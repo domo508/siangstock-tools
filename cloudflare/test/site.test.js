@@ -112,3 +112,15 @@ describe("集中規則瀏覽器用戶端", () => {
     await expect(client.fetchLatest(async () => ({ ok: false, status: 503 }), core)).rejects.toThrow(/無法使用/);
   });
 });
+
+describe("前台導覽", () => {
+  it("清洗工具與規則頁都有清楚的上一層路徑", () => {
+    const inventoryHtml = readFileSync("../inventory/index.html", "utf8");
+    const adminHtml = readFileSync("../inventory/rules-admin/index.html", "utf8");
+    expect(inventoryHtml).toContain("公司工具首頁");
+    expect(inventoryHtml).toContain("← 返回公司工具首頁");
+    expect(adminHtml).toContain("公司工具首頁");
+    expect(adminHtml).toContain("← 返回清洗工具");
+    expect(adminHtml).toContain("完成設定，返回清洗工具");
+  });
+});
