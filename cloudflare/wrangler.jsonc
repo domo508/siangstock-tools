@@ -5,6 +5,12 @@
   "compatibility_date": "2026-08-11",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "siangstock.com/api/rules*",
+      "zone_name": "siangstock.com"
+    }
+  ],
   "observability": {
     "enabled": false
   },
@@ -18,7 +24,7 @@
     {
       "binding": "DB",
       "database_name": "inventory-rules",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "81766d2c-43c9-4180-806f-867fef201b3b",
       "migrations_dir": "worker/migrations"
     }
   ]

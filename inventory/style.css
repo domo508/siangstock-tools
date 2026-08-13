@@ -97,6 +97,8 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
   background: #42a379;
   box-shadow: 0 0 0 4px rgba(66, 163, 121, 0.14);
 }
+.pending-badge { color: var(--gold); border-color: #ead79d; background: var(--gold-soft); }
+.pending-badge::before { background: #c99a2e; box-shadow: 0 0 0 4px rgba(201, 154, 46, 0.14); }
 
 .hero {
   display: grid;

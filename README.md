@@ -13,7 +13,7 @@
 所有同事都會使用 Cloudflare D1 中的公司集中規則。工具在「開啟頁面」及每次按「開始分析」前，都會透過同源的 `/api/rules` 再取最新版；若規則服務無法使用，會直接禁止分析，不會偷偷改用舊規則。
 
 - `/inventory/`：一般工具頁，可查看及下載目前規則，不能修改。
-- `/inventory/rules-admin/`：規則管理頁，需公司 Google 帳號登入，並只允許指定管理者。
+- `/inventory/rules-admin/`：規則管理頁；完成 Cloudflare Access 後，會以公司 Google 帳號登入並只允許指定管理者。
 - 管理頁可新增、刪除、匯入及匯出 JSON；發布時有版本衝突保護。
 
 來源 Excel 不會被改寫。排除資料也會完整保留在輸出檔，方便稽核。
@@ -68,6 +68,14 @@ Cloudflare 相關程式全部放在 `cloudflare/` 子目錄，避免 Zeabur 把�
    - `siang01@siangapato.com.tw`
 6. 把 Access team domain 與 application AUD 填入 Worker 變數。Worker 本身還會驗證 Access JWT 的簽章、issuer、AUD 及 email 白名單；不能只靠前端或 Cookie。
 7. 最後只把 Worker route 接到 `siangstock.com/api/rules*`，不攔截首頁或其他路徑。
+
+### 目前部署狀態
+
+- D1 與 Worker 已部署，正式同源 GET/HEAD 可讀取集中規則 v1。
+- 正式 route 僅為 `siangstock.com/api/rules*`，不攔截首頁、庫存靜態頁或其他路徑。
+- Cloudflare Zero Trust Free 啟用頁要求同意「超出免費額度時自動刷卡」。目前未取得此付費風險授權，因此沒有啟用 Access。
+- `ACCESS_TEAM_DOMAIN` 與 `ACCESS_AUD` 目前留空；Worker 對所有管理 PUT 回覆 503，任何人都不能發布。管理頁清楚標示「發布功能目前停用」。
+- 等帳戶持有人明確同意 Zero Trust 的超額用量刷卡條款後，再完成 Google IdP、Access path policy 與 JWT 參數。
 
 D1 的 `rules_current` 只保留一份現行規則；每次更新會由資料庫 trigger 原子寫入 `rules_history`。更新 API 需帶 `expectedVersion`，若版本已改會回覆 409，避免後存的人覆蓋先存的人。
 
