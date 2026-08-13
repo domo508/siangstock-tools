@@ -195,6 +195,7 @@ h1 {
 }
 .rules-state.applied { color: var(--green); background: var(--green-soft); }
 .rules-state.dirty { color: var(--gold); background: var(--gold-soft); }
+.rules-state.error { color: var(--red); background: var(--red-soft); }
 
 .rule-columns {
   display: grid;
@@ -323,6 +324,7 @@ h1 {
 .button-primary { color: white; background: var(--navy); box-shadow: 0 9px 20px rgba(21, 63, 99, 0.2); }
 .button-secondary { color: var(--navy); background: #e8f0f4; }
 .button-download { color: white; background: var(--green); box-shadow: 0 9px 20px rgba(47, 114, 91, 0.2); }
+.button-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 
 .selected-file {
   display: flex;

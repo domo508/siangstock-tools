@@ -1,0 +1,21 @@
+{
+  "name": "siangstock-central-rules",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "pnpm cf:types && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cf:types": "wrangler types worker-configuration.d.ts",
+    "cf:dev": "wrangler dev --local",
+    "cf:migrate:local": "wrangler d1 migrations apply inventory-rules --local"
+  },
+  "dependencies": {
+    "jose": "^6.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0",
+    "wrangler": "^4.30.0"
+  }
+}

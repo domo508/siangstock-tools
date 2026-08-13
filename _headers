@@ -1,5 +1,5 @@
 /*
-  Content-Security-Policy: default-src 'self' data: blob:; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'
+  Content-Security-Policy: default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
   Referrer-Policy: no-referrer
@@ -12,6 +12,9 @@
 
 /inventory/index.html
   Cache-Control: no-cache
+
+/inventory/rules-admin/index.html
+  Cache-Control: no-store
 
 /inventory/*.js
   Cache-Control: public, max-age=3600

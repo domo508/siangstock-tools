@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>公司庫存規則管理</title>
+  <link rel="stylesheet" href="../style.css">
+  <script src="../rules.bundle.js" defer></script>
+  <script src="../core.js" defer></script>
+  <script src="../rules-client.js" defer></script>
+  <script src="admin.js" defer></script>
+</head>
+<body>
+  <main class="page-shell">
+    <header class="topbar">
+      <a class="brand brand-link" href="../"><span class="brand-mark" aria-hidden="true">規</span><span>翔仔居家・規則管理</span></a>
+      <span class="privacy-badge">受公司 Google 登入保護</span>
+    </header>
+
+    <section class="hero admin-hero" aria-labelledby="page-title">
+      <div class="hero-copy">
+        <p class="eyebrow">集中規則管理</p>
+        <h1 id="page-title">所有同事共用同一份最新版</h1>
+        <p>在這裡更新後，其他同事下次開頁或按分析時就會取得新版本。這個頁面只傳送規則文字；沒有 Excel 上傳功能。</p>
+      </div>
+      <div class="flow-card">
+        <strong id="admin-version">正在載入最新版……</strong>
+        <p id="admin-updated">請稍候。</p>
+        <p class="rules-tip"><strong>版本衝突保護：</strong>若另一位管理者先更新，系統會拒絕覆蓋，請重新載入後再修改。</p>
+      </div>
+    </section>
+
+    <section class="rules-manager" aria-labelledby="rules-title">
+      <div class="rules-heading">
+        <div><p class="eyebrow">編輯區</p><h2 id="rules-title">分類規則</h2><p>新增或刪除後，按「發布公司規則」才會讓所有同事使用。</p></div>
+        <span id="rules-state" class="rules-state dirty">載入中</span>
+      </div>
+
+      <div class="rule-columns">
+        <section class="rule-editor excluded-editor">
+          <div class="rule-editor-heading"><div><h3>排除關鍵字</h3><p>品名只要包含，就判為排除項目。</p></div><span id="excluded-rule-count" class="rule-count">0 項</span></div>
+          <div class="rule-add-row"><label class="visually-hidden" for="excluded-rule-input">新增排除關鍵字</label><input id="excluded-rule-input" type="text" placeholder="例如：手續費" autocomplete="off"><button id="add-excluded-rule" class="button button-secondary" type="button">新增</button></div>
+          <ul id="excluded-rule-list" class="rule-list"></ul>
+        </section>
+        <section class="rule-editor review-editor">
+          <div class="rule-editor-heading"><div><h3>待確認關鍵字</h3><p>品名只要包含，就交由同事人工確認。</p></div><span id="review-rule-count" class="rule-count">0 項</span></div>
+          <div class="rule-add-row"><label class="visually-hidden" for="review-rule-input">新增待確認關鍵字</label><input id="review-rule-input" type="text" placeholder="例如：瑕疵" autocomplete="off"><button id="add-review-rule" class="button button-secondary" type="button">新增</button></div>
+          <ul id="review-rule-list" class="rule-list"></ul>
+        </section>
+        <section class="rule-editor whitelist-editor">
+          <div class="rule-editor-heading"><div><h3>指定品名白名單</h3><p><strong>完整品名完全相同</strong>才優先判為正常商品，不是包含文字。</p></div><span id="whitelist-rule-count" class="rule-count">0 項</span></div>
+          <div class="rule-add-row"><label class="visually-hidden" for="whitelist-rule-input">新增白名單完整品名</label><input id="whitelist-rule-input" type="text" placeholder="例如：門市展示品－原木托盤" autocomplete="off"><button id="add-whitelist-rule" class="button button-secondary" type="button">新增</button></div>
+          <ul id="whitelist-rule-list" class="rule-list"></ul>
+        </section>
+      </div>
+
+      <div class="rules-footer">
+        <p id="rules-feedback" class="rules-feedback working" role="status" aria-live="polite">正在取得公司最新版。</p>
+        <div class="rules-actions">
+          <button id="reload-rules" class="button button-secondary" type="button">重新載入最新版</button>
+          <button id="import-rules" class="button button-secondary" type="button">載入 JSON</button>
+          <input id="rules-input" class="visually-hidden" type="file" accept=".json,application/json">
+          <button id="export-rules" class="button button-secondary" type="button" disabled>下載 JSON 備份</button>
+          <button id="restore-defaults" class="button button-secondary" type="button">恢復預設草稿</button>
+          <button id="publish-rules" class="button button-primary" type="button" disabled>發布公司規則</button>
+        </div>
+      </div>
+      <p class="rules-tip"><strong>提醒：</strong>「恢復預設草稿」只會改畫面，仍需按發布；它不會刪除你先前下載的 JSON。發布前建議先下載 JSON 備份。</p>
+    </section>
+  </main>
+</body>
+</html>
