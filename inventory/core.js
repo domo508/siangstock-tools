@@ -7,6 +7,12 @@
   "use strict";
 
   const RESULT_COLUMNS = ["分類結果", "判斷原因", "命中的關鍵字"];
+  const PURCHASE_AMOUNT_COLUMN = "實際庫存進貨額";
+  const PURCHASE_AMOUNT_SOURCE_COLUMNS = {
+    inventory: ["實際庫存"],
+    inventoryCost: ["實際庫存成本額"],
+    purchasePrice: ["進貨價"]
+  };
   const RULE_LIST_KEYS = ["排除關鍵字", "待人工確認關鍵字", "指定品名白名單"];
   const CATEGORY_TO_SHEET = {
     "正常商品": "乾淨商品",
@@ -275,6 +281,9 @@
     const columnRules = safeRules["欄位辨識"];
     const quantityIndex = candidateIndex(location.headers, columnRules["庫存數量"] || []);
     const averageCostIndex = candidateIndex(location.headers, columnRules["平均成本"] || []);
+    const actualInventoryIndex = candidateIndex(location.headers, PURCHASE_AMOUNT_SOURCE_COLUMNS.inventory);
+    const actualInventoryCostIndex = candidateIndex(location.headers, PURCHASE_AMOUNT_SOURCE_COLUMNS.inventoryCost);
+    const purchasePriceIndex = candidateIndex(location.headers, PURCHASE_AMOUNT_SOURCE_COLUMNS.purchasePrice);
     const amount = recognizeAmountColumn(
       location.headers,
       rows,
@@ -296,6 +305,9 @@
       productNameColumn: displayHeader(location.headers[location.productIndex]),
       quantityColumn: quantityIndex === null ? null : displayHeader(location.headers[quantityIndex]),
       averageCostColumn: averageCostIndex === null ? null : displayHeader(location.headers[averageCostIndex]),
+      actualInventoryColumnIndex: actualInventoryIndex,
+      actualInventoryCostColumnIndex: actualInventoryCostIndex,
+      purchasePriceColumnIndex: purchasePriceIndex,
       amountColumn: amount.name,
       amountColumnIndex: amount.index,
       amountStatus: amount.status,
@@ -332,11 +344,51 @@
     return indexes;
   }
 
+  function shiftedIndex(sourceIndex, insertionIndex) {
+    if (sourceIndex === null || sourceIndex === undefined) return null;
+    return sourceIndex >= insertionIndex ? sourceIndex + 1 : sourceIndex;
+  }
+
+  function purchaseAmountLayout(analysis, XLSX) {
+    const insertionIndex = analysis.actualInventoryCostColumnIndex === null
+      || analysis.actualInventoryCostColumnIndex === undefined
+      ? analysis.headers.length
+      : analysis.actualInventoryCostColumnIndex + 1;
+    const inventoryIndex = shiftedIndex(analysis.actualInventoryColumnIndex, insertionIndex);
+    const purchasePriceIndex = shiftedIndex(analysis.purchasePriceColumnIndex, insertionIndex);
+    return {
+      insertionIndex,
+      inventoryIndex,
+      purchasePriceIndex,
+      inventoryColumn: inventoryIndex === null ? null : XLSX.utils.encode_col(inventoryIndex),
+      purchasePriceColumn: purchasePriceIndex === null ? null : XLSX.utils.encode_col(purchasePriceIndex),
+      ready: inventoryIndex !== null && purchasePriceIndex !== null
+    };
+  }
+
+  function purchaseAmountValue(analysis, rowIndex) {
+    const inventory = strictNumber(analysis.rows[rowIndex][analysis.actualInventoryColumnIndex]);
+    const purchasePrice = strictNumber(analysis.rows[rowIndex][analysis.purchasePriceColumnIndex]);
+    return inventory === null || purchasePrice === null ? 0 : inventory * purchasePrice;
+  }
+
   function makeDataSheet(analysis, category, XLSX) {
-    const rows = [analysis.headers.concat(RESULT_COLUMNS)];
+    const layout = purchaseAmountLayout(analysis, XLSX);
+    const outputHeaders = analysis.headers.slice();
+    outputHeaders.splice(layout.insertionIndex, 0, PURCHASE_AMOUNT_COLUMN);
+    const rows = [outputHeaders.concat(RESULT_COLUMNS)];
     const indexes = indexesForCategory(analysis, category);
     indexes.forEach((index) => {
-      const row = analysis.rows[index];
+      const row = analysis.rows[index].slice();
+      const outputRowNumber = rows.length + 1;
+      const purchaseAmountCell = layout.ready
+        ? {
+          t: "n",
+          f: `IFERROR(${layout.inventoryColumn}${outputRowNumber}*${layout.purchasePriceColumn}${outputRowNumber},0)`,
+          v: purchaseAmountValue(analysis, index)
+        }
+        : null;
+      row.splice(layout.insertionIndex, 0, purchaseAmountCell);
       rows.push(row.concat([
         analysis.categories[index],
         analysis.reasons[index],
@@ -344,14 +396,28 @@
       ]));
     });
     const totalRow = Array(rows[0].length).fill("");
-    if (analysis.amountColumnIndex !== 0) totalRow[0] = "合計";
-    totalRow[analysis.headers.length] = "合計";
-    totalRow[analysis.headers.length + 1] = `資料筆數：${indexes.length}`;
+    const shiftedAmountIndex = shiftedIndex(analysis.amountColumnIndex, layout.insertionIndex);
+    if (shiftedAmountIndex !== 0) totalRow[0] = "合計";
+    totalRow[outputHeaders.length] = "合計";
+    totalRow[outputHeaders.length + 1] = `資料筆數：${indexes.length}`;
     if (analysis.amountColumnIndex === null || analysis.amountColumnIndex === undefined) {
-      totalRow[analysis.headers.length + 2] = "金額欄未安全辨識";
+      totalRow[outputHeaders.length + 2] = "金額欄未安全辨識";
     } else {
-      totalRow[analysis.amountColumnIndex] = sumAmounts(analysis, indexes);
-      totalRow[analysis.headers.length + 2] = `金額欄：${analysis.amountColumn}`;
+      totalRow[shiftedAmountIndex] = sumAmounts(analysis, indexes);
+      totalRow[outputHeaders.length + 2] = `金額欄：${analysis.amountColumn}`;
+    }
+    if (layout.ready) {
+      const totalRowNumber = indexes.length + 2;
+      const totalValue = indexes.reduce((sum, index) => sum + purchaseAmountValue(analysis, index), 0);
+      totalRow[layout.insertionIndex] = indexes.length
+        ? {
+          t: "n",
+          f: `SUM(${XLSX.utils.encode_col(layout.insertionIndex)}2:${XLSX.utils.encode_col(layout.insertionIndex)}${totalRowNumber - 1})`,
+          v: totalValue
+        }
+        : { t: "n", f: "0", v: 0 };
+    } else {
+      totalRow[layout.insertionIndex] = "未辨識進貨價";
     }
     rows.push(totalRow);
     const worksheet = XLSX.utils.aoa_to_sheet(rows, { cellDates: true });
@@ -359,8 +425,14 @@
     const dataEndRow = indexes.length + 1;
     worksheet["!autofilter"] = { ref: `A1:${XLSX.utils.encode_col(lastColumn)}${dataEndRow}` };
     worksheet["!inventoryTotalRow"] = rows.length;
+    for (let rowNumber = 2; rowNumber <= rows.length; rowNumber += 1) {
+      const cell = worksheet[`${XLSX.utils.encode_col(layout.insertionIndex)}${rowNumber}`];
+      if (cell?.t === "n") cell.z = "#,##0.00";
+    }
     worksheet["!cols"] = rows[0].map((header, index) => ({
-      wch: index >= rows[0].length - 3 ? 28 : Math.min(34, Math.max(11, String(header || "").length + 4))
+      wch: index === layout.insertionIndex
+        ? 20
+        : index >= rows[0].length - 3 ? 28 : Math.min(34, Math.max(11, String(header || "").length + 4))
     }));
     return worksheet;
   }
