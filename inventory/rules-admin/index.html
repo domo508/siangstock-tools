@@ -7,23 +7,23 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>公司庫存規則管理</title>
   <link rel="stylesheet" href="../style.css">
-  <script src="../rules.bundle.js" defer></script>
-  <script src="../core.js" defer></script>
-  <script src="../rules-client.js" defer></script>
-  <script src="admin.js" defer></script>
+  <script src="../rules.bundle.js?v=20260813-access" defer></script>
+  <script src="../core.js?v=20260813-access" defer></script>
+  <script src="../rules-client.js?v=20260813-access" defer></script>
+  <script src="admin.js?v=20260813-access" defer></script>
 </head>
 <body>
   <main class="page-shell">
     <header class="topbar">
       <a class="brand brand-link" href="../"><span class="brand-mark" aria-hidden="true">規</span><span>翔仔居家・規則管理</span></a>
-      <span class="privacy-badge pending-badge">發布功能目前停用</span>
+      <span class="privacy-badge">僅限指定管理者發布</span>
     </header>
 
     <section class="hero admin-hero" aria-labelledby="page-title">
       <div class="hero-copy">
         <p class="eyebrow">集中規則管理</p>
         <h1 id="page-title">所有同事共用同一份最新版</h1>
-        <p>目前可先查看、編輯草稿與匯出 JSON；Cloudflare Access 尚未啟用，因此發布端點會安全拒絕。完成公司 Google 登入保護後，發布的新版本才會提供給所有同事。</p>
+        <p>此頁使用公司 Google 帳號登入，只有指定管理者可以開啟與發布。發布後，所有同事會在開啟工具或每次分析前取得公司最新版規則。</p>
       </div>
       <div class="flow-card">
         <strong id="admin-version">正在載入最新版……</strong>

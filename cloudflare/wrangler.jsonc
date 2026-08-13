@@ -17,8 +17,8 @@
   "vars": {
     "ALLOWED_ORIGINS": "https://siangstock.com",
     "ADMIN_EMAILS": "evan0728@siangapato.com.tw,siang01@siangapato.com.tw",
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": ""
+    "ACCESS_TEAM_DOMAIN": "https://restless-band-7fc2.cloudflareaccess.com",
+    "ACCESS_AUD": "fbba64a4f03b08aed53ef51bc84ac02ea756acb40e1ccc6ade275104f708932d"
   },
   "d1_databases": [
     {
