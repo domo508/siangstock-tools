@@ -1,0 +1,23 @@
+/*
+  Content-Security-Policy: default-src 'self' data: blob:; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+
+/index.html
+  Cache-Control: no-cache
+
+/inventory/index.html
+  Cache-Control: no-cache
+
+/inventory/*.js
+  Cache-Control: public, max-age=3600
+
+/inventory/assets/*
+  Cache-Control: public, max-age=3600
+
+/site.css
+  Cache-Control: public, max-age=3600

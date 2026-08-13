@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Excel 只在使用者瀏覽器處理的庫存分類工具">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>網域版 Excel 庫存清理工具</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="assets/xlsx.full.min.js" defer></script>
+  <script src="rules.bundle.js" defer></script>
+  <script src="core.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="page-shell">
+    <header class="topbar">
+      <a class="brand brand-link" href="/" aria-label="回到公司工具首頁">
+        <span class="brand-mark" aria-hidden="true">庫</span>
+        <span>翔仔居家・庫存清理</span>
+      </a>
+      <span class="privacy-badge">瀏覽器本機處理・不上傳 Excel</span>
+    </header>
+
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-copy">
+        <p class="eyebrow">Excel 庫存分類</p>
+        <h1 id="page-title">三步整理庫存，原始檔安心保留</h1>
+        <p>選一個 `.xlsx`，工具會在這個瀏覽器分頁內找出品名欄、完成三分類，並產生一份新的 Excel。沒有登入、沒有上傳，也不會碰原始檔。</p>
+      </div>
+      <div class="flow-card" aria-label="使用步驟">
+        <div class="flow-step"><span class="flow-step-number">1</span><div><strong>選擇 Excel</strong><span>從自己的電腦選擇庫存檔。</span></div></div>
+        <div class="flow-step"><span class="flow-step-number">2</span><div><strong>開始分析</strong><span>自動找品名欄並顯示分類統計。</span></div></div>
+        <div class="flow-step"><span class="flow-step-number">3</span><div><strong>下載新檔</strong><span>保留全部資料，三張明細表最後附筆數與安全金額合計。</span></div></div>
+      </div>
+    </section>
+
+    <section id="rules-manager" class="rules-manager" aria-labelledby="rules-title">
+      <div class="rules-heading">
+        <div>
+          <p class="eyebrow">分類規則</p>
+          <h2 id="rules-title">規則管理</h2>
+          <p>直接在這裡新增或刪除，不必打開 JSON。修改完成後，記得按「更新規則」。</p>
+        </div>
+        <span id="rules-state" class="rules-state applied">規則已套用</span>
+      </div>
+
+      <div class="rule-columns">
+        <section class="rule-editor excluded-editor" aria-labelledby="excluded-rules-title">
+          <div class="rule-editor-heading">
+            <div><h3 id="excluded-rules-title">排除關鍵字</h3><p>品名只要包含這些文字，就會列入排除項目。</p></div>
+            <span id="excluded-rule-count" class="rule-count">0 項</span>
+          </div>
+          <div class="rule-add-row">
+            <label class="visually-hidden" for="excluded-rule-input">新增排除關鍵字</label>
+            <input id="excluded-rule-input" type="text" placeholder="例如：手續費" autocomplete="off">
+            <button id="add-excluded-rule" class="button button-secondary" type="button">新增</button>
+          </div>
+          <ul id="excluded-rule-list" class="rule-list" aria-live="polite"></ul>
+        </section>
+
+        <section class="rule-editor review-editor" aria-labelledby="review-rules-title">
+          <div class="rule-editor-heading">
+            <div><h3 id="review-rules-title">待確認關鍵字</h3><p>品名只要包含這些文字，就會留給同事人工確認。</p></div>
+            <span id="review-rule-count" class="rule-count">0 項</span>
+          </div>
+          <div class="rule-add-row">
+            <label class="visually-hidden" for="review-rule-input">新增待確認關鍵字</label>
+            <input id="review-rule-input" type="text" placeholder="例如：瑕疵" autocomplete="off">
+            <button id="add-review-rule" class="button button-secondary" type="button">新增</button>
+          </div>
+          <ul id="review-rule-list" class="rule-list" aria-live="polite"></ul>
+        </section>
+
+        <section class="rule-editor whitelist-editor" aria-labelledby="whitelist-rules-title">
+          <div class="rule-editor-heading">
+            <div>
+              <h3 id="whitelist-rules-title">指定品名白名單</h3>
+              <p><strong>完整品名完全相同</strong>時，會優先列為正常商品。不是「包含文字」；多一個字或少一個字都不算。</p>
+            </div>
+            <span id="whitelist-rule-count" class="rule-count">0 項</span>
+          </div>
+          <div class="rule-add-row">
+            <label class="visually-hidden" for="whitelist-rule-input">新增白名單完整品名</label>
+            <input id="whitelist-rule-input" type="text" placeholder="例如：門市展示品－原木托盤" autocomplete="off">
+            <button id="add-whitelist-rule" class="button button-secondary" type="button">新增</button>
+          </div>
+          <ul id="whitelist-rule-list" class="rule-list" aria-live="polite"></ul>
+        </section>
+      </div>
+
+      <div class="rules-footer">
+        <div>
+          <strong id="rules-source">目前使用：隨工具附上的內建規則</strong>
+          <p id="rules-feedback" class="rules-feedback success" role="status" aria-live="polite">目前畫面與分析使用的規則一致。</p>
+        </div>
+        <div class="rules-actions">
+          <button id="import-rules" class="button button-secondary" type="button">載入規則 JSON</button>
+          <input id="rules-input" class="visually-hidden" type="file" accept=".json,application/json">
+          <button id="export-rules" class="button button-secondary" type="button">下載規則 JSON</button>
+          <button id="update-rules" class="button button-primary" type="button" disabled>更新規則</button>
+        </div>
+      </div>
+      <p class="rules-tip"><strong>提醒：</strong>規則更新後會影響下一次分析。如果畫面已有分類結果，請再按一次「開始分析」才會反映新規則。</p>
+    </section>
+
+    <section class="tool-card" aria-label="庫存分析工具">
+      <div class="tool-body">
+        <div id="drop-zone" class="drop-zone">
+          <div>
+            <div class="file-icon" aria-hidden="true">XLSX</div>
+            <h2>把庫存 Excel 拖到這裡</h2>
+            <p>或按下按鈕，從電腦選擇檔案</p>
+            <button id="choose-file" class="button button-secondary" type="button">選擇 .xlsx 檔</button>
+            <input id="file-input" class="visually-hidden" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+          </div>
+        </div>
+
+        <div class="selected-file">
+          <div>
+            <strong id="file-name">尚未選擇 Excel</strong>
+            <span id="file-details">只支援副檔名為 .xlsx 的檔案</span>
+          </div>
+          <div class="actions">
+            <button id="analyze-file" class="button button-primary" type="button" disabled>開始分析</button>
+            <button id="download-result" class="button button-download" type="button" disabled>下載結果 Excel</button>
+          </div>
+        </div>
+        <div id="status-box" class="status-box info" role="status" aria-live="polite">請先選擇要分析的 Excel。</div>
+      </div>
+
+      <section id="results" class="results" aria-labelledby="results-title" hidden>
+        <div class="results-header">
+          <div><h2 id="results-title">分類統計</h2><p>確認筆數後，再下載新的 Excel。</p></div>
+          <span class="privacy-badge">列數檢查：<strong id="conservation-check">—</strong></span>
+        </div>
+        <p id="stale-results-notice" class="stale-notice" hidden><strong>這是舊結果：</strong>規則已更新，請重新按「開始分析」後再下載。</p>
+        <div class="metrics">
+          <div class="metric"><span>原始總筆數</span><strong id="metric-total">0</strong></div>
+          <div class="metric normal"><span>正常商品</span><strong id="metric-normal">0</strong></div>
+          <div class="metric excluded"><span>排除項目</span><strong id="metric-excluded">0</strong></div>
+          <div class="metric review"><span>待人工確認</span><strong id="metric-review">0</strong></div>
+        </div>
+        <dl class="details-grid">
+          <div class="detail-row"><dt>資料工作表</dt><dd id="detected-sheet">—</dd></div>
+          <div class="detail-row"><dt>品名欄位</dt><dd id="detected-product">—</dd></div>
+          <div class="detail-row"><dt>庫存數量欄位</dt><dd id="detected-quantity">—</dd></div>
+          <div class="detail-row"><dt>平均成本欄位</dt><dd id="detected-average">—</dd></div>
+          <div class="detail-row"><dt>庫存金額欄位</dt><dd id="detected-amount">—</dd></div>
+          <div class="detail-row"><dt>金額判斷</dt><dd id="amount-status">—</dd></div>
+        </dl>
+        <p class="offline-note"><strong>資料安全：</strong>網站只傳送這個靜態工具頁面，沒有上傳 Excel 的程式或伺服器。選檔後，Excel 只在目前瀏覽器分頁的記憶體裡處理；結果也是由瀏覽器直接下載。</p>
+      </section>
+    </section>
+  </main>
+</body>
+</html>
