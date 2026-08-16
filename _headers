@@ -16,10 +16,19 @@
 /inventory/rules-admin/index.html
   Cache-Control: no-store
 
+/cost-analysis/index.html
+  Cache-Control: no-cache
+
 /inventory/*.js
   Cache-Control: public, max-age=3600
 
 /inventory/assets/*
+  Cache-Control: public, max-age=3600
+
+/cost-analysis/*.js
+  Cache-Control: public, max-age=3600
+
+/cost-analysis/*.css
   Cache-Control: public, max-age=3600
 
 /site.css

@@ -146,7 +146,7 @@ h1 {
 
 .tool-grid {
   display: grid;
-  grid-template-columns: 1.35fr 0.825fr 0.825fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
 }
 
@@ -197,6 +197,7 @@ h1 {
 
 .planned { color: #7b8995; background: #f7f9fa; }
 .planned .tool-icon { background: #81909d; }
+.cost-icon { background: linear-gradient(145deg, #2f725b, #26947b); }
 .tool-card h3 { margin: 0 0 12px; font-size: 1.42rem; }
 .tool-card p { margin: 0; color: var(--muted); line-height: 1.65; }
 .tool-card code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

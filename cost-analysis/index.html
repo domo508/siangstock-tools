@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="在瀏覽器本機完成的庫存成本分析與報表勾稽工具">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'">
+  <title>庫存成本分析｜翔仔居家</title>
+  <link rel="stylesheet" href="style.css?v=20260816-initial">
+</head>
+<body>
+  <main class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="回到公司工具首頁">
+        <span class="brand-mark" aria-hidden="true">析</span>
+        <span>翔仔居家・庫存成本分析</span>
+      </a>
+      <span class="privacy-badge">瀏覽器本機處理・不上傳Excel</span>
+    </header>
+
+    <nav class="breadcrumb" aria-label="頁面導覽">
+      <ol>
+        <li><a href="/">公司工具首頁</a></li>
+        <li aria-current="page">庫存成本分析</li>
+      </ol>
+      <a class="back-link" href="/">← 返回公司工具首頁</a>
+    </nav>
+
+    <section class="hero" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">INVENTORY COST ANALYSIS</p>
+        <h1 id="page-title">把庫存差異，<br>拆成看得懂的原因。</h1>
+        <p class="hero-description">依商品編號整合期初、進貨、期末、銷售、門市月結、出入庫、退廠與調撥資料。先比數量，再以進貨價成本找出銷售、報廢、盤盈虧及價格基準差異。</p>
+      </div>
+      <aside class="privacy-card" aria-label="資料安全說明">
+        <span class="privacy-icon" aria-hidden="true">✓</span>
+        <div>
+          <strong>Excel只留在目前分頁</strong>
+          <p>所有讀取、計算與下載均在這台電腦的瀏覽器完成，不會傳到網站、Cloudflare或其他伺服器。</p>
+        </div>
+      </aside>
+    </section>
+
+    <section class="steps" aria-label="使用步驟">
+      <div><span>1</span><strong>選擇八類報表</strong><small>本月沒有資料的選填報表可以略過。</small></div>
+      <div><span>2</span><strong>確認欄位對應</strong><small>系統會自動辨識，也可以人工修正。</small></div>
+      <div><span>3</span><strong>分析並下載</strong><small>產生同一份Excel的四個頁籤。</small></div>
+    </section>
+
+    <section class="panel" aria-labelledby="upload-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">資料來源</p>
+          <h2 id="upload-title">選擇本月報表</h2>
+        </div>
+        <p>期初、期末、進貨與銷售為必要來源；其餘本月無資料時可留空。</p>
+      </div>
+
+      <div class="warehouse-note" role="note">
+        <strong>期初、期末請使用相同倉別範圍</strong>
+        <small>應包含：寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。請排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。</small>
+      </div>
+
+      <div id="upload-grid" class="upload-grid"></div>
+
+      <div class="action-bar">
+        <button id="analyze-button" class="primary-button" type="button" disabled>開始分析</button>
+        <button id="download-button" class="secondary-button" type="button" disabled>下載結果Excel</button>
+        <p id="main-status" class="main-status" role="status">請先選擇期初、期末、進貨及銷售Excel。</p>
+      </div>
+    </section>
+
+    <section id="result-panel" class="panel results" aria-labelledby="result-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">分析結果</p>
+          <h2 id="result-title">本月勾稽摘要</h2>
+        </div>
+        <p>數量差異優先；金額統一以進貨價相關欄位計算。</p>
+      </div>
+      <div id="summary-cards" class="summary-grid"></div>
+      <div class="result-table-wrap">
+        <table>
+          <thead><tr><th>商品編號</th><th>品名</th><th>A數量</th><th>B數量</th><th>C數量</th><th>未解釋數量</th><th>未解釋金額</th><th>狀態</th></tr></thead>
+          <tbody id="result-rows"></tbody>
+        </table>
+      </div>
+      <p class="result-note">畫面只顯示差異最大的前20項；完整明細、未配對資料與來源檢查請下載Excel查看。</p>
+    </section>
+
+    <section class="panel rules-panel" aria-labelledby="rules-title">
+      <div class="section-heading compact">
+        <div>
+          <p class="eyebrow">固定規則</p>
+          <h2 id="rules-title">成本與單據怎麼判斷？</h2>
+        </div>
+      </div>
+      <div class="rule-grid">
+        <article><strong>進貨價是成本基準</strong><p>一般報表的「進貨價」是最近一次進貨成本；「成本價」是平均成本，只供參考。</p></article>
+        <article><strong>進貨明細有一個例外</strong><p>當月進貨明細中的「成本價」是供應商給我司的進貨價，會納入A。</p></article>
+        <article><strong>門市成本不進A／B</strong><p>門市成本＝進貨價×1.1；門市月結金額是加盟請款，只用於月結與調撥勾稽。</p></article>
+        <article><strong>總倉代出不要求調撥單</strong><p>第5類以門市月結搭配銷售成本或總倉出庫核對；直營月結只作記錄。</p></article>
+        <article><strong>客退不另上傳</strong><p>銷售成本負值沖回B，客退入庫單只確認回到哪個倉，不再列為盤盈。</p></article>
+        <article><strong>運費不是庫存商品</strong><p>加盟月結的代墊運費保留請款核對，但排除商品數量與成本。</p></article>
+      </div>
+    </section>
+
+    <footer>
+      <p>翔仔居家・庫存成本分析</p>
+      <p>分析前請確認報表月份一致；遇到問題時，請記下畫面訊息並告知管理同事。</p>
+    </footer>
+  </main>
+
+  <script src="../inventory/assets/xlsx.full.min.js"></script>
+  <script src="core.js?v=20260816-initial"></script>
+  <script src="app.js?v=20260816-initial"></script>
+</body>
+</html>
