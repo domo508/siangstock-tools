@@ -250,7 +250,10 @@
       ["最終未解釋差異", formatNumber(t.quantityDifference), `$${formatNumber(t.rawAmountDifference)}`, Math.abs(t.quantityDifference) > 0.000001 || Math.abs(t.rawAmountDifference) >= 1]
     ];
     summaryCards.innerHTML = cards.map(([label, value, sub, warn]) => `<div class="summary-card ${warn ? "warn" : ""}"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong><span>${escapeHtml(sub)}</span></div>`).join("");
-    resultRows.innerHTML = analysis.details.slice(0, 20).map((item) => `<tr><td>${escapeHtml(item.sku)}</td><td>${escapeHtml(item.name)}</td><td>${formatNumber(item.aQty)}</td><td>${formatNumber(item.salesQty)}</td><td>${formatNumber(item.adjustmentQty)}</td><td>${formatNumber(item.quantityDifference)}</td><td>${formatNumber(item.rawAmountDifference)}</td><td class="${item.status === "通過" ? "status-pass" : "status-warn"}">${escapeHtml(item.status)}</td><td class="advice-cell">${escapeHtml(item.advice)}</td></tr>`).join("");
+    const differenceItems = analysis.details.filter((item) => item.status !== "通過").slice(0, 20);
+    resultRows.innerHTML = differenceItems.length
+      ? differenceItems.map((item) => `<tr><td>${escapeHtml(item.sku)}</td><td>${escapeHtml(item.name)}</td><td>${formatNumber(item.aQty)}</td><td>${formatNumber(item.salesQty)}</td><td>${formatNumber(item.adjustmentQty)}</td><td>${formatNumber(item.quantityDifference)}</td><td>${formatNumber(item.rawAmountDifference)}</td><td class="status-warn">${escapeHtml(item.status)}</td><td class="advice-cell">${escapeHtml(item.advice)}</td></tr>`).join("")
+      : '<tr><td colspan="9" class="status-pass">本月所有商品皆通過，沒有需要列入差異明細的品項。</td></tr>';
     resultPanel.hidden = false;
     resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
   }

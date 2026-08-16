@@ -148,7 +148,10 @@
         purchaseCostAmount: ["進貨價成本額", "調撥進貨成本額", "實際成本額"],
         sourceCostPrice: ["調出方成本價", "調出成本價"],
         destinationCostPrice: ["調入方成本價", "調入成本價"],
-        transferAmount: ["調出方成本額", "調撥金額", "結算額"],
+        sourceCostAmount: ["調出方成本額", "調出成本額"],
+        destinationCostAmount: ["調入方成本額", "調入成本額"],
+        settlementPrice: ["結算價", "調撥結算價"],
+        transferAmount: ["結算額", "調撥結算額", "調撥金額"],
         status: ["狀態", "單據狀態", "審核狀態"]
       },
       required: ["sourceWarehouse", "destinationWarehouse", "qty"],
@@ -306,7 +309,10 @@
       salesAmount: "銷售金額",
       sourceCostPrice: "調出方成本價",
       destinationCostPrice: "調入方成本價",
-      transferAmount: "調撥金額"
+      sourceCostAmount: "調出方成本額",
+      destinationCostAmount: "調入方成本額",
+      settlementPrice: "結算價",
+      transferAmount: "結算額"
     };
     return labels[field] || field;
   }
@@ -480,6 +486,9 @@
         averageCost: parseNumber(valueAt(row, mapping, "averageCost")),
         sourceCostPrice: parseNumber(valueAt(row, mapping, "sourceCostPrice")),
         destinationCostPrice: parseNumber(valueAt(row, mapping, "destinationCostPrice")),
+        sourceCostAmount: parseNumber(valueAt(row, mapping, "sourceCostAmount")),
+        destinationCostAmount: parseNumber(valueAt(row, mapping, "destinationCostAmount")),
+        settlementPrice: parseNumber(valueAt(row, mapping, "settlementPrice")),
         claimAmount: parseNumber(valueAt(row, mapping, "claimAmount")),
         salesAmount: parseNumber(valueAt(row, mapping, "salesAmount")),
         status: String(status || "").trim()
@@ -546,6 +555,9 @@
             record.purchaseCostAmount,
             record.sourceCostPrice,
             record.destinationCostPrice,
+            record.sourceCostAmount,
+            record.destinationCostAmount,
+            record.settlementPrice,
             record.transferAmount
           ]);
           const occurrence = (partCounts.get(signature) || 0) + 1;
@@ -736,6 +748,43 @@
     return { year, month };
   }
 
+  function isCompanyScope(scope) {
+    return scope === "included" || scope === "direct";
+  }
+
+  function sideCostAmount(transfer, side) {
+    const amountField = side === "source" ? "sourceCostAmount" : "destinationCostAmount";
+    const priceField = side === "source" ? "sourceCostPrice" : "destinationCostPrice";
+    if (transfer[amountField] != null) return Math.abs(transfer[amountField]);
+    if (transfer[priceField] != null) return Math.abs(transfer.qty || 0) * Math.abs(transfer[priceField]);
+    return null;
+  }
+
+  function transferBillingBasis(transfer, monthlyRecord) {
+    const sourceScope = classifyWarehouse(transfer.sourceWarehouse);
+    const destinationScope = classifyWarehouse(transfer.destinationWarehouse);
+    let companySide = null;
+    let oppositeSide = null;
+    if (isCompanyScope(sourceScope) && destinationScope === "franchise") {
+      companySide = "source";
+      oppositeSide = "destination";
+    } else if (sourceScope === "franchise" && isCompanyScope(destinationScope)) {
+      companySide = "destination";
+      oppositeSide = "source";
+    } else if (sourceScope === "franchise" && destinationScope === "franchise") {
+      const monthlyStore = normalizeText(monthlyRecord.store);
+      companySide = normalizeText(transfer.sourceWarehouse).includes(monthlyStore) ? "source" : "destination";
+      oppositeSide = companySide === "source" ? "destination" : "source";
+    } else {
+      return null;
+    }
+    const directAmount = sideCostAmount(transfer, companySide);
+    if (directAmount != null) return { amount: directAmount, estimated: false, basis: `${companySide === "source" ? "調出" : "調入"}方成本額` };
+    const oppositeAmount = sideCostAmount(transfer, oppositeSide);
+    if (oppositeAmount != null) return { amount: oppositeAmount * 1.11, estimated: true, basis: "另一方成本額×1.11輔助估算" };
+    return null;
+  }
+
   function movementMode(record) {
     const direction = normalizeText(record.direction || record.status || record.doc);
     if (direction.includes("出庫")) return "out";
@@ -799,6 +848,8 @@
     }
     if (record.reportType === "storeMonthly") return record.claimAmount;
     if (record.reportType === "transfers") {
+      if (record.sourceCostAmount != null) return record.sourceCostAmount;
+      if (record.destinationCostAmount != null) return record.destinationCostAmount;
       return record.transferAmount != null ? record.transferAmount : recordCost(record);
     }
     return recordCost(record);
@@ -950,17 +1001,18 @@
           }
         } else {
           match._monthlyMatched = true;
-          const settlementAmount = match.transferAmount != null
-            ? Math.abs(match.transferAmount)
-            : (match.sourceCostPrice != null ? Math.abs(match.qty || 0) * match.sourceCostPrice : null);
-          const amountDifference = record.claimAmount != null && settlementAmount != null
-            ? Math.abs(Math.abs(record.claimAmount) - settlementAmount)
-            : null;
-          const amountTolerance = record.claimAmount != null
-            ? Math.max(2, Math.abs(record.claimAmount) * 0.01)
-            : 2;
-          if (amountDifference != null && amountDifference > amountTolerance) {
-            addIssue(issues, "warning", "月結與調撥金額不同", record, `月結請款 ${displayNumber(record.claimAmount)}，調撥結算金額 ${displayNumber(settlementAmount)}。兩者僅作請款勾稽，不作A／B成本。`);
+          if (classifyWarehouse(record.store) === "franchise") {
+            const billingBasis = transferBillingBasis(match, record);
+            if (!billingBasis) {
+              addIssue(issues, "warning", "加盟月結缺少可比結算成本", record, "調撥單找不到可供請款核對的調出／調入方成本；本項只影響請款稽核，不作A／B成本。");
+            } else {
+              const roundedClaimAmount = Math.round(Math.abs(record.claimAmount || 0));
+              const roundedBillingAmount = Math.round(Math.abs(billingBasis.amount));
+              if (roundedClaimAmount !== roundedBillingAmount) {
+                addIssue(issues, "warning", "月結與調撥金額不同", record, `月結請款 ${displayNumber(record.claimAmount)}，調撥${billingBasis.basis} ${displayNumber(billingBasis.amount)}；四捨五入後分別為 ${displayNumber(roundedClaimAmount)} 與 ${displayNumber(roundedBillingAmount)}。兩者僅作請款勾稽，不作A／B成本。`);
+              }
+              if (billingBasis.estimated) addIssue(issues, "info", "加盟結算採1.11輔助估算", record, "調撥單缺少公司側成本額，已暫用另一方成本額×1.11進行請款稽核；A／B成本仍以進貨價相關欄位為準。");
+            }
           }
         }
       } else {
@@ -1198,21 +1250,24 @@
       [],
       ["成本規則"],
       ["A、B、C均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。"],
-      ["門市成本＝進貨價×1.1，門市月結金額為加盟請款金額，兩者均不直接作A／B成本。"],
+      ["門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。"],
+      ["02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。"],
       ["狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]
     ];
     const summary = makeSheet(XLSX, summaryRows, [30, 20, 22]);
     setNumberFormats(XLSX, summary, ["B6:B15"], "#,##0");
     setNumberFormats(XLSX, summary, ["C6:C15"], "#,##0.00");
     setNumberFormats(XLSX, summary, ["B18:B23"], "#,##0");
-    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", "A、B、C均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本＝進貨價×1.1，門市月結金額為加盟請款金額，兩者均不直接作A／B成本。", "狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]);
+    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", "A、B、C均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。", "02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。", "狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]);
     summary["!merges"] = summaryRows
       .map((row, index) => summaryMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 2 } } : null)
       .filter(Boolean);
     XLSX.utils.book_append_sheet(workbook, summary, "01_分析摘要");
 
     const detailHeaders = ["商品編號", "品名", "期初數量", "期初進貨價成本", "進貨數量", "進貨未稅額", "退廠數量", "退廠未稅額", "期末數量", "期末進貨價成本", "A數量", "A金額", "B數量", "B金額", "C數量", "C金額", "數量差異", "原始金額差異", "統一參考進貨價", "同價基準差異", "進貨價基準影響", "C組原因", "狀態", "建議排查方法"];
-    const detailRows = [detailHeaders, ...analysis.details.map((item) => [item.sku, item.name, item.openingQty, item.openingAmount, item.purchaseQty, item.purchaseAmount, item.supplierReturnQty, item.supplierReturnAmount, item.closingQty, item.closingAmount, item.aQty, item.aAmount, item.salesQty, item.salesAmount, item.adjustmentQty, item.adjustmentAmount, item.quantityDifference, item.rawAmountDifference, item.refPrice, item.standardizedDifference, item.priceBasisEffect, item.reasons, item.status, item.advice])];
+    const detailRow = (item) => [item.sku, item.name, item.openingQty, item.openingAmount, item.purchaseQty, item.purchaseAmount, item.supplierReturnQty, item.supplierReturnAmount, item.closingQty, item.closingAmount, item.aQty, item.aAmount, item.salesQty, item.salesAmount, item.adjustmentQty, item.adjustmentAmount, item.quantityDifference, item.rawAmountDifference, item.refPrice, item.standardizedDifference, item.priceBasisEffect, item.reasons, item.status, item.advice];
+    const differenceItems = analysis.details.filter((item) => item.status !== "通過");
+    const detailRows = [detailHeaders, ...differenceItems.map(detailRow)];
     const detailSheet = makeSheet(XLSX, detailRows, [16, 30, 12, 18, 12, 16, 12, 16, 12, 18, 12, 16, 12, 16, 12, 16, 12, 18, 16, 18, 18, 24, 18, 64], `A1:X${detailRows.length}`);
     const detailEndRow = Math.max(2, detailRows.length);
     setNumberFormats(XLSX, detailSheet, ["C", "E", "G", "I", "K", "M", "O", "Q"].map((column) => `${column}2:${column}${detailEndRow}`), "#,##0");
@@ -1277,6 +1332,12 @@
     setNumberFormats(XLSX, adjustmentSheet, [`M2:O${adjustmentEndRow}`], "#,##0.00");
     XLSX.utils.book_append_sheet(workbook, adjustmentSheet, "04_C組調整明細");
     XLSX.utils.book_append_sheet(workbook, sourceSheet, "05_來源檢查");
+    const allDetailRows = [detailHeaders, ...analysis.details.map(detailRow)];
+    const allDetailSheet = makeSheet(XLSX, allDetailRows, [16, 30, 12, 18, 12, 16, 12, 16, 12, 18, 12, 16, 12, 16, 12, 16, 12, 18, 16, 18, 18, 24, 18, 64], `A1:X${allDetailRows.length}`);
+    const allDetailEndRow = Math.max(2, allDetailRows.length);
+    setNumberFormats(XLSX, allDetailSheet, ["C", "E", "G", "I", "K", "M", "O", "Q"].map((column) => `${column}2:${column}${allDetailEndRow}`), "#,##0");
+    setNumberFormats(XLSX, allDetailSheet, ["D", "F", "H", "J", "L", "N", "P", "R", "S", "T", "U"].map((column) => `${column}2:${column}${allDetailEndRow}`), "#,##0.00");
+    XLSX.utils.book_append_sheet(workbook, allDetailSheet, "06_全部商品勾稽明細");
     return workbook;
   }
 
