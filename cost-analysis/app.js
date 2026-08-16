@@ -3,6 +3,8 @@
 
   const core = globalThis.InventoryCostCore;
   const XLSX = globalThis.XLSX;
+  const inventoryCore = globalThis.InventoryCore;
+  const rulesClient = globalThis.InventoryRulesClient;
   const requiredTypes = new Set(["opening", "closing", "purchases", "sales"]);
   const descriptions = {
     opening: "含總倉、直營與公司內各專用倉；排除加盟店倉。",
@@ -18,7 +20,11 @@
   const state = {
     sources: {},
     analysis: null,
-    outputWorkbook: null
+    outputWorkbook: null,
+    rules: null,
+    rulesVersion: null,
+    rulesUpdatedAt: "",
+    rulesReady: false
   };
 
   const uploadGrid = document.getElementById("upload-grid");
@@ -28,6 +34,8 @@
   const resultPanel = document.getElementById("result-panel");
   const summaryCards = document.getElementById("summary-cards");
   const resultRows = document.getElementById("result-rows");
+  const productRulesTitle = document.getElementById("product-rules-title");
+  const productRulesDetail = document.getElementById("product-rules-detail");
 
   function escapeHtml(value) {
     return String(value == null ? "" : value)
@@ -48,6 +56,34 @@
     resultPanel.hidden = true;
     downloadButton.disabled = true;
     if (message) mainStatus.textContent = message;
+  }
+
+  async function refreshRules(context) {
+    state.rulesReady = false;
+    productRulesTitle.textContent = "正在取得公司最新版商品規則";
+    productRulesDetail.textContent = "分析前會再次確認規則版本；若規則服務無法使用，系統將停止分析，避免使用不同版本。";
+    updateAnalyzeAvailability(true);
+    try {
+      const latest = await rulesClient.fetchLatest(globalThis.fetch.bind(globalThis), inventoryCore);
+      state.rules = latest.rules;
+      state.rulesVersion = latest.version;
+      state.rulesUpdatedAt = latest.updatedAt;
+      state.rulesReady = true;
+      const exclusions = latest.rules["排除關鍵字"] || [];
+      productRulesTitle.textContent = `目前使用：公司集中規則 v${latest.version}`;
+      productRulesDetail.textContent = `${rulesClient.formatUpdatedAt(latest.updatedAt)} 更新，共 ${exclusions.length} 項排除關鍵字：${exclusions.join("、") || "無"}。${context === "analysis" ? "已在分析前再次確認最新版。" : "開始分析前會再確認一次。"}`;
+      updateAnalyzeAvailability(true);
+      return latest;
+    } catch (error) {
+      state.rules = null;
+      state.rulesVersion = null;
+      state.rulesUpdatedAt = "";
+      state.rulesReady = false;
+      productRulesTitle.textContent = "公司集中規則服務目前無法使用";
+      productRulesDetail.textContent = "為避免誤用舊規則，本次禁止分析。請稍後重試或通知管理者。";
+      updateAnalyzeAvailability(true);
+      throw error;
+    }
   }
 
   function createCards() {
@@ -187,10 +223,11 @@
   function updateAnalyzeAvailability(preserveStatus = false) {
     const missingFiles = Array.from(requiredTypes).filter((type) => !state.sources[type]);
     const invalid = Object.keys(state.sources).filter((type) => !core.validateMapping(type, state.sources[type].mapping).valid);
-    analyzeButton.disabled = missingFiles.length > 0 || invalid.length > 0;
+    analyzeButton.disabled = missingFiles.length > 0 || invalid.length > 0 || !state.rulesReady;
     if (preserveStatus) return;
     if (missingFiles.length) mainStatus.textContent = `尚缺必要來源：${missingFiles.map((type) => core.REPORT_SCHEMAS[type].label).join("、")}`;
     else if (invalid.length) mainStatus.textContent = "部分報表的必要欄位尚未完成對應。";
+    else if (!state.rulesReady) mainStatus.textContent = "必要來源已就緒，但需先取得公司最新版商品規則。";
     else mainStatus.textContent = "必要來源與欄位已就緒，可以開始分析。";
   }
 
@@ -208,11 +245,13 @@
     resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  analyzeButton.addEventListener("click", () => {
+  analyzeButton.addEventListener("click", async () => {
     analyzeButton.disabled = true;
     downloadButton.disabled = true;
-    mainStatus.textContent = "正在整理八類來源並計算差異……";
+    mainStatus.textContent = "正在確認公司最新版商品規則……";
     try {
+      await refreshRules("analysis");
+      mainStatus.textContent = `已取得公司集中規則 v${state.rulesVersion}，正在整理八類來源並計算差異……`;
       const reports = {};
       for (const type of core.REPORT_ORDER) {
         const source = state.sources[type];
@@ -224,10 +263,14 @@
           fileName: source.file.name
         });
       }
-      state.analysis = core.analyzeReports(reports);
+      state.analysis = core.analyzeReports(reports, {
+        rules: state.rules,
+        rulesVersion: state.rulesVersion,
+        rulesUpdatedAt: state.rulesUpdatedAt
+      });
       state.outputWorkbook = core.buildOutputWorkbook(state.analysis, XLSX);
       renderResults(state.analysis);
-      mainStatus.textContent = `分析完成：${state.analysis.totals.itemCount}項商品，${state.analysis.totals.issueCount}項來源或配對問題。`;
+      mainStatus.textContent = `分析完成：使用公司集中規則 v${state.rulesVersion}，共${state.analysis.totals.itemCount}項商品，排除${state.analysis.exclusions.length}列，另有${state.analysis.totals.issueCount}項來源或配對問題。`;
       downloadButton.disabled = false;
     } catch (error) {
       mainStatus.textContent = `分析失敗：${error.message}`;
@@ -245,4 +288,7 @@
 
   createCards();
   updateAnalyzeAvailability();
+  refreshRules("load").catch(() => {
+    mainStatus.textContent = "公司集中規則服務目前無法使用；為避免誤用舊規則，本次禁止分析。";
+  });
 })();

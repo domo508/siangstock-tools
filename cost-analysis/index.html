@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="在瀏覽器本機完成的庫存成本分析與報表勾稽工具">
   <meta name="robots" content="noindex,nofollow">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'">
   <title>庫存成本分析｜翔仔居家</title>
   <link rel="stylesheet" href="style.css?v=20260816-initial">
 </head>
@@ -62,6 +62,11 @@
         <small>應包含：寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。請排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。</small>
       </div>
 
+      <div class="warehouse-note" role="note">
+        <strong id="product-rules-title">正在取得公司最新版商品規則</strong>
+        <small id="product-rules-detail">分析前會再次確認規則版本；若規則服務無法使用，系統將停止分析，避免使用不同版本。</small>
+      </div>
+
       <div id="upload-grid" class="upload-grid"></div>
 
       <div class="action-bar">
@@ -102,7 +107,7 @@
         <article><strong>門市成本不進A／B</strong><p>門市成本＝進貨價×1.1；門市月結金額是加盟請款，只用於月結與調撥勾稽。</p></article>
         <article><strong>總倉代出不要求調撥單</strong><p>第5類以門市月結搭配銷售成本或總倉出庫核對；直營月結只作記錄。</p></article>
         <article><strong>客退不另上傳</strong><p>銷售成本負值沖回B，客退入庫單只確認回到哪個倉，不再列為盤盈。</p></article>
-        <article><strong>運費不是庫存商品</strong><p>加盟月結的代墊運費保留請款核對，但排除商品數量與成本。</p></article>
+        <article><strong>共用公司商品排除規則</strong><p>八類來源均依「歷史庫存資料清洗」的公司最新版規則判斷，排除明細保留在來源檢查。</p></article>
       </div>
     </section>
 
@@ -113,7 +118,9 @@
   </main>
 
   <script src="../inventory/assets/xlsx.full.min.js"></script>
-  <script src="core.js?v=20260816-initial"></script>
-  <script src="app.js?v=20260816-initial"></script>
+  <script src="../inventory/core.js?v=20260816-shared-rules"></script>
+  <script src="../inventory/rules-client.js?v=20260816-shared-rules"></script>
+  <script src="core.js?v=20260816-shared-rules"></script>
+  <script src="app.js?v=20260816-shared-rules"></script>
 </body>
 </html>

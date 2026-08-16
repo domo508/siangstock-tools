@@ -186,6 +186,67 @@ describe("庫存成本分析核心規則", () => {
     expect(workbook.SheetNames).toEqual(["01_分析摘要", "02_商品差異明細", "03_未配對資料", "04_來源檢查"]);
   });
 
+  it("八類來源共用集中排除規則，並保留逐列排除數量與金額", () => {
+    const excludedName = "活動折扣券";
+    const reports = {
+      opening: report("opening", [{ sku: "X1", name: excludedName, warehouse: "寬承總倉", qty: 1, purchasePrice: 10 }]),
+      closing: report("closing", [{ sku: "X1", name: excludedName, warehouse: "寬承總倉", qty: 1, purchasePrice: 10 }]),
+      purchases: report("purchases", [{ sku: "X1", name: excludedName, qty: 1, purchasePrice: 10, untaxedAmount: 10 }]),
+      sales: report("sales", [{ sku: "X1", name: excludedName, qty: 1, purchasePrice: 10 }]),
+      storeMonthly: report("storeMonthly", [{ sku: "X1", name: excludedName, store: "台中文心秀泰專櫃", reconcileType: "1", qty: 1, claimAmount: 11 }]),
+      movements: report("movements", [{ sku: "X1", name: excludedName, qty: 1, direction: "出庫", reason: "公關贈送", purchasePrice: 10 }]),
+      supplierReturns: report("supplierReturns", [{ sku: "X1", name: excludedName, qty: 1, purchasePrice: 10, untaxedAmount: 10 }]),
+      transfers: report("transfers", [{ sku: "X1", name: excludedName, sourceWarehouse: "寬承總倉", destinationWarehouse: "台中文心秀泰專櫃", qty: 1, purchasePrice: 10, transferAmount: 11 }])
+    };
+    const analysis = core.analyzeReports(reports, {
+      rules: { "排除關鍵字": ["折扣券"], "待人工確認關鍵字": [], "指定品名白名單": [] },
+      rulesVersion: 5,
+      rulesUpdatedAt: "2026-08-13T09:51:21.000Z"
+    });
+    expect(analysis.details).toHaveLength(0);
+    expect(analysis.exclusions).toHaveLength(8);
+    expect(analysis.exclusions.every((row) => row.keywords === "折扣券")).toBe(true);
+    expect(analysis.sourceChecks.every((row) => row.ruleExcludedRows === 1)).toBe(true);
+    expect(analysis.issues.every((issue) => issue.level === "info")).toBe(true);
+  });
+
+  it("完整品名白名單優先於排除關鍵字，待確認商品仍納入但提出警示", () => {
+    const rules = {
+      "排除關鍵字": ["樣品"],
+      "待人工確認關鍵字": ["特殊"],
+      "指定品名白名單": ["樣品正常商品"]
+    };
+    const reports = {
+      opening: report("opening", [
+        { sku: "W1", name: "樣品正常商品", warehouse: "寬承總倉", qty: 2, purchasePrice: 10 },
+        { sku: "R1", name: "特殊商品", warehouse: "寬承總倉", qty: 1, purchasePrice: 10 }
+      ]),
+      closing: report("closing", [
+        { sku: "W1", name: "樣品正常商品", warehouse: "寬承總倉", qty: 2, purchasePrice: 10 },
+        { sku: "R1", name: "特殊商品", warehouse: "寬承總倉", qty: 1, purchasePrice: 10 }
+      ])
+    };
+    const analysis = core.analyzeReports(reports, { rules, rulesVersion: 6 });
+    expect(analysis.details.map((row) => row.sku).sort()).toEqual(["R1", "W1"]);
+    expect(analysis.exclusions).toHaveLength(0);
+    expect(analysis.issues.filter((issue) => issue.type === "集中規則待人工確認")).toHaveLength(2);
+  });
+
+  it("輸出來源檢查包含集中規則版本與排除明細", () => {
+    const reports = {
+      opening: report("opening", [{ sku: "E1", name: "門市運費", warehouse: "寬承總倉", qty: 3, purchasePrice: 20 }])
+    };
+    const analysis = core.analyzeReports(reports, {
+      rules: { "排除關鍵字": ["運費"], "待人工確認關鍵字": [], "指定品名白名單": [] },
+      rulesVersion: 5,
+      rulesUpdatedAt: "2026-08-13T09:51:21.000Z"
+    });
+    const workbook = core.buildOutputWorkbook(analysis, XLSX);
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets["04_來源檢查"], { header: 1, defval: "" });
+    expect(rows.some((row) => row[0] === "規則版本" && row[1] === "v5")).toBe(true);
+    expect(rows.some((row) => row[4] === "門市運費" && row[7] === "運費")).toBe(true);
+  });
+
   it("門市互調的第3與第4類可共同配對同一筆調撥單", () => {
     const reports = {
       ...baseInventory("M1", 5, 5),
@@ -212,7 +273,9 @@ describe("庫存成本分析前台", () => {
     expect(html).toContain("請排除加盟店倉");
     expect(html).toContain("選擇八類報表");
     expect(html).toContain("不會傳到網站、Cloudflare或其他伺服器");
-    expect(app).not.toContain("fetch(");
+    expect(html).toContain("公司最新版商品規則");
+    expect(html).toContain("../inventory/rules-client.js");
+    expect(app).toContain("rulesClient.fetchLatest");
     expect(app).not.toContain("XMLHttpRequest");
   });
 });

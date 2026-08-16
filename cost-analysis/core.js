@@ -187,6 +187,11 @@
   ];
 
   const CANCELLED_WORDS = ["取消", "作廢", "刪除", "不成立", "未成立"];
+  const DEFAULT_PRODUCT_RULES = {
+    "排除關鍵字": ["運費"],
+    "待人工確認關鍵字": [],
+    "指定品名白名單": []
+  };
   const SHEET_NAME_HINTS = {
     opening: ["期初庫存", "期初"],
     closing: ["期末庫存", "期末"],
@@ -230,6 +235,35 @@
   function isFreight(name) {
     const text = normalizeText(name);
     return text.includes("運費");
+  }
+
+  function normalizeRuleText(value) {
+    return String(value == null ? "" : value).normalize("NFKC").toLocaleLowerCase("zh-Hant").trim().replace(/\s+/g, "");
+  }
+
+  function normalizeRuleExact(value) {
+    return String(value == null ? "" : value).normalize("NFKC").toLocaleLowerCase("zh-Hant").trim();
+  }
+
+  function productRuleResult(name, rules) {
+    const activeRules = rules && typeof rules === "object" ? rules : DEFAULT_PRODUCT_RULES;
+    const exclusions = Array.isArray(activeRules["排除關鍵字"]) ? activeRules["排除關鍵字"] : [];
+    const reviews = Array.isArray(activeRules["待人工確認關鍵字"]) ? activeRules["待人工確認關鍵字"] : [];
+    const whitelist = Array.isArray(activeRules["指定品名白名單"]) ? activeRules["指定品名白名單"] : [];
+    const normalizedName = normalizeRuleText(name);
+    const exactName = normalizeRuleExact(name);
+    if (exactName && whitelist.some((value) => normalizeRuleExact(value) === exactName)) {
+      return { category: "normal", keywords: [], reason: `完整品名命中白名單：${String(name).trim()}` };
+    }
+    const exclusionMatches = exclusions.filter((keyword) => normalizedName.includes(normalizeRuleText(keyword)));
+    if (exclusionMatches.length) {
+      return { category: "excluded", keywords: exclusionMatches, reason: `命中排除關鍵字：${exclusionMatches[0]}` };
+    }
+    const reviewMatches = reviews.filter((keyword) => normalizedName.includes(normalizeRuleText(keyword)));
+    if (reviewMatches.length) {
+      return { category: "review", keywords: reviewMatches, reason: `命中待確認關鍵字：${reviewMatches[0]}` };
+    }
+    return { category: "normal", keywords: [], reason: "未命中排除或待確認關鍵字" };
   }
 
   function classifyWarehouse(value) {
@@ -653,16 +687,38 @@
     return item.referencePrices.length ? item.referencePrices[item.referencePrices.length - 1].price : 0;
   }
 
-  function analyzeReports(reports) {
+  function sourceAmount(record) {
+    if (record.reportType === "purchases" || record.reportType === "supplierReturns") {
+      return record.untaxedAmount != null ? record.untaxedAmount : recordCost(record);
+    }
+    if (record.reportType === "storeMonthly") return record.claimAmount;
+    if (record.reportType === "transfers") {
+      return record.transferAmount != null ? record.transferAmount : recordCost(record);
+    }
+    return recordCost(record);
+  }
+
+  function analyzeReports(reports, options) {
     const items = new Map();
     const issues = [];
     const sourceChecks = [];
-    const getRecords = (type) => reports[type] && Array.isArray(reports[type].records) ? reports[type].records : [];
+    const exclusions = [];
+    const productRules = options && options.rules ? options.rules : DEFAULT_PRODUCT_RULES;
+    const ruleContext = {
+      version: options && options.rulesVersion != null ? options.rulesVersion : "內建預設",
+      updatedAt: options && options.rulesUpdatedAt ? options.rulesUpdatedAt : "",
+      exclusions: Array.isArray(productRules["排除關鍵字"]) ? [...productRules["排除關鍵字"]] : [],
+      reviews: Array.isArray(productRules["待人工確認關鍵字"]) ? [...productRules["待人工確認關鍵字"]] : [],
+      whitelist: Array.isArray(productRules["指定品名白名單"]) ? [...productRules["指定品名白名單"]] : []
+    };
+    const sourceCheckByType = new Map();
 
     for (const type of REPORT_ORDER) {
+      let sourceCheck;
       if (reports[type] && reports[type].meta) {
         const meta = reports[type].meta;
-        sourceChecks.push({
+        sourceCheck = {
+          reportType: type,
           source: meta.label,
           fileName: meta.fileName,
           sheetName: meta.sheetName,
@@ -670,19 +726,61 @@
           rawRows: meta.rawRows,
           acceptedRows: meta.acceptedRows,
           cancelledRows: meta.cancelledRows,
+          parsedQty: 0,
+          parsedAmount: 0,
+          ruleExcludedRows: 0,
+          ruleExcludedQty: 0,
+          ruleExcludedAmount: 0,
+          reviewRows: 0,
           note: ""
-        });
+        };
       } else {
-        sourceChecks.push({ source: REPORT_SCHEMAS[type].label, fileName: "未匯入", sheetName: "", headerRow: "", rawRows: 0, acceptedRows: 0, cancelledRows: 0, note: type === "opening" || type === "closing" || type === "purchases" || type === "sales" ? "必要來源未匯入" : "本月無資料時可略過" });
+        sourceCheck = { reportType: type, source: REPORT_SCHEMAS[type].label, fileName: "未匯入", sheetName: "", headerRow: "", rawRows: 0, acceptedRows: 0, cancelledRows: 0, parsedQty: 0, parsedAmount: 0, ruleExcludedRows: 0, ruleExcludedQty: 0, ruleExcludedAmount: 0, reviewRows: 0, note: type === "opening" || type === "closing" || type === "purchases" || type === "sales" ? "必要來源未匯入" : "本月無資料時可略過" };
       }
+      sourceChecks.push(sourceCheck);
+      sourceCheckByType.set(type, sourceCheck);
     }
+
+    const filteredRecords = {};
+    for (const type of REPORT_ORDER) {
+      const records = reports[type] && Array.isArray(reports[type].records) ? reports[type].records : [];
+      const sourceCheck = sourceCheckByType.get(type);
+      filteredRecords[type] = records.filter((record) => {
+        const amount = sourceAmount(record);
+        sourceCheck.parsedQty += record.qty || 0;
+        if (amount != null) sourceCheck.parsedAmount += amount;
+        const result = productRuleResult(record.name, productRules);
+        if (result.category === "excluded") {
+          sourceCheck.ruleExcludedRows += 1;
+          sourceCheck.ruleExcludedQty += record.qty || 0;
+          if (amount != null) sourceCheck.ruleExcludedAmount += amount;
+          exclusions.push({
+            source: REPORT_SCHEMAS[type].label,
+            row: record.sourceRow || "",
+            doc: record.doc || record.relatedDoc || "",
+            sku: record.sku || "",
+            name: record.name || "",
+            qty: record.qty || 0,
+            amount: amount == null ? "" : amount,
+            keywords: result.keywords.join("、"),
+            reason: result.reason
+          });
+          return false;
+        }
+        if (result.category === "review") {
+          sourceCheck.reviewRows += 1;
+          addIssue(issues, "warning", "集中規則待人工確認", record, `${result.reason}；本次仍納入計算，請人工確認。`);
+        }
+        return true;
+      });
+      sourceCheck.ruleIncludedRows = records.length - sourceCheck.ruleExcludedRows;
+      sourceCheck.ruleIncludedQty = sourceCheck.parsedQty - sourceCheck.ruleExcludedQty;
+      sourceCheck.ruleIncludedAmount = sourceCheck.parsedAmount - sourceCheck.ruleExcludedAmount;
+    }
+    const getRecords = (type) => filteredRecords[type] || [];
 
     for (const type of ["opening", "closing"]) {
       for (const record of getRecords(type)) {
-        if (isFreight(record.name)) {
-          addIssue(issues, "info", "排除庫存運費", record, "運費不是庫存商品，未納入期初或期末庫存。" );
-          continue;
-        }
         const scope = classifyWarehouse(record.warehouse);
         if (scope === "franchise") {
           addIssue(issues, "info", "排除加盟店倉", record, `${record.warehouse}不屬總公司庫存範圍，未納入${REPORT_SCHEMAS[type].label}。`);
@@ -707,10 +805,6 @@
     }
 
     for (const record of getRecords("purchases")) {
-      if (isFreight(record.name)) {
-        addIssue(issues, "info", "排除進貨運費", record, "運費不是庫存商品，未納入A。" );
-        continue;
-      }
       const item = getOrCreateItem(items, record);
       const qty = Math.abs(record.qty || 0);
       const amount = record.untaxedAmount != null ? Math.abs(record.untaxedAmount) : Math.abs(recordCost(record) || 0);
@@ -720,10 +814,6 @@
     }
 
     for (const record of getRecords("supplierReturns")) {
-      if (isFreight(record.name)) {
-        addIssue(issues, "info", "排除退廠運費", record, "運費不是庫存商品，未納入供應商退貨。" );
-        continue;
-      }
       const item = getOrCreateItem(items, record);
       const qty = Math.abs(record.qty || 0);
       const amount = record.untaxedAmount != null ? Math.abs(record.untaxedAmount) : Math.abs(recordCost(record) || 0);
@@ -737,10 +827,6 @@
     const monthly = getRecords("storeMonthly");
 
     for (const record of monthly) {
-      if (isFreight(record.name)) {
-        addIssue(issues, "info", "排除非庫存運費", record, `請款金額${record.claimAmount == null ? "" : ` ${record.claimAmount}`}保留核對，但不納入庫存數量與成本。`);
-        continue;
-      }
       const direction = monthlyDirection(record);
       if (!direction.type) {
         addIssue(issues, "error", "無法辨識對帳總類", record, `對帳總類「${record.reconcileType}」不在1至5類規則內。`);
@@ -815,10 +901,6 @@
     }
 
     for (const transfer of transfers) {
-      if (isFreight(transfer.name)) {
-        addIssue(issues, "info", "排除調撥運費", transfer, "運費不是庫存商品，未納入B，也不要求月結配對。" );
-        continue;
-      }
       const sourceScope = classifyWarehouse(transfer.sourceWarehouse);
       const destinationScope = classifyWarehouse(transfer.destinationWarehouse);
       let sign = 0;
@@ -848,10 +930,6 @@
 
     for (const sale of sales) {
       if (sale._used) continue;
-      if (isFreight(sale.name)) {
-        addIssue(issues, "info", "排除銷售運費", sale, "運費不是庫存商品，未納入B。" );
-        continue;
-      }
       const item = getOrCreateItem(items, sale);
       const qty = sale.qty || 0;
       const amount = recordCost(sale);
@@ -863,10 +941,6 @@
 
     for (const movement of movements) {
       if (movement._used) continue;
-      if (isFreight(movement.name)) {
-        addIssue(issues, "info", "排除出入庫運費", movement, "運費不是庫存商品，未納入C。" );
-        continue;
-      }
       const rule = adjustmentRule(movement);
       if (!rule) continue;
       const item = getOrCreateItem(items, movement);
@@ -918,7 +992,7 @@
     totals.quantityIssueCount = details.filter((item) => item.status === "數量差異").length;
     totals.amountOnlyIssueCount = details.filter((item) => item.status === "僅金額差異").length;
 
-    return { details, issues, sourceChecks, totals, generatedAt: new Date().toISOString() };
+    return { details, issues, sourceChecks, exclusions, ruleContext, totals, generatedAt: new Date().toISOString() };
   }
 
   function setSheetLayout(sheet, widths, filterRange) {
@@ -935,9 +1009,12 @@
   function buildOutputWorkbook(analysis, XLSX) {
     const workbook = XLSX.utils.book_new();
     const t = analysis.totals;
+    const ruleContext = analysis.ruleContext || { version: "內建預設", updatedAt: "", exclusions: ["運費"], reviews: [], whitelist: [] };
     const summaryRows = [
       ["庫存成本分析摘要"],
       ["產生時間", analysis.generatedAt],
+      ["集中排除規則", `公司集中規則 v${ruleContext.version}`, ruleContext.updatedAt || ""],
+      ["排除關鍵字", `${ruleContext.exclusions.length}項；完整清單與逐列排除明細請見04_來源檢查`],
       ["計算項目", "數量", "進貨價成本金額"],
       ["期初庫存", t.openingQty, t.openingAmount],
       ["當月進貨", t.purchaseQty, t.purchaseAmount],
@@ -962,7 +1039,10 @@
       ["門市成本＝進貨價×1.1，門市月結金額為加盟請款金額，兩者均不直接作A／B成本。"]
     ];
     const summary = makeSheet(XLSX, summaryRows, [30, 20, 22]);
-    summary["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 2 } }, { s: { r: 21, c: 0 }, e: { r: 21, c: 2 } }, { s: { r: 22, c: 0 }, e: { r: 22, c: 2 } }, { s: { r: 23, c: 0 }, e: { r: 23, c: 2 } }];
+    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", "A、B、C均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本＝進貨價×1.1，門市月結金額為加盟請款金額，兩者均不直接作A／B成本。"]);
+    summary["!merges"] = summaryRows
+      .map((row, index) => summaryMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 2 } } : null)
+      .filter(Boolean);
     XLSX.utils.book_append_sheet(workbook, summary, "01_分析摘要");
 
     const detailHeaders = ["商品編號", "品名", "期初數量", "期初進貨價成本", "進貨數量", "進貨未稅額", "退廠數量", "退廠未稅額", "期末數量", "期末進貨價成本", "A數量", "A金額", "B數量", "B金額", "C數量", "C金額", "數量差異", "原始金額差異", "統一參考進貨價", "同價基準差異", "進貨價基準影響", "C組原因", "狀態"];
@@ -976,24 +1056,35 @@
     const issueSheet = makeSheet(XLSX, issueRows, [10, 24, 22, 10, 18, 16, 28, 70], `A1:H${issueRows.length}`);
     XLSX.utils.book_append_sheet(workbook, issueSheet, "03_未配對資料");
 
-    const sourceHeaders = ["報表種類", "檔名", "工作表", "表頭列", "原始資料列", "納入列", "取消／作廢列", "備註"];
+    const sourceHeaders = ["報表種類", "檔名", "工作表", "表頭列", "原始資料列", "解析有效列", "有效數量", "有效來源金額", "規則排除列", "排除數量", "排除來源金額", "規則後列數", "規則後數量", "規則後來源金額", "待確認列", "取消／作廢列", "備註"];
     const sourceRows = [
       sourceHeaders,
-      ...analysis.sourceChecks.map((row) => [row.source, row.fileName, row.sheetName, row.headerRow, row.rawRows, row.acceptedRows, row.cancelledRows, row.note]),
+      ...analysis.sourceChecks.map((row) => [row.source, row.fileName, row.sheetName, row.headerRow, row.rawRows, row.acceptedRows, row.parsedQty || 0, row.parsedAmount || 0, row.ruleExcludedRows || 0, row.ruleExcludedQty || 0, row.ruleExcludedAmount || 0, row.ruleIncludedRows || 0, row.ruleIncludedQty || 0, row.ruleIncludedAmount || 0, row.reviewRows || 0, row.cancelledRows, row.note]),
       [],
       ["期初／期末應納入倉別"],
       ["寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。"],
       [],
       ["報表專用成本規則"],
-      ["當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C成本優先採進貨價相關欄位。"]
+      ["當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C成本優先採進貨價相關欄位。"],
+      [],
+      ["公司集中商品規則"],
+      ["規則版本", `v${ruleContext.version}`, ruleContext.updatedAt || ""],
+      ["排除關鍵字", ruleContext.exclusions.join("、") || "無"],
+      ["待確認關鍵字", ruleContext.reviews.join("、") || "無"],
+      ["指定品名白名單", ruleContext.whitelist.join("、") || "無"],
+      ["判斷順序", "完整品名白名單優先，其次排除關鍵字，再其次待人工確認關鍵字。"],
+      [],
+      ["集中規則排除明細"],
+      ["來源報表", "來源列", "單據編號", "商品編號", "品名", "數量", "來源金額", "命中關鍵字", "排除原因"],
+      ...(analysis.exclusions && analysis.exclusions.length
+        ? analysis.exclusions.map((row) => [row.source, row.row, row.doc, row.sku, row.name, row.qty, row.amount, row.keywords, row.reason])
+        : [["本次沒有集中規則排除資料"]])
     ];
-    const sourceSheet = makeSheet(XLSX, sourceRows, [26, 34, 22, 10, 14, 12, 16, 80]);
-    sourceSheet["!merges"] = [
-      { s: { r: analysis.sourceChecks.length + 2, c: 0 }, e: { r: analysis.sourceChecks.length + 2, c: 7 } },
-      { s: { r: analysis.sourceChecks.length + 3, c: 0 }, e: { r: analysis.sourceChecks.length + 3, c: 7 } },
-      { s: { r: analysis.sourceChecks.length + 5, c: 0 }, e: { r: analysis.sourceChecks.length + 5, c: 7 } },
-      { s: { r: analysis.sourceChecks.length + 6, c: 0 }, e: { r: analysis.sourceChecks.length + 6, c: 7 } }
-    ];
+    const sourceSheet = makeSheet(XLSX, sourceRows, [26, 34, 22, 10, 14, 14, 14, 18, 14, 14, 18, 14, 14, 20, 12, 16, 80]);
+    const sourceMergeLabels = new Set(["期初／期末應納入倉別", "寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。", "報表專用成本規則", "當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C成本優先採進貨價相關欄位。", "公司集中商品規則", "集中規則排除明細"]);
+    sourceSheet["!merges"] = sourceRows
+      .map((row, index) => sourceMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 16 } } : null)
+      .filter(Boolean);
     XLSX.utils.book_append_sheet(workbook, sourceSheet, "04_來源檢查");
     return workbook;
   }
@@ -1004,9 +1095,11 @@
     INCLUDED_WAREHOUSES,
     DIRECT_STORES,
     FRANCHISE_STORES,
+    DEFAULT_PRODUCT_RULES,
     normalizeText,
     parseNumber,
     isFreight,
+    productRuleResult,
     classifyWarehouse,
     fieldLabel,
     autoMapHeaders,
