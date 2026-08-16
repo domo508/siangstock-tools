@@ -175,7 +175,7 @@ describe("庫存成本分析核心規則", () => {
     expect(analysis.issues.some((issue) => issue.type.includes("缺少月結"))).toBe(false);
   });
 
-  it("公司內部調撥不進B，輸出整合為同一活頁簿四個頁籤", () => {
+  it("公司內部調撥不進B，輸出整合為同一活頁簿五個頁籤", () => {
     const reports = {
       ...baseInventory("I1", 5, 5),
       transfers: report("transfers", [{ sku: "I1", name: "商品I1", sourceWarehouse: "寬承總倉", destinationWarehouse: "瑕疵倉", qty: 1, purchasePrice: 10 }])
@@ -183,7 +183,51 @@ describe("庫存成本分析核心規則", () => {
     const analysis = core.analyzeReports(reports);
     expect(analysis.details[0].salesQty).toBe(0);
     const workbook = core.buildOutputWorkbook(analysis, XLSX);
-    expect(workbook.SheetNames).toEqual(["01_分析摘要", "02_商品差異明細", "03_未配對資料", "04_來源檢查"]);
+    expect(workbook.SheetNames).toEqual(["01_分析摘要", "02_商品差異明細", "03_未配對資料", "04_C組調整明細", "05_來源檢查"]);
+  });
+
+  it("將商品差異拆成四種互斥狀態並提供排查建議", () => {
+    const reports = {
+      opening: report("opening", [
+        { sku: "PASS", name: "通過商品", warehouse: "寬承總倉", qty: 1, purchasePrice: 10 },
+        { sku: "QTY", name: "僅數量商品", warehouse: "寬承總倉", qty: 1, purchasePrice: 10 },
+        { sku: "AMT", name: "僅金額商品", warehouse: "寬承總倉", qty: 1, purchasePrice: 10 },
+        { sku: "BOTH", name: "數量金額商品", warehouse: "寬承總倉", qty: 1, purchasePrice: 10 }
+      ]),
+      closing: report("closing", [
+        { sku: "PASS", name: "通過商品", warehouse: "寬承總倉", qty: 0, purchasePrice: 10 },
+        { sku: "QTY", name: "僅數量商品", warehouse: "寬承總倉", qty: 0, purchasePrice: 10 },
+        { sku: "AMT", name: "僅金額商品", warehouse: "寬承總倉", qty: 0, purchasePrice: 10 },
+        { sku: "BOTH", name: "數量金額商品", warehouse: "寬承總倉", qty: 0, purchasePrice: 10 }
+      ]),
+      sales: report("sales", [
+        { sku: "PASS", name: "通過商品", qty: 1, purchaseCostAmount: 10 },
+        { sku: "QTY", name: "僅數量商品", qty: 0, purchaseCostAmount: 10 },
+        { sku: "AMT", name: "僅金額商品", qty: 1, purchaseCostAmount: 8 }
+      ])
+    };
+    const analysis = core.analyzeReports(reports);
+    const statuses = Object.fromEntries(analysis.details.map((item) => [item.sku, item.status]));
+    expect(statuses).toEqual({ BOTH: "數量＆金額差異", AMT: "僅金額差異", PASS: "通過", QTY: "僅數量差異" });
+    expect(analysis.details.every((item) => item.advice)).toBe(true);
+    expect(analysis.totals.quantityOnlyIssueCount).toBe(1);
+    expect(analysis.totals.amountOnlyIssueCount).toBe(1);
+    expect(analysis.totals.quantityAmountIssueCount).toBe(1);
+  });
+
+  it("C組頁籤逐筆列出非銷售出入庫調整及成本說明", () => {
+    const reports = {
+      ...baseInventory("C1", 10, 9, 20),
+      movements: report("movements", [{ doc: "OT1", sku: "C1", name: "商品C1", warehouse: "寬承總倉", qty: 1, direction: "出庫單", reason: "公關贈送", purchasePrice: 20 }])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.adjustmentDetails).toHaveLength(1);
+    expect(analysis.adjustmentDetails[0]).toMatchObject({ category: "公關贈送", sourceDirection: "出庫", adjustmentQty: 1, adjustmentAmount: 20 });
+    const workbook = core.buildOutputWorkbook(analysis, XLSX);
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets["04_C組調整明細"], { header: 1, defval: "" });
+    expect(rows[0]).toContain("納入說明");
+    expect(rows[1]).toContain("非銷售出庫，C列正數，於A－B－C中扣除。");
+    expect(XLSX.utils.format_cell(workbook.Sheets["04_C組調整明細"]["O2"])).toBe("20.00");
   });
 
   it("八類來源共用集中排除規則，並保留逐列排除數量與金額", () => {
@@ -242,7 +286,7 @@ describe("庫存成本分析核心規則", () => {
       rulesUpdatedAt: "2026-08-13T09:51:21.000Z"
     });
     const workbook = core.buildOutputWorkbook(analysis, XLSX);
-    const rows = XLSX.utils.sheet_to_json(workbook.Sheets["04_來源檢查"], { header: 1, defval: "" });
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets["05_來源檢查"], { header: 1, defval: "" });
     expect(rows.some((row) => row[0] === "規則版本" && row[1] === "v5")).toBe(true);
     expect(rows.some((row) => row[4] === "門市運費" && row[7] === "運費")).toBe(true);
   });

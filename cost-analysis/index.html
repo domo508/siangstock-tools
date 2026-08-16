@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex,nofollow">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'">
   <title>庫存成本分析｜翔仔居家</title>
-  <link rel="stylesheet" href="style.css?v=20260816-initial">
+  <link rel="stylesheet" href="style.css?v=20260816-status-c-detail">
 </head>
 <body>
   <main class="page-shell">
@@ -45,7 +45,7 @@
     <section class="steps" aria-label="使用步驟">
       <div><span>1</span><strong>選擇八類報表</strong><small>本月沒有資料的選填報表可以略過。</small></div>
       <div><span>2</span><strong>確認欄位對應</strong><small>系統會自動辨識，也可以人工修正。</small></div>
-      <div><span>3</span><strong>分析並下載</strong><small>產生同一份Excel的四個頁籤。</small></div>
+      <div><span>3</span><strong>分析並下載</strong><small>產生同一份Excel的五個頁籤。</small></div>
     </section>
 
     <section class="panel" aria-labelledby="upload-title">
@@ -87,11 +87,11 @@
       <div id="summary-cards" class="summary-grid"></div>
       <div class="result-table-wrap">
         <table>
-          <thead><tr><th>商品編號</th><th>品名</th><th>A數量</th><th>B數量</th><th>C數量</th><th>未解釋數量</th><th>未解釋金額</th><th>狀態</th></tr></thead>
+          <thead><tr><th>商品編號</th><th>品名</th><th>A數量</th><th>B數量</th><th>C數量</th><th>未解釋數量</th><th>未解釋金額</th><th>狀態</th><th>建議排查方法</th></tr></thead>
           <tbody id="result-rows"></tbody>
         </table>
       </div>
-      <p class="result-note">畫面只顯示差異最大的前20項；完整明細、未配對資料與來源檢查請下載Excel查看。</p>
+      <p class="result-note">畫面只顯示差異最大的前20項；完整商品明細、未配對資料、來源檢查與C組調整細項請下載Excel查看。</p>
     </section>
 
     <section class="panel rules-panel" aria-labelledby="rules-title">
@@ -108,6 +108,7 @@
         <article><strong>總倉代出不要求調撥單</strong><p>第5類以門市月結搭配銷售成本或總倉出庫核對；直營月結只作記錄。</p></article>
         <article><strong>客退不另上傳</strong><p>銷售成本負值沖回B，客退入庫單只確認回到哪個倉，不再列為盤盈。</p></article>
         <article><strong>共用公司商品排除規則</strong><p>八類來源均依「歷史庫存資料清洗」的公司最新版規則判斷，排除明細保留在來源檢查。</p></article>
+        <article><strong>差異狀態分開判斷</strong><p>區分通過、僅數量差異、僅金額差異及數量＆金額差異，並提供對應排查建議。</p></article>
       </div>
     </section>
 
@@ -120,7 +121,7 @@
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="../inventory/core.js?v=20260816-shared-rules"></script>
   <script src="../inventory/rules-client.js?v=20260816-shared-rules"></script>
-  <script src="core.js?v=20260816-shared-rules"></script>
-  <script src="app.js?v=20260816-shared-rules"></script>
+  <script src="core.js?v=20260816-status-c-detail"></script>
+  <script src="app.js?v=20260816-status-c-detail"></script>
 </body>
 </html>

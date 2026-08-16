@@ -691,6 +691,25 @@
     return item.referencePrices.length ? item.referencePrices[item.referencePrices.length - 1].price : 0;
   }
 
+  function differenceStatus(quantityDifference, amountDifference) {
+    const hasQuantityDifference = Math.abs(quantityDifference) >= EPSILON;
+    const hasAmountDifference = Math.abs(amountDifference) >= 1;
+    if (hasQuantityDifference && hasAmountDifference) return "數量＆金額差異";
+    if (hasQuantityDifference) return "僅數量差異";
+    if (hasAmountDifference) return "僅金額差異";
+    return "通過";
+  }
+
+  function investigationAdvice(status, item) {
+    const cReasonNote = item.reasons.size
+      ? `先確認C組「${Array.from(item.reasons).join("、")}」是否完整，`
+      : "";
+    if (status === "數量＆金額差異") return `${cReasonNote}先查期初／期末倉別範圍、銷售／調撥／出入庫漏單、品號與正負方向；數量釐清後，再核對進貨價及未稅成本。`;
+    if (status === "僅數量差異") return `${cReasonNote}檢查期初／期末倉別範圍、銷售／調撥／出入庫漏單、品號與正負方向；金額已在1元容許值內。`;
+    if (status === "僅金額差異") return "數量已平衡；核對期初／期末進貨價、進貨／退廠未稅額及銷售進貨價成本。";
+    return "數量與金額皆在容許值內，原則上無需排查。";
+  }
+
   function sourceAmount(record) {
     if (record.reportType === "purchases" || record.reportType === "supplierReturns") {
       return record.untaxedAmount != null ? record.untaxedAmount : recordCost(record);
@@ -707,6 +726,7 @@
     const issues = [];
     const sourceChecks = [];
     const exclusions = [];
+    const adjustmentDetails = [];
     const productRules = options && options.rules ? options.rules : DEFAULT_PRODUCT_RULES;
     const ruleContext = {
       version: options && options.rulesVersion != null ? options.rulesVersion : "內建預設",
@@ -960,6 +980,39 @@
       if (directMovementCost == null && !fallbackMovementPrice) addIssue(issues, "error", "出入庫缺少進貨價成本", movement, "無法從期末、當月進貨、銷售或期初取得進貨價，C金額暫列0。" );
       if (rule.uncertain) addIssue(issues, "warning", "未分類出入庫原因", movement, `原因「${movement.reason || "空白"}」未命中既定規則，暫依${rule.sign > 0 ? "出庫" : "入庫"}方向納入C。`);
       if (rule.label === "員購待核對") addIssue(issues, "warning", "員購需確認銷貨單", movement, "若另有銷貨單，這筆應歸B並避免與C重複；目前未找到可靠關聯，暫列C。" );
+      const quantityMagnitude = Math.abs(movement.qty || 0);
+      const adoptedPrice = quantityMagnitude > EPSILON && directMovementCost != null
+        ? Math.abs(directMovementCost) / quantityMagnitude
+        : fallbackMovementPrice;
+      const costBasis = directMovementCost != null
+        ? "出入庫明細的進貨價相關欄位"
+        : (fallbackMovementPrice ? "商品統一參考進貨價" : "缺少進貨價，C金額暫列0");
+      const notice = rule.label === "員購待核對"
+        ? "請確認是否另有銷貨單；若有，應歸B並避免與C重複。"
+        : (rule.uncertain ? "原因未命中既定規則，請人工確認分類及方向。" : "");
+      const resolvedDirection = movementMode(movement);
+      adjustmentDetails.push({
+        sourceRow: movement.sourceRow || "",
+        date: movement.date || "",
+        doc: movement.doc || "",
+        relatedDoc: movement.relatedDoc || "",
+        warehouse: movement.warehouse || "",
+        sku: movement.sku || "",
+        name: movement.name || "",
+        sourceDirection: resolvedDirection === "out" ? "出庫" : (resolvedDirection === "in" ? "入庫" : "未辨識"),
+        sourceReason: movement.reason || "",
+        category: rule.label,
+        sourceQty: movement.qty || 0,
+        adjustmentQty: qty,
+        sourceCostAmount: directMovementCost == null ? "" : Math.abs(directMovementCost),
+        adoptedPrice: adoptedPrice || 0,
+        adjustmentAmount: amount,
+        costBasis,
+        explanation: rule.sign > 0
+          ? "非銷售出庫，C列正數，於A－B－C中扣除。"
+          : "非銷售入庫，C列負數，於A－B－C中加回。",
+        notice
+      });
     }
 
     const details = Array.from(items.values()).map((item) => {
@@ -970,7 +1023,8 @@
       const refPrice = referencePrice(item);
       const standardizedDifference = quantityDifference * refPrice;
       const priceBasisEffect = rawAmountDifference - standardizedDifference;
-      const status = Math.abs(quantityDifference) < EPSILON && Math.abs(rawAmountDifference) < 1 ? "通過" : (Math.abs(quantityDifference) < EPSILON ? "僅金額差異" : "數量差異");
+      const status = differenceStatus(quantityDifference, rawAmountDifference);
+      const advice = investigationAdvice(status, item);
       return {
         ...item,
         reasons: Array.from(item.reasons).join("、"),
@@ -981,7 +1035,8 @@
         refPrice,
         standardizedDifference,
         priceBasisEffect,
-        status
+        status,
+        advice
       };
     }).sort((a, b) => Math.abs(b.rawAmountDifference) - Math.abs(a.rawAmountDifference));
 
@@ -993,10 +1048,12 @@
     totals.itemCount = details.length;
     totals.issueCount = issues.filter((issue) => issue.level !== "info").length;
     totals.passCount = details.filter((item) => item.status === "通過").length;
-    totals.quantityIssueCount = details.filter((item) => item.status === "數量差異").length;
+    totals.quantityOnlyIssueCount = details.filter((item) => item.status === "僅數量差異").length;
     totals.amountOnlyIssueCount = details.filter((item) => item.status === "僅金額差異").length;
+    totals.quantityAmountIssueCount = details.filter((item) => item.status === "數量＆金額差異").length;
+    totals.quantityIssueCount = totals.quantityOnlyIssueCount + totals.quantityAmountIssueCount;
 
-    return { details, issues, sourceChecks, exclusions, ruleContext, totals, generatedAt: new Date().toISOString() };
+    return { details, issues, sourceChecks, exclusions, adjustmentDetails, ruleContext, totals, generatedAt: new Date().toISOString() };
   }
 
   function setSheetLayout(sheet, widths, filterRange) {
@@ -1030,7 +1087,7 @@
       ["庫存成本分析摘要"],
       ["產生時間", analysis.generatedAt],
       ["集中排除規則", `公司集中規則 v${ruleContext.version}`, ruleContext.updatedAt || ""],
-      ["排除關鍵字", `${ruleContext.exclusions.length}項；完整清單與逐列排除明細請見04_來源檢查`],
+      ["排除關鍵字", `${ruleContext.exclusions.length}項；完整清單與逐列排除明細請見05_來源檢查`],
       ["計算項目", "數量", "進貨價成本金額"],
       ["期初庫存", t.openingQty, t.openingAmount],
       ["當月進貨", t.purchaseQty, t.purchaseAmount],
@@ -1046,27 +1103,29 @@
       ["檢查統計", "數量"],
       ["商品總數", t.itemCount],
       ["完全通過", t.passCount],
-      ["數量差異商品", t.quantityIssueCount],
+      ["僅數量差異商品", t.quantityOnlyIssueCount],
       ["僅金額差異商品", t.amountOnlyIssueCount],
+      ["數量＆金額差異商品", t.quantityAmountIssueCount],
       ["來源／配對問題", t.issueCount],
       [],
       ["成本規則"],
       ["A、B、C均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。"],
-      ["門市成本＝進貨價×1.1，門市月結金額為加盟請款金額，兩者均不直接作A／B成本。"]
+      ["門市成本＝進貨價×1.1，門市月結金額為加盟請款金額，兩者均不直接作A／B成本。"],
+      ["狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]
     ];
     const summary = makeSheet(XLSX, summaryRows, [30, 20, 22]);
     setNumberFormats(XLSX, summary, ["B6:B15"], "#,##0");
     setNumberFormats(XLSX, summary, ["C6:C15"], "#,##0.00");
-    setNumberFormats(XLSX, summary, ["B18:B22"], "#,##0");
-    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", "A、B、C均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本＝進貨價×1.1，門市月結金額為加盟請款金額，兩者均不直接作A／B成本。"]);
+    setNumberFormats(XLSX, summary, ["B18:B23"], "#,##0");
+    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", "A、B、C均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本＝進貨價×1.1，門市月結金額為加盟請款金額，兩者均不直接作A／B成本。", "狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]);
     summary["!merges"] = summaryRows
       .map((row, index) => summaryMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 2 } } : null)
       .filter(Boolean);
     XLSX.utils.book_append_sheet(workbook, summary, "01_分析摘要");
 
-    const detailHeaders = ["商品編號", "品名", "期初數量", "期初進貨價成本", "進貨數量", "進貨未稅額", "退廠數量", "退廠未稅額", "期末數量", "期末進貨價成本", "A數量", "A金額", "B數量", "B金額", "C數量", "C金額", "數量差異", "原始金額差異", "統一參考進貨價", "同價基準差異", "進貨價基準影響", "C組原因", "狀態"];
-    const detailRows = [detailHeaders, ...analysis.details.map((item) => [item.sku, item.name, item.openingQty, item.openingAmount, item.purchaseQty, item.purchaseAmount, item.supplierReturnQty, item.supplierReturnAmount, item.closingQty, item.closingAmount, item.aQty, item.aAmount, item.salesQty, item.salesAmount, item.adjustmentQty, item.adjustmentAmount, item.quantityDifference, item.rawAmountDifference, item.refPrice, item.standardizedDifference, item.priceBasisEffect, item.reasons, item.status])];
-    const detailSheet = makeSheet(XLSX, detailRows, [16, 30, 12, 18, 12, 16, 12, 16, 12, 18, 12, 16, 12, 16, 12, 16, 12, 18, 16, 18, 18, 24, 14], `A1:W${detailRows.length}`);
+    const detailHeaders = ["商品編號", "品名", "期初數量", "期初進貨價成本", "進貨數量", "進貨未稅額", "退廠數量", "退廠未稅額", "期末數量", "期末進貨價成本", "A數量", "A金額", "B數量", "B金額", "C數量", "C金額", "數量差異", "原始金額差異", "統一參考進貨價", "同價基準差異", "進貨價基準影響", "C組原因", "狀態", "建議排查方法"];
+    const detailRows = [detailHeaders, ...analysis.details.map((item) => [item.sku, item.name, item.openingQty, item.openingAmount, item.purchaseQty, item.purchaseAmount, item.supplierReturnQty, item.supplierReturnAmount, item.closingQty, item.closingAmount, item.aQty, item.aAmount, item.salesQty, item.salesAmount, item.adjustmentQty, item.adjustmentAmount, item.quantityDifference, item.rawAmountDifference, item.refPrice, item.standardizedDifference, item.priceBasisEffect, item.reasons, item.status, item.advice])];
+    const detailSheet = makeSheet(XLSX, detailRows, [16, 30, 12, 18, 12, 16, 12, 16, 12, 18, 12, 16, 12, 16, 12, 16, 12, 18, 16, 18, 18, 24, 18, 64], `A1:X${detailRows.length}`);
     const detailEndRow = Math.max(2, detailRows.length);
     setNumberFormats(XLSX, detailSheet, ["C", "E", "G", "I", "K", "M", "O", "Q"].map((column) => `${column}2:${column}${detailEndRow}`), "#,##0");
     setNumberFormats(XLSX, detailSheet, ["D", "F", "H", "J", "L", "N", "P", "R", "S", "T", "U"].map((column) => `${column}2:${column}${detailEndRow}`), "#,##0.00");
@@ -1116,7 +1175,20 @@
     sourceSheet["!merges"] = sourceRows
       .map((row, index) => sourceMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 16 } } : null)
       .filter(Boolean);
-    XLSX.utils.book_append_sheet(workbook, sourceSheet, "04_來源檢查");
+    const adjustmentHeaders = ["來源列", "出入庫日期", "出入庫單號", "關聯單號", "倉別", "商品編號", "品名", "判斷方向", "原始原因", "C組分類", "來源數量", "C調整數量", "來源進貨價成本", "採用進貨價", "C調整金額", "成本依據", "納入說明", "注意事項"];
+    const adjustmentRows = [
+      adjustmentHeaders,
+      ...(analysis.adjustmentDetails && analysis.adjustmentDetails.length
+        ? analysis.adjustmentDetails.map((row) => [row.sourceRow, row.date, row.doc, row.relatedDoc, row.warehouse, row.sku, row.name, row.sourceDirection, row.sourceReason, row.category, row.sourceQty, row.adjustmentQty, row.sourceCostAmount, row.adoptedPrice, row.adjustmentAmount, row.costBasis, row.explanation, row.notice])
+        : [["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "本月沒有納入C組的非銷售出入庫調整。", ""]])
+    ];
+    const adjustmentSheet = makeSheet(XLSX, adjustmentRows, [10, 16, 20, 18, 20, 16, 30, 14, 26, 18, 12, 14, 18, 16, 18, 28, 44, 48], `A1:R${adjustmentRows.length}`);
+    const adjustmentEndRow = Math.max(2, adjustmentRows.length);
+    setNumberFormats(XLSX, adjustmentSheet, [`A2:A${adjustmentEndRow}`], "#,##0");
+    setNumberFormats(XLSX, adjustmentSheet, [`K2:L${adjustmentEndRow}`], "#,##0");
+    setNumberFormats(XLSX, adjustmentSheet, [`M2:O${adjustmentEndRow}`], "#,##0.00");
+    XLSX.utils.book_append_sheet(workbook, adjustmentSheet, "04_C組調整明細");
+    XLSX.utils.book_append_sheet(workbook, sourceSheet, "05_來源檢查");
     return workbook;
   }
 
