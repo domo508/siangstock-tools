@@ -14,7 +14,7 @@
     storeMonthly: "用於加盟請款、總倉代出及門市調撥數量核對。",
     movements: "盤盈、盤虧、報廢、贈送、客訴、員購與樣品等原因。",
     supplierReturns: "完成退廠後，以未稅進貨額沖減當月進貨。",
-    transfers: "公司內互調作稽核；跨加盟體系用於月結查漏補缺。"
+    transfers: "公司內互調作稽核；可同時選擇當月與上月檔案，系統合併去重後處理跨月月結。"
   };
 
   const state = {
@@ -90,6 +90,7 @@
     uploadGrid.innerHTML = "";
     core.REPORT_ORDER.forEach((type, index) => {
       const schema = core.REPORT_SCHEMAS[type];
+      const multiple = type === "transfers";
       const card = document.createElement("article");
       card.className = "upload-card";
       card.dataset.type = type;
@@ -99,7 +100,7 @@
           <span class="source-badge ${requiredTypes.has(type) ? "required" : ""}">${requiredTypes.has(type) ? "必要" : "選填"}</span>
         </div>
         <p class="upload-help">${escapeHtml(descriptions[type])}</p>
-        <label class="file-button">選擇 .xlsx 檔<input type="file" accept=".xlsx" data-file-type="${type}"></label>
+        <label class="file-button">${multiple ? "選擇一或多個 .xlsx 檔" : "選擇 .xlsx 檔"}<input type="file" accept=".xlsx" data-file-type="${type}" ${multiple ? "multiple" : ""}></label>
         <p class="file-name" data-file-name>尚未選擇</p>
         <div class="mapping-box" data-mapping hidden></div>`;
       uploadGrid.appendChild(card);
@@ -131,16 +132,25 @@
       updateAnalyzeAvailability();
       return;
     }
-    const file = input.files[0];
-    fileName.textContent = `正在讀取：${file.name}`;
+    const files = Array.from(input.files);
+    const file = files[0];
+    fileName.textContent = `正在讀取：${files.map((entry) => entry.name).join("、")}`;
     try {
-      const data = await readFile(file);
-      const workbook = XLSX.read(data, { type: "array", cellDates: true });
-      const inspection = core.inspectWorkbook(workbook, XLSX, type);
-      const selected = inspection.sheets[0];
+      const entries = await Promise.all(files.map(async (entryFile) => {
+        const data = await readFile(entryFile);
+        const workbook = XLSX.read(data, { type: "array", cellDates: true });
+        const inspection = core.inspectWorkbook(workbook, XLSX, type);
+        const selected = inspection.sheets[0];
+        const validation = core.validateMapping(type, selected.mapping);
+        if (!validation.valid) throw new Error(`${entryFile.name}缺少：${validation.missing.join("、")}`);
+        return { file: entryFile, workbook, inspection, selected };
+      }));
+      const { workbook, inspection, selected } = entries[0];
       state.sources[type] = {
         type,
         file,
+        files,
+        entries,
         workbook,
         inspection,
         sheetName: selected.name,
@@ -148,7 +158,7 @@
         headers: selected.headers,
         mapping: { ...selected.mapping }
       };
-      fileName.textContent = file.name;
+      fileName.textContent = files.length > 1 ? `已選擇${files.length}個檔案：${files.map((entry) => entry.name).join("、")}` : file.name;
       renderMapping(type);
     } catch (error) {
       delete state.sources[type];
@@ -256,12 +266,17 @@
       for (const type of core.REPORT_ORDER) {
         const source = state.sources[type];
         if (!source) continue;
-        reports[type] = core.extractReport(source.workbook, XLSX, type, {
-          sheetName: source.sheetName,
-          headerRowIndex: source.headerRowIndex,
-          mapping: source.mapping,
-          fileName: source.file.name
+        const entries = source.entries || [{ file: source.file, workbook: source.workbook }];
+        const parts = entries.map((entry, entryIndex) => {
+          const selected = entryIndex === 0 ? source : entry.selected;
+          return core.extractReport(entry.workbook, XLSX, type, {
+            sheetName: selected.sheetName || selected.name,
+            headerRowIndex: selected.headerRowIndex,
+            mapping: selected.mapping,
+            fileName: entry.file.name
+          });
         });
+        reports[type] = core.mergeReportParts(type, parts);
       }
       state.analysis = core.analyzeReports(reports, {
         rules: state.rules,

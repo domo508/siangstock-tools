@@ -307,6 +307,36 @@ describe("庫存成本分析核心規則", () => {
     expect(XLSX.utils.format_cell(workbook.Sheets["02_商品差異明細"]["D2"])).toBe("123,450.00");
   });
 
+  it("有月結單號時只配對相同單號，跨月缺單標示為待查", () => {
+    const reports = {
+      ...baseInventory("S1", 5, 5),
+      storeMonthly: report("storeMonthly", [
+        { date: "2026/6/2", doc: "AT2605000229", sku: "S1", name: "商品S1", store: "台北中山門市", reconcileType: "1 總倉調撥至對帳門市", qty: 1, claimAmount: 11 },
+        { date: "2026/6/9", doc: "AT2606000068", sku: "S1", name: "商品S1", store: "台北中山門市", reconcileType: "1 總倉調撥至對帳門市", qty: 1, claimAmount: 11 }
+      ]),
+      transfers: report("transfers", [
+        { date: "2026/6/9", doc: "AT2606000068", sku: "S1", name: "商品S1", sourceWarehouse: "寬承總倉", destinationWarehouse: "台北中山門市", qty: 1, transferAmount: 11 }
+      ])
+    };
+    const analysis = core.analyzeReports(reports);
+    const crossMonthIssues = analysis.issues.filter((issue) => issue.type === "跨月調撥待查");
+    expect(crossMonthIssues).toHaveLength(1);
+    expect(crossMonthIssues[0]).toMatchObject({ level: "warning", doc: "AT2605000229" });
+    expect(analysis.issues.some((issue) => issue.doc === "AT2606000068" && issue.type.includes("缺少調撥"))).toBe(false);
+  });
+
+  it("合併多個調撥檔時去除跨檔重複列並保留同檔重複明細", () => {
+    const duplicate = { date: "2026/5/31", doc: "AT2605000001", sku: "T1", name: "商品T1", sourceWarehouse: "寬承總倉", destinationWarehouse: "台中文心秀泰專櫃", qty: 1, transferAmount: 11 };
+    const first = report("transfers", [duplicate, duplicate]);
+    first.meta = { label: "調撥單明細", fileName: "05調撥.xlsx", sheetName: "工作表1", headerRow: 1, rawRows: 2, acceptedRows: 2, cancelledRows: 0, blankRows: 0 };
+    const second = report("transfers", [duplicate]);
+    second.meta = { label: "調撥單明細", fileName: "06調撥.xlsx", sheetName: "工作表1", headerRow: 1, rawRows: 1, acceptedRows: 1, cancelledRows: 0, blankRows: 0 };
+    const merged = core.mergeReportParts("transfers", [first, second]);
+    expect(merged.records).toHaveLength(2);
+    expect(merged.meta.fileName).toBe("05調撥.xlsx、06調撥.xlsx");
+    expect(merged.meta.note).toContain("去除1列重複調撥資料");
+  });
+
   it("門市互調的第3與第4類可共同配對同一筆調撥單", () => {
     const reports = {
       ...baseInventory("M1", 5, 5),
@@ -336,6 +366,8 @@ describe("庫存成本分析前台", () => {
     expect(html).toContain("公司最新版商品規則");
     expect(html).toContain("../inventory/rules-client.js");
     expect(app).toContain("rulesClient.fetchLatest");
+    expect(app).toContain('type === "transfers"');
+    expect(app).toContain("multiple");
     expect(app).not.toContain("XMLHttpRequest");
   });
 });

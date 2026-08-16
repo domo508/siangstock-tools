@@ -523,6 +523,65 @@
     };
   }
 
+  function mergeReportParts(reportType, parts) {
+    const reports = (parts || []).filter((part) => part && Array.isArray(part.records));
+    if (!reports.length) return null;
+    const firstMeta = reports[0].meta || {};
+    let records = reports.flatMap((part) => part.records);
+    let duplicateRows = 0;
+
+    if (reportType === "transfers" && reports.length > 1) {
+      const retainedCounts = new Map();
+      const merged = [];
+      for (const part of reports) {
+        const partCounts = new Map();
+        for (const record of part.records) {
+          const signature = JSON.stringify([
+            normalizeText(record.doc),
+            String(record.date || "").trim(),
+            normalizeText(record.sourceWarehouse),
+            normalizeText(record.destinationWarehouse),
+            itemKey(record),
+            Number(record.qty || 0),
+            record.purchaseCostAmount,
+            record.sourceCostPrice,
+            record.destinationCostPrice,
+            record.transferAmount
+          ]);
+          const occurrence = (partCounts.get(signature) || 0) + 1;
+          partCounts.set(signature, occurrence);
+          const retained = retainedCounts.get(signature) || 0;
+          if (occurrence > retained) merged.push(record);
+          else duplicateRows += 1;
+        }
+        for (const [signature, count] of partCounts) {
+          retainedCounts.set(signature, Math.max(retainedCounts.get(signature) || 0, count));
+        }
+      }
+      records = merged;
+    }
+
+    const fileNames = reports.map((part) => part.meta && part.meta.fileName).filter(Boolean);
+    const sheetNames = [...new Set(reports.map((part) => part.meta && part.meta.sheetName).filter(Boolean))];
+    return {
+      reportType,
+      records,
+      meta: {
+        ...firstMeta,
+        reportType,
+        label: firstMeta.label || REPORT_SCHEMAS[reportType].label,
+        fileName: fileNames.join("、"),
+        sheetName: sheetNames.join("、"),
+        headerRow: reports.every((part) => part.meta && part.meta.headerRow === firstMeta.headerRow) ? firstMeta.headerRow : "多檔",
+        rawRows: reports.reduce((total, part) => total + Number(part.meta && part.meta.rawRows || 0), 0),
+        acceptedRows: records.length,
+        cancelledRows: reports.reduce((total, part) => total + Number(part.meta && part.meta.cancelledRows || 0), 0),
+        blankRows: reports.reduce((total, part) => total + Number(part.meta && part.meta.blankRows || 0), 0),
+        note: reports.length > 1 ? `已合併${reports.length}個檔案；去除${duplicateRows}列重複調撥資料。` : ""
+      }
+    };
+  }
+
   function itemKey(record) {
     const sku = normalizeText(record.sku);
     return sku ? `sku:${sku}` : `name:${normalizeText(record.name)}`;
@@ -647,10 +706,34 @@
       match = candidates.find((candidate) => candidate.doc
         && normalizeText(candidate.doc) === normalizeText(record.doc)
         && predicate(candidate));
+    } else {
+      match = candidates.find(predicate);
     }
-    if (!match) match = candidates.find(predicate);
     if (match) match._monthlyMatchKeys.add(key);
     return match;
+  }
+
+  function monthIndexFromDate(value) {
+    const match = String(value == null ? "" : value).match(/(20\d{2})\D{1,3}(\d{1,2})/);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    return month >= 1 && month <= 12 ? year * 12 + month : null;
+  }
+
+  function monthIndexFromTransferDoc(value) {
+    const match = String(value == null ? "" : value).toUpperCase().match(/AT(\d{2})(0[1-9]|1[0-2])/);
+    if (!match) return null;
+    return (2000 + Number(match[1])) * 12 + Number(match[2]);
+  }
+
+  function crossMonthTransferContext(record) {
+    const documentMonth = monthIndexFromTransferDoc(record.doc);
+    const monthlyReportMonth = monthIndexFromDate(record.date);
+    if (documentMonth == null || monthlyReportMonth == null || documentMonth >= monthlyReportMonth) return null;
+    const year = Math.floor((documentMonth - 1) / 12);
+    const month = documentMonth - year * 12;
+    return { year, month };
   }
 
   function movementMode(record) {
@@ -756,7 +839,7 @@
           ruleExcludedQty: 0,
           ruleExcludedAmount: 0,
           reviewRows: 0,
-          note: ""
+          note: meta.note || ""
         };
       } else {
         sourceCheck = { reportType: type, source: REPORT_SCHEMAS[type].label, fileName: "未匯入", sheetName: "", headerRow: "", rawRows: 0, acceptedRows: 0, cancelledRows: 0, parsedQty: 0, parsedAmount: 0, ruleExcludedRows: 0, ruleExcludedQty: 0, ruleExcludedAmount: 0, reviewRows: 0, note: type === "opening" || type === "closing" || type === "purchases" || type === "sales" ? "必要來源未匯入" : "本月無資料時可略過" };
@@ -859,7 +942,12 @@
       if (direction.type <= 4) {
         const match = findMonthlyTransferMatch(transfers, record);
         if (!match) {
-          addIssue(issues, "error", "月結缺少調撥配對", record, `${direction.source}→${direction.destination}找不到相同商品及數量的調撥單。`);
+          const crossMonth = crossMonthTransferContext(record);
+          if (crossMonth) {
+            addIssue(issues, "warning", "跨月調撥待查", record, `單號顯示為${crossMonth.year}年${crossMonth.month}月，但本筆列在較後月份的月結報表；${direction.source}→${direction.destination}尚未找到相同單號、商品及數量的調撥單，請補匯入上月調撥明細後再分析。`);
+          } else {
+            addIssue(issues, "error", "月結缺少調撥配對", record, `${direction.source}→${direction.destination}找不到相同單號、商品及數量的調撥單。`);
+          }
         } else {
           match._monthlyMatched = true;
           const settlementAmount = match.transferAmount != null
@@ -1210,6 +1298,7 @@
     inspectSheet,
     inspectWorkbook,
     extractReport,
+    mergeReportParts,
     analyzeReports,
     buildOutputWorkbook,
     normalizeReconcileType,
