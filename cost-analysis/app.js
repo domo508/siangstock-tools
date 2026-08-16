@@ -270,7 +270,7 @@
       });
       state.outputWorkbook = core.buildOutputWorkbook(state.analysis, XLSX);
       renderResults(state.analysis);
-      mainStatus.textContent = `分析完成：使用公司集中規則 v${state.rulesVersion}，共${state.analysis.totals.itemCount}項商品，排除${state.analysis.exclusions.length}列，另有${state.analysis.totals.issueCount}項來源或配對問題。`;
+      mainStatus.textContent = `分析完成：使用公司集中規則 v${state.rulesVersion}，共${formatNumber(state.analysis.totals.itemCount, 0)}項商品，排除${formatNumber(state.analysis.exclusions.length, 0)}列，另有${formatNumber(state.analysis.totals.issueCount, 0)}項來源或配對問題。`;
       downloadButton.disabled = false;
     } catch (error) {
       mainStatus.textContent = `分析失敗：${error.message}`;

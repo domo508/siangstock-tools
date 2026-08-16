@@ -266,6 +266,10 @@
     return { category: "normal", keywords: [], reason: "未命中排除或待確認關鍵字" };
   }
 
+  function displayNumber(value, maximumFractionDigits = 4) {
+    return new Intl.NumberFormat("zh-TW", { maximumFractionDigits }).format(Number(value || 0));
+  }
+
   function classifyWarehouse(value) {
     const text = normalizeText(value);
     if (!text) return "unknown";
@@ -848,7 +852,7 @@
             ? Math.max(2, Math.abs(record.claimAmount) * 0.01)
             : 2;
           if (amountDifference != null && amountDifference > amountTolerance) {
-            addIssue(issues, "warning", "月結與調撥金額不同", record, `月結請款 ${record.claimAmount}，調撥結算金額 ${settlementAmount}。兩者僅作請款勾稽，不作A／B成本。`);
+            addIssue(issues, "warning", "月結與調撥金額不同", record, `月結請款 ${displayNumber(record.claimAmount)}，調撥結算金額 ${displayNumber(settlementAmount)}。兩者僅作請款勾稽，不作A／B成本。`);
           }
         }
       } else {
@@ -1006,6 +1010,18 @@
     return sheet;
   }
 
+  function setNumberFormats(XLSX, sheet, ranges, formatCode) {
+    for (const rangeText of ranges) {
+      const range = XLSX.utils.decode_range(rangeText);
+      for (let row = range.s.r; row <= range.e.r; row += 1) {
+        for (let column = range.s.c; column <= range.e.c; column += 1) {
+          const cell = sheet[XLSX.utils.encode_cell({ r: row, c: column })];
+          if (cell && cell.t === "n") cell.z = formatCode;
+        }
+      }
+    }
+  }
+
   function buildOutputWorkbook(analysis, XLSX) {
     const workbook = XLSX.utils.book_new();
     const t = analysis.totals;
@@ -1039,6 +1055,9 @@
       ["門市成本＝進貨價×1.1，門市月結金額為加盟請款金額，兩者均不直接作A／B成本。"]
     ];
     const summary = makeSheet(XLSX, summaryRows, [30, 20, 22]);
+    setNumberFormats(XLSX, summary, ["B6:B15"], "#,##0");
+    setNumberFormats(XLSX, summary, ["C6:C15"], "#,##0.00");
+    setNumberFormats(XLSX, summary, ["B18:B22"], "#,##0");
     const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", "A、B、C均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本＝進貨價×1.1，門市月結金額為加盟請款金額，兩者均不直接作A／B成本。"]);
     summary["!merges"] = summaryRows
       .map((row, index) => summaryMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 2 } } : null)
@@ -1048,12 +1067,16 @@
     const detailHeaders = ["商品編號", "品名", "期初數量", "期初進貨價成本", "進貨數量", "進貨未稅額", "退廠數量", "退廠未稅額", "期末數量", "期末進貨價成本", "A數量", "A金額", "B數量", "B金額", "C數量", "C金額", "數量差異", "原始金額差異", "統一參考進貨價", "同價基準差異", "進貨價基準影響", "C組原因", "狀態"];
     const detailRows = [detailHeaders, ...analysis.details.map((item) => [item.sku, item.name, item.openingQty, item.openingAmount, item.purchaseQty, item.purchaseAmount, item.supplierReturnQty, item.supplierReturnAmount, item.closingQty, item.closingAmount, item.aQty, item.aAmount, item.salesQty, item.salesAmount, item.adjustmentQty, item.adjustmentAmount, item.quantityDifference, item.rawAmountDifference, item.refPrice, item.standardizedDifference, item.priceBasisEffect, item.reasons, item.status])];
     const detailSheet = makeSheet(XLSX, detailRows, [16, 30, 12, 18, 12, 16, 12, 16, 12, 18, 12, 16, 12, 16, 12, 16, 12, 18, 16, 18, 18, 24, 14], `A1:W${detailRows.length}`);
+    const detailEndRow = Math.max(2, detailRows.length);
+    setNumberFormats(XLSX, detailSheet, ["C", "E", "G", "I", "K", "M", "O", "Q"].map((column) => `${column}2:${column}${detailEndRow}`), "#,##0");
+    setNumberFormats(XLSX, detailSheet, ["D", "F", "H", "J", "L", "N", "P", "R", "S", "T", "U"].map((column) => `${column}2:${column}${detailEndRow}`), "#,##0.00");
     XLSX.utils.book_append_sheet(workbook, detailSheet, "02_商品差異明細");
 
     const issueHeaders = ["層級", "問題類型", "來源報表", "來源列", "單據編號", "商品編號", "品名", "說明"];
     const issueRows = [issueHeaders, ...analysis.issues.map((issue) => [issue.level, issue.type, issue.source, issue.row, issue.doc, issue.sku, issue.name, issue.detail])];
     if (issueRows.length === 1) issueRows.push(["info", "無未配對資料", "", "", "", "", "", "所有來源與規則檢查均通過。"]);
     const issueSheet = makeSheet(XLSX, issueRows, [10, 24, 22, 10, 18, 16, 28, 70], `A1:H${issueRows.length}`);
+    setNumberFormats(XLSX, issueSheet, [`D2:D${issueRows.length}`], "#,##0");
     XLSX.utils.book_append_sheet(workbook, issueSheet, "03_未配對資料");
 
     const sourceHeaders = ["報表種類", "檔名", "工作表", "表頭列", "原始資料列", "解析有效列", "有效數量", "有效來源金額", "規則排除列", "排除數量", "排除來源金額", "規則後列數", "規則後數量", "規則後來源金額", "待確認列", "取消／作廢列", "備註"];
@@ -1081,6 +1104,14 @@
         : [["本次沒有集中規則排除資料"]])
     ];
     const sourceSheet = makeSheet(XLSX, sourceRows, [26, 34, 22, 10, 14, 14, 14, 18, 14, 14, 18, 14, 14, 20, 12, 16, 80]);
+    setNumberFormats(XLSX, sourceSheet, ["D2:F9", "I2:I9", "L2:L9", "O2:P9"], "#,##0");
+    setNumberFormats(XLSX, sourceSheet, ["G2:G9", "J2:J9", "M2:M9"], "#,##0");
+    setNumberFormats(XLSX, sourceSheet, ["H2:H9", "K2:K9", "N2:N9"], "#,##0.00");
+    const exclusionStartRow = 26;
+    const exclusionEndRow = Math.max(exclusionStartRow, exclusionStartRow + (analysis.exclusions ? analysis.exclusions.length : 0) - 1);
+    setNumberFormats(XLSX, sourceSheet, [`B${exclusionStartRow}:B${exclusionEndRow}`], "#,##0");
+    setNumberFormats(XLSX, sourceSheet, [`F${exclusionStartRow}:F${exclusionEndRow}`], "#,##0");
+    setNumberFormats(XLSX, sourceSheet, [`G${exclusionStartRow}:G${exclusionEndRow}`], "#,##0.00");
     const sourceMergeLabels = new Set(["期初／期末應納入倉別", "寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。", "報表專用成本規則", "當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C成本優先採進貨價相關欄位。", "公司集中商品規則", "集中規則排除明細"]);
     sourceSheet["!merges"] = sourceRows
       .map((row, index) => sourceMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 16 } } : null)

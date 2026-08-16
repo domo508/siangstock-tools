@@ -247,6 +247,22 @@ describe("庫存成本分析核心規則", () => {
     expect(rows.some((row) => row[4] === "門市運費" && row[7] === "運費")).toBe(true);
   });
 
+  it("下載活頁簿的數量與金額使用千分位格式", () => {
+    const reports = {
+      opening: report("opening", [{ sku: "N1", name: "一般商品", warehouse: "寬承總倉", qty: 12345, purchasePrice: 10 }]),
+      closing: report("closing", [{ sku: "N1", name: "一般商品", warehouse: "寬承總倉", qty: 0, purchasePrice: 10 }])
+    };
+    const analysis = core.analyzeReports(reports, {
+      rules: { "排除關鍵字": [], "待人工確認關鍵字": [], "指定品名白名單": [] },
+      rulesVersion: 5
+    });
+    const workbook = core.buildOutputWorkbook(analysis, XLSX);
+    expect(XLSX.utils.format_cell(workbook.Sheets["01_分析摘要"]["B6"])).toBe("12,345");
+    expect(XLSX.utils.format_cell(workbook.Sheets["01_分析摘要"]["C6"])).toBe("123,450.00");
+    expect(XLSX.utils.format_cell(workbook.Sheets["02_商品差異明細"]["C2"])).toBe("12,345");
+    expect(XLSX.utils.format_cell(workbook.Sheets["02_商品差異明細"]["D2"])).toBe("123,450.00");
+  });
+
   it("門市互調的第3與第4類可共同配對同一筆調撥單", () => {
     const reports = {
       ...baseInventory("M1", 5, 5),
