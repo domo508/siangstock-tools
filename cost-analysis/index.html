@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex,nofollow">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'">
   <title>庫存成本分析｜翔仔居家</title>
-  <link rel="stylesheet" href="style.css?v=20260817-billing-detail-r1">
+  <link rel="stylesheet" href="style.css?v=20260817-rt-timing-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -52,7 +52,7 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">資料來源</p>
-          <h2 id="upload-title">選擇本月報表</h2>
+          <h2 id="upload-title">選擇本月報表與跨月銷售</h2>
         </div>
         <p>期初、期末、進貨與銷售為必要來源；其餘本月無資料時可留空。</p>
       </div>
@@ -87,7 +87,7 @@
       <div id="summary-cards" class="summary-grid"></div>
       <div class="result-table-wrap">
         <table>
-          <thead><tr><th>商品編號</th><th>品名</th><th>A數量</th><th>B數量</th><th>C數量</th><th>未解釋數量</th><th>未解釋金額</th><th>狀態</th><th>建議排查方法</th></tr></thead>
+          <thead><tr><th>商品編號</th><th>品名</th><th>A數量</th><th>B數量</th><th>C數量</th><th>D跨月數量</th><th>未解釋數量</th><th>未解釋金額</th><th>狀態</th><th>建議排查方法</th></tr></thead>
           <tbody id="result-rows"></tbody>
         </table>
       </div>
@@ -108,6 +108,8 @@
         <article><strong>內部倉互調不查請款差異</strong><p>非加盟的公司內部倉只核對單號與數量；月結請款為0及調撥成本均不列A／B，也不列金額異常。</p></article>
         <article><strong>總倉代出不要求調撥單</strong><p>第5類以門市月結搭配銷售成本或總倉出庫核對；直營月結只作記錄。</p></article>
         <article><strong>跨月調撥另外標示</strong><p>月結單號屬上月且找不到同單號調撥時，標示「跨月調撥待查」；可同時選擇當月與上月調撥檔重新配對。</p></article>
+        <article><strong>R認列、T扣庫</strong><p>R單是正式銷售與B成本認列點；T單是總倉實際扣庫點。可匯入本月及前2個月銷售，以D組調整跨月時間差。</p></article>
+        <article><strong>只依完整單號配對</strong><p>支援一張T合併多張R；完整取貨／來源單號、商品及數量吻合才自動配對。無法嚴格判定時列異常，不自行沖銷。</p></article>
         <article><strong>客退不另上傳</strong><p>銷售成本負值沖回B，客退入庫單只確認回到哪個倉，不再列為盤盈。</p></article>
         <article><strong>共用公司商品排除規則</strong><p>八類來源均依「歷史庫存資料清洗」的公司最新版規則判斷，排除明細保留在來源檢查。</p></article>
         <article><strong>差異狀態分開判斷</strong><p>區分通過、僅數量差異、僅金額差異及數量＆金額差異，並提供對應排查建議。</p></article>
@@ -123,7 +125,7 @@
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="../inventory/core.js?v=20260816-shared-rules"></script>
   <script src="../inventory/rules-client.js?v=20260816-shared-rules"></script>
-  <script src="core.js?v=20260817-billing-detail-r1"></script>
-  <script src="app.js?v=20260817-billing-detail-r1"></script>
+  <script src="core.js?v=20260817-rt-timing-r1"></script>
+  <script src="app.js?v=20260817-rt-timing-r1"></script>
 </body>
 </html>
