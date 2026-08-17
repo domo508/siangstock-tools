@@ -1214,6 +1214,12 @@
     }
 
     for (const transfer of transfers) {
+      const transferMonth = recordMonthIndex(transfer);
+      if (analysisMonth != null && transferMonth == null) {
+        addIssue(issues, "error", "調撥月份無法判斷", transfer, "無法從開單日期或單據編碼判斷調撥月份；為避免混入本月B，本列只保留作來源檢查，不納入B。" );
+        continue;
+      }
+      if (analysisMonth != null && transferMonth !== analysisMonth) continue;
       const sourceScope = classifyWarehouse(transfer.sourceWarehouse);
       const destinationScope = classifyWarehouse(transfer.destinationWarehouse);
       let sign = 0;
@@ -1477,7 +1483,7 @@
       ["來源／配對問題", t.issueCount],
       [],
       ["成本規則"],
-      [`分析月份：${analysis.analysisMonthLabel || "月份不明"}。銷售可匯入本月及前2個月；前期資料只供R／T跨月配對，不重複加入本月B。`],
+      [`分析月份：${analysis.analysisMonthLabel || "月份不明"}。銷售可匯入本月及前2個月，調撥可匯入本月及上月；前期資料只供跨月配對與稽核，不重複加入本月B。`],
       ["A、B、C、D均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。"],
       ["門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。"],
       ["02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。"],
@@ -1487,7 +1493,7 @@
     setNumberFormats(XLSX, summary, ["B6:B16"], "#,##0");
     setNumberFormats(XLSX, summary, ["C6:C16"], "#,##0.00");
     setNumberFormats(XLSX, summary, ["B19:B24"], "#,##0");
-    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", `分析月份：${analysis.analysisMonthLabel || "月份不明"}。銷售可匯入本月及前2個月；前期資料只供R／T跨月配對，不重複加入本月B。`, "A、B、C、D均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。", "02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。", "狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]);
+    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", `分析月份：${analysis.analysisMonthLabel || "月份不明"}。銷售可匯入本月及前2個月，調撥可匯入本月及上月；前期資料只供跨月配對與稽核，不重複加入本月B。`, "A、B、C、D均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。", "02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。", "狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]);
     summary["!merges"] = summaryRows
       .map((row, index) => summaryMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 2 } } : null)
       .filter(Boolean);
