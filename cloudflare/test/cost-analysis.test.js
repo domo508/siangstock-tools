@@ -382,6 +382,36 @@ describe("庫存成本分析核心規則", () => {
     expect(merged.meta.note).toContain("去除1列重複調撥資料");
   });
 
+  it("前月調撥只供跨月月結配對，不重複納入本月B", () => {
+    const reports = {
+      ...baseInventory("MONTH-TRANSFER", 10, 9, 10),
+      storeMonthly: report("storeMonthly", [
+        { date: "2026-06-02", doc: "AT2605000001", sku: "MONTH-TRANSFER", name: "月份調撥商品", store: "台中文心秀泰專櫃", reconcileType: "1 總倉調撥至對帳門市", qty: 2, claimAmount: 22 },
+        { date: "2026-06-10", doc: "AT2606000001", sku: "MONTH-TRANSFER", name: "月份調撥商品", store: "台中文心秀泰專櫃", reconcileType: "1 總倉調撥至對帳門市", qty: 1, claimAmount: 11 }
+      ]),
+      transfers: report("transfers", [
+        { date: "2026-05-31", doc: "AT2605000001", sku: "MONTH-TRANSFER", name: "月份調撥商品", sourceWarehouse: "寬承總倉", destinationWarehouse: "台中文心秀泰專櫃", qty: 2, purchasePrice: 10, sourceCostAmount: 20 },
+        { date: "2026-06-10", doc: "AT2606000001", sku: "MONTH-TRANSFER", name: "月份調撥商品", sourceWarehouse: "寬承總倉", destinationWarehouse: "台中文心秀泰專櫃", qty: 1, purchasePrice: 10, sourceCostAmount: 10 }
+      ])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.analysisMonthLabel).toBe("2026年6月");
+    expect(analysis.details[0]).toMatchObject({ salesQty: 1, salesAmount: 10, quantityDifference: 0, rawAmountDifference: 0 });
+    expect(analysis.issues.some((issue) => issue.type === "月結缺少調撥配對")).toBe(false);
+    expect(analysis.issues.some((issue) => issue.type === "跨體系調撥缺少月結配對")).toBe(false);
+  });
+
+  it("分析月份已知時，月份無法判斷的調撥不直接混入B", () => {
+    const reports = {
+      ...baseInventory("UNKNOWN-TRANSFER-MONTH", 1, 1, 10),
+      purchases: report("purchases", [{ date: "2026-06-01", sku: "UNKNOWN-TRANSFER-MONTH", name: "月份不明調撥", qty: 0, purchasePrice: 10, untaxedAmount: 0 }]),
+      transfers: report("transfers", [{ doc: "AT-UNKNOWN", sku: "UNKNOWN-TRANSFER-MONTH", name: "月份不明調撥", sourceWarehouse: "寬承總倉", destinationWarehouse: "台中文心秀泰專櫃", qty: 1, purchasePrice: 10 }])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.details[0].salesQty).toBe(0);
+    expect(analysis.issues.some((issue) => issue.type === "調撥月份無法判斷" && issue.level === "error")).toBe(true);
+  });
+
   it("門市互調的第3與第4類可共同配對同一筆調撥單", () => {
     const reports = {
       ...baseInventory("M1", 5, 5),
