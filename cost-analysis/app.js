@@ -10,11 +10,11 @@
     opening: "含總倉、直營與公司內各專用倉；排除加盟店倉。",
     closing: "倉別範圍必須與期初完全一致。",
     purchases: "本報表中的「成本價」例外視為供應商進貨價。",
-    sales: "可同時選擇本月及前2個月；前期檔只用於R／T跨月配對。客戶退貨已用負值呈現，不需另傳客退報表。",
-    storeMonthly: "用於加盟請款、總倉代出及門市調撥數量核對。",
+    sales: "可同時選擇本月及前2個月；加盟總倉代出的R／T只作正式成本、扣庫與跨月稽核。客戶退貨已用負值呈現，不需另傳客退報表。",
+    storeMonthly: "B2加盟調撥、B3總倉代出與B4加盟退回的主要認列來源。",
     movements: "盤盈、盤虧、報廢、贈送、客訴、員購與樣品等原因。",
     supplierReturns: "完成退廠後，以未稅進貨額沖減當月進貨。",
-    transfers: "公司內互調作稽核；可同時選擇當月與上月檔案，前期調撥只供跨月月結配對，不重複納入本月B。"
+    transfers: "只供月結單號、品項、數量、成本及跨月稽核；沒有月結時不會單獨增加B。"
   };
 
   const state = {
@@ -245,16 +245,20 @@
     const t = analysis.totals;
     const cards = [
       ["A 庫存推算耗用", formatNumber(t.aQty), `$${formatNumber(t.aAmount)}`, false],
-      ["B 淨銷售／跨體系", formatNumber(t.salesQty), `$${formatNumber(t.salesAmount)}`, false],
+      ["B 四類來源合計", formatNumber(t.salesQty), `$${formatNumber(t.salesAmount)}`, false],
+      ["B1 淨銷售", formatNumber(t.b1Qty), `$${formatNumber(t.b1Amount)}`, false],
+      ["B2 加盟月結調撥", formatNumber(t.b2Qty), `$${formatNumber(t.b2Amount)}`, false],
+      ["B3 總倉代出", formatNumber(t.b3Qty), `$${formatNumber(t.b3Amount)}`, false],
+      ["B4 加盟退回", formatNumber(t.b4Qty), `$${formatNumber(t.b4Amount)}`, false],
       ["C 非銷售調整", formatNumber(t.adjustmentQty), `$${formatNumber(t.adjustmentAmount)}`, false],
-      ["D 跨月R／T時點", formatNumber(t.timingQty), `$${formatNumber(t.timingAmount)}`, false],
+      ["D 跨月／尚未月結時點", formatNumber(t.timingQty), `$${formatNumber(t.timingAmount)}`, false],
       ["最終未解釋差異", formatNumber(t.quantityDifference), `$${formatNumber(t.rawAmountDifference)}`, Math.abs(t.quantityDifference) > 0.000001 || Math.abs(t.rawAmountDifference) >= 1]
     ];
     summaryCards.innerHTML = cards.map(([label, value, sub, warn]) => `<div class="summary-card ${warn ? "warn" : ""}"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong><span>${escapeHtml(sub)}</span></div>`).join("");
     const differenceItems = analysis.details.filter((item) => item.status !== "通過").slice(0, 20);
     resultRows.innerHTML = differenceItems.length
-      ? differenceItems.map((item) => `<tr><td>${escapeHtml(item.sku)}</td><td>${escapeHtml(item.name)}</td><td>${formatNumber(item.aQty)}</td><td>${formatNumber(item.salesQty)}</td><td>${formatNumber(item.adjustmentQty)}</td><td>${formatNumber(item.timingQty)}</td><td>${formatNumber(item.quantityDifference)}</td><td>${formatNumber(item.rawAmountDifference)}</td><td class="status-warn">${escapeHtml(item.status)}</td><td class="advice-cell">${escapeHtml(item.advice)}</td></tr>`).join("")
-      : '<tr><td colspan="10" class="status-pass">本月所有商品皆通過，沒有需要列入差異明細的品項。</td></tr>';
+      ? differenceItems.map((item) => `<tr><td>${escapeHtml(item.sku)}</td><td>${escapeHtml(item.name)}</td><td>${formatNumber(item.aQty)}</td><td>${formatNumber(item.salesQty)}</td><td>${formatNumber(item.b1Qty)}</td><td>${formatNumber(item.b2Qty)}</td><td>${formatNumber(item.b3Qty)}</td><td>${formatNumber(item.b4Qty)}</td><td>${formatNumber(item.adjustmentQty)}</td><td>${formatNumber(item.timingQty)}</td><td>${formatNumber(item.quantityDifference)}</td><td>${formatNumber(item.rawAmountDifference)}</td><td class="status-warn">${escapeHtml(item.status)}</td><td class="advice-cell">${escapeHtml(item.advice)}</td></tr>`).join("")
+      : '<tr><td colspan="14" class="status-pass">本月所有商品皆通過，沒有需要列入差異明細的品項。</td></tr>';
     resultPanel.hidden = false;
     resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
   }

@@ -151,14 +151,20 @@ describe("庫存成本分析核心規則", () => {
   });
 
   it("第5類加盟總倉代出以月結確認數量、銷售明細取進貨價成本", () => {
+    const tDoc = "T0000002606150001";
     const reports = {
       ...baseInventory("F5", 10, 9, 20),
-      sales: report("sales", [{ sku: "F5", name: "商品F5", store: "高雄夢時代專櫃", qty: 1, purchasePrice: 20 }]),
-      storeMonthly: report("storeMonthly", [{ sku: "F5", name: "商品F5", store: "高雄夢時代專櫃", reconcileType: "5 總倉代出", qty: 1, claimAmount: 33 }])
+      sales: report("sales", [
+        { date: "2026-06-15", doc: "R0700002606150001", pickupDoc: tDoc, sku: "F5", name: "商品F5", store: "高雄夢時代專櫃", pickupWarehouse: "寬承總倉", salesQty: 1, qty: 0, purchaseCostAmount: 20 },
+        { date: "2026-06-15", doc: tDoc, sourceDoc: "R0700002606150001", sku: "F5", name: "商品F5", store: "高雄夢時代專櫃", outboundWarehouse: "寬承總倉", salesQty: 1, qty: 1, salesAmount: 0, purchaseCostAmount: 0 }
+      ]),
+      storeMonthly: report("storeMonthly", [{ date: "2026-06-15", doc: tDoc, sku: "F5", name: "商品F5", store: "高雄夢時代專櫃", reconcileType: "5 總倉代出", qty: 1, claimAmount: 33 }])
     };
     const analysis = core.analyzeReports(reports);
     expect(analysis.details[0].salesQty).toBe(1);
     expect(analysis.details[0].salesAmount).toBe(20);
+    expect(analysis.details[0].b3Qty).toBe(1);
+    expect(analysis.details[0].b1Qty).toBe(0);
     expect(analysis.issues.some((issue) => issue.type.includes("缺少調撥"))).toBe(false);
   });
 
@@ -183,6 +189,73 @@ describe("庫存成本分析核心規則", () => {
     expect(analysis.details[0].salesAmount).toBe(20);
     expect(analysis.details[0].quantityDifference).toBe(0);
     expect(analysis.issues.some((issue) => issue.type.includes("缺少月結"))).toBe(false);
+  });
+
+  it("B總計固定等於B1至B4，B2至B4以門市月結為認列主體", () => {
+    const tDoc = "T0000002606200001";
+    const reports = {
+      opening: report("opening", [
+        { sku: "NET", name: "一般銷售", warehouse: "寬承總倉", qty: 1, purchasePrice: 10 },
+        { sku: "BUY", name: "加盟採購", warehouse: "寬承總倉", qty: 1, purchasePrice: 20 },
+        { sku: "FUL", name: "總倉代出", warehouse: "寬承總倉", qty: 1, purchasePrice: 30 },
+        { sku: "RET", name: "加盟退回", warehouse: "寬承總倉", qty: 0, purchasePrice: 40 }
+      ]),
+      closing: report("closing", [
+        { sku: "NET", name: "一般銷售", warehouse: "寬承總倉", qty: 0, purchasePrice: 10 },
+        { sku: "BUY", name: "加盟採購", warehouse: "寬承總倉", qty: 0, purchasePrice: 20 },
+        { sku: "FUL", name: "總倉代出", warehouse: "寬承總倉", qty: 0, purchasePrice: 30 },
+        { sku: "RET", name: "加盟退回", warehouse: "寬承總倉", qty: 1, purchasePrice: 40 }
+      ]),
+      sales: report("sales", [
+        { date: "2026-06-10", doc: "S2606100001", store: "寬承總倉", sku: "NET", name: "一般銷售", qty: 1, purchasePrice: 10 },
+        { date: "2026-06-20", doc: "R0700002606200001", pickupDoc: tDoc, store: "新竹東區門市", pickupWarehouse: "寬承總倉", sku: "FUL", name: "總倉代出", salesQty: 1, qty: 0, purchaseCostAmount: 30 },
+        { date: "2026-06-20", doc: tDoc, sourceDoc: "R0700002606200001", store: "新竹東區門市", outboundWarehouse: "寬承總倉", sku: "FUL", name: "總倉代出", salesQty: 1, qty: 1, salesAmount: 0, purchaseCostAmount: 0 }
+      ]),
+      storeMonthly: report("storeMonthly", [
+        { date: "2026-06-12", doc: "AT2606000001", store: "新竹東區門市", reconcileType: "1 總倉調撥至對帳門市", sku: "BUY", name: "加盟採購", qty: 1 },
+        { date: "2026-06-20", doc: tDoc, store: "新竹東區門市", reconcileType: "5 總倉代出", sku: "FUL", name: "總倉代出", qty: 1 },
+        { date: "2026-06-25", doc: "AT2606000002", store: "新竹東區門市", reconcileType: "2 對帳門市調撥至總倉", sku: "RET", name: "加盟退回", qty: 1 }
+      ]),
+      transfers: report("transfers", [
+        { date: "2026-06-12", doc: "AT2606000001", sourceWarehouse: "寬承總倉", destinationWarehouse: "新竹東區門市", sku: "BUY", name: "加盟採購", qty: 1, purchasePrice: 20 },
+        { date: "2026-06-25", doc: "AT2606000002", sourceWarehouse: "新竹東區門市", destinationWarehouse: "寬承總倉", sku: "RET", name: "加盟退回", qty: 1, purchasePrice: 40 }
+      ])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.totals).toMatchObject({
+      b1Qty: 1, b1Amount: 10,
+      b2Qty: 1, b2Amount: 20,
+      b3Qty: 1, b3Amount: 30,
+      b4Qty: -1, b4Amount: -40,
+      salesQty: 2, salesAmount: 20
+    });
+    expect(analysis.totals.salesQty).toBe(analysis.totals.b1Qty + analysis.totals.b2Qty + analysis.totals.b3Qty + analysis.totals.b4Qty);
+    expect(analysis.totals.salesAmount).toBe(analysis.totals.b1Amount + analysis.totals.b2Amount + analysis.totals.b3Amount + analysis.totals.b4Amount);
+    const workbook = core.buildOutputWorkbook(analysis, XLSX);
+    const summaryRows = XLSX.utils.sheet_to_json(workbook.Sheets["01_分析摘要"], { header: 1, defval: "" });
+    const detailHeaders = XLSX.utils.sheet_to_json(workbook.Sheets["06_全部商品勾稽明細"], { header: 1, defval: "" })[0];
+    expect(summaryRows.some((row) => row[0] === "　B4：加盟退回" && row[1] === -1 && row[2] === -40)).toBe(true);
+    expect(detailHeaders).toEqual(expect.arrayContaining(["B1淨銷售金額", "B2加盟月結調撥金額", "B3總倉代出金額", "B4加盟退回金額"]));
+  });
+
+  it("本月跨體系調撥沒有門市月結時不進B，只以D抵銷已扣庫時點", () => {
+    const reports = {
+      ...baseInventory("NO-MONTHLY", 1, 0, 15),
+      transfers: report("transfers", [{ date: "2026-06-18", doc: "AT2606000099", sourceWarehouse: "寬承總倉", destinationWarehouse: "新竹東區門市", sku: "NO-MONTHLY", name: "尚未月結商品", qty: 1, purchasePrice: 15 }])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.details[0]).toMatchObject({ b2Qty: 0, b4Qty: 0, salesQty: 0, timingQty: 1, timingAmount: 15, quantityDifference: 0, rawAmountDifference: 0 });
+    expect(analysis.issues.some((issue) => issue.type === "有調撥無月結／可能漏請款" && issue.level === "error")).toBe(true);
+  });
+
+  it("加盟月結已認列但尚無調撥時仍進B2，並以反向D暫時抵銷", () => {
+    const reports = {
+      ...baseInventory("NO-TRANSFER", 1, 1, 15),
+      storeMonthly: report("storeMonthly", [{ date: "2026-06-18", doc: "AT2606000100", store: "新竹東區門市", reconcileType: "1 總倉調撥至對帳門市", sku: "NO-TRANSFER", name: "尚無調撥商品", qty: 1 }])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.details[0]).toMatchObject({ b2Qty: 1, b2Amount: 15, salesQty: 1, timingQty: -1, timingAmount: -15, quantityDifference: 0, rawAmountDifference: 0 });
+    expect(analysis.issues.some((issue) => issue.type === "月結缺少調撥配對" && issue.level === "error")).toBe(true);
   });
 
   it("公司內部調撥不進B，輸出整合為同一活頁簿六個頁籤", () => {
@@ -382,7 +455,7 @@ describe("庫存成本分析核心規則", () => {
     expect(merged.meta.note).toContain("去除1列重複調撥資料");
   });
 
-  it("前月調撥只供跨月月結配對，不重複納入本月B", () => {
+  it("前月調撥由本月月結認列B2，並以D抵銷跨月庫存時點", () => {
     const reports = {
       ...baseInventory("MONTH-TRANSFER", 10, 9, 10),
       storeMonthly: report("storeMonthly", [
@@ -396,7 +469,16 @@ describe("庫存成本分析核心規則", () => {
     };
     const analysis = core.analyzeReports(reports);
     expect(analysis.analysisMonthLabel).toBe("2026年6月");
-    expect(analysis.details[0]).toMatchObject({ salesQty: 1, salesAmount: 10, quantityDifference: 0, rawAmountDifference: 0 });
+    expect(analysis.details[0]).toMatchObject({
+      salesQty: 3,
+      salesAmount: 30,
+      b2Qty: 3,
+      b2Amount: 30,
+      timingQty: -2,
+      timingAmount: -20,
+      quantityDifference: 0,
+      rawAmountDifference: 0
+    });
     expect(analysis.issues.some((issue) => issue.type === "月結缺少調撥配對")).toBe(false);
     expect(analysis.issues.some((issue) => issue.type === "跨體系調撥缺少月結配對")).toBe(false);
   });
@@ -446,6 +528,10 @@ describe("庫存成本分析核心規則", () => {
         { date: "2026-06-16", doc: tDoc, sourceDoc: "R0600002605310005", store: "台中文心秀泰專櫃", outboundWarehouse: "寬承總倉", sku: "F13057", name: "熊冷被", salesQty: 1, qty: 1, purchaseCostAmount: 470 },
         { date: "2026-06-16", doc: tDoc, sourceDoc: "R0600002605310005", store: "台中文心秀泰專櫃", outboundWarehouse: "寬承總倉", sku: "L50038", name: "熊冷墊", salesQty: 0, qty: 1, purchaseCostAmount: 0 },
         { date: "2026-06-16", doc: tDoc, sourceDoc: "R0600002605310005", store: "台中文心秀泰專櫃", outboundWarehouse: "寬承總倉", sku: "N00143", name: "贈品洗衣袋", salesQty: 1, qty: 1, purchaseCostAmount: 51.52 }
+      ]),
+      storeMonthly: report("storeMonthly", [
+        { date: "2026-06-16", doc: tDoc, store: "台中文心秀泰專櫃", reconcileType: "5 總倉代出", sku: "F13057", name: "熊冷被", qty: 1 },
+        { date: "2026-06-16", doc: tDoc, store: "台中文心秀泰專櫃", reconcileType: "5 總倉代出", sku: "L50038", name: "熊冷墊", qty: 1 }
       ])
     };
     const analysis = core.analyzeReports(reports);
@@ -453,25 +539,27 @@ describe("庫存成本分析核心規則", () => {
     expect(analysis.analysisMonthLabel).toBe("2026年6月");
     expect(bySku.F13057).toMatchObject({ salesQty: 0, salesAmount: 0, timingQty: 1, timingAmount: 470, quantityDifference: 0, rawAmountDifference: 0 });
     expect(bySku.L50038).toMatchObject({ salesQty: 0, salesAmount: 0, timingQty: 1, timingAmount: 420, quantityDifference: 0, rawAmountDifference: 0 });
-    expect(bySku.N00143).toMatchObject({ salesQty: 1, salesAmount: 51.52, timingQty: 0, quantityDifference: 0 });
+    expect(bySku.N00143).toMatchObject({ salesQty: 0, salesAmount: 0, timingQty: 1, timingAmount: 51.52, quantityDifference: 0 });
     expect(analysis.issues.some((issue) => issue.type === "跨月R→T已配對（T合併多張R）")).toBe(true);
     expect(analysis.issues.some((issue) => issue.sku === "F13057" && issue.type === "T單可能合併多張R，來源待查")).toBe(false);
     const workbook = core.buildOutputWorkbook(analysis, XLSX);
     const summaryRows = XLSX.utils.sheet_to_json(workbook.Sheets["01_分析摘要"], { header: 1, defval: "" });
     const issueRows = XLSX.utils.sheet_to_json(workbook.Sheets["03_未配對資料"], { header: 1, defval: "" });
     const detailRows = XLSX.utils.sheet_to_json(workbook.Sheets["06_全部商品勾稽明細"], { header: 1, defval: "" });
-    expect(summaryRows.some((row) => row[0] === "D：跨月R／T認列時點調整" && row[1] === 2 && row[2] === 890)).toBe(true);
-    expect(issueRows.some((row) => row[0] === "D組跨月R／T勾稽明細（含已配對）")).toBe(true);
-    expect(detailRows[0]).toContain("D跨月金額");
+    expect(summaryRows.some((row) => row[0] === "D：跨月／尚未月結時點調整" && row[1] === 3 && row[2] === 941.52)).toBe(true);
+    expect(issueRows.some((row) => row[0] === "D組跨月與尚未月結勾稽明細（含已配對）")).toBe(true);
+    expect(detailRows[0]).toContain("D時點金額");
   });
 
   it("本月R尚無T時B照正式銷售認列並以D負項消除時間差", () => {
+    const tDoc = "T0000002606300001";
     const reports = {
       ...baseInventory("R-NO-T", 1, 1, 100),
-      sales: report("sales", [{ date: "2026-06-30", doc: "R0600002606300001", store: "新竹東區門市", pickupWarehouse: "寬承總倉", sku: "R-NO-T", name: "待總倉代出", salesQty: 1, qty: 0, purchaseCostAmount: 100 }])
+      sales: report("sales", [{ date: "2026-06-30", doc: "R0600002606300001", pickupDoc: tDoc, store: "新竹東區門市", pickupWarehouse: "寬承總倉", sku: "R-NO-T", name: "待總倉代出", salesQty: 1, qty: 0, purchaseCostAmount: 100 }]),
+      storeMonthly: report("storeMonthly", [{ date: "2026-06-30", doc: tDoc, store: "新竹東區門市", reconcileType: "5 總倉代出", sku: "R-NO-T", name: "待總倉代出", qty: 1 }])
     };
     const analysis = core.analyzeReports(reports);
-    expect(analysis.details[0]).toMatchObject({ salesQty: 1, salesAmount: 100, timingQty: -1, timingAmount: -100, quantityDifference: 0, rawAmountDifference: 0 });
+    expect(analysis.details[0]).toMatchObject({ salesQty: 1, salesAmount: 100, b3Qty: 1, b3Amount: 100, timingQty: -1, timingAmount: -100, quantityDifference: 0, rawAmountDifference: 0 });
     expect(analysis.issues.some((issue) => issue.type === "本月R單尚無T" && issue.level === "info")).toBe(true);
   });
 
@@ -485,7 +573,8 @@ describe("庫存成本分析核心規則", () => {
     };
     const analysis = core.analyzeReports(reports);
     expect(analysis.issues.some((issue) => issue.type === "T單可能合併多張R，來源待查")).toBe(true);
-    expect(analysis.details[0].timingQty).toBe(0);
+    expect(analysis.details[0].salesQty).toBe(0);
+    expect(analysis.details[0].timingQty).toBe(1);
   });
 
   it("同檔完全相同銷售列保留計算並標示疑似重複", () => {
