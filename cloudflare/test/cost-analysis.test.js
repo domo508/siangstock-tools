@@ -3,7 +3,7 @@ import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 
 function loadBrowserScript(path, context = {}) {
-  const sandbox = { console, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, Blob, URL, setTimeout, clearTimeout, ...context };
+  const sandbox = { console, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, Blob, URL, setTimeout, clearTimeout, setImmediate, clearImmediate, ...context };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(readFileSync(path, "utf8"), sandbox, { filename: path });
@@ -12,6 +12,8 @@ function loadBrowserScript(path, context = {}) {
 
 const xlsxContext = loadBrowserScript("../inventory/assets/xlsx.full.min.js");
 const XLSX = xlsxContext.XLSX;
+const jszipContext = loadBrowserScript("../cost-analysis/assets/jszip.min.js");
+const JSZip = jszipContext.JSZip;
 const core = loadBrowserScript("../cost-analysis/core.js", { XLSX }).InventoryCostCore;
 
 function report(type, records) {
@@ -267,6 +269,18 @@ describe("庫存成本分析核心規則", () => {
     expect(analysis.details[0].salesQty).toBe(0);
     const workbook = core.buildOutputWorkbook(analysis, XLSX);
     expect(workbook.SheetNames).toEqual(["01_分析摘要", "02_商品差異明細", "03_未配對資料", "04_C組調整明細", "05_來源檢查", "06_全部商品勾稽明細"]);
+    expect(workbook.Sheets["05_來源檢查"]["!autofilter"].ref).toBe("A1:Q9");
+  });
+
+  it("下載版Excel的六個頁籤皆凍結第一列", async () => {
+    const analysis = core.analyzeReports({ ...baseInventory("FREEZE", 1, 0, 10), sales: report("sales", [{ sku: "FREEZE", name: "凍結測試", qty: 1, purchasePrice: 10 }]) });
+    const workbook = core.buildOutputWorkbook(analysis, XLSX);
+    const bytes = await core.buildFrozenWorkbookBytes(workbook, XLSX, JSZip);
+    const archive = await JSZip.loadAsync(bytes);
+    for (let index = 1; index <= 6; index += 1) {
+      const xml = await archive.file(`xl/worksheets/sheet${index}.xml`).async("string");
+      expect(xml).toContain('<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>');
+    }
   });
 
   it("加盟請款以公司側報表成本四捨五入核對，內部倉不查請款金額", () => {
@@ -597,6 +611,8 @@ describe("庫存成本分析前台", () => {
     expect(html).toContain("選擇八類報表");
     expect(html).toContain("不會傳到網站、Cloudflare或其他伺服器");
     expect(html).toContain("公司最新版商品規則");
+    expect(html).toContain("凍結第一列");
+    expect(html).toContain("assets/jszip.min.js");
     expect(html).toContain("../inventory/rules-client.js");
     expect(app).toContain("rulesClient.fetchLatest");
     expect(app).toContain('type === "transfers"');

@@ -113,6 +113,7 @@
         <article><strong>客退不另上傳</strong><p>銷售成本負值沖回B，客退入庫單只確認回到哪個倉，不再列為盤盈。</p></article>
         <article><strong>共用公司商品排除規則</strong><p>八類來源均依「歷史庫存資料清洗」的公司最新版規則判斷，排除明細保留在來源檢查。</p></article>
         <article><strong>差異狀態分開判斷</strong><p>區分通過、僅數量差異、僅金額差異及數量＆金額差異，並提供對應排查建議。</p></article>
+        <article><strong>匯出後方便查閱</strong><p>Excel各頁籤會凍結第一列；明細型頁籤自動加入表頭篩選與排序選項。</p></article>
       </div>
     </section>
 
@@ -123,9 +124,10 @@
   </main>
 
   <script src="../inventory/assets/xlsx.full.min.js"></script>
+  <script src="assets/jszip.min.js"></script>
   <script src="../inventory/core.js?v=20260816-shared-rules"></script>
   <script src="../inventory/rules-client.js?v=20260816-shared-rules"></script>
-  <script src="core.js?v=20260817-transfer-month-r2"></script>
-  <script src="app.js?v=20260817-transfer-month-r2"></script>
+  <script src="core.js?v=20260817-b-breakdown-freeze-r1"></script>
+  <script src="app.js?v=20260817-b-breakdown-freeze-r1"></script>
 </body>
 </html>

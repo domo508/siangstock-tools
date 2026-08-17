@@ -1663,6 +1663,36 @@
     return sheet;
   }
 
+  function freezeFirstRowInWorksheetXml(xml) {
+    if (/<pane\b[^>]*\bstate="frozen"/.test(xml)) return xml;
+    const pane = '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/>';
+    const selfClosingView = /<sheetViews><sheetView([^>]*)\/><\/sheetViews>/;
+    if (selfClosingView.test(xml)) {
+      return xml.replace(selfClosingView, (_match, attributes) => `<sheetViews><sheetView${attributes}>${pane}</sheetView></sheetViews>`);
+    }
+    const populatedView = /<sheetViews><sheetView([^>]*)>/;
+    if (populatedView.test(xml)) {
+      return xml.replace(populatedView, (_match, attributes) => `<sheetViews><sheetView${attributes}>${pane}`);
+    }
+    throw new Error("匯出工作表缺少sheetViews，無法安全凍結第一列表頭。");
+  }
+
+  async function buildFrozenWorkbookBytes(workbook, XLSX, JSZip) {
+    if (!JSZip || typeof JSZip.loadAsync !== "function") throw new Error("Excel凍結窗格元件未載入，請重新整理後再下載。");
+    const source = XLSX.write(workbook, { type: "array", bookType: "xlsx", compression: true });
+    const archive = await JSZip.loadAsync(source);
+    const worksheetPaths = Object.keys(archive.files)
+      .filter((path) => /^xl\/worksheets\/sheet\d+\.xml$/.test(path))
+      .sort((left, right) => Number(left.match(/sheet(\d+)/)[1]) - Number(right.match(/sheet(\d+)/)[1]));
+    if (!worksheetPaths.length) throw new Error("匯出檔中找不到Excel工作表，無法設定凍結窗格。");
+    for (const path of worksheetPaths) {
+      const entry = archive.file(path);
+      const xml = await entry.async("string");
+      archive.file(path, freezeFirstRowInWorksheetXml(xml));
+    }
+    return archive.generateAsync({ type: "uint8array", compression: "DEFLATE", compressionOptions: { level: 6 } });
+  }
+
   function setNumberFormats(XLSX, sheet, ranges, formatCode) {
     for (const rangeText of ranges) {
       const range = XLSX.utils.decode_range(rangeText);
@@ -1776,7 +1806,7 @@
         ? analysis.exclusions.map((row) => [row.source, row.row, row.doc, row.sku, row.name, row.qty, row.amount, row.keywords, row.reason])
         : [["本次沒有集中規則排除資料"]])
     ];
-    const sourceSheet = makeSheet(XLSX, sourceRows, [26, 34, 22, 10, 14, 14, 14, 18, 14, 14, 18, 14, 14, 20, 12, 16, 80]);
+    const sourceSheet = makeSheet(XLSX, sourceRows, [26, 34, 22, 10, 14, 14, 14, 18, 14, 14, 18, 14, 14, 20, 12, 16, 80], `A1:Q${analysis.sourceChecks.length + 1}`);
     setNumberFormats(XLSX, sourceSheet, ["D2:F9", "I2:I9", "L2:L9", "O2:P9"], "#,##0");
     setNumberFormats(XLSX, sourceSheet, ["G2:G9", "J2:J9", "M2:M9"], "#,##0");
     setNumberFormats(XLSX, sourceSheet, ["H2:H9", "K2:K9", "N2:N9"], "#,##0.00");
@@ -1833,6 +1863,7 @@
     mergeReportParts,
     analyzeReports,
     buildOutputWorkbook,
+    buildFrozenWorkbookBytes,
     normalizeReconcileType,
     monthlyDirection
   };

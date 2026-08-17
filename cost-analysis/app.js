@@ -302,11 +302,30 @@
     updateAnalyzeAvailability(true);
   });
 
-  downloadButton.addEventListener("click", () => {
+  downloadButton.addEventListener("click", async () => {
     if (!state.outputWorkbook) return;
     const date = new Date();
     const stamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
-    XLSX.writeFile(state.outputWorkbook, `庫存成本分析_${stamp}.xlsx`, { compression: true });
+    const originalLabel = downloadButton.textContent;
+    downloadButton.disabled = true;
+    downloadButton.textContent = "正在整理Excel…";
+    try {
+      const bytes = await core.buildFrozenWorkbookBytes(state.outputWorkbook, XLSX, globalThis.JSZip);
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `庫存成本分析_${stamp}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      mainStatus.textContent = "Excel已下載：各頁籤第一列已凍結，明細表頭可直接篩選與排序。";
+    } catch (error) {
+      mainStatus.textContent = `Excel下載失敗：${error.message}`;
+    } finally {
+      downloadButton.textContent = originalLabel;
+      downloadButton.disabled = false;
+    }
   });
 
   createCards();
