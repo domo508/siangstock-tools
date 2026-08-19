@@ -1106,6 +1106,10 @@
     const analysisMonth = options && Number.isInteger(options.analysisMonth)
       ? options.analysisMonth
       : (monthCandidates.length ? Math.max(...monthCandidates) : null);
+    const isCurrentAnalysisRecord = (record) => {
+      const month = record && record._recordMonth != null ? record._recordMonth : recordMonthIndex(record);
+      return analysisMonth == null || month == null || month === analysisMonth;
+    };
     const sales = getRecords("sales").map((record) => ({
       ...record,
       _used: false,
@@ -1137,7 +1141,9 @@
       ]);
       const first = duplicateSales.get(signature);
       if (first) {
-        addIssue(issues, "error", "銷售明細疑似重複", sale, `與同檔第${first.sourceRow}列完全相同；兩列均保留、不自動排除，請確認是否為系統重複資料。`);
+        if (isCurrentAnalysisRecord(sale)) {
+          addIssue(issues, "error", "銷售明細疑似重複", sale, `與同檔第${first.sourceRow}列完全相同；兩列均保留、不自動排除，請確認是否為系統重複資料。`);
+        }
       } else {
         duplicateSales.set(signature, sale);
       }
@@ -1176,17 +1182,19 @@
         rtPairs.push({ r: rRow, t: tRow });
         const rCost = recordCost(rRow);
         const tCost = recordCost(tRow);
-        if (rCost != null && tCost != null && Math.abs(rCost) >= EPSILON && Math.abs(tCost) >= EPSILON && Math.abs(Math.abs(rCost) - Math.abs(tCost)) >= 1) {
+        if (isCurrentAnalysisRecord(tRow) && rCost != null && tCost != null && Math.abs(rCost) >= EPSILON && Math.abs(tCost) >= EPSILON && Math.abs(Math.abs(rCost) - Math.abs(tCost)) >= 1) {
           addIssue(issues, "warning", "R／T進貨價成本不同", tRow, `R單${rRow.doc}為${displayNumber(rCost)}，T單${tRow.doc}為${displayNumber(tCost)}；B與跨月D以正式R單成本為準。`);
         }
-        if (tRow.sourceDoc && normalizeText(tRow.sourceDoc) !== normalizeText(rRow.doc)) {
+        if (isCurrentAnalysisRecord(tRow) && tRow.sourceDoc && normalizeText(tRow.sourceDoc) !== normalizeText(rRow.doc)) {
           addIssue(issues, "info", "T單來源欄僅顯示主R", tRow, `本品項依R單「取貨單號」完整連結至${rRow.doc}；T單來源欄顯示${tRow.sourceDoc}，不可作為逐品項唯一來源。`);
         }
         continue;
       }
       if (exactCandidates.length > 1) {
         tRow._rtAmbiguous = true;
-        addIssue(issues, "error", "T單可能合併多張R，來源待查", tRow, `找到${exactCandidates.length}筆具有完整單號關聯且商品、數量相同的R列，無法安全決定成本來源；未自動沖銷。`);
+        if (isCurrentAnalysisRecord(tRow)) {
+          addIssue(issues, "error", "T單可能合併多張R，來源待查", tRow, `找到${exactCandidates.length}筆具有完整單號關聯且商品、數量相同的R列，無法安全決定成本來源；未自動沖銷。`);
+        }
         continue;
       }
       const possibleRows = pendingRRows.filter((rRow) => !rRow._rtMatched
@@ -1195,7 +1203,9 @@
         && (rRow._recordMonth == null || tRow._recordMonth == null || rRow._recordMonth <= tRow._recordMonth));
       if (possibleRows.length) {
         tRow._rtAmbiguous = true;
-        addIssue(issues, "warning", "T單可能合併多張R，來源待查", tRow, `另有${possibleRows.length}筆商品與數量相同的未扣庫R列，但報表沒有完整R／T單號關聯；依保守原則不自動配對或沖銷。`);
+        if (isCurrentAnalysisRecord(tRow)) {
+          addIssue(issues, "warning", "T單可能合併多張R，來源待查", tRow, `另有${possibleRows.length}筆商品與數量相同的未扣庫R列，但報表沒有完整R／T單號關聯；依保守原則不自動配對或沖銷。`);
+        }
       }
     }
 
@@ -1209,7 +1219,9 @@
     for (const pairs of pairsByTDoc.values()) {
       const rDocs = [...new Set(pairs.map((pair) => pair.r.doc).filter(Boolean))];
       if (rDocs.length <= 1) continue;
-      addIssue(issues, "info", "跨月R→T已配對（T合併多張R）", pairs[0].t, `T單${pairs[0].t.doc}依完整取貨單號、商品及數量配對${rDocs.length}張R單：${rDocs.join("、")}；T成本不再重複列入B。`);
+      if (isCurrentAnalysisRecord(pairs[0].t)) {
+        addIssue(issues, "info", "跨月R→T已配對（T合併多張R）", pairs[0].t, `T單${pairs[0].t.doc}依完整取貨單號、商品及數量配對${rDocs.length}張R單：${rDocs.join("、")}；T成本不再重複列入B。`);
+      }
     }
 
     const recognizedMonthlyTransferKeys = new Set();
@@ -1464,8 +1476,13 @@
         if (!pair.t._monthlyB3 && analysisMonth != null && tMonth === analysisMonth) {
           const timingQty = Math.abs(rQty);
           const timingAmount = Math.abs(rCost || 0);
-          addTimingAdjustment(pair.t, "本月T／尚未月結", timingQty, timingAmount, pair.r.doc, pair.t.doc, "總倉代出尚未月結", "T已於本月扣庫，但門市月結尚未認列B3；D列正數抵銷本月A的時間差。");
-          addIssue(issues, "error", "總倉代出尚未月結／可能漏請款", pair.t, `R單${pair.r.doc}與T單${pair.t.doc}已配對，但沒有第5類門市月結；不加入B3，僅列D及待查。`);
+          if (rMonth != null && rMonth < analysisMonth) {
+            addTimingAdjustment(pair.t, "前期R／本月T", timingQty, timingAmount, pair.r.doc, pair.t.doc, "跨月R→T已配對", "R屬前期正式銷售，本月T才實際扣庫；D列正數抵銷本月A的庫存時點差，前期月結不在本月稽核範圍。");
+            addIssue(issues, "info", "前期R／本月T跨月配對", pair.t, `R單${pair.r.doc}屬${displayMonth(rMonth)}，T單${pair.t.doc}於本月扣庫；前期月結不屬本月03稽核範圍，本月僅列D處理庫存時點差。`);
+          } else {
+            addTimingAdjustment(pair.t, "本月T／尚未月結", timingQty, timingAmount, pair.r.doc, pair.t.doc, "總倉代出尚未月結", "T已於本月扣庫，但本月門市月結尚未認列B3；D列正數抵銷本月A的時間差。");
+            addIssue(issues, "error", "總倉代出尚未月結／可能漏請款", pair.t, `R單${pair.r.doc}與T單${pair.t.doc}已配對，但本月沒有第5類門市月結；不加入B3，僅列D及待查。`);
+          }
         }
         continue;
       }
@@ -1493,7 +1510,7 @@
     for (const rRow of pendingRRows.filter((row) => !row._rtMatched && isCompanySalesRecord(row))) {
       const storeScope = classifyWarehouse(rRow.store);
       if (storeScope === "franchise") {
-        if (!rRow._monthlyB3) addIssue(issues, "error", "總倉代出尚未月結／可能漏請款", rRow, "正式R單尚未找到第5類門市月結；依月結主認列原則不加入B3，等待月結後再由R提供成本與認列月份。" );
+        if (!rRow._monthlyB3 && isCurrentAnalysisRecord(rRow)) addIssue(issues, "error", "總倉代出尚未月結／可能漏請款", rRow, "本月正式R單尚未找到第5類門市月結；依月結主認列原則不加入B3，等待月結後再由R提供成本與認列月份。" );
         rRow._used = true;
         continue;
       }
@@ -1516,10 +1533,12 @@
           explanation: "R單已列入本月B但尚未扣庫，D列負數抵銷本月B的時間差。"
         });
       }
-      const level = ageMonths == null || ageMonths <= 0 ? "info" : (ageMonths === 1 ? "warning" : "error");
-      const type = ageMonths == null || ageMonths <= 0 ? "本月R單尚無T" : (ageMonths === 1 ? "R單跨月尚無T" : "R單逾兩月尚無T");
-      const ageText = ageMonths == null ? "無法判斷月份" : (ageMonths <= 0 ? "仍在正式銷售當月" : `已跨${ageMonths}個月`);
-      addIssue(issues, level, type, rRow, `${ageText}，目前沒有以完整取貨單號、來源單號、商品及數量配對到T單；不自行推測來源。`);
+      if (isCurrentAnalysisRecord(rRow)) {
+        const level = ageMonths == null || ageMonths <= 0 ? "info" : (ageMonths === 1 ? "warning" : "error");
+        const type = ageMonths == null || ageMonths <= 0 ? "本月R單尚無T" : (ageMonths === 1 ? "R單跨月尚無T" : "R單逾兩月尚無T");
+        const ageText = ageMonths == null ? "無法判斷月份" : (ageMonths <= 0 ? "仍在正式銷售當月" : `已跨${ageMonths}個月`);
+        addIssue(issues, level, type, rRow, `${ageText}，目前沒有以完整取貨單號、來源單號、商品及數量配對到T單；不自行推測來源。`);
+      }
     }
 
     for (const sale of sales) {
@@ -1741,6 +1760,7 @@
       [],
       ["成本規則"],
       [`分析月份：${analysis.analysisMonthLabel || "月份不明"}。B2、B3、B4均以門市月結為主要認列來源；調撥與R／T銷售資料只供成本、扣庫及跨月稽核，不可單獨增加B。`],
+      ["03_未配對資料只列分析月份內的異常；月份無法判斷者仍列待查。前期銷售資料只保留作R／T跨月配對背景，不把前期未配對事項重複帶入本月。"],
       ["A、B、C、D均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。"],
       ["門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。"],
       ["02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。"],
@@ -1750,7 +1770,7 @@
     setNumberFormats(XLSX, summary, ["B6:B20"], "#,##0");
     setNumberFormats(XLSX, summary, ["C6:C20"], "#,##0.00");
     setNumberFormats(XLSX, summary, ["B23:B28"], "#,##0");
-    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", `分析月份：${analysis.analysisMonthLabel || "月份不明"}。B2、B3、B4均以門市月結為主要認列來源；調撥與R／T銷售資料只供成本、扣庫及跨月稽核，不可單獨增加B。`, "A、B、C、D均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。", "02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。", "狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]);
+    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", `分析月份：${analysis.analysisMonthLabel || "月份不明"}。B2、B3、B4均以門市月結為主要認列來源；調撥與R／T銷售資料只供成本、扣庫及跨月稽核，不可單獨增加B。`, "03_未配對資料只列分析月份內的異常；月份無法判斷者仍列待查。前期銷售資料只保留作R／T跨月配對背景，不把前期未配對事項重複帶入本月。", "A、B、C、D均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。", "02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。", "狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]);
     summary["!merges"] = summaryRows
       .map((row, index) => summaryMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 2 } } : null)
       .filter(Boolean);

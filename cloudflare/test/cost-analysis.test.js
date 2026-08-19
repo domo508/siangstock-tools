@@ -598,6 +598,35 @@ describe("庫存成本分析核心規則", () => {
     expect(analysis.details[0].salesQty).toBe(2);
     expect(analysis.issues.some((issue) => issue.type === "銷售明細疑似重複" && issue.level === "error")).toBe(true);
   });
+
+  it("03未配對資料只列分析月份異常，前期未配對R與重複列不重複帶入", () => {
+    const prior = { date: "2026-05-20", doc: "R0600002605200001", sourceFile: "05銷售.xlsx", store: "新竹東區門市", pickupWarehouse: "寬承總倉", sku: "MONTHLY-ISSUE", name: "月份範圍商品", salesQty: 1, qty: 0, purchaseCostAmount: 100 };
+    const current = { date: "2026-06-20", doc: "R0600002606200001", sourceFile: "06銷售.xlsx", store: "新竹東區門市", pickupWarehouse: "寬承總倉", sku: "MONTHLY-ISSUE", name: "月份範圍商品", salesQty: 1, qty: 0, purchaseCostAmount: 100 };
+    const reports = {
+      ...baseInventory("MONTHLY-ISSUE", 1, 1, 100),
+      sales: report("sales", [prior, prior, current])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.analysisMonthLabel).toBe("2026年6月");
+    expect(analysis.issues.some((issue) => issue.doc === prior.doc)).toBe(false);
+    expect(analysis.issues.some((issue) => issue.doc === current.doc && issue.type === "總倉代出尚未月結／可能漏請款" && issue.level === "error")).toBe(true);
+  });
+
+  it("前期R於本月才產生T且無本月月結時列跨月資訊，不誤標本月漏請款", () => {
+    const tDoc = "T0000002606100002";
+    const reports = {
+      ...baseInventory("PRIOR-R-CURRENT-T", 1, 0, 100),
+      sales: report("sales", [
+        { date: "2026-05-20", doc: "R0600002605200002", pickupDoc: tDoc, store: "新竹東區門市", pickupWarehouse: "寬承總倉", sku: "PRIOR-R-CURRENT-T", name: "跨月配對商品", salesQty: 1, qty: 0, purchaseCostAmount: 100 },
+        { date: "2026-06-10", doc: tDoc, sourceDoc: "R0600002605200002", store: "新竹東區門市", outboundWarehouse: "寬承總倉", sku: "PRIOR-R-CURRENT-T", name: "跨月配對商品", salesQty: 0, qty: 1, purchaseCostAmount: 0 }
+      ])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.details[0]).toMatchObject({ timingQty: 1, timingAmount: 100, quantityDifference: 0, rawAmountDifference: 0 });
+    expect(analysis.issues.some((issue) => issue.doc === tDoc && issue.type === "前期R／本月T跨月配對" && issue.level === "info")).toBe(true);
+    expect(analysis.issues.some((issue) => issue.doc === tDoc && issue.type === "總倉代出尚未月結／可能漏請款")).toBe(false);
+    expect(analysis.timingDetails.some((detail) => detail.auditDoc === tDoc && detail.type === "前期R／本月T" && detail.status === "跨月R→T已配對")).toBe(true);
+  });
 });
 
 describe("庫存成本分析前台", () => {
