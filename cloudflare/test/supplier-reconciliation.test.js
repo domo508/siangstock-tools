@@ -17,12 +17,12 @@ const core = loadBrowserScript("../supplier-reconciliation/core.js", { XLSX }).S
 function buildReports() {
   const aBook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(aBook, XLSX.utils.aoa_to_sheet([
-    ["收貨單編碼", "貨號", "品名", "已收數量", "未稅進貨價", "未稅進貨額", "供應商名稱"],
-    ["R1", "P1", "60天絲床包 [晨曦]", 10, 100, 1000, "測試供應商"],
-    ["R2", "P2", "純棉薄被套 [暮雨]", 5, 200, 1000, "測試供應商"],
-    ["R3", "P3", "熊冷被 [Soft Beige]", 5, 300, 1500, "測試供應商"],
-    ["R4", "P4", "內部限定床架配件", 2, 80, 160, "測試供應商"],
-    [4, "", "", 22, "", 3660, ""]
+    ["開單日期", "收貨單編碼", "貨號", "品名", "已收數量", "未稅進貨價", "未稅進貨額", "供應商名稱"],
+    ["2026-06-01", "R1", "P1", "60天絲床包 [晨曦]", 10, 100, 1000, "測試供應商"],
+    ["2026-06-02", "R2", "P2", "純棉薄被套 [暮雨]", 5, 200, 1000, "測試供應商"],
+    ["2026-06-03", "R3", "P3", "熊冷被 [Soft Beige]", 5, 300, 1500, "測試供應商"],
+    ["2026-06-04", "R4", "P4", "內部限定床架配件", 2, 80, 160, "測試供應商"],
+    ["", 4, "", "", 22, "", 3660, ""]
   ]), "工作表1");
 
   const bBook = XLSX.utils.book_new();
@@ -76,12 +76,77 @@ describe("財務供應商對帳核心", () => {
     expect(analysis.paired.some((row) => row.status === "金額差異")).toBe(false);
   });
 
-  it("輸出七頁籤並保留原始資料、差異與說明", () => {
+  it("支援民國年日期，並承接B表群組中留白的日期與帳別", () => {
+    expect(core.parseDateValue("115/06/02").key).toBe("2026-06-02");
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
+      ["帳款日", "進銷單號", "帳別", "品名", "數量", "單價", "合計"],
+      ["115/06/02", "S1", "銷退", "第一項", 1, 100, 100],
+      ["", "", "", "第二項", 2, 100, 200]
+    ]), "對帳單");
+    const inspection = core.inspectWorkbook(book, XLSX, "b").sheets[0];
+    const report = core.extractSource(book, XLSX, "b", { sheetName: inspection.name, headerRowIndex: inspection.headerRowIndex, mapping: inspection.mapping, fileName: "B.xlsx" });
+    expect(report.records[1].date).toBe("115/06/02");
+    expect(report.records[1].doc).toBe("S1");
+    expect(report.records[1].transactionType).toBe("銷退");
+    expect(report.records[1].qty).toBe(-2);
+  });
+
+  it("輸出八頁籤並保留原始資料、差異、說明與跨月台帳", () => {
     const { aReport, bReport } = buildReports();
     const workbook = core.buildOutputWorkbook(core.analyzeReports(aReport, bReport), XLSX);
-    expect(workbook.SheetNames).toEqual(["01_對帳總覽", "02_差異明細", "03_未配對品項", "04_完全通過", "05_A表原始資料", "06_B表原始資料", "07_比對說明"]);
+    expect(workbook.SheetNames).toEqual(["01_對帳總覽", "02_差異明細", "03_未配對品項", "04_完全通過", "05_A表原始資料", "06_B表原始資料", "07_比對說明", "08_跨月認列台帳"]);
     expect(workbook.Sheets["02_差異明細"]["!autofilter"]).toBeTruthy();
     expect(workbook.Sheets["05_A表原始資料"]["!autofilter"]).toBeTruthy();
+    const summary = XLSX.utils.sheet_to_json(workbook.Sheets["01_對帳總覽"], { header: 1, defval: "" });
+    expect(summary.some((row) => row[0] === "A表對價" && row[1] === "A表4項＝成功配對3項＋僅A表1項")).toBe(true);
+    expect(summary.some((row) => row[0] === "⚠ 財務特別提醒" && row[1] === "配對但有差異2項＋僅A表1項＋僅B表1項＝4項待確認")).toBe(true);
+  });
+
+  it("不同床包尺寸不會因名稱與單價相近而強制配對", () => {
+    const a = { name: "晨曦5尺床包", canonicalName: core.canonicalizeName("晨曦5尺床包"), qty: 1, unitPrice: 100 };
+    const b = { name: "晨曦6尺床包", canonicalName: core.canonicalizeName("晨曦6尺床包"), qty: 1, unitPrice: 100 };
+    expect(core.matchScore(a, b).sizesCompatible).toBe(false);
+    expect(core.findMatches([a], [b]).accepted).toHaveLength(0);
+  });
+
+  it("只用次月必要數量補足本月短少，並留下部分認列台帳", () => {
+    const makeReport = (sourceType, records) => ({
+      sourceType, fileName: `${sourceType}.xlsx`, sheetName: "資料", headerRowIndex: 0,
+      records: records.map((row, index) => ({ ...row, sourceRow: index + 2, transactionType: "" })),
+      rawRows: records.map((row, index) => ({ ...row, sourceRow: index + 2, included: true, reason: "商品明細", sourceFile: `${sourceType}.xlsx`, sheetName: "資料", transactionType: "" }))
+    });
+    const aReport = makeReport("a", [
+      { date: "2026-06-30", doc: "R1", sku: "P1", name: "晨曦5尺床包", qty: 8, unitPrice: 100, amount: 800, supplier: "測試供應商" },
+      { date: "2026-07-02", doc: "R2", sku: "P1", name: "晨曦5尺床包", qty: 5, unitPrice: 100, amount: 500, supplier: "測試供應商" },
+      { date: "2026-07-02", doc: "R3", sku: "P9", name: "次月其他商品", qty: 9, unitPrice: 50, amount: 450, supplier: "測試供應商" }
+    ]);
+    const bReport = makeReport("b", [
+      { date: "2026-06-30", doc: "S1", sku: "", name: "晨曦5尺床包", qty: 10, unitPrice: 100, amount: 1000, supplier: "測試供應商" }
+    ]);
+    const june = core.analyzeMonthlyReports(aReport, bReport, { month: "2026-06", cutoff: "2026-07-03" });
+    expect(june.paired).toHaveLength(1);
+    expect(june.paired[0].status).toBe("跨月完全通過");
+    expect(june.crossMonthAllocations).toHaveLength(1);
+    expect(june.crossMonthAllocations[0].recognizedQty).toBe(2);
+    expect(june.aOnly).toHaveLength(0);
+    expect(june.aItems[0].qty).toBe(10);
+
+    const workbook = core.buildOutputWorkbook(june, XLSX);
+    const importedLedger = core.ledgerRowsFromWorkbook(workbook, XLSX);
+    expect(importedLedger).toHaveLength(1);
+    expect(importedLedger[0].recognizedQty).toBe(2);
+
+    const julyB = makeReport("b", [
+      { date: "2026-07-03", doc: "S2", sku: "", name: "本月新品", qty: 1, unitPrice: 80, amount: 80, supplier: "測試供應商" }
+    ]);
+    const julyA = makeReport("a", [
+      { date: "2026-07-02", doc: "R2", sku: "P1", name: "晨曦5尺床包", qty: 5, unitPrice: 100, amount: 500, supplier: "測試供應商" },
+      { date: "2026-07-03", doc: "R4", sku: "P4", name: "本月新品", qty: 1, unitPrice: 80, amount: 80, supplier: "測試供應商" }
+    ]);
+    const july = core.analyzeMonthlyReports(julyA, julyB, { month: "2026-07", cutoff: "2026-08-03", priorLedger: importedLedger });
+    expect(july.totals.priorExcludedQty).toBe(2);
+    expect(july.aOnly.find((row) => row.aSku === "P1").aQty).toBe(3);
   });
 });
 
@@ -95,6 +160,12 @@ describe("財務供應商對帳前台", () => {
     expect(html).toContain("← 返回公司工具首頁");
     expect(html).toContain("不上傳、不會修改原始檔");
     expect(html).toContain("A表「未稅進貨價」對應B表「單價」");
+    expect(html).toContain('id="period-month"');
+    expect(html).toContain('id="prior-file"');
+    expect(html).toContain('id="summary-notes"');
+    expect(html).toContain("第8頁籤");
+    expect(app).toContain("數量對價關係");
+    expect(app).toContain("財務特別提醒");
     expect(html).toContain("下載結果Excel");
     expect(html).toContain("connect-src 'none'");
     expect(app).not.toContain("fetch(");

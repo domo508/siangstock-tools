@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'">
   <title>財務供應商對帳比對｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260820-supplier-r1">
-  <link rel="stylesheet" href="style.css?v=20260820-supplier-r1">
+  <link rel="stylesheet" href="style.css?v=20260821-cross-month-r3">
 </head>
 <body>
   <main class="page-shell">
@@ -29,7 +29,7 @@
       <div>
         <p class="eyebrow">SUPPLIER RECONCILIATION</p>
         <h1 id="page-title">把供應商差異，<br>直接整理出來。</h1>
-        <p class="hero-description">匯入 ERP 收貨單與供應商對帳報表，依品名、規格及單價保守配對。分清數量差異、單價差異與單邊品項，讓財務直接處理異常。</p>
+        <p class="hero-description">匯入 ERP 收貨單與供應商對帳報表，先核對完整月份，再只用次月必要收貨補足跨月落差。分清同月、跨月與真正異常，讓財務直接處理。</p>
       </div>
       <aside class="privacy-card" aria-label="資料安全說明">
         <span class="privacy-icon" aria-hidden="true">✓</span>
@@ -38,15 +38,21 @@
     </section>
 
     <section class="steps" aria-label="使用步驟">
-      <div><span>1</span><strong>選擇兩份報表</strong><small>A表為 ERP 收貨單，B表為供應商對帳表。</small></div>
-      <div><span>2</span><strong>確認欄位並比對</strong><small>系統自動辨識，也可人工修正欄位。</small></div>
-      <div><span>3</span><strong>處理差異並下載</strong><small>產生可篩選、可追溯的七頁籤Excel。</small></div>
+      <div><span>1</span><strong>設定月份並選檔</strong><small>A表可包含次月補收；B表只核對指定月份。</small></div>
+      <div><span>2</span><strong>分兩階段比對</strong><small>先比同月，再用截止日前收貨補足B表短少。</small></div>
+      <div><span>3</span><strong>下載並延續台帳</strong><small>跨月認列寫入第8頁籤，下期匯入即可排除。</small></div>
     </section>
 
     <section class="panel" aria-labelledby="upload-title">
       <div class="section-heading">
-        <div><p class="eyebrow">資料來源</p><h2 id="upload-title">選擇本期兩份對帳報表</h2></div>
-        <p>支援 .xlsx、.xls、.csv；請確認供應商與對帳月份一致。</p>
+        <div><p class="eyebrow">資料來源</p><h2 id="upload-title">設定月份並選擇對帳資料</h2></div>
+        <p>A、B表支援 .xlsx、.xls、.csv；上期結果請使用本工具輸出的 .xlsx。</p>
+      </div>
+
+      <div class="period-grid" aria-label="對帳期間設定">
+        <label><span>對帳月份＊</span><input id="period-month" type="month" required></label>
+        <label><span>跨月補收截止日＊</span><input id="cross-month-cutoff" type="date" required></label>
+        <p>例如對帳6月，可把截止日設為7/3或7/10；次月資料只會補足B表短少，不會整批累加。</p>
       </div>
 
       <div class="reconciliation-note" role="note">
@@ -54,7 +60,7 @@
         <small>A表「未稅進貨價」對應B表「單價」；A表「未稅進貨額」對應B表「合計」。金額差額保留供財務排序，但不重複列為一般差異類型。</small>
       </div>
 
-      <div class="upload-grid two-sources">
+      <div class="upload-grid three-sources">
         <article class="upload-card" data-source="a">
           <div class="upload-card-header"><h3>A表・ERP收貨單</h3><span class="source-badge required">必要</span></div>
           <p class="upload-help">使用貨號、品名、已收數量、未稅進貨價與未稅進貨額。</p>
@@ -68,6 +74,12 @@
           <label class="file-button">選擇B表<input id="b-file" type="file" accept=".xlsx,.xls,.csv"></label>
           <p id="b-file-name" class="file-name">尚未選擇</p>
           <div id="b-mapping" class="mapping-box" hidden></div>
+        </article>
+        <article class="upload-card prior-card">
+          <div class="upload-card-header"><h3>上期對帳結果</h3><span class="source-badge optional">第二期起建議</span></div>
+          <p class="upload-help">讀取第8頁籤的跨月認列台帳，排除已在前期使用的收貨數量。</p>
+          <label class="file-button">選擇上期結果<input id="prior-file" type="file" accept=".xlsx"></label>
+          <p id="prior-file-name" class="file-name">未選擇（首期可略過）</p>
         </article>
       </div>
 
@@ -84,8 +96,10 @@
         <p>成功配對代表找到同一商品；完全通過才代表數量、單價與金額均一致。</p>
       </div>
       <div id="summary-cards" class="summary-grid reconciliation-summary"></div>
+      <div id="summary-notes" class="reconciliation-summary-notes" aria-label="對帳數量關係與財務提醒"></div>
       <div class="result-toolbar" aria-label="結果篩選">
         <button class="filter-button active" type="button" data-filter="differences">待處理差異</button>
+        <button class="filter-button" type="button" data-filter="cross">跨月配對</button>
         <button class="filter-button" type="button" data-filter="unmatched">僅A／僅B</button>
         <button class="filter-button" type="button" data-filter="all">全部配對</button>
       </div>
@@ -104,9 +118,10 @@
         <article><strong>先辨識商品身分</strong><p>比較品名、規格、商品類型與單價；名稱不夠可靠時保留待人工確認。</p></article>
         <article><strong>數量與單價說明原因</strong><p>差異類型只分數量、單價、數量＋單價及計算異常。</p></article>
         <article><strong>金額表示財務影響</strong><p>金額差額保留、可排序，但不重複當成一般差異類型。</p></article>
-        <article><strong>單邊資料不自動沖銷</strong><p>只出現在其中一份報表的商品會列為僅A表或僅B表。</p></article>
+        <article><strong>次月資料只補短少</strong><p>跨月候選只補足B表缺少的數量，不會把次月全部收貨累加進本月。</p></article>
+        <article><strong>已認列數量不重複</strong><p>下期匯入上期結果後，先扣除已用於前期的收貨數量，再進行本月對帳。</p></article>
         <article><strong>退貨以負值沖回</strong><p>B表帳別為銷退時，數量與合計會以負數併入同品項。</p></article>
-        <article><strong>匯出可完整追溯</strong><p>結果包含總覽、差異、未配對、通過、兩份原始資料及比對說明。</p></article>
+        <article><strong>匯出可完整追溯</strong><p>結果包含總覽、差異、未配對、通過、原始資料、說明及跨月認列台帳。</p></article>
       </div>
     </section>
 
@@ -115,7 +130,7 @@
 
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="../cost-analysis/assets/jszip.min.js"></script>
-  <script src="core.js?v=20260820-supplier-r1"></script>
-  <script src="app.js?v=20260820-supplier-r1"></script>
+  <script src="core.js?v=20260821-cross-month-r3"></script>
+  <script src="app.js?v=20260821-cross-month-r3"></script>
 </body>
 </html>

@@ -8,7 +8,32 @@
 
 .reconciliation-note strong { display: block; margin-bottom: 5px; }
 .reconciliation-note small { color: #4e6d61; line-height: 1.65; }
-.two-sources { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.period-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #f8fbfc;
+}
+
+.period-grid label { display: grid; gap: 7px; color: var(--navy); font-weight: 800; }
+.period-grid input {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 11px;
+  border: 1px solid #b6cad2;
+  border-radius: 10px;
+  color: var(--navy);
+  background: white;
+  font: inherit;
+}
+.period-grid p { grid-column: 1 / -1; margin: 0; color: var(--muted); line-height: 1.55; font-size: 0.88rem; }
+.three-sources { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.prior-card { background: #f8fbfc; }
+.source-badge.optional { color: var(--green); }
 
 .result-toolbar {
   display: flex;
@@ -16,6 +41,33 @@
   margin: 2px 0 16px;
   flex-wrap: wrap;
 }
+
+.reconciliation-summary-notes {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr);
+  gap: 14px;
+  margin: 18px 0;
+}
+
+.equivalence-note,
+.attention-alert {
+  padding: 16px 18px;
+  border-radius: 16px;
+}
+
+.equivalence-note { border: 1px solid #b9d2da; background: #f5fafb; }
+.equivalence-note strong { color: var(--navy); }
+.equivalence-note p,
+.attention-alert p { margin: 7px 0 0; line-height: 1.6; }
+.equivalence-note p { color: var(--muted); }
+
+.attention-alert {
+  border: 1px solid #e0a69d;
+  color: #8f3028;
+  background: var(--soft-red);
+}
+.attention-alert strong { font-size: 1.02rem; }
+.attention-alert b { font-size: 1.08rem; }
 
 .filter-button {
   min-height: 38px;
@@ -65,11 +117,18 @@
 .status-chip.warn { color: #755f19; background: var(--soft-yellow); }
 .status-chip.error { color: var(--red); background: var(--soft-red); }
 .status-chip.single { color: var(--navy); background: var(--soft-blue); }
+.status-chip.cross { color: #326873; background: #e5f4f6; }
 .negative, .positive { color: var(--red); font-weight: 800; }
 .muted-cell { color: var(--muted); }
 
+@media (max-width: 900px) {
+  .three-sources { grid-template-columns: 1fr; }
+  .reconciliation-summary-notes { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 680px) {
-  .two-sources { grid-template-columns: 1fr; }
+  .period-grid { grid-template-columns: 1fr; padding: 15px; }
+  .period-grid p { grid-column: auto; }
   .result-toolbar { display: grid; grid-template-columns: 1fr; }
   .filter-button { width: 100%; }
 }

@@ -3,13 +3,17 @@
 
   const core = globalThis.SupplierReconciliationCore;
   const XLSX = globalThis.XLSX;
-  const state = { sources: {}, analysis: null, outputWorkbook: null, filter: "differences" };
+  const state = { sources: {}, priorLedger: [], analysis: null, outputWorkbook: null, filter: "differences" };
   const analyzeButton = document.getElementById("analyze-button");
   const downloadButton = document.getElementById("download-button");
   const mainStatus = document.getElementById("main-status");
   const resultPanel = document.getElementById("result-panel");
   const summaryCards = document.getElementById("summary-cards");
+  const summaryNotes = document.getElementById("summary-notes");
   const resultRows = document.getElementById("result-rows");
+  const periodMonth = document.getElementById("period-month");
+  const cutoffDate = document.getElementById("cross-month-cutoff");
+  const priorFileName = document.getElementById("prior-file-name");
 
   function escapeHtml(value) {
     return String(value == null ? "" : value)
@@ -108,10 +112,19 @@
   function updateAvailability() {
     const missing = ["a", "b"].filter((type) => !state.sources[type]);
     const invalid = ["a", "b"].filter((type) => state.sources[type] && !core.validateMapping(type, state.sources[type].mapping).valid);
-    analyzeButton.disabled = missing.length > 0 || invalid.length > 0;
+    const periodMissing = !periodMonth.value || !cutoffDate.value;
+    analyzeButton.disabled = missing.length > 0 || invalid.length > 0 || periodMissing;
     if (missing.length) mainStatus.textContent = `尚缺：${missing.map((type) => core.SOURCE_SCHEMAS[type].label).join("、")}`;
     else if (invalid.length) mainStatus.textContent = "部分必要欄位尚未完成對應。";
+    else if (periodMissing) mainStatus.textContent = "請選擇對帳月份與跨月補收截止日。";
     else mainStatus.textContent = "兩份報表與必要欄位已就緒，可以開始比對。";
+  }
+
+  function setDefaultCutoff(month) {
+    if (!/^\d{4}-\d{2}$/.test(month)) return;
+    const [year, monthNumber] = month.split("-").map(Number);
+    const date = new Date(year, monthNumber, 3);
+    cutoffDate.value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   }
 
   async function onFileChange(type, event) {
@@ -138,6 +151,11 @@
       state.sources[type] = { file, workbook, inspection, sheetName: selected.name, headerRowIndex: selected.headerRowIndex, headers: selected.headers, mapping: { ...selected.mapping } };
       fileName.textContent = `${file.name}・已讀取`;
       renderMapping(type);
+      if (type === "b" && core.validateMapping(type, state.sources[type].mapping).valid) {
+        const report = core.extractSource(workbook, XLSX, type, { sheetName: selected.name, headerRowIndex: selected.headerRowIndex, mapping: selected.mapping, fileName: file.name });
+        const inferred = core.inferDominantMonth(report);
+        if (inferred && !periodMonth.value) { periodMonth.value = inferred; setDefaultCutoff(inferred); }
+      }
     } catch (error) {
       delete state.sources[type];
       card.classList.add("error");
@@ -148,6 +166,7 @@
   }
 
   function statusClass(status) {
+    if (status.startsWith("跨月")) return "cross";
     if (status === "完全通過") return "pass";
     if (status === "僅A表存在" || status === "僅B表存在") return "single";
     if (status === "計算異常") return "warn";
@@ -173,20 +192,34 @@
     document.querySelectorAll("[data-filter]").forEach((button) => button.classList.toggle("active", button.dataset.filter === filter));
     if (!state.analysis) return;
     if (filter === "unmatched") renderRows(state.analysis.unmatched);
+    else if (filter === "cross") renderRows(state.analysis.paired.filter((row) => row.crossMonth));
     else if (filter === "all") renderRows(state.analysis.paired);
     else renderRows(state.analysis.differences);
   }
 
   function renderResults(analysis) {
     const t = analysis.totals;
+    const crossDifferenceCount = Math.max(0, (t.crossMonthCount || 0) - (t.crossMonthPassCount || 0));
+    const attentionCount = t.differenceCount + t.aOnlyCount + t.bOnlyCount;
     const cards = [
       ["A表商品", formatNumber(t.aItemCount), "ERP收貨商品"], ["B表商品", formatNumber(t.bItemCount), "供應商商品"],
       ["成功配對", formatNumber(t.matchedCount), `A ${formatPercent(t.aPairRate)}・B ${formatPercent(t.bPairRate)}`],
-      ["完全通過", formatNumber(t.passCount), "數量、單價、金額一致"], ["配對但有差異", formatNumber(t.differenceCount), "需由財務處理"],
+      ["完全通過", formatNumber(t.passCount), "含跨月完全通過"], ["跨月配對", formatNumber(t.crossMonthCount), `其中完全通過${formatNumber(t.crossMonthPassCount)}項`],
+      ["前期已認列排除", formatNumber(t.priorExcludedQty), `${formatNumber(t.priorExcludedCount)}筆收貨資料`], ["配對但有差異", formatNumber(t.differenceCount), "需由財務處理"],
       ["僅A表存在", formatNumber(t.aOnlyCount), "B表未找到可靠對應"], ["僅B表存在", formatNumber(t.bOnlyCount), "A表未找到可靠對應"],
       ["待處理差異額", `$${formatNumber(t.absoluteDifference)}`, "差異絕對額加總"]
     ];
-    summaryCards.innerHTML = cards.map(([label, value, sub], index) => `<div class="summary-card ${index === 4 || index === 7 ? "warn" : ""}"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong><span>${escapeHtml(sub)}</span></div>`).join("");
+    summaryCards.innerHTML = cards.map(([label, value, sub]) => `<div class="summary-card ${label === "配對但有差異" || label === "待處理差異額" ? "warn" : ""}"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong><span>${escapeHtml(sub)}</span></div>`).join("");
+    summaryNotes.innerHTML = `
+      <div class="equivalence-note">
+        <strong>數量對價關係</strong>
+        <p>A表${formatNumber(t.aItemCount)}項＝成功配對${formatNumber(t.matchedCount)}項＋僅A表${formatNumber(t.aOnlyCount)}項；B表${formatNumber(t.bItemCount)}項＝成功配對${formatNumber(t.matchedCount)}項＋僅B表${formatNumber(t.bOnlyCount)}項。</p>
+        <p>成功配對${formatNumber(t.matchedCount)}項＝完全通過${formatNumber(t.passCount)}項＋配對但有差異${formatNumber(t.differenceCount)}項；跨月配對${formatNumber(t.crossMonthCount)}項＝跨月完全通過${formatNumber(t.crossMonthPassCount)}項＋跨月有差異${formatNumber(crossDifferenceCount)}項。</p>
+      </div>
+      <div class="attention-alert" role="note">
+        <strong>財務特別提醒</strong>
+        <p>配對但有差異${formatNumber(t.differenceCount)}項＋僅A表${formatNumber(t.aOnlyCount)}項＋僅B表${formatNumber(t.bOnlyCount)}項＝<b>${formatNumber(attentionCount)}項待確認</b></p>
+      </div>`;
     applyFilter("differences");
     resultPanel.hidden = false;
     resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -202,11 +235,11 @@
         const source = state.sources[type];
         reports[type] = core.extractSource(source.workbook, XLSX, type, { sheetName: source.sheetName, headerRowIndex: source.headerRowIndex, mapping: source.mapping, fileName: source.file.name });
       }
-      state.analysis = core.analyzeReports(reports.a, reports.b);
+      state.analysis = core.analyzeMonthlyReports(reports.a, reports.b, { month: periodMonth.value, cutoff: cutoffDate.value, priorLedger: state.priorLedger });
       state.outputWorkbook = core.buildOutputWorkbook(state.analysis, XLSX);
       renderResults(state.analysis);
       const t = state.analysis.totals;
-      mainStatus.textContent = `比對完成：成功配對${formatNumber(t.matchedCount)}項，完全通過${formatNumber(t.passCount)}項，差異${formatNumber(t.differenceCount)}項，僅A表${formatNumber(t.aOnlyCount)}項，僅B表${formatNumber(t.bOnlyCount)}項。`;
+      mainStatus.textContent = `比對完成：成功配對${formatNumber(t.matchedCount)}項，其中跨月${formatNumber(t.crossMonthCount)}項；完全通過${formatNumber(t.passCount)}項，差異${formatNumber(t.differenceCount)}項，僅A表${formatNumber(t.aOnlyCount)}項，僅B表${formatNumber(t.bOnlyCount)}項。`;
       downloadButton.disabled = false;
     } catch (error) {
       resultPanel.hidden = true;
@@ -228,7 +261,7 @@
       const date = new Date();
       const stamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
       link.href = url;
-      link.download = `財務供應商對帳比對_${stamp}.xlsx`;
+      link.download = `財務供應商對帳比對_${state.analysis.period?.month || stamp}.xlsx`;
       document.body.appendChild(link);
       link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 0);
@@ -243,6 +276,25 @@
 
   document.getElementById("a-file").addEventListener("change", (event) => onFileChange("a", event));
   document.getElementById("b-file").addEventListener("change", (event) => onFileChange("b", event));
+  document.getElementById("prior-file").addEventListener("change", async (event) => {
+    resetResults("上期結果已變更，請重新開始比對。");
+    const file = event.currentTarget.files?.[0];
+    state.priorLedger = [];
+    if (!file) { priorFileName.textContent = "未選擇（首期可略過）"; updateAvailability(); return; }
+    priorFileName.textContent = `正在讀取：${file.name}`;
+    try {
+      const data = await readFile(file);
+      const workbook = XLSX.read(data, { type: "array", cellDates: true });
+      state.priorLedger = core.ledgerRowsFromWorkbook(workbook, XLSX);
+      priorFileName.textContent = `${file.name}・已讀取${formatNumber(state.priorLedger.length)}筆跨月認列`;
+    } catch (error) {
+      state.priorLedger = [];
+      priorFileName.textContent = `${file.name}：${error.message}`;
+    }
+    updateAvailability();
+  });
+  periodMonth.addEventListener("change", () => { setDefaultCutoff(periodMonth.value); resetResults("對帳月份已變更，請重新開始比對。"); updateAvailability(); });
+  cutoffDate.addEventListener("change", () => { resetResults("跨月截止日已變更，請重新開始比對。"); updateAvailability(); });
   document.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => applyFilter(button.dataset.filter)));
   updateAvailability();
 })();
