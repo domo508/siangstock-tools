@@ -82,6 +82,7 @@ describe("庫存成本分析核心規則", () => {
     const salesMap = core.autoMapHeaders(cases.sales, "sales");
     expect(cases.sales[salesMap.qty]).toBe("扣庫量");
     expect(cases.sales[salesMap.purchaseCostAmount]).toBe("進貨價金額");
+    expect(core.autoMapHeaders(["銷別", ...cases.sales], "sales").salesType).toBe(0);
     const transferMap = core.autoMapHeaders(cases.transfers, "transfers");
     expect(cases.transfers[transferMap.sourceCostAmount]).toBe("調出方成本額");
     expect(cases.transfers[transferMap.transferAmount]).toBe("結算額");
@@ -138,6 +139,67 @@ describe("庫存成本分析核心規則", () => {
     expect(item.salesQty).toBe(2);
     expect(item.adjustmentQty).toBe(0);
     expect(item.quantityDifference).toBe(0);
+  });
+
+  it("訂貨與退訂只有在來源單號、維度、數量及金額完整反向且無有效T時才沖銷", () => {
+    const reports = {
+      ...baseInventory("ORDER-CANCEL", 1, 1, 100),
+      sales: report("sales", [
+        { date: "2026-06-06", doc: "R0100002606060008", salesType: "訂貨", store: "台北中山門市", pickupWarehouse: "寬承總倉", outboundWarehouse: "台北中山門市", sku: "ORDER-CANCEL", name: "訂貨退訂商品", salesQty: 1, qty: 0, salesAmount: 200, purchaseCostAmount: 100 },
+        { date: "2026-06-06", doc: "R0100002606060010", sourceDoc: "R0100002606060008", salesType: "退訂", store: "台北中山門市", pickupWarehouse: "寬承總倉", outboundWarehouse: "台北中山門市", sku: "ORDER-CANCEL", name: "訂貨退訂商品", salesQty: -1, qty: 0, salesAmount: -200, purchaseCostAmount: -100 }
+      ])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.details[0]).toMatchObject({ salesQty: 0, salesAmount: 0, timingQty: 0, timingAmount: 0, status: "通過" });
+    expect(analysis.issues.some((issue) => issue.type.includes("尚無T") || issue.type.includes("尚未月結"))).toBe(false);
+    expect(analysis.salesCancellationDetails).toHaveLength(1);
+    expect(analysis.salesCancellationDetails[0]).toMatchObject({ kind: "訂貨→退訂", originalDoc: "R0100002606060008", reversalDoc: "R0100002606060010" });
+  });
+
+  it("嚴格沖銷任一金額不完全反向時不自動配對", () => {
+    const reports = {
+      ...baseInventory("ORDER-MISMATCH", 1, 1, 100),
+      sales: report("sales", [
+        { date: "2026-06-06", doc: "R0100002606060008", salesType: "訂貨", store: "台北中山門市", pickupWarehouse: "寬承總倉", outboundWarehouse: "台北中山門市", sku: "ORDER-MISMATCH", name: "金額不符商品", salesQty: 1, qty: 0, salesAmount: 200, purchaseCostAmount: 100 },
+        { date: "2026-06-06", doc: "R0100002606060010", sourceDoc: "R0100002606060008", salesType: "退訂", store: "台北中山門市", pickupWarehouse: "寬承總倉", outboundWarehouse: "台北中山門市", sku: "ORDER-MISMATCH", name: "金額不符商品", salesQty: -1, qty: 0, salesAmount: -199, purchaseCostAmount: -100 }
+      ])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.salesCancellationDetails).toHaveLength(0);
+    expect(analysis.details[0]).toMatchObject({ timingQty: -2, timingAmount: -200 });
+    expect(analysis.issues.filter((issue) => issue.type === "本月R單尚無T")).toHaveLength(2);
+  });
+
+  it("訂貨已有有效T時即使退訂完整反向也不得自動沖銷", () => {
+    const tDoc = "T0000002606100001";
+    const reports = {
+      ...baseInventory("ORDER-HAS-T", 1, 0, 100),
+      sales: report("sales", [
+        { date: "2026-06-06", doc: "R0100002606060008", pickupDoc: tDoc, salesType: "訂貨", store: "台北中山門市", pickupWarehouse: "寬承總倉", outboundWarehouse: "台北中山門市", sku: "ORDER-HAS-T", name: "已有T商品", salesQty: 1, qty: 0, salesAmount: 200, purchaseCostAmount: 100 },
+        { date: "2026-06-06", doc: "R0100002606060010", sourceDoc: "R0100002606060008", pickupDoc: tDoc, salesType: "退訂", store: "台北中山門市", pickupWarehouse: "寬承總倉", outboundWarehouse: "台北中山門市", sku: "ORDER-HAS-T", name: "已有T商品", salesQty: -1, qty: 0, salesAmount: -200, purchaseCostAmount: -100 },
+        { date: "2026-06-10", doc: tDoc, sourceDoc: "R0100002606060008", salesType: "取貨", store: "台北中山門市", outboundWarehouse: "寬承總倉", sku: "ORDER-HAS-T", name: "已有T商品", salesQty: 1, qty: 1, salesAmount: 0, purchaseCostAmount: 0 }
+      ])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.salesCancellationDetails).toHaveLength(0);
+    expect(analysis.issues.some((issue) => issue.type === "T單可能合併多張R，來源待查")).toBe(true);
+  });
+
+  it("同月銷貨與退貨完整反向時保留來源稽核但不列異常", () => {
+    const reports = {
+      ...baseInventory("SALE-RETURN", 1, 1, 80),
+      sales: report("sales", [
+        { date: "2026-06-08", doc: "R0100002606080001", salesType: "銷貨", store: "台北中山門市", pickupWarehouse: "台北中山門市", outboundWarehouse: "台北中山門市", sku: "SALE-RETURN", name: "銷退商品", salesQty: 1, qty: 1, salesAmount: 160, purchaseCostAmount: 80 },
+        { date: "2026-06-08", doc: "R0100002606080002", sourceDoc: "R0100002606080001", salesType: "退貨", store: "台北中山門市", pickupWarehouse: "台北中山門市", outboundWarehouse: "台北中山門市", sku: "SALE-RETURN", name: "銷退商品", salesQty: -1, qty: -1, salesAmount: -160, purchaseCostAmount: -80 }
+      ])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.details[0]).toMatchObject({ salesQty: 0, salesAmount: 0, status: "通過" });
+    expect(analysis.salesCancellationDetails).toHaveLength(1);
+    const workbook = core.buildOutputWorkbook(analysis, XLSX);
+    const sourceRows = XLSX.utils.sheet_to_json(workbook.Sheets["05_來源檢查"], { header: 1, defval: "" });
+    expect(sourceRows.some((row) => row[0] === "銷售流水嚴格沖銷明細")).toBe(true);
+    expect(sourceRows.some((row) => row[0] === "銷貨→退貨" && row[2] === "R0100002606080001" && row[4] === "R0100002606080002")).toBe(true);
   });
 
   it("第5類直營總倉代出只認列銷售一次且不要求調撥單", () => {

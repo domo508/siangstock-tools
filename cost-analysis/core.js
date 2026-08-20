@@ -78,6 +78,7 @@
         purchasePrice: ["進貨價", "最近進貨價", "實際進貨價", "進貨成本單價"],
         averageCost: ["成本價", "平均成本", "單位成本"],
         salesAmount: ["折後金額", "銷售金額", "銷貨金額", "未稅銷售額", "含稅金額"],
+        salesType: ["銷別", "交易類型", "銷售類型", "銷貨類型"],
         status: ["狀態", "訂單狀態", "單據狀態"]
       },
       required: ["qty"],
@@ -317,6 +318,7 @@
       reason: "出入庫原因",
       relatedDoc: "關聯單號",
       salesAmount: "銷售金額",
+      salesType: "銷別",
       sourceCostPrice: "調出方成本價",
       destinationCostPrice: "調入方成本價",
       sourceCostAmount: "調出方成本額",
@@ -506,6 +508,7 @@
         claimAmount: parseNumber(valueAt(row, mapping, "claimAmount")),
         salesAmount: parseNumber(valueAt(row, mapping, "salesAmount")),
         salesQty: parseNumber(valueAt(row, mapping, "salesQty")),
+        salesType: String(valueAt(row, mapping, "salesType") || "").trim(),
         sourceFile: options && options.fileName ? options.fileName : "",
         rowFingerprint: JSON.stringify(row.map((value) => value instanceof Date ? value.toISOString() : value)),
         status: String(status || "").trim()
@@ -573,7 +576,7 @@
               normalizeText(record.doc), normalizeText(record.sourceDoc), normalizeText(record.pickupDoc),
               String(record.date || "").trim(), normalizeText(record.store), normalizeText(record.outboundWarehouse),
               normalizeText(record.pickupWarehouse), itemKey(record), Number(record.salesQty || 0), Number(record.qty || 0),
-              record.salesAmount, record.purchaseCostAmount, record.purchasePrice
+              record.salesAmount, record.purchaseCostAmount, record.purchasePrice, normalizeText(record.salesType)
             ]));
           const occurrence = (partCounts.get(signature) || 0) + 1;
           partCounts.set(signature, occurrence);
@@ -833,6 +836,84 @@
     return Math.abs(Math.abs(Number(left || 0)) - Math.abs(Number(right || 0))) < EPSILON;
   }
 
+  function inverseValues(left, right) {
+    if (left == null || right == null) return false;
+    return Math.abs(Number(left) + Number(right)) < EPSILON;
+  }
+
+  function salesCancellationKind(record) {
+    const type = normalizeText(record && record.salesType);
+    if (type === normalizeText("退訂")) return { reversalType: "退訂", originalType: "訂貨" };
+    if (type === normalizeText("退貨")) return { reversalType: "退貨", originalType: "銷貨" };
+    return null;
+  }
+
+  function strictCancellationLookupKey(record, salesType, document) {
+    return [
+      normalizeText(salesType),
+      normalizeText(document),
+      itemKey(record),
+      normalizeText(record.store),
+      normalizeText(record.pickupWarehouse),
+      normalizeText(record.outboundWarehouse)
+    ].join("|");
+  }
+
+  function effectiveFulfillmentKey(sourceDocument, record, qty) {
+    return [normalizeText(sourceDocument), itemKey(record), Math.abs(Number(qty || 0))].join("|");
+  }
+
+  function hasEffectiveFulfillmentT(original, effectiveFulfillmentKeys) {
+    const linkedTDocuments = pickupTDocuments(original.pickupDoc);
+    if (linkedTDocuments.size) return true;
+    const originalDocument = normalizeText(original.doc);
+    if (!originalDocument) return false;
+    return effectiveFulfillmentKeys.has(effectiveFulfillmentKey(originalDocument, original, salesRecognitionQty(original)));
+  }
+
+  function findStrictSalesCancellationPairs(sales) {
+    const used = new Set();
+    const pairs = [];
+    const originalsByKey = new Map();
+    const effectiveFulfillmentKeys = new Set();
+    for (const record of sales) {
+      const salesType = normalizeText(record.salesType);
+      if (salesType === normalizeText("訂貨") || salesType === normalizeText("銷貨")) {
+        const key = strictCancellationLookupKey(record, salesType, record.doc);
+        const bucket = originalsByKey.get(key) || [];
+        bucket.push(record);
+        originalsByKey.set(key, bucket);
+      }
+      if (isHeadquartersFulfillmentT(record) && record.sourceDoc) {
+        effectiveFulfillmentKeys.add(effectiveFulfillmentKey(record.sourceDoc, record, record.qty));
+      }
+    }
+    for (const reversal of sales) {
+      const kind = salesCancellationKind(reversal);
+      if (!kind || used.has(reversal)) continue;
+      const originalDocument = normalizeText(reversal.sourceDoc);
+      if (!originalDocument) continue;
+      const lookupKey = strictCancellationLookupKey(reversal, kind.originalType, originalDocument);
+      const candidates = (originalsByKey.get(lookupKey) || []).filter((original) => !used.has(original)
+        && inverseValues(original.salesQty, reversal.salesQty)
+        && inverseValues(original.qty, reversal.qty)
+        && inverseValues(original.salesAmount, reversal.salesAmount)
+        && inverseValues(original.purchaseCostAmount, reversal.purchaseCostAmount)
+        && (kind.reversalType !== "退貨" || recordMonthIndex(original) === recordMonthIndex(reversal))
+        && (kind.reversalType !== "退訂" || (
+          Math.abs(Number(original.qty || 0)) < EPSILON
+          && Math.abs(Number(reversal.qty || 0)) < EPSILON
+          && !hasEffectiveFulfillmentT(original, effectiveFulfillmentKeys)
+        )));
+      if (candidates.length !== 1) continue;
+      const original = candidates[0];
+      used.add(original);
+      used.add(reversal);
+      pairs.push({ kind: `${kind.originalType}→${kind.reversalType}`, original, reversal });
+    }
+    return pairs;
+  }
+
   function isCompanySalesRecord(record) {
     const outboundScope = classifyWarehouse(record.outboundWarehouse);
     if (isCompanyScope(outboundScope)) return true;
@@ -984,6 +1065,7 @@
     const exclusions = [];
     const adjustmentDetails = [];
     const timingDetails = [];
+    const salesCancellationDetails = [];
     const productRules = options && options.rules ? options.rules : DEFAULT_PRODUCT_RULES;
     const ruleContext = {
       version: options && options.rulesVersion != null ? options.rulesVersion : "內建預設",
@@ -1117,6 +1199,7 @@
       _rtPartner: null,
       _monthlyB3: false,
       _monthlyRecord: null,
+      _salesFlowCancelled: false,
       _recordMonth: recordMonthIndex(record)
     }));
     const movements = getRecords("movements").map((record) => ({ ...record, _used: false }));
@@ -1137,7 +1220,7 @@
         sale.sourceFile || "", normalizeText(sale.doc), normalizeText(sale.sourceDoc), normalizeText(sale.pickupDoc),
         String(sale.date || "").trim(), normalizeText(sale.store), normalizeText(sale.outboundWarehouse),
         itemKey(sale), Number(sale.salesQty || 0), Number(sale.qty || 0), sale.salesAmount,
-        sale.purchaseCostAmount, sale.purchasePrice
+        sale.purchaseCostAmount, sale.purchasePrice, normalizeText(sale.salesType)
       ]);
       const first = duplicateSales.get(signature);
       if (first) {
@@ -1164,8 +1247,41 @@
       }
     }
 
-    const pendingRRows = sales.filter(isPendingHeadquartersR);
-    const tFulfillmentRows = sales.filter(isHeadquartersFulfillmentT);
+    const strictSalesCancellationPairs = findStrictSalesCancellationPairs(sales);
+    for (const pair of strictSalesCancellationPairs) {
+      pair.original._salesFlowCancelled = true;
+      pair.reversal._salesFlowCancelled = true;
+      const orderCancellation = pair.kind === "訂貨→退訂";
+      salesCancellationDetails.push({
+        kind: pair.kind,
+        originalRow: pair.original.sourceRow || "",
+        originalDoc: pair.original.doc || "",
+        reversalRow: pair.reversal.sourceRow || "",
+        reversalDoc: pair.reversal.doc || "",
+        sku: pair.original.sku || pair.reversal.sku || "",
+        name: pair.original.name || pair.reversal.name || "",
+        store: pair.original.store || pair.reversal.store || "",
+        pickupWarehouse: pair.original.pickupWarehouse || pair.reversal.pickupWarehouse || "",
+        outboundWarehouse: pair.original.outboundWarehouse || pair.reversal.outboundWarehouse || "",
+        originalMonth: displayMonth(recordMonthIndex(pair.original)),
+        reversalMonth: displayMonth(recordMonthIndex(pair.reversal)),
+        originalSalesQty: Number(pair.original.salesQty || 0),
+        reversalSalesQty: Number(pair.reversal.salesQty || 0),
+        originalQty: Number(pair.original.qty || 0),
+        reversalQty: Number(pair.reversal.qty || 0),
+        originalSalesAmount: Number(pair.original.salesAmount || 0),
+        reversalSalesAmount: Number(pair.reversal.salesAmount || 0),
+        originalCostAmount: Number(pair.original.purchaseCostAmount || 0),
+        reversalCostAmount: Number(pair.reversal.purchaseCostAmount || 0),
+        conclusion: orderCancellation
+          ? "來源單號精確指向原訂貨，未形成有效T，數量與金額完整反向；本組不列03或D。"
+          : "來源單號精確指向同月原銷貨，數量與金額完整反向；本組淨額為0，不列異常。"
+      });
+    }
+    const activeSales = sales.filter((record) => !record._salesFlowCancelled);
+
+    const pendingRRows = activeSales.filter(isPendingHeadquartersR);
+    const tFulfillmentRows = activeSales.filter(isHeadquartersFulfillmentT);
     const rtPairs = [];
     for (const tRow of tFulfillmentRows) {
       const exactCandidates = pendingRRows.filter((rRow) => !rRow._rtMatched
@@ -1342,7 +1458,7 @@
           addIssue(issues, "error", "總倉代出門市類型不明", record, `無法判斷「${record.store}」是直營或加盟。`);
           continue;
         }
-        const tCandidates = sales.filter((candidate) => isHeadquartersFulfillmentT(candidate)
+        const tCandidates = activeSales.filter((candidate) => isHeadquartersFulfillmentT(candidate)
           && sameItem(candidate, record)
           && sameQuantity(candidate, record)
           && (!record.doc || (candidate.doc && normalizeText(candidate.doc) === normalizeText(record.doc))));
@@ -1541,7 +1657,7 @@
       }
     }
 
-    for (const sale of sales) {
+    for (const sale of activeSales) {
       if (sale._used) continue;
       const isCurrent = analysisMonth == null || sale._recordMonth == null || sale._recordMonth === analysisMonth;
       if (!isCurrent || !isCompanySalesRecord(sale)) continue;
@@ -1668,7 +1784,7 @@
     totals.quantityAmountIssueCount = details.filter((item) => item.status === "數量＆金額差異").length;
     totals.quantityIssueCount = totals.quantityOnlyIssueCount + totals.quantityAmountIssueCount;
 
-    return { details, issues, sourceChecks, exclusions, adjustmentDetails, timingDetails, ruleContext, totals, analysisMonth, analysisMonthLabel: displayMonth(analysisMonth), generatedAt: new Date().toISOString() };
+    return { details, issues, sourceChecks, exclusions, adjustmentDetails, timingDetails, salesCancellationDetails, ruleContext, totals, analysisMonth, analysisMonthLabel: displayMonth(analysisMonth), generatedAt: new Date().toISOString() };
   }
 
   function setSheetLayout(sheet, widths, filterRange) {
@@ -1764,13 +1880,14 @@
       ["A、B、C、D均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。"],
       ["門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。"],
       ["02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。"],
+      ["銷售流水沖銷採嚴格配對：來源單號須精確指向原單，商品、門市、取貨倉及出貨倉一致，數量與銷售／進貨價金額完整反向；退訂另須確認未形成有效T。完整配對明細請見05_來源檢查。"],
       ["狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]
     ];
     const summary = makeSheet(XLSX, summaryRows, [30, 20, 22]);
     setNumberFormats(XLSX, summary, ["B6:B20"], "#,##0");
     setNumberFormats(XLSX, summary, ["C6:C20"], "#,##0.00");
     setNumberFormats(XLSX, summary, ["B23:B28"], "#,##0");
-    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", `分析月份：${analysis.analysisMonthLabel || "月份不明"}。B2、B3、B4均以門市月結為主要認列來源；調撥與R／T銷售資料只供成本、扣庫及跨月稽核，不可單獨增加B。`, "03_未配對資料只列分析月份內的異常；月份無法判斷者仍列待查。前期銷售資料只保留作R／T跨月配對背景，不把前期未配對事項重複帶入本月。", "A、B、C、D均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。", "02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。", "狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]);
+    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", `分析月份：${analysis.analysisMonthLabel || "月份不明"}。B2、B3、B4均以門市月結為主要認列來源；調撥與R／T銷售資料只供成本、扣庫及跨月稽核，不可單獨增加B。`, "03_未配對資料只列分析月份內的異常；月份無法判斷者仍列待查。前期銷售資料只保留作R／T跨月配對背景，不把前期未配對事項重複帶入本月。", "A、B、C、D均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。", "02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。", "銷售流水沖銷採嚴格配對：來源單號須精確指向原單，商品、門市、取貨倉及出貨倉一致，數量與銷售／進貨價金額完整反向；退訂另須確認未形成有效T。完整配對明細請見05_來源檢查。", "狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]);
     summary["!merges"] = summaryRows
       .map((row, index) => summaryMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 2 } } : null)
       .filter(Boolean);
@@ -1803,6 +1920,10 @@
     XLSX.utils.book_append_sheet(workbook, issueSheet, "03_未配對資料");
 
     const sourceHeaders = ["報表種類", "檔名", "工作表", "表頭列", "原始資料列", "解析有效列", "有效數量", "有效來源金額", "規則排除列", "排除數量", "排除來源金額", "規則後列數", "規則後數量", "規則後來源金額", "待確認列", "取消／作廢列", "備註"];
+    const cancellationHeaders = ["沖銷類型", "原單來源列", "原POS單", "沖銷來源列", "沖銷POS單", "商品編號", "品名", "門市", "取貨倉", "出貨倉", "原單月份", "沖銷月份", "原銷售量", "沖銷銷售量", "原扣庫量", "沖銷扣庫量", "原銷售金額", "沖銷銷售金額", "原進貨價成本", "沖銷進貨價成本", "嚴格配對結論"];
+    const cancellationRows = analysis.salesCancellationDetails && analysis.salesCancellationDetails.length
+      ? analysis.salesCancellationDetails.map((row) => [row.kind, row.originalRow, row.originalDoc, row.reversalRow, row.reversalDoc, row.sku, row.name, row.store, row.pickupWarehouse, row.outboundWarehouse, row.originalMonth, row.reversalMonth, row.originalSalesQty, row.reversalSalesQty, row.originalQty, row.reversalQty, row.originalSalesAmount, row.reversalSalesAmount, row.originalCostAmount, row.reversalCostAmount, row.conclusion])
+      : [["本次沒有符合嚴格條件的銷售流水沖銷資料"]];
     const sourceRows = [
       sourceHeaders,
       ...analysis.sourceChecks.map((row) => [row.source, row.fileName, row.sheetName, row.headerRow, row.rawRows, row.acceptedRows, row.parsedQty || 0, row.parsedAmount || 0, row.ruleExcludedRows || 0, row.ruleExcludedQty || 0, row.ruleExcludedAmount || 0, row.ruleIncludedRows || 0, row.ruleIncludedQty || 0, row.ruleIncludedAmount || 0, row.reviewRows || 0, row.cancelledRows, row.note]),
@@ -1824,20 +1945,31 @@
       ["來源報表", "來源列", "單據編號", "商品編號", "品名", "數量", "來源金額", "命中關鍵字", "排除原因"],
       ...(analysis.exclusions && analysis.exclusions.length
         ? analysis.exclusions.map((row) => [row.source, row.row, row.doc, row.sku, row.name, row.qty, row.amount, row.keywords, row.reason])
-        : [["本次沒有集中規則排除資料"]])
+        : [["本次沒有集中規則排除資料"]]),
+      [],
+      ["銷售流水嚴格沖銷明細"],
+      cancellationHeaders,
+      ...cancellationRows
     ];
-    const sourceSheet = makeSheet(XLSX, sourceRows, [26, 34, 22, 10, 14, 14, 14, 18, 14, 14, 18, 14, 14, 20, 12, 16, 80], `A1:Q${analysis.sourceChecks.length + 1}`);
+    const sourceSheet = makeSheet(XLSX, sourceRows, [26, 14, 22, 14, 22, 16, 30, 24, 22, 22, 14, 14, 14, 14, 14, 14, 18, 18, 18, 18, 72], `A1:Q${analysis.sourceChecks.length + 1}`);
     setNumberFormats(XLSX, sourceSheet, ["D2:F9", "I2:I9", "L2:L9", "O2:P9"], "#,##0");
     setNumberFormats(XLSX, sourceSheet, ["G2:G9", "J2:J9", "M2:M9"], "#,##0");
     setNumberFormats(XLSX, sourceSheet, ["H2:H9", "K2:K9", "N2:N9"], "#,##0.00");
-    const exclusionStartRow = 26;
-    const exclusionEndRow = Math.max(exclusionStartRow, exclusionStartRow + (analysis.exclusions ? analysis.exclusions.length : 0) - 1);
+    const exclusionHeaderRow = sourceRows.findIndex((row) => row[0] === "來源報表" && row[1] === "來源列") + 1;
+    const exclusionStartRow = exclusionHeaderRow + 1;
+    const exclusionEndRow = Math.max(exclusionStartRow, exclusionStartRow + Math.max(1, analysis.exclusions ? analysis.exclusions.length : 0) - 1);
     setNumberFormats(XLSX, sourceSheet, [`B${exclusionStartRow}:B${exclusionEndRow}`], "#,##0");
     setNumberFormats(XLSX, sourceSheet, [`F${exclusionStartRow}:F${exclusionEndRow}`], "#,##0");
     setNumberFormats(XLSX, sourceSheet, [`G${exclusionStartRow}:G${exclusionEndRow}`], "#,##0.00");
-    const sourceMergeLabels = new Set(["期初／期末應納入倉別", "寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。", "報表專用成本規則", "當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C／D成本優先採進貨價相關欄位。", "公司集中商品規則", "集中規則排除明細"]);
+    const cancellationHeaderRow = sourceRows.findIndex((row) => row[0] === "沖銷類型" && row[1] === "原單來源列") + 1;
+    const cancellationStartRow = cancellationHeaderRow + 1;
+    const cancellationEndRow = Math.max(cancellationStartRow, cancellationStartRow + cancellationRows.length - 1);
+    setNumberFormats(XLSX, sourceSheet, [`B${cancellationStartRow}:B${cancellationEndRow}`, `D${cancellationStartRow}:D${cancellationEndRow}`], "#,##0");
+    setNumberFormats(XLSX, sourceSheet, [`M${cancellationStartRow}:P${cancellationEndRow}`], "#,##0");
+    setNumberFormats(XLSX, sourceSheet, [`Q${cancellationStartRow}:T${cancellationEndRow}`], "#,##0.00");
+    const sourceMergeLabels = new Set(["期初／期末應納入倉別", "寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。", "報表專用成本規則", "當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C／D成本優先採進貨價相關欄位。", "公司集中商品規則", "集中規則排除明細", "銷售流水嚴格沖銷明細"]);
     sourceSheet["!merges"] = sourceRows
-      .map((row, index) => sourceMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 16 } } : null)
+      .map((row, index) => sourceMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 20 } } : null)
       .filter(Boolean);
     const adjustmentHeaders = ["來源列", "出入庫日期", "出入庫單號", "關聯單號", "倉別", "商品編號", "品名", "判斷方向", "原始原因", "C組分類", "來源數量", "C調整數量", "來源進貨價成本", "採用進貨價", "C調整金額", "成本依據", "納入說明", "注意事項"];
     const adjustmentRows = [
