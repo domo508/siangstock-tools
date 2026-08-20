@@ -19,6 +19,9 @@
 /cost-analysis/index.html
   Cache-Control: no-cache
 
+/supplier-reconciliation/index.html
+  Cache-Control: no-cache
+
 /inventory/*.js
   Cache-Control: public, max-age=3600
 
@@ -29,6 +32,12 @@
   Cache-Control: public, max-age=3600
 
 /cost-analysis/*.css
+  Cache-Control: public, max-age=3600
+
+/supplier-reconciliation/*.js
+  Cache-Control: public, max-age=3600
+
+/supplier-reconciliation/*.css
   Cache-Control: public, max-age=3600
 
 /site.css
