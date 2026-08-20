@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="在瀏覽器本機比對 ERP 收貨單與供應商對帳報表">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'">
+  <title>財務供應商對帳比對｜翔仔居家</title>
+  <link rel="stylesheet" href="../cost-analysis/style.css?v=20260820-supplier-r1">
+  <link rel="stylesheet" href="style.css?v=20260820-supplier-r1">
+</head>
+<body>
+  <main class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="回到公司工具首頁">
+        <span class="brand-mark" aria-hidden="true">對</span>
+        <span>翔仔居家・財務供應商對帳比對</span>
+      </a>
+      <span class="privacy-badge">瀏覽器本機處理・不上傳Excel</span>
+    </header>
+
+    <nav class="breadcrumb" aria-label="頁面導覽">
+      <ol><li><a href="/">公司工具首頁</a></li><li aria-current="page">財務供應商對帳比對</li></ol>
+      <a class="back-link" href="/">← 返回公司工具首頁</a>
+    </nav>
+
+    <section class="hero" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">SUPPLIER RECONCILIATION</p>
+        <h1 id="page-title">把供應商差異，<br>直接整理出來。</h1>
+        <p class="hero-description">匯入 ERP 收貨單與供應商對帳報表，依品名、規格及單價保守配對。分清數量差異、單價差異與單邊品項，讓財務直接處理異常。</p>
+      </div>
+      <aside class="privacy-card" aria-label="資料安全說明">
+        <span class="privacy-icon" aria-hidden="true">✓</span>
+        <div><strong>Excel只留在目前分頁</strong><p>所有讀取、比對與下載均在這台電腦的瀏覽器完成，不上傳、不會修改原始檔。</p></div>
+      </aside>
+    </section>
+
+    <section class="steps" aria-label="使用步驟">
+      <div><span>1</span><strong>選擇兩份報表</strong><small>A表為 ERP 收貨單，B表為供應商對帳表。</small></div>
+      <div><span>2</span><strong>確認欄位並比對</strong><small>系統自動辨識，也可人工修正欄位。</small></div>
+      <div><span>3</span><strong>處理差異並下載</strong><small>產生可篩選、可追溯的七頁籤Excel。</small></div>
+    </section>
+
+    <section class="panel" aria-labelledby="upload-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">資料來源</p><h2 id="upload-title">選擇本期兩份對帳報表</h2></div>
+        <p>支援 .xlsx、.xls、.csv；請確認供應商與對帳月份一致。</p>
+      </div>
+
+      <div class="reconciliation-note" role="note">
+        <strong>本次成本口徑</strong>
+        <small>A表「未稅進貨價」對應B表「單價」；A表「未稅進貨額」對應B表「合計」。金額差額保留供財務排序，但不重複列為一般差異類型。</small>
+      </div>
+
+      <div class="upload-grid two-sources">
+        <article class="upload-card" data-source="a">
+          <div class="upload-card-header"><h3>A表・ERP收貨單</h3><span class="source-badge required">必要</span></div>
+          <p class="upload-help">使用貨號、品名、已收數量、未稅進貨價與未稅進貨額。</p>
+          <label class="file-button">選擇A表<input id="a-file" type="file" accept=".xlsx,.xls,.csv"></label>
+          <p id="a-file-name" class="file-name">尚未選擇</p>
+          <div id="a-mapping" class="mapping-box" hidden></div>
+        </article>
+        <article class="upload-card" data-source="b">
+          <div class="upload-card-header"><h3>B表・供應商對帳報表</h3><span class="source-badge required">必要</span></div>
+          <p class="upload-help">使用帳別、品名、數量、單價與合計；銷退會自動以負數沖回。</p>
+          <label class="file-button">選擇B表<input id="b-file" type="file" accept=".xlsx,.xls,.csv"></label>
+          <p id="b-file-name" class="file-name">尚未選擇</p>
+          <div id="b-mapping" class="mapping-box" hidden></div>
+        </article>
+      </div>
+
+      <div class="action-bar">
+        <button id="analyze-button" class="primary-button" type="button" disabled>開始比對</button>
+        <button id="download-button" class="secondary-button" type="button" disabled>下載結果Excel</button>
+        <p id="main-status" class="main-status" role="status">請先選擇A表與B表。</p>
+      </div>
+    </section>
+
+    <section id="result-panel" class="panel results" aria-labelledby="result-title" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow">分析結果</p><h2 id="result-title">對帳摘要</h2></div>
+        <p>成功配對代表找到同一商品；完全通過才代表數量、單價與金額均一致。</p>
+      </div>
+      <div id="summary-cards" class="summary-grid reconciliation-summary"></div>
+      <div class="result-toolbar" aria-label="結果篩選">
+        <button class="filter-button active" type="button" data-filter="differences">待處理差異</button>
+        <button class="filter-button" type="button" data-filter="unmatched">僅A／僅B</button>
+        <button class="filter-button" type="button" data-filter="all">全部配對</button>
+      </div>
+      <div class="result-table-wrap">
+        <table class="reconciliation-table">
+          <thead><tr><th>狀態</th><th>A貨號</th><th>A品名</th><th>B品名</th><th>A數量</th><th>B數量</th><th>數量差異</th><th>A未稅單價</th><th>B單價</th><th>單價差異</th><th>金額差額</th><th>配對依據</th></tr></thead>
+          <tbody id="result-rows"></tbody>
+        </table>
+      </div>
+      <p class="result-note">正數代表A表較多，負數代表B表較多；疑似但不夠可靠的商品不會強制配對。</p>
+    </section>
+
+    <section class="panel rules-panel" aria-labelledby="rules-title">
+      <div class="section-heading compact"><div><p class="eyebrow">固定規則</p><h2 id="rules-title">這份對帳怎麼判斷？</h2></div></div>
+      <div class="rule-grid">
+        <article><strong>先辨識商品身分</strong><p>比較品名、規格、商品類型與單價；名稱不夠可靠時保留待人工確認。</p></article>
+        <article><strong>數量與單價說明原因</strong><p>差異類型只分數量、單價、數量＋單價及計算異常。</p></article>
+        <article><strong>金額表示財務影響</strong><p>金額差額保留、可排序，但不重複當成一般差異類型。</p></article>
+        <article><strong>單邊資料不自動沖銷</strong><p>只出現在其中一份報表的商品會列為僅A表或僅B表。</p></article>
+        <article><strong>退貨以負值沖回</strong><p>B表帳別為銷退時，數量與合計會以負數併入同品項。</p></article>
+        <article><strong>匯出可完整追溯</strong><p>結果包含總覽、差異、未配對、通過、兩份原始資料及比對說明。</p></article>
+      </div>
+    </section>
+
+    <footer><p>翔仔居家・財務供應商對帳比對</p><p>開始前請確認兩份報表的供應商與月份一致。</p></footer>
+  </main>
+
+  <script src="../inventory/assets/xlsx.full.min.js"></script>
+  <script src="../cost-analysis/assets/jszip.min.js"></script>
+  <script src="core.js?v=20260820-supplier-r1"></script>
+  <script src="app.js?v=20260820-supplier-r1"></script>
+</body>
+</html>
