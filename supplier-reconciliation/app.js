@@ -167,6 +167,7 @@
 
   function statusClass(status) {
     if (status.startsWith("跨月")) return "cross";
+    if (status.includes("疑似前期")) return "warn";
     if (status === "完全通過") return "pass";
     if (status === "僅A表存在" || status === "僅B表存在") return "single";
     if (status === "計算異常") return "warn";
@@ -182,9 +183,12 @@
       <td><span class="status-chip ${statusClass(item.status)}">${escapeHtml(item.status)}</span></td>
       <td>${escapeHtml(item.aSku || "—")}</td><td>${escapeHtml(item.aName || "—")}</td><td>${escapeHtml(item.bName || "—")}</td>
       <td>${formatNumber(item.aQty)}</td><td>${formatNumber(item.bQty)}</td><td class="${signedClass(item.qtyDifference)}">${formatNumber(item.qtyDifference)}</td>
+      <td>${formatNumber(item.recognizedQty)}</td><td>${formatNumber(item.crossMonthQty)}</td>
+      <td class="${signedClass(item.aMissingQty)}">${formatNumber(item.aMissingQty)}</td><td class="${signedClass(item.bMissingQty)}">${formatNumber(item.bMissingQty)}</td>
+      <td class="${signedClass(item.auditDifferenceQty)}">${formatNumber(item.auditDifferenceQty)}</td>
       <td>${formatNumber(item.aUnitPrice)}</td><td>${formatNumber(item.bUnitPrice)}</td><td class="${signedClass(item.unitPriceDifference)}">${formatNumber(item.unitPriceDifference)}</td>
-      <td class="${signedClass(item.amountDifference)}">${formatNumber(item.amountDifference)}</td><td class="muted-cell">${escapeHtml(item.matchBasis)}</td>
-    </tr>`).join("") : '<tr><td colspan="12" class="status-pass">這個分類目前沒有品項。</td></tr>';
+      <td class="audit-cell">${escapeHtml(item.auditExplanation || item.matchBasis)}</td>
+    </tr>`).join("") : '<tr><td colspan="16" class="status-pass">這個分類目前沒有品項。</td></tr>';
   }
 
   function applyFilter(filter) {
@@ -228,7 +232,7 @@
   analyzeButton.addEventListener("click", () => {
     analyzeButton.disabled = true;
     downloadButton.disabled = true;
-    mainStatus.textContent = "正在整理商品、合併銷退並比對差異……";
+    mainStatus.textContent = "正在逐筆分配A、B明細數量並核對跨月差異……";
     try {
       const reports = {};
       for (const type of ["a", "b"]) {

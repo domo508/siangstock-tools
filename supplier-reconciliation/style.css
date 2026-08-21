@@ -84,7 +84,7 @@
   background: var(--navy);
 }
 
-.reconciliation-table { min-width: 1540px; }
+.reconciliation-table { min-width: 2050px; }
 .reconciliation-table th:first-child,
 .reconciliation-table th:nth-child(2),
 .reconciliation-table th:nth-child(3),
@@ -97,12 +97,16 @@
 .reconciliation-table td:last-child { text-align: left; }
 
 .reconciliation-table td:nth-child(3),
-.reconciliation-table td:nth-child(4) {
+.reconciliation-table td:nth-child(4),
+.reconciliation-table td:last-child {
   min-width: 260px;
   max-width: 390px;
   white-space: normal;
   line-height: 1.5;
 }
+
+.reconciliation-table td:last-child { min-width: 360px; }
+.audit-cell { color: var(--muted); text-align: left; white-space: normal; line-height: 1.55; }
 
 .status-chip {
   display: inline-block;

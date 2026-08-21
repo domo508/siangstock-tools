@@ -492,8 +492,102 @@
     return { ...report, records, rawRows };
   }
 
-  function bDemandItem(item, qty) {
-    return { ...item, qty, amount: qty * item.unitPrice, prices: [item.unitPrice] };
+  function recordDateTime(record) {
+    return parseDateValue(record?.date)?.date?.valueOf() || 0;
+  }
+
+  function quantityText(value) {
+    const number = Number(value || 0);
+    return Number.isInteger(number) ? String(number) : String(Math.round(number * 1000) / 1000);
+  }
+
+  function auditRecordText(source, record, qty) {
+    const date = parseDateValue(record.date)?.key || String(record.date || "未提供日期");
+    const doc = String(record.doc || "未提供單號");
+    return `${source}表第${record.sourceRow}列｜${date}｜${doc}｜${quantityText(qty)}件`;
+  }
+
+  function buildBDemandLots(records) {
+    const lots = [];
+    let unappliedReturn = 0;
+    const ordered = records.slice().sort((left, right) => left.sourceRow - right.sourceRow);
+    for (const record of ordered) {
+      if (record.qty > EPSILON) {
+        const offset = Math.min(record.qty, unappliedReturn);
+        unappliedReturn -= offset;
+        const remaining = record.qty - offset;
+        if (remaining > EPSILON) lots.push({ record, originalQty: remaining, remaining });
+        continue;
+      }
+      if (record.qty >= -EPSILON) continue;
+      let returned = -record.qty;
+      for (let index = lots.length - 1; index >= 0 && returned > EPSILON; index -= 1) {
+        const offset = Math.min(lots[index].remaining, returned);
+        lots[index].remaining -= offset;
+        returned -= offset;
+      }
+      unappliedReturn += returned;
+    }
+    return lots.filter((lot) => lot.remaining > EPSILON);
+  }
+
+  function lineCandidateScore(aLot, bLot) {
+    let score = 0;
+    if (Math.abs(aLot.remaining - bLot.remaining) <= EPSILON) score += 10000;
+    if (Math.abs(aLot.record.unitPrice - bLot.record.unitPrice) <= EPSILON) score += 500;
+    if (!aLot.crossMonth) score += 300;
+    const aDate = recordDateTime(aLot.record);
+    const bDate = recordDateTime(bLot.record);
+    if (aDate && bDate) {
+      const days = Math.round((aDate - bDate) / 86400000);
+      if (days >= 0) score += 240 - Math.min(days, 180);
+      else score += 100 - Math.min(Math.abs(days), 180);
+      if (aLot.crossMonth && days >= 0) score += 80;
+    }
+    return score;
+  }
+
+  function allocateLineQuantities(baseRecords, crossRecords, bRecords, bounds) {
+    const aLots = [
+      ...baseRecords.map((record) => ({ record, remaining: Math.max(0, record.qty), crossMonth: false })),
+      ...crossRecords.map((record) => ({ record, remaining: Math.max(0, record.qty), crossMonth: true }))
+    ].filter((lot) => lot.remaining > EPSILON);
+    const bLots = buildBDemandLots(bRecords);
+    const allocations = [];
+    const allocate = (aLot, bLot, qty) => {
+      aLot.remaining -= qty;
+      bLot.remaining -= qty;
+      allocations.push({ aRecord: aLot.record, bRecord: bLot.record, qty, crossMonth: aLot.crossMonth });
+    };
+
+    while (true) {
+      const exact = [];
+      for (const aLot of aLots) for (const bLot of bLots) {
+        if (aLot.remaining <= EPSILON || bLot.remaining <= EPSILON || Math.abs(aLot.remaining - bLot.remaining) > EPSILON) continue;
+        exact.push({ aLot, bLot, score: lineCandidateScore(aLot, bLot) });
+      }
+      exact.sort((left, right) => right.score - left.score || left.bLot.record.sourceRow - right.bLot.record.sourceRow || left.aLot.record.sourceRow - right.aLot.record.sourceRow);
+      if (!exact.length) break;
+      allocate(exact[0].aLot, exact[0].bLot, exact[0].bLot.remaining);
+    }
+
+    const orderedB = bLots.slice().sort((left, right) => recordDateTime(left.record) - recordDateTime(right.record) || left.record.sourceRow - right.record.sourceRow);
+    for (const bLot of orderedB) {
+      while (bLot.remaining > EPSILON) {
+        const candidates = aLots.filter((lot) => lot.remaining > EPSILON).sort((left, right) => lineCandidateScore(right, bLot) - lineCandidateScore(left, bLot) || left.record.sourceRow - right.record.sourceRow);
+        if (!candidates.length) break;
+        allocate(candidates[0], bLot, Math.min(candidates[0].remaining, bLot.remaining));
+      }
+    }
+
+    const remainingA = aLots.filter((lot) => !lot.crossMonth && lot.remaining > EPSILON);
+    const remainingB = bLots.filter((lot) => lot.remaining > EPSILON);
+    const priorWindowDay = bounds.cutoff.getDate();
+    const suspectedPrior = remainingA.filter((lot) => {
+      const parsed = parseDateValue(lot.record.date);
+      return parsed && parsed.date.getDate() <= priorWindowDay;
+    });
+    return { allocations, remainingA, remainingB, suspectedPrior };
   }
 
   function ledgerRowsFromWorkbook(workbook, XLSX) {
@@ -536,50 +630,106 @@
     if (!bRecords.length) throw new Error(`${bounds.monthText}的B表沒有可比對商品，請確認帳款日與月份。`);
     const baseAReport = reportWithRecords(aReport, baseRecords);
     const scopedBReport = reportWithRecords(bReport, bRecords);
-    const baseAnalysis = analyzeReports(baseAReport, scopedBReport);
-    const bByName = new Map(baseAnalysis.bItems.map((item) => [canonicalizeName(item.name), item]));
-    const demands = [];
-    for (const row of baseAnalysis.paired) {
-      if (row.qtyDifference >= -EPSILON || row.bQty <= 0) continue;
-      const item = bByName.get(canonicalizeName(row.bName));
-      if (item) demands.push(bDemandItem(item, -row.qtyDifference));
+    const combinedAReport = reportWithRecords(aReport, [...baseRecords, ...crossRecords]);
+    const baseItems = aggregateSource(baseAReport);
+    const combinedAItems = aggregateSource(combinedAReport);
+    const bItems = aggregateSource(scopedBReport);
+    const matching = findMatches(combinedAItems, bItems);
+    const baseBySku = new Map(baseItems.map((item) => [item.sku, item]));
+    const baseRecordsBySku = new Map();
+    const crossRecordsBySku = new Map();
+    const bRecordsByKey = new Map();
+    for (const record of baseRecords) {
+      const rows = baseRecordsBySku.get(record.sku) || [];
+      rows.push(record); baseRecordsBySku.set(record.sku, rows);
     }
-    for (const row of baseAnalysis.bOnly) {
-      if (row.bQty <= 0) continue;
-      const item = bByName.get(canonicalizeName(row.bName));
-      if (item) demands.push(bDemandItem(item, row.bQty));
+    for (const record of crossRecords) {
+      const rows = crossRecordsBySku.get(record.sku) || [];
+      rows.push(record); crossRecordsBySku.set(record.sku, rows);
     }
-    const crossReport = reportWithRecords(aReport, crossRecords);
-    const crossItems = aggregateSource(crossReport);
-    const matching = findMatches(crossItems, demands);
-    const selectedRecords = [];
+    for (const record of bRecords) {
+      const key = canonicalizeName(record.name);
+      const rows = bRecordsByKey.get(key) || [];
+      rows.push(record); bRecordsByKey.set(key, rows);
+    }
+
+    const paired = [];
     const currentLedger = [];
-    const crossReasonByRow = new Map();
+    const selectedCrossByRow = new Map();
     for (const match of matching.accepted) {
-      const aItem = crossItems[match.aIndex];
-      const demand = demands[match.bIndex];
-      const latestBDate = [...(demand.dates || [])].map(parseDateValue).filter(Boolean).sort((left, right) => left.date - right.date).at(-1);
-      let needed = Math.min(Math.max(0, demand.qty), Math.max(0, aItem.qty));
-      const sourceRecords = crossRecords.filter((record) => record.sku === aItem.sku).sort((left, right) => (parseDateValue(left.date)?.date || 0) - (parseDateValue(right.date)?.date || 0));
-      for (const record of sourceRecords) {
-        if (needed <= EPSILON) break;
-        const recognizedQty = Math.min(needed, Math.max(0, record.qty));
-        if (recognizedQty <= EPSILON) continue;
+      const combinedItem = combinedAItems[match.aIndex];
+      const bItem = bItems[match.bIndex];
+      const baseItem = baseBySku.get(combinedItem.sku);
+      const audit = allocateLineQuantities(baseRecordsBySku.get(combinedItem.sku) || [], crossRecordsBySku.get(combinedItem.sku) || [], bRecordsByKey.get(bItem.key) || [], bounds);
+      const recognizedQty = audit.allocations.reduce((sum, row) => sum + row.qty, 0);
+      const crossMonthQty = audit.allocations.filter((row) => row.crossMonth).reduce((sum, row) => sum + row.qty, 0);
+      const aMissingQty = audit.remainingB.reduce((sum, row) => sum + row.remaining, 0);
+      const bMissingQty = audit.remainingA.reduce((sum, row) => sum + row.remaining, 0);
+      const suspectedPriorQty = audit.suspectedPrior.reduce((sum, row) => sum + row.remaining, 0);
+      const recognizedAAmount = audit.allocations.reduce((sum, row) => sum + row.qty * row.aRecord.unitPrice, 0);
+      const recognizedAUnitPrice = recognizedQty > EPSILON ? recognizedAAmount / recognizedQty : (baseItem?.unitPrice ?? combinedItem.unitPrice);
+      const unitPriceDifference = recognizedAUnitPrice - bItem.unitPrice;
+      const priceDifferent = Math.abs(unitPriceDifference) > EPSILON;
+      const internalAmountAnomaly = [...(baseRecordsBySku.get(combinedItem.sku) || []), ...(bRecordsByKey.get(bItem.key) || [])]
+        .some((record) => Math.abs(record.amount - record.qty * record.unitPrice) > EPSILON);
+      const hasQuantityIssue = aMissingQty > EPSILON || bMissingQty > EPSILON;
+      const onlySuspectedPrior = bMissingQty > EPSILON && aMissingQty <= EPSILON && Math.abs(bMissingQty - suspectedPriorQty) <= EPSILON;
+      let status;
+      if (!hasQuantityIssue && !priceDifferent && !internalAmountAnomaly) status = crossMonthQty > EPSILON ? "跨月完全通過" : "完全通過";
+      else if (onlySuspectedPrior) status = `${crossMonthQty > EPSILON ? "跨月配對＋" : ""}疑似前期跨月${priceDifferent ? "＋單價差異" : ""}`;
+      else if (hasQuantityIssue && priceDifferent) status = `${crossMonthQty > EPSILON ? "跨月" : ""}數量＋單價差異`;
+      else if (hasQuantityIssue) status = `${crossMonthQty > EPSILON ? "跨月" : ""}數量差異`;
+      else if (priceDifferent) status = `${crossMonthQty > EPSILON ? "跨月" : ""}單價差異`;
+      else status = `${crossMonthQty > EPSILON ? "跨月" : ""}計算異常`;
+
+      const crossDetails = audit.allocations.filter((row) => row.crossMonth).map((row) => `${auditRecordText("B", row.bRecord, row.qty)} ↔ ${auditRecordText("A", row.aRecord, row.qty)}`);
+      const suspectedDetails = audit.suspectedPrior.map((row) => auditRecordText("A", row.record, row.remaining));
+      const aMissingDetails = audit.remainingB.map((row) => auditRecordText("B", row.record, row.remaining));
+      const bMissingDetails = audit.remainingA.map((row) => auditRecordText("A", row.record, row.remaining));
+      const explanation = [];
+      if (recognizedQty > EPSILON) explanation.push(`逐筆已核對${quantityText(recognizedQty)}件${crossMonthQty > EPSILON ? `（含跨月${quantityText(crossMonthQty)}件）` : ""}`);
+      if (aMissingQty > EPSILON) explanation.push(`A表缺少可對應收貨${quantityText(aMissingQty)}件，請查B來源明細`);
+      if (bMissingQty > EPSILON) explanation.push(`B表缺少可對應帳款${quantityText(bMissingQty)}件，請查A來源明細`);
+      if (suspectedPriorQty > EPSILON) explanation.push(`其中${quantityText(suspectedPriorQty)}件位於月初，疑似應由上期跨月認列，需匯入上期台帳確認`);
+
+      for (const allocation of audit.allocations.filter((row) => row.crossMonth)) {
+        const record = allocation.aRecord;
+        const bRecord = allocation.bRecord;
         const aDate = parseDateValue(record.date);
-        const bDate = latestBDate;
+        const bDate = parseDateValue(bRecord.date);
         const crossMonthDays = aDate && bDate ? Math.round((aDate.date - bDate.date) / 86400000) : 0;
-        const selected = { ...record, qty: recognizedQty, amount: recognizedQty * record.unitPrice, crossMonth: true };
-        selectedRecords.push(selected);
-        crossReasonByRow.set(record.sourceRow, `跨月認列${recognizedQty}件至${bounds.monthText}`);
+        selectedCrossByRow.set(record.sourceRow, (selectedCrossByRow.get(record.sourceRow) || 0) + allocation.qty);
         currentLedger.push({
-          recognitionMonth: bounds.monthText, supplier: record.supplier || "", bDate: bDate?.key || "", bDoc: demand.docs?.join("、") || "", bName: demand.name,
+          recognitionMonth: bounds.monthText, supplier: record.supplier || "", bDate: bDate?.key || bRecord.date, bDoc: String(bRecord.doc || ""), bName: bRecord.name,
           aReceiptDate: aDate?.key || record.date, aDoc: String(record.doc || ""), aSku: record.sku, aName: record.name,
-          recognizedQty, aUnitPrice: record.unitPrice, recognizedAmount: recognizedQty * record.unitPrice, crossMonthDays,
+          recognizedQty: allocation.qty, aUnitPrice: record.unitPrice, recognizedAmount: allocation.qty * record.unitPrice, crossMonthDays,
           fingerprint: receiptKey(record)
         });
-        needed -= recognizedQty;
       }
+
+      const aQty = baseItem?.qty || 0;
+      const aAmount = baseItem?.amount || 0;
+      const auditAmountDifference = audit.remainingA.reduce((sum, row) => sum + row.remaining * row.record.unitPrice, 0)
+        - audit.remainingB.reduce((sum, row) => sum + row.remaining * row.record.unitPrice, 0);
+      paired.push({
+        status, aSku: combinedItem.sku, aName: combinedItem.name, bName: bItem.name,
+        aQty, bQty: bItem.qty, qtyDifference: aQty - bItem.qty, recognizedQty, crossMonthQty,
+        aMissingQty, bMissingQty, auditDifferenceQty: bMissingQty - aMissingQty, suspectedPriorQty,
+        aUnitPrice: recognizedAUnitPrice, bUnitPrice: bItem.unitPrice, unitPriceDifference,
+        aAmount, bAmount: bItem.amount, amountDifference: aAmount - bItem.amount, auditAmountDifference,
+        aMissingDetail: aMissingDetails.join("；"), bMissingDetail: bMissingDetails.join("；"),
+        crossMonthDetail: crossDetails.join("；"), suspectedPriorDetail: suspectedDetails.join("；"), auditExplanation: explanation.join("；"),
+        matchBasis: `${match.confidence}；逐筆數量分配`, matchScore: match.score,
+        aRows: combinedItem.rows.join("、"), bRows: bItem.rows.join("、"), crossMonth: crossMonthQty > EPSILON
+      });
     }
+
+    const usedASkus = new Set(matching.accepted.map((match) => combinedAItems[match.aIndex].sku));
+    const usedBKeys = new Set(matching.accepted.map((match) => bItems[match.bIndex].key));
+    const selectedRecords = crossRecords.filter((record) => selectedCrossByRow.has(record.sourceRow)).map((record) => {
+      const qty = selectedCrossByRow.get(record.sourceRow);
+      return { ...record, qty, amount: qty * record.unitPrice, crossMonth: true };
+    });
     const selectedRows = new Set(selectedRecords.map((record) => record.sourceRow));
     const baseRows = new Set(baseRecords.map((record) => record.sourceRow));
     const priorByRow = new Map(priorResult.exclusions.map((item) => [item.sourceRow, item]));
@@ -587,37 +737,80 @@
     for (const row of aReport.rawRows) {
       if (!row.included) continue;
       const prior = priorByRow.get(row.sourceRow);
-      if (selectedRows.has(row.sourceRow)) rawReasons.set(row.sourceRow, crossReasonByRow.get(row.sourceRow));
+      if (selectedRows.has(row.sourceRow)) rawReasons.set(row.sourceRow, `逐筆跨月認列${quantityText(selectedCrossByRow.get(row.sourceRow))}件至${bounds.monthText}`);
       else if (baseRows.has(row.sourceRow)) rawReasons.set(row.sourceRow, prior ? `扣除前期已認列${prior.excludedQty}件後納入本期` : "納入本期比對");
       else if (prior) rawReasons.set(row.sourceRow, `前期已認列${prior.excludedQty}件，本期排除`);
-      else rawReasons.set(row.sourceRow, "不在本期或未被跨月補收使用");
+      else rawReasons.set(row.sourceRow, "不在本期或未被逐筆跨月配對使用");
     }
     const finalAReport = reportWithRecords(aReport, [...baseRecords, ...selectedRecords], rawReasons);
-    const analysis = analyzeReports(finalAReport, scopedBReport);
-    const crossSkus = new Set(currentLedger.map((row) => row.aSku));
-    analysis.paired = analysis.paired.map((row) => crossSkus.has(row.aSku) ? { ...row, baseStatus: row.status, status: `跨月${row.status}`, crossMonth: true, matchBasis: `${row.matchBasis}；跨月補收認列` } : row);
-    analysis.passed = analysis.paired.filter((row) => row.status === "完全通過" || row.status === "跨月完全通過");
-    analysis.differences = analysis.paired.filter((row) => !["完全通過", "跨月完全通過"].includes(row.status)).sort((left, right) => Math.abs(right.amountDifference) - Math.abs(left.amountDifference));
-    analysis.unmatched = [...analysis.aOnly, ...analysis.bOnly].sort((left, right) => Math.abs(right.amountDifference || 0) - Math.abs(left.amountDifference || 0));
-    analysis.totals.passCount = analysis.passed.length;
-    analysis.totals.differenceCount = analysis.differences.length;
-    analysis.totals.crossMonthCount = analysis.paired.filter((row) => row.crossMonth).length;
-    analysis.totals.crossMonthPassCount = analysis.passed.filter((row) => row.crossMonth).length;
-    analysis.totals.priorExcludedCount = priorResult.exclusions.length;
-    analysis.totals.priorExcludedQty = priorResult.exclusions.reduce((sum, row) => sum + row.excludedQty, 0);
-    analysis.totals.absoluteDifference = analysis.differences.reduce((sum, item) => sum + Math.abs(item.amountDifference), 0);
-    analysis.period = { month: bounds.monthText, cutoff: bounds.cutoffKey };
-    analysis.priorLedger = priorLedger;
-    analysis.crossMonthAllocations = currentLedger;
-    analysis.ledgerAllocations = [...priorLedger, ...currentLedger];
-    analysis.priorPeriodExclusions = priorResult.exclusions;
-    analysis.baseAnalysis = baseAnalysis;
-    return analysis;
+
+    const suspectedBySku = new Map(matching.suspected.map((candidate) => [combinedAItems[candidate.aIndex].sku, bItems[candidate.bIndex]?.name || ""]));
+    const aOnly = baseItems.filter((item) => !usedASkus.has(item.sku)).map((item) => {
+      const records = baseRecordsBySku.get(item.sku) || [];
+      const suspectedRows = records.filter((record) => {
+        const parsed = parseDateValue(record.date);
+        return parsed && parsed.date.getDate() <= bounds.cutoff.getDate();
+      });
+      const suspectedPriorQty = suspectedRows.reduce((sum, record) => sum + Math.max(0, record.qty), 0);
+      const candidateName = suspectedBySku.get(item.sku) || "";
+      return {
+        status: "僅A表存在", aSku: item.sku, aName: item.name, bName: "", aQty: item.qty, bQty: null, qtyDifference: item.qty,
+        recognizedQty: 0, crossMonthQty: 0, aMissingQty: 0, bMissingQty: item.qty, auditDifferenceQty: item.qty, suspectedPriorQty,
+        aUnitPrice: item.unitPrice, bUnitPrice: null, unitPriceDifference: null, aAmount: item.amount, bAmount: null,
+        amountDifference: item.amount, auditAmountDifference: item.amount, aMissingDetail: "", bMissingDetail: records.map((record) => auditRecordText("A", record, record.qty)).join("；"),
+        crossMonthDetail: "", suspectedPriorDetail: suspectedRows.map((record) => auditRecordText("A", record, record.qty)).join("；"),
+        auditExplanation: `B表沒有可靠對應商品；A表${quantityText(item.qty)}件待確認${suspectedPriorQty > EPSILON ? `，其中月初${quantityText(suspectedPriorQty)}件疑似前期跨月` : ""}`,
+        matchBasis: candidateName ? `疑似：${candidateName}` : "未找到可靠對應商品", suspected: Boolean(candidateName), aRows: item.rows.join("、"), bRows: ""
+      };
+    });
+    const bOnly = bItems.filter((item) => !usedBKeys.has(item.key)).map((item) => {
+      const demandLots = buildBDemandLots(bRecordsByKey.get(item.key) || []);
+      const missingQty = demandLots.reduce((sum, row) => sum + row.remaining, 0);
+      return {
+        status: "僅B表存在", aSku: "", aName: "", bName: item.name, aQty: null, bQty: item.qty, qtyDifference: -item.qty,
+        recognizedQty: 0, crossMonthQty: 0, aMissingQty: missingQty, bMissingQty: 0, auditDifferenceQty: -missingQty, suspectedPriorQty: 0,
+        aUnitPrice: null, bUnitPrice: item.unitPrice, unitPriceDifference: null, aAmount: null, bAmount: item.amount,
+        amountDifference: -item.amount, auditAmountDifference: -item.amount,
+        aMissingDetail: demandLots.map((row) => auditRecordText("B", row.record, row.remaining)).join("；"), bMissingDetail: "", crossMonthDetail: "", suspectedPriorDetail: "",
+        auditExplanation: `A表沒有可靠對應商品；B表${quantityText(missingQty)}件待確認`, matchBasis: "未找到可靠對應商品", aRows: "", bRows: item.rows.join("、")
+      };
+    });
+    const passed = paired.filter((row) => ["完全通過", "跨月完全通過"].includes(row.status));
+    const differences = paired.filter((row) => !["完全通過", "跨月完全通過"].includes(row.status)).sort((left, right) => Math.abs(right.auditAmountDifference) - Math.abs(left.auditAmountDifference));
+    const unmatched = [...aOnly, ...bOnly].sort((left, right) => Math.abs(right.auditAmountDifference || 0) - Math.abs(left.auditAmountDifference || 0));
+    const aItems = aggregateSource(finalAReport);
+    const totals = {
+      aItemCount: aItems.length, bItemCount: bItems.length, matchedCount: paired.length,
+      passCount: passed.length, differenceCount: differences.length, aOnlyCount: aOnly.length, bOnlyCount: bOnly.length,
+      suspectedCount: aOnly.filter((item) => item.suspected).length,
+      aPairRate: aItems.length ? paired.length / aItems.length : 0, bPairRate: bItems.length ? paired.length / bItems.length : 0,
+      aAmount: aItems.reduce((sum, item) => sum + item.amount, 0), bAmount: bItems.reduce((sum, item) => sum + item.amount, 0),
+      matchedAmountDifference: paired.reduce((sum, item) => sum + item.amountDifference, 0),
+      absoluteDifference: differences.reduce((sum, item) => sum + Math.abs(item.auditAmountDifference), 0),
+      crossMonthCount: paired.filter((row) => row.crossMonth).length, crossMonthPassCount: passed.filter((row) => row.crossMonth).length,
+      priorExcludedCount: priorResult.exclusions.length, priorExcludedQty: priorResult.exclusions.reduce((sum, row) => sum + row.excludedQty, 0)
+    };
+    return {
+      generatedAt: new Date().toISOString(), aReport: finalAReport, bReport: scopedBReport, aItems, bItems, paired, passed, differences, unmatched, aOnly, bOnly, totals,
+      period: { month: bounds.monthText, cutoff: bounds.cutoffKey }, priorLedger, crossMonthAllocations: currentLedger,
+      ledgerAllocations: [...priorLedger, ...currentLedger], priorPeriodExclusions: priorResult.exclusions,
+      baseAnalysis: analyzeReports(baseAReport, scopedBReport)
+    };
   }
 
-  const DETAIL_HEADERS = ["差異類型", "A貨號", "A品名", "B品名", "A數量", "B數量", "數量差異", "A未稅進貨價", "B單價", "單價差異", "A未稅進貨額", "B合計", "金額差額", "配對依據", "A原始列", "B原始列"];
+  const DETAIL_HEADERS = [
+    "差異類型", "A貨號", "A品名", "B品名", "A本月數量", "B本月數量", "月度淨差異", "逐筆已核對數量", "跨月認列數量",
+    "A表缺少對應數量", "B表缺少對應數量", "稽核差異數量", "疑似前期數量", "A未稅進貨價", "B單價", "單價差異",
+    "A本月未稅進貨額", "B合計", "月度金額差額", "稽核差異金額", "A表缺少時的B來源明細", "B表缺少時的A來源明細",
+    "跨月配對明細", "疑似前期跨月明細", "稽核說明", "配對依據", "A原始列", "B原始列"
+  ];
   function detailValues(item) {
-    return [item.status, item.aSku, item.aName, item.bName, item.aQty, item.bQty, item.qtyDifference, item.aUnitPrice, item.bUnitPrice, item.unitPriceDifference, item.aAmount, item.bAmount, item.amountDifference, item.matchBasis, item.aRows || "", item.bRows || ""];
+    return [
+      item.status, item.aSku, item.aName, item.bName, item.aQty, item.bQty, item.qtyDifference, item.recognizedQty, item.crossMonthQty,
+      item.aMissingQty, item.bMissingQty, item.auditDifferenceQty, item.suspectedPriorQty, item.aUnitPrice, item.bUnitPrice, item.unitPriceDifference,
+      item.aAmount, item.bAmount, item.amountDifference, item.auditAmountDifference, item.aMissingDetail || "", item.bMissingDetail || "",
+      item.crossMonthDetail || "", item.suspectedPriorDetail || "", item.auditExplanation || "", item.matchBasis, item.aRows || "", item.bRows || ""
+    ];
   }
 
   function makeSheet(XLSX, rows, widths, filterRange) {
@@ -649,7 +842,7 @@
     const summaryRows = [
       ["財務供應商對帳比對摘要", ""], ["產生時間", new Date(analysis.generatedAt).toLocaleString("zh-TW")],
       ["A表來源", analysis.aReport.fileName], ["B表來源", analysis.bReport.fileName],
-      ["成本口徑", "A表未稅進貨價 ↔ B表單價；A表未稅進貨額 ↔ B表合計"],
+      ["成本口徑", "A表未稅進貨價 ↔ B表單價；金額欄位只呈現財務影響，不作為一般差異類型"],
       ["對帳月份", analysis.period?.month || "未指定"], ["跨月補收截止日", analysis.period?.cutoff || "未使用"], ["", ""],
       ["指標", "結果"], ["A表商品數", t.aItemCount], ["B表商品數", t.bItemCount], ["成功配對", t.matchedCount],
       ["A表配對率", t.aPairRate], ["B表配對率", t.bPairRate], ["完全通過", t.passCount], ["跨月配對", t.crossMonthCount || 0], ["跨月完全通過", t.crossMonthPassCount || 0],
@@ -671,13 +864,13 @@
     }
     XLSX.utils.book_append_sheet(workbook, summarySheet, "01_對帳總覽");
 
-    const detailWidths = [18, 15, 38, 38, 12, 12, 12, 16, 12, 12, 17, 14, 14, 34, 14, 14];
-    const differenceSheet = makeSheet(XLSX, [DETAIL_HEADERS, ...analysis.differences.map(detailValues)], detailWidths, `A1:P${Math.max(1, analysis.differences.length + 1)}`);
-    const unmatchedSheet = makeSheet(XLSX, [DETAIL_HEADERS, ...analysis.unmatched.map(detailValues)], detailWidths, `A1:P${Math.max(1, analysis.unmatched.length + 1)}`);
-    const passedSheet = makeSheet(XLSX, [DETAIL_HEADERS, ...analysis.passed.map(detailValues)], detailWidths, `A1:P${Math.max(1, analysis.passed.length + 1)}`);
-    if (analysis.differences.length) setNumberFormats(XLSX, differenceSheet, [`E2:M${analysis.differences.length + 1}`], "#,##0;[Red](#,##0);-");
-    if (analysis.unmatched.length) setNumberFormats(XLSX, unmatchedSheet, [`E2:M${analysis.unmatched.length + 1}`], "#,##0;[Red](#,##0);-");
-    if (analysis.passed.length) setNumberFormats(XLSX, passedSheet, [`E2:M${analysis.passed.length + 1}`], "#,##0;[Red](#,##0);-");
+    const detailWidths = [22, 15, 38, 38, 13, 13, 13, 16, 15, 18, 18, 15, 15, 16, 12, 12, 18, 14, 16, 16, 56, 56, 62, 56, 68, 34, 16, 16];
+    const differenceSheet = makeSheet(XLSX, [DETAIL_HEADERS, ...analysis.differences.map(detailValues)], detailWidths, `A1:AB${Math.max(1, analysis.differences.length + 1)}`);
+    const unmatchedSheet = makeSheet(XLSX, [DETAIL_HEADERS, ...analysis.unmatched.map(detailValues)], detailWidths, `A1:AB${Math.max(1, analysis.unmatched.length + 1)}`);
+    const passedSheet = makeSheet(XLSX, [DETAIL_HEADERS, ...analysis.passed.map(detailValues)], detailWidths, `A1:AB${Math.max(1, analysis.passed.length + 1)}`);
+    if (analysis.differences.length) setNumberFormats(XLSX, differenceSheet, [`E2:T${analysis.differences.length + 1}`], "#,##0;[Red](#,##0);-");
+    if (analysis.unmatched.length) setNumberFormats(XLSX, unmatchedSheet, [`E2:T${analysis.unmatched.length + 1}`], "#,##0;[Red](#,##0);-");
+    if (analysis.passed.length) setNumberFormats(XLSX, passedSheet, [`E2:T${analysis.passed.length + 1}`], "#,##0;[Red](#,##0);-");
     XLSX.utils.book_append_sheet(workbook, differenceSheet, "02_差異明細");
     XLSX.utils.book_append_sheet(workbook, unmatchedSheet, "03_未配對品項");
     XLSX.utils.book_append_sheet(workbook, passedSheet, "04_完全通過");
@@ -695,11 +888,13 @@
     const rules = [
       ["比對規則", "說明"], ["商品配對", "依標準化品名、商品類型、規格、單價與數量計算；只有高可信且一對一時自動配對。"],
       ["保守原則", "名稱不夠可靠或多個候選太接近時，不強制沖銷，保留僅A／僅B及疑似候選。"],
-      ["數量", "A表已收數量減B表淨數量；B表銷退以負數沖回。"], ["單價", "A表未稅進貨價減B表單價。"],
+      ["數量", "先按商品辨識，再逐筆分配A、B明細數量；優先配對等量明細，剩餘量才拆分。B表銷退以負數沖回。"], ["單價", "A表未稅進貨價減B表單價。"],
       ["金額", "A表未稅進貨額減B表合計；用來表示財務影響，不獨立重複分類。"],
-      ["月份範圍", "A表只納入對帳月份；截止日前的次月資料只用來補足B表短少，不會整批累加。"],
-      ["跨月標示", "使用次月收貨補足時標示跨月；已認列數量寫入08_跨月認列台帳，供下期排除。"],
-      ["差異類型", "完全通過、跨月完全通過、數量差異、單價差異、數量＋單價差異、計算異常、僅A表存在、僅B表存在。"],
+      ["月份範圍", "B表只核對指定月份；A表同時檢查本月與截止日前次月明細，次月資料只有逐筆配對成功的數量才認列。"],
+      ["跨月標示", "任何B明細對到次月A收貨都標示跨月，不以商品月總量是否短少為前提；認列數量寫入08_跨月認列台帳，供下期排除。"],
+      ["疑似前期", "本月月初仍找不到B明細的A收貨會特別標示疑似前期跨月；未匯入上期台帳前不會自動排除。"],
+      ["明細追溯", "差異頁籤列出A／B缺少的數量，以及原始列號、日期、單號與剩餘數量，供稽核直接回查。"],
+      ["差異類型", "完全通過、跨月完全通過、疑似前期跨月、數量差異、單價差異、數量＋單價差異、計算異常、僅A表存在、僅B表存在。"],
       ["資料安全", "Excel只在目前瀏覽器分頁讀取、計算與下載，不上傳、不修改原始檔。"]
     ];
     XLSX.utils.book_append_sheet(workbook, makeSheet(XLSX, rules, [24, 92]), "07_比對說明");

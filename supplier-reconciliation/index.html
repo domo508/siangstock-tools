@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'">
   <title>財務供應商對帳比對｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260820-supplier-r1">
-  <link rel="stylesheet" href="style.css?v=20260821-cross-month-r3">
+  <link rel="stylesheet" href="style.css?v=20260821-line-audit-r4">
 </head>
 <body>
   <main class="page-shell">
@@ -29,7 +29,7 @@
       <div>
         <p class="eyebrow">SUPPLIER RECONCILIATION</p>
         <h1 id="page-title">把供應商差異，<br>直接整理出來。</h1>
-        <p class="hero-description">匯入 ERP 收貨單與供應商對帳報表，先核對完整月份，再只用次月必要收貨補足跨月落差。分清同月、跨月與真正異常，讓財務直接處理。</p>
+        <p class="hero-description">匯入 ERP 收貨單與供應商對帳報表，逐筆核對每張帳款與收貨明細，再標出同月、跨月、疑似前期與真正異常，讓財務直接回查原始列。</p>
       </div>
       <aside class="privacy-card" aria-label="資料安全說明">
         <span class="privacy-icon" aria-hidden="true">✓</span>
@@ -39,7 +39,7 @@
 
     <section class="steps" aria-label="使用步驟">
       <div><span>1</span><strong>設定月份並選檔</strong><small>A表可包含次月補收；B表只核對指定月份。</small></div>
-      <div><span>2</span><strong>分兩階段比對</strong><small>先比同月，再用截止日前收貨補足B表短少。</small></div>
+      <div><span>2</span><strong>逐筆核對明細</strong><small>等量明細優先，再拆分剩餘量並檢查截止日前跨月收貨。</small></div>
       <div><span>3</span><strong>下載並延續台帳</strong><small>跨月認列寫入第8頁籤，下期匯入即可排除。</small></div>
     </section>
 
@@ -52,7 +52,7 @@
       <div class="period-grid" aria-label="對帳期間設定">
         <label><span>對帳月份＊</span><input id="period-month" type="month" required></label>
         <label><span>跨月補收截止日＊</span><input id="cross-month-cutoff" type="date" required></label>
-        <p>例如對帳6月，可把截止日設為7/3或7/10；次月資料只會補足B表短少，不會整批累加。</p>
+        <p>例如對帳6月，可把截止日設為7/3或7/10；每筆B帳款都會檢查同月與次月A收貨，只有實際配對的跨月數量會被認列。</p>
       </div>
 
       <div class="reconciliation-note" role="note">
@@ -105,11 +105,11 @@
       </div>
       <div class="result-table-wrap">
         <table class="reconciliation-table">
-          <thead><tr><th>狀態</th><th>A貨號</th><th>A品名</th><th>B品名</th><th>A數量</th><th>B數量</th><th>數量差異</th><th>A未稅單價</th><th>B單價</th><th>單價差異</th><th>金額差額</th><th>配對依據</th></tr></thead>
+          <thead><tr><th>狀態</th><th>A貨號</th><th>A品名</th><th>B品名</th><th>A本月</th><th>B本月</th><th>月度淨差</th><th>逐筆已核對</th><th>跨月認列</th><th>A表缺少</th><th>B表缺少</th><th>稽核差異</th><th>A未稅單價</th><th>B單價</th><th>單價差異</th><th>稽核說明</th></tr></thead>
           <tbody id="result-rows"></tbody>
         </table>
       </div>
-      <p class="result-note">正數代表A表較多，負數代表B表較多；疑似但不夠可靠的商品不會強制配對。</p>
+      <p class="result-note">月度淨差保留原月份統計；稽核差異則把已確認的次月跨月配對納入。下載Excel可查看缺少明細的原始列號、日期、單號與剩餘數量。</p>
     </section>
 
     <section class="panel rules-panel" aria-labelledby="rules-title">
@@ -118,7 +118,8 @@
         <article><strong>先辨識商品身分</strong><p>比較品名、規格、商品類型與單價；名稱不夠可靠時保留待人工確認。</p></article>
         <article><strong>數量與單價說明原因</strong><p>差異類型只分數量、單價、數量＋單價及計算異常。</p></article>
         <article><strong>金額表示財務影響</strong><p>金額差額保留、可排序，但不重複當成一般差異類型。</p></article>
-        <article><strong>次月資料只補短少</strong><p>跨月候選只補足B表缺少的數量，不會把次月全部收貨累加進本月。</p></article>
+        <article><strong>每筆都檢查跨月</strong><p>不等商品月總量短少；每張B帳款都會尋找同月及截止日前的次月A收貨。</p></article>
+        <article><strong>疑似前期另外標示</strong><p>月初A收貨找不到本期B帳款時，保留差異並提醒匯入上期台帳確認。</p></article>
         <article><strong>已認列數量不重複</strong><p>下期匯入上期結果後，先扣除已用於前期的收貨數量，再進行本月對帳。</p></article>
         <article><strong>退貨以負值沖回</strong><p>B表帳別為銷退時，數量與合計會以負數併入同品項。</p></article>
         <article><strong>匯出可完整追溯</strong><p>結果包含總覽、差異、未配對、通過、原始資料、說明及跨月認列台帳。</p></article>
@@ -130,7 +131,7 @@
 
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="../cost-analysis/assets/jszip.min.js"></script>
-  <script src="core.js?v=20260821-cross-month-r3"></script>
-  <script src="app.js?v=20260821-cross-month-r3"></script>
+  <script src="core.js?v=20260821-line-audit-r4"></script>
+  <script src="app.js?v=20260821-line-audit-r4"></script>
 </body>
 </html>

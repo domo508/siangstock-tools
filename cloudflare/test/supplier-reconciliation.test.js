@@ -148,6 +148,54 @@ describe("財務供應商對帳核心", () => {
     expect(july.totals.priorExcludedQty).toBe(2);
     expect(july.aOnly.find((row) => row.aSku === "P1").aQty).toBe(3);
   });
+
+  it("逐筆核對每張明細，即使月總量未短少也辨識跨月與疑似前期", () => {
+    const makeReport = (sourceType, records) => ({
+      sourceType, fileName: `${sourceType}.xlsx`, sheetName: "資料", headerRowIndex: 0,
+      records: records.map((row, index) => ({ ...row, sourceRow: row.sourceRow || index + 2, transactionType: "" })),
+      rawRows: records.map((row, index) => ({ ...row, sourceRow: row.sourceRow || index + 2, included: true, reason: "商品明細", sourceFile: `${sourceType}.xlsx`, sheetName: "資料", transactionType: "" }))
+    });
+    const product = "涼感-PINGU熊冷Let's Go Fishing-150*200cm涼被";
+    const aReport = makeReport("a", [
+      { sourceRow: 77, date: "2026-06-16", doc: "RP2026060011", sku: "F13053", name: product, qty: 10, unitPrice: 600, amount: 6000, supplier: "普悠瑪" },
+      { sourceRow: 240, date: "2026-07-01", doc: "RP2026070007", sku: "F13053", name: product, qty: 30, unitPrice: 600, amount: 18000, supplier: "普悠瑪" },
+      { sourceRow: 255, date: "2026-06-24", doc: "RP202606001H", sku: "F13053", name: product, qty: 40, unitPrice: 600, amount: 24000, supplier: "普悠瑪" },
+      { sourceRow: 282, date: "2026-06-01", doc: "RP2026060002", sku: "F13053", name: product, qty: 70, unitPrice: 600, amount: 42000, supplier: "普悠瑪" }
+    ]);
+    const bReport = makeReport("b", [
+      { sourceRow: 392, date: "2026-06-23", doc: "2011506230004", sku: "", name: product, qty: 40, unitPrice: 600, amount: 24000, supplier: "普悠瑪" },
+      { sourceRow: 420, date: "2026-06-24", doc: "2011506240001", sku: "", name: product, qty: 10, unitPrice: 600, amount: 6000, supplier: "普悠瑪" },
+      { sourceRow: 486, date: "2026-06-30", doc: "2011506300003", sku: "", name: product, qty: 30, unitPrice: 600, amount: 18000, supplier: "普悠瑪" }
+    ]);
+    const analysis = core.analyzeMonthlyReports(aReport, bReport, { month: "2026-06", cutoff: "2026-07-10" });
+    const row = analysis.paired[0];
+    expect(row.status).toBe("跨月配對＋疑似前期跨月");
+    expect(row.aQty).toBe(120);
+    expect(row.bQty).toBe(80);
+    expect(row.qtyDifference).toBe(40);
+    expect(row.recognizedQty).toBe(80);
+    expect(row.crossMonthQty).toBe(30);
+    expect(row.aMissingQty).toBe(0);
+    expect(row.bMissingQty).toBe(70);
+    expect(row.auditDifferenceQty).toBe(70);
+    expect(row.suspectedPriorQty).toBe(70);
+    expect(row.bMissingDetail).toContain("A表第282列");
+    expect(row.crossMonthDetail).toContain("B表第486列");
+    expect(row.crossMonthDetail).toContain("A表第240列");
+    expect(analysis.crossMonthAllocations[0].recognizedQty).toBe(30);
+  });
+
+  it("差異頁籤提供A、B缺少明細列號與逐筆稽核欄位", () => {
+    const { aReport, bReport } = buildReports();
+    const analysis = core.analyzeMonthlyReports(aReport, bReport, { month: "2026-06", cutoff: "2026-07-10" });
+    const workbook = core.buildOutputWorkbook(analysis, XLSX);
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets["02_差異明細"], { header: 1, defval: "" });
+    expect(rows[0]).toContain("逐筆已核對數量");
+    expect(rows[0]).toContain("A表缺少時的B來源明細");
+    expect(rows[0]).toContain("B表缺少時的A來源明細");
+    expect(rows[0]).toContain("跨月配對明細");
+    expect(rows[0]).toContain("稽核說明");
+  });
 });
 
 describe("財務供應商對帳前台", () => {
@@ -164,6 +212,8 @@ describe("財務供應商對帳前台", () => {
     expect(html).toContain('id="prior-file"');
     expect(html).toContain('id="summary-notes"');
     expect(html).toContain("第8頁籤");
+    expect(html).toContain("每筆都檢查跨月");
+    expect(html).toContain("原始列號、日期、單號與剩餘數量");
     expect(app).toContain("數量對價關係");
     expect(app).toContain("財務特別提醒");
     expect(html).toContain("下載結果Excel");
