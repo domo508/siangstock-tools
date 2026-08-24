@@ -689,6 +689,63 @@ describe("庫存成本分析核心規則", () => {
     expect(analysis.issues.some((issue) => issue.doc === tDoc && issue.type === "總倉代出尚未月結／可能漏請款")).toBe(false);
     expect(analysis.timingDetails.some((detail) => detail.auditDoc === tDoc && detail.type === "前期R／本月T" && detail.status === "跨月R→T已配對")).toBe(true);
   });
+
+  it("分析月份由本月主報表鎖定，銷售與調撥的前期資料不會推進月份", () => {
+    const reports = {
+      ...baseInventory("MONTH-LOCK", 2, 1, 100),
+      purchases: report("purchases", [{ date: "2026-05-02", doc: "IR26050001", sku: "MONTH-LOCK", name: "月份鎖定商品", qty: 1, untaxedAmount: 100 }]),
+      sales: report("sales", [
+        { date: "2026-04-28", doc: "R0100002604280001", sku: "MONTH-LOCK", name: "月份鎖定商品", qty: 0, purchaseCostAmount: 0 },
+        { date: "2026-05-18", doc: "R0100002605180001", sku: "MONTH-LOCK", name: "月份鎖定商品", qty: 2, purchaseCostAmount: 200 }
+      ]),
+      storeMonthly: report("storeMonthly", [{ date: "2026-05-18", doc: "AT26050001", sku: "MONTH-LOCK", name: "月份鎖定商品", store: "台中北屯門市", reconcileType: "1 總倉調撥至對帳門市", qty: 1 }]),
+      movements: report("movements", [{ date: "2026-05-20", doc: "IO26050001", sku: "MONTH-LOCK", name: "月份鎖定商品", qty: 0 }]),
+      supplierReturns: report("supplierReturns", [{ date: "2026-05-21", doc: "RT26050001", sku: "MONTH-LOCK", name: "月份鎖定商品", qty: 0 }]),
+      transfers: report("transfers", [
+        { date: "2026-04-28", doc: "AT26040001", sku: "MONTH-LOCK", name: "月份鎖定商品", qty: 1 },
+        { date: "2026-05-18", doc: "AT26050001", sku: "MONTH-LOCK", name: "月份鎖定商品", qty: 1 }
+      ])
+    };
+    const monthContext = core.resolveAnalysisMonth(reports);
+    expect(monthContext.analysisMonthLabel).toBe("2026年5月");
+    expect(monthContext.sourceMonthChecks.find((row) => row.type === "sales")).toMatchObject({ role: "本月認列＋前期稽核", result: "通過：2026年4月、2026年5月" });
+    const analysis = core.analyzeReports(reports, monthContext);
+    expect(analysis.analysisMonthLabel).toBe("2026年5月");
+    const workbook = core.buildOutputWorkbook(analysis, XLSX);
+    const sourceRows = XLSX.utils.sheet_to_json(workbook.Sheets["05_來源檢查"], { header: 1, defval: "" });
+    expect(sourceRows.some((row) => row[0] === "來源月份檢查")).toBe(true);
+    expect(sourceRows.some((row) => row[0] === "當月進貨明細" && row[1] === "月份鎖定主報表" && row[2] === "2026年5月")).toBe(true);
+  });
+
+  it("混入晚於分析月份的調撥資料時停止分析，不產生混月結果", () => {
+    const reports = {
+      purchases: report("purchases", [{ date: "2026-05-02", sku: "FUTURE", name: "未來月份商品", qty: 1 }]),
+      sales: report("sales", [{ date: "2026-05-03", doc: "R0100002605030001", sku: "FUTURE", name: "未來月份商品", qty: 1, purchaseCostAmount: 10 }]),
+      storeMonthly: report("storeMonthly", [{ date: "2026-05-03", doc: "AT26050001", sku: "FUTURE", name: "未來月份商品", qty: 1 }]),
+      transfers: report("transfers", [
+        { date: "2026-05-03", doc: "AT26050001", sku: "FUTURE", name: "未來月份商品", qty: 1 },
+        { date: "2026-06-03", doc: "AT26060001", sku: "FUTURE", name: "未來月份商品", qty: 1 }
+      ])
+    };
+    expect(() => core.resolveAnalysisMonth(reports)).toThrow("包含晚於分析月份2026年5月的2026年6月資料");
+  });
+
+  it("當月進貨與門市月結月份不一致時停止分析", () => {
+    const reports = {
+      purchases: report("purchases", [{ date: "2026-05-02", sku: "MISMATCH", name: "月份不符商品", qty: 1 }]),
+      sales: report("sales", [{ date: "2026-05-03", doc: "R0100002605030001", sku: "MISMATCH", name: "月份不符商品", qty: 1, purchaseCostAmount: 10 }]),
+      storeMonthly: report("storeMonthly", [{ date: "2026-06-03", doc: "AT26060001", sku: "MISMATCH", name: "月份不符商品", qty: 1 }])
+    };
+    expect(() => core.resolveAnalysisMonth(reports)).toThrow("本月主報表月份不一致");
+  });
+
+  it("銷售明細缺少分析月份時停止分析", () => {
+    const reports = {
+      purchases: report("purchases", [{ date: "2026-05-02", sku: "NO-CURRENT-SALES", name: "缺本月銷售商品", qty: 1 }]),
+      sales: report("sales", [{ date: "2026-04-03", doc: "R0100002604030001", sku: "NO-CURRENT-SALES", name: "缺本月銷售商品", qty: 1, purchaseCostAmount: 10 }])
+    };
+    expect(() => core.resolveAnalysisMonth(reports)).toThrow("銷售品項成本明細未包含分析月份2026年5月");
+  });
 });
 
 describe("庫存成本分析前台", () => {
@@ -702,10 +759,13 @@ describe("庫存成本分析前台", () => {
     expect(html).toContain("選擇八類報表");
     expect(html).toContain("不會傳到網站、Cloudflare或其他伺服器");
     expect(html).toContain("公司最新版商品規則");
+    expect(html).toContain("分析月份由本月主報表鎖定");
+    expect(html).toContain("若含未來月份，系統會停止分析");
     expect(html).toContain("凍結第一列");
     expect(html).toContain("assets/jszip.min.js");
     expect(html).toContain("../inventory/rules-client.js");
     expect(app).toContain("rulesClient.fetchLatest");
+    expect(app).toContain("core.resolveAnalysisMonth");
     expect(app).toContain('type === "transfers"');
     expect(app).toContain('type === "transfers" || type === "sales"');
     expect(app).toContain("multiple");
