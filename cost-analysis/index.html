@@ -52,14 +52,19 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">資料來源</p>
-          <h2 id="upload-title">選擇本月報表與跨月銷售</h2>
+          <h2 id="upload-title">選擇本月報表與前期稽核資料</h2>
         </div>
-        <p>期初、期末、進貨與銷售為必要來源；其餘本月無資料時可留空。</p>
+        <p>期初、期末、進貨與銷售為必要來源；銷售可含前2個月，調撥可含前月。</p>
       </div>
 
       <div class="warehouse-note" role="note">
         <strong>期初、期末請使用相同倉別範圍</strong>
         <small>應包含：寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。請排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。</small>
+      </div>
+
+      <div class="warehouse-note" role="note">
+        <strong>分析月份由本月主報表鎖定</strong>
+        <small>當月進貨與門市月結須為同一月份；銷售可選本月及前2個月，調撥請選本月及前月。若含未來月份，系統會停止分析，不會產生混月結果。</small>
       </div>
 
       <div class="warehouse-note" role="note">
@@ -127,7 +132,7 @@
   <script src="assets/jszip.min.js"></script>
   <script src="../inventory/core.js?v=20260816-shared-rules"></script>
   <script src="../inventory/rules-client.js?v=20260816-shared-rules"></script>
-  <script src="core.js?v=20260820-strict-cancellation-r1"></script>
-  <script src="app.js?v=20260817-b-breakdown-freeze-r1"></script>
+  <script src="core.js?v=20260824-month-lock-r1"></script>
+  <script src="app.js?v=20260824-month-lock-r1"></script>
 </body>
 </html>
