@@ -808,6 +808,86 @@
     return monthIndexFromDate(record && record.date) ?? monthIndexFromSalesDoc(record && record.doc);
   }
 
+  function sourceMonthCheck(type, reports) {
+    const records = reports[type] && Array.isArray(reports[type].records) ? reports[type].records : [];
+    const months = [...new Set(records.map(recordMonthIndex).filter((month) => month != null))].sort((left, right) => left - right);
+    const unknownRows = records.filter((record) => recordMonthIndex(record) == null).length;
+    return {
+      type,
+      source: REPORT_SCHEMAS[type].label,
+      fileName: reports[type] && reports[type].meta ? reports[type].meta.fileName || "" : "",
+      recordCount: records.length,
+      months,
+      unknownRows,
+      monthLabels: months.map(displayMonth)
+    };
+  }
+
+  function resolveAnalysisMonth(reports) {
+    const checks = REPORT_ORDER.map((type) => sourceMonthCheck(type, reports));
+    const checkByType = new Map(checks.map((check) => [check.type, check]));
+    const currentMonthTypes = ["purchases", "storeMonthly", "movements", "supplierReturns"];
+    const monthCandidates = [];
+
+    for (const type of currentMonthTypes) {
+      const check = checkByType.get(type);
+      if (!check.recordCount) continue;
+      if (check.unknownRows) {
+        throw new Error(`${check.source}${check.fileName ? `（${check.fileName}）` : ""}有${check.unknownRows}列無法判斷月份；請確認日期或單據編號後再分析。`);
+      }
+      if (check.months.length !== 1) {
+        throw new Error(`${check.source}${check.fileName ? `（${check.fileName}）` : ""}同時包含${check.monthLabels.join("、") || "無法辨識的月份"}；本月主報表只能包含單一月份。`);
+      }
+      monthCandidates.push({ type, month: check.months[0], source: check.source });
+    }
+
+    const distinctAnchorMonths = [...new Set(monthCandidates.map((entry) => entry.month))];
+    if (!distinctAnchorMonths.length) {
+      throw new Error("無法從當月進貨、門市月結、出入庫或退廠報表鎖定分析月份；請至少提供一份含日期的本月主報表。");
+    }
+    if (distinctAnchorMonths.length > 1) {
+      const detail = monthCandidates.map((entry) => `${entry.source}=${displayMonth(entry.month)}`).join("、");
+      throw new Error(`本月主報表月份不一致：${detail}。請改選同一月份的報表後再分析。`);
+    }
+
+    const analysisMonth = distinctAnchorMonths[0];
+    for (const type of ["sales", "transfers"]) {
+      const check = checkByType.get(type);
+      if (!check.recordCount) continue;
+      if (check.unknownRows) {
+        throw new Error(`${check.source}${check.fileName ? `（${check.fileName}）` : ""}有${check.unknownRows}列無法判斷月份；跨月稽核資料必須可辨識月份。`);
+      }
+      const futureMonths = check.months.filter((month) => month > analysisMonth);
+      if (futureMonths.length) {
+        throw new Error(`${check.source}${check.fileName ? `（${check.fileName}）` : ""}包含晚於分析月份${displayMonth(analysisMonth)}的${futureMonths.map(displayMonth).join("、")}資料；請移除未來月份檔案後再分析。`);
+      }
+    }
+
+    const salesCheck = checkByType.get("sales");
+    if (!salesCheck.recordCount || !salesCheck.months.includes(analysisMonth)) {
+      throw new Error(`銷售品項成本明細未包含分析月份${displayMonth(analysisMonth)}；請至少匯入本月銷售，前1至2個月只作跨月稽核。`);
+    }
+
+    const anchorTypeSet = new Set(currentMonthTypes);
+    const sourceMonthChecks = checks.map((check) => {
+      let role = "不參與月份判定";
+      let result = "庫存快照，不檢查月份";
+      if (anchorTypeSet.has(check.type)) {
+        role = check.type === "purchases" || check.type === "storeMonthly" ? "月份鎖定主報表" : "本月一致性驗證";
+        result = check.recordCount ? `通過：${displayMonth(analysisMonth)}` : "未匯入／本月無資料";
+      } else if (check.type === "sales") {
+        role = "本月認列＋前期稽核";
+        result = `通過：${check.monthLabels.join("、")}`;
+      } else if (check.type === "transfers") {
+        role = "本月／前期稽核";
+        result = check.recordCount ? `通過：${check.monthLabels.join("、")}` : "未匯入／本月無資料";
+      }
+      return { ...check, role, result };
+    });
+
+    return { analysisMonth, analysisMonthLabel: displayMonth(analysisMonth), sourceMonthChecks };
+  }
+
   function displayMonth(monthIndex) {
     if (monthIndex == null) return "月份不明";
     const year = Math.floor((monthIndex - 1) / 12);
@@ -1066,6 +1146,7 @@
     const adjustmentDetails = [];
     const timingDetails = [];
     const salesCancellationDetails = [];
+    const sourceMonthChecks = options && Array.isArray(options.sourceMonthChecks) ? options.sourceMonthChecks : [];
     const productRules = options && options.rules ? options.rules : DEFAULT_PRODUCT_RULES;
     const ruleContext = {
       version: options && options.rulesVersion != null ? options.rulesVersion : "內建預設",
@@ -1784,7 +1865,7 @@
     totals.quantityAmountIssueCount = details.filter((item) => item.status === "數量＆金額差異").length;
     totals.quantityIssueCount = totals.quantityOnlyIssueCount + totals.quantityAmountIssueCount;
 
-    return { details, issues, sourceChecks, exclusions, adjustmentDetails, timingDetails, salesCancellationDetails, ruleContext, totals, analysisMonth, analysisMonthLabel: displayMonth(analysisMonth), generatedAt: new Date().toISOString() };
+    return { details, issues, sourceChecks, sourceMonthChecks, exclusions, adjustmentDetails, timingDetails, salesCancellationDetails, ruleContext, totals, analysisMonth, analysisMonthLabel: displayMonth(analysisMonth), generatedAt: new Date().toISOString() };
   }
 
   function setSheetLayout(sheet, widths, filterRange) {
@@ -1876,6 +1957,7 @@
       [],
       ["成本規則"],
       [`分析月份：${analysis.analysisMonthLabel || "月份不明"}。B2、B3、B4均以門市月結為主要認列來源；調撥與R／T銷售資料只供成本、扣庫及跨月稽核，不可單獨增加B。`],
+      ["分析月份由當月進貨與門市月結等本月主報表鎖定；銷售與調撥只供本月／前期稽核，不得包含晚於分析月份的資料。來源月份檢查請見05_來源檢查。"],
       ["03_未配對資料只列分析月份內的異常；月份無法判斷者仍列待查。前期銷售資料只保留作R／T跨月配對背景，不把前期未配對事項重複帶入本月。"],
       ["A、B、C、D均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。"],
       ["門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。"],
@@ -1887,7 +1969,7 @@
     setNumberFormats(XLSX, summary, ["B6:B20"], "#,##0");
     setNumberFormats(XLSX, summary, ["C6:C20"], "#,##0.00");
     setNumberFormats(XLSX, summary, ["B23:B28"], "#,##0");
-    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", `分析月份：${analysis.analysisMonthLabel || "月份不明"}。B2、B3、B4均以門市月結為主要認列來源；調撥與R／T銷售資料只供成本、扣庫及跨月稽核，不可單獨增加B。`, "03_未配對資料只列分析月份內的異常；月份無法判斷者仍列待查。前期銷售資料只保留作R／T跨月配對背景，不把前期未配對事項重複帶入本月。", "A、B、C、D均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。", "02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。", "銷售流水沖銷採嚴格配對：來源單號須精確指向原單，商品、門市、取貨倉及出貨倉一致，數量與銷售／進貨價金額完整反向；退訂另須確認未形成有效T。完整配對明細請見05_來源檢查。", "狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]);
+    const summaryMergeLabels = new Set(["庫存成本分析摘要", "成本規則", `分析月份：${analysis.analysisMonthLabel || "月份不明"}。B2、B3、B4均以門市月結為主要認列來源；調撥與R／T銷售資料只供成本、扣庫及跨月稽核，不可單獨增加B。`, "分析月份由當月進貨與門市月結等本月主報表鎖定；銷售與調撥只供本月／前期稽核，不得包含晚於分析月份的資料。來源月份檢查請見05_來源檢查。", "03_未配對資料只列分析月份內的異常；月份無法判斷者仍列待查。前期銷售資料只保留作R／T跨月配對背景，不把前期未配對事項重複帶入本月。", "A、B、C、D均以報表中的進貨價相關欄位為成本基準。一般報表的成本價代表平均成本，只供參考；當月進貨明細的成本價例外代表供應商進貨價。", "門市成本原則為相關成本×1.11；加盟請款優先依報表成本欄位核對，1.11只在缺值時輔助估算，均不直接作A／B成本。", "02_商品差異明細只列非通過商品；包含通過品項的完整勾稽底稿請見06_全部商品勾稽明細。", "銷售流水沖銷採嚴格配對：來源單號須精確指向原單，商品、門市、取貨倉及出貨倉一致，數量與銷售／進貨價金額完整反向；退訂另須確認未形成有效T。完整配對明細請見05_來源檢查。", "狀態判斷：未解釋數量絕對值小於0.000001視為0；未解釋金額絕對值未滿1元視為容許尾差。"]);
     summary["!merges"] = summaryRows
       .map((row, index) => summaryMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 2 } } : null)
       .filter(Boolean);
@@ -1928,6 +2010,12 @@
       sourceHeaders,
       ...analysis.sourceChecks.map((row) => [row.source, row.fileName, row.sheetName, row.headerRow, row.rawRows, row.acceptedRows, row.parsedQty || 0, row.parsedAmount || 0, row.ruleExcludedRows || 0, row.ruleExcludedQty || 0, row.ruleExcludedAmount || 0, row.ruleIncludedRows || 0, row.ruleIncludedQty || 0, row.ruleIncludedAmount || 0, row.reviewRows || 0, row.cancelledRows, row.note]),
       [],
+      ["來源月份檢查"],
+      ["報表種類", "月份角色", "偵測月份", "無法辨識列", "檢查結果", "檔名"],
+      ...(analysis.sourceMonthChecks && analysis.sourceMonthChecks.length
+        ? analysis.sourceMonthChecks.map((row) => [row.source, row.role, row.monthLabels.join("、") || "不適用", row.unknownRows || 0, row.result, row.fileName])
+        : [["本次未執行來源月份檢查"]]),
+      [],
       ["期初／期末應納入倉別"],
       ["寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。"],
       [],
@@ -1955,6 +2043,10 @@
     setNumberFormats(XLSX, sourceSheet, ["D2:F9", "I2:I9", "L2:L9", "O2:P9"], "#,##0");
     setNumberFormats(XLSX, sourceSheet, ["G2:G9", "J2:J9", "M2:M9"], "#,##0");
     setNumberFormats(XLSX, sourceSheet, ["H2:H9", "K2:K9", "N2:N9"], "#,##0.00");
+    const monthCheckHeaderRow = sourceRows.findIndex((row) => row[0] === "報表種類" && row[1] === "月份角色") + 1;
+    const monthCheckStartRow = monthCheckHeaderRow + 1;
+    const monthCheckEndRow = Math.max(monthCheckStartRow, monthCheckStartRow + Math.max(1, analysis.sourceMonthChecks ? analysis.sourceMonthChecks.length : 0) - 1);
+    setNumberFormats(XLSX, sourceSheet, [`D${monthCheckStartRow}:D${monthCheckEndRow}`], "#,##0");
     const exclusionHeaderRow = sourceRows.findIndex((row) => row[0] === "來源報表" && row[1] === "來源列") + 1;
     const exclusionStartRow = exclusionHeaderRow + 1;
     const exclusionEndRow = Math.max(exclusionStartRow, exclusionStartRow + Math.max(1, analysis.exclusions ? analysis.exclusions.length : 0) - 1);
@@ -1967,7 +2059,7 @@
     setNumberFormats(XLSX, sourceSheet, [`B${cancellationStartRow}:B${cancellationEndRow}`, `D${cancellationStartRow}:D${cancellationEndRow}`], "#,##0");
     setNumberFormats(XLSX, sourceSheet, [`M${cancellationStartRow}:P${cancellationEndRow}`], "#,##0");
     setNumberFormats(XLSX, sourceSheet, [`Q${cancellationStartRow}:T${cancellationEndRow}`], "#,##0.00");
-    const sourceMergeLabels = new Set(["期初／期末應納入倉別", "寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。", "報表專用成本規則", "當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C／D成本優先採進貨價相關欄位。", "公司集中商品規則", "集中規則排除明細", "銷售流水嚴格沖銷明細"]);
+    const sourceMergeLabels = new Set(["來源月份檢查", "本次未執行來源月份檢查", "期初／期末應納入倉別", "寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。", "報表專用成本規則", "當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C／D成本優先採進貨價相關欄位。", "公司集中商品規則", "集中規則排除明細", "銷售流水嚴格沖銷明細"]);
     sourceSheet["!merges"] = sourceRows
       .map((row, index) => sourceMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 20 } } : null)
       .filter(Boolean);
@@ -2013,6 +2105,7 @@
     inspectWorkbook,
     extractReport,
     mergeReportParts,
+    resolveAnalysisMonth,
     analyzeReports,
     buildOutputWorkbook,
     buildFrozenWorkbookBytes,
