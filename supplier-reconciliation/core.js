@@ -249,6 +249,40 @@
     return unique[0] || 0;
   }
 
+  function hasDistinctiveDimensions(value) {
+    return /\d+(?:\.\d+)?\s*[x×＊*]\s*\d+(?:\.\d+)?(?:\s*[x×＊*]\s*\d+(?:\.\d+)?)?/i.test(String(value || ""));
+  }
+
+  function isRecoverableMisplacedProductName(value) {
+    const normalized = normalizeText(value);
+    const blockedHints = ["運費", "打樣", "色樣", "版費", "加工費", "處理費", "包裝費"];
+    return hasDistinctiveDimensions(value) && !blockedHints.some((word) => normalized.includes(normalizeText(word)));
+  }
+
+  function findMisplacedBNames(rows, headerRowIndex, mapping) {
+    const recoveredByDataRow = new Map();
+    const consumedNameRows = new Map();
+    if (mapping.transactionType == null || mapping.name == null) return { recoveredByDataRow, consumedNameRows };
+    for (let index = headerRowIndex + 1; index < rows.length - 1; index += 1) {
+      const row = rows[index];
+      const nextRow = rows[index + 1];
+      if (!Array.isArray(row) || !Array.isArray(nextRow)) continue;
+      const currentName = normalizeText(valueAt(row, mapping, "name"));
+      const currentType = String(valueAt(row, mapping, "transactionType") || "").trim();
+      const hasFinancialValues = parseNumber(valueAt(row, mapping, "qty")) != null
+        && parseNumber(valueAt(row, mapping, "unitPrice")) != null
+        && parseNumber(valueAt(row, mapping, "amount")) != null;
+      if ((currentName && currentName !== "其他") || !/銷貨|銷退|退貨|折讓/.test(currentType) || !hasFinancialValues) continue;
+      const candidate = String(valueAt(nextRow, mapping, "transactionType") || "").trim();
+      const nextHasNormalName = String(valueAt(nextRow, mapping, "name") || "").trim();
+      const nextHasFinancialValues = ["qty", "unitPrice", "amount"].some((field) => parseNumber(valueAt(nextRow, mapping, field)) != null);
+      if (!candidate || nextHasNormalName || nextHasFinancialValues || !isRecoverableMisplacedProductName(candidate)) continue;
+      recoveredByDataRow.set(index, { name: candidate, nameSourceRow: index + 2 });
+      consumedNameRows.set(index + 1, index + 1);
+    }
+    return { recoveredByDataRow, consumedNameRows };
+  }
+
   function extractSource(workbook, XLSX, sourceType, options) {
     const sheetName = options.sheetName || workbook.SheetNames[0];
     const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: true, defval: "" });
@@ -257,10 +291,21 @@
     const records = [];
     const rawRows = [];
     const carried = { date: "", doc: "", transactionType: "", supplier: "" };
+    const misplaced = sourceType === "b" ? findMisplacedBNames(rows, headerRowIndex, mapping) : { recoveredByDataRow: new Map(), consumedNameRows: new Map() };
     for (let index = headerRowIndex + 1; index < rows.length; index += 1) {
       const row = rows[index];
       if (!Array.isArray(row) || row.every((value) => value == null || String(value).trim() === "")) continue;
-      const name = String(valueAt(row, mapping, "name") || "").trim();
+      if (sourceType === "b" && misplaced.consumedNameRows.has(index)) {
+        rawRows.push({
+          source: "B", sourceFile: options.fileName || "", sheetName, sourceRow: index + 1,
+          date: "", doc: "", supplier: "", transactionType: String(valueAt(row, mapping, "transactionType") || "").trim(),
+          sku: "", name: "", qty: 0, unitPrice: 0, amount: 0, included: false,
+          reason: `錯置品名已併入B表第${misplaced.consumedNameRows.get(index)}列商品明細`
+        });
+        continue;
+      }
+      const recoveredName = misplaced.recoveredByDataRow.get(index);
+      const name = recoveredName?.name || String(valueAt(row, mapping, "name") || "").trim();
       const sku = String(valueAt(row, mapping, "sku") || "").trim();
       const qtyValue = parseNumber(valueAt(row, mapping, "qty"));
       const priceValue = parseNumber(valueAt(row, mapping, "unitPrice"));
@@ -279,7 +324,7 @@
         transactionType ||= carried.transactionType;
       }
       let included = true;
-      let reason = "納入比對";
+      let reason = recoveredName ? `納入比對；品名由B表第${recoveredName.nameSourceRow}列帳別欄補回` : "納入比對";
       if (!name || qtyValue == null || priceValue == null || amountValue == null) { included = false; reason = "缺少品名、數量、單價或金額"; }
       if (sourceType === "a" && (!sku || isTotalRow(row, mapping))) { included = false; reason = isTotalRow(row, mapping) ? "合計列" : "缺少貨號"; }
       if (sourceType === "b" && NON_PRODUCT_NAMES.some((word) => normalizeText(name) === normalizeText(word))) { included = false; reason = "非商品項目"; }
@@ -287,6 +332,7 @@
       if (sourceType === "b" && /銷退|退貨|折讓/.test(transactionType)) sign = -1;
       const record = {
         source: sourceType.toUpperCase(), sourceFile: options.fileName || "", sheetName, sourceRow: index + 1,
+        nameSourceRow: recoveredName?.nameSourceRow || null, formatRepair: recoveredName ? "帳別欄錯置品名補回" : "",
         date, doc, supplier,
         transactionType, sku, name, qty: sign * Math.abs(qtyValue || 0), unitPrice: priceValue || 0,
         amount: sign * Math.abs(amountValue || 0), included, reason
@@ -308,7 +354,7 @@
       current.qty += record.qty;
       current.amount += record.amount;
       current.prices.push(record.unitPrice);
-      current.rows.push(record.sourceRow);
+      current.rows.push(record.nameSourceRow ? `${record.sourceRow}（品名${record.nameSourceRow}）` : record.sourceRow);
       if (record.doc) current.docs.add(String(record.doc));
       if (record.date) current.dates.add(parseDateValue(record.date)?.key || String(record.date));
       map.set(key, current);
@@ -487,7 +533,9 @@
     const rawRows = report.rawRows.map((row) => {
       if (!row.included) return { ...row };
       const detail = rawReasonByRow.get(row.sourceRow);
-      return { ...row, included: includedRows.has(row.sourceRow), reason: detail || (includedRows.has(row.sourceRow) ? "納入本期比對" : "不在本期比對範圍") };
+      const included = includedRows.has(row.sourceRow);
+      const includedReason = row.formatRepair ? `納入本期比對；${row.formatRepair}` : "納入本期比對";
+      return { ...row, included, reason: detail || (included ? includedReason : "不在本期比對範圍") };
     });
     return { ...report, records, rawRows };
   }
@@ -504,7 +552,8 @@
   function auditRecordText(source, record, qty) {
     const date = parseDateValue(record.date)?.key || String(record.date || "未提供日期");
     const doc = String(record.doc || "未提供單號");
-    return `${source}表第${record.sourceRow}列｜${date}｜${doc}｜${quantityText(qty)}件`;
+    const rowText = record.nameSourceRow ? `${source}表第${record.sourceRow}列（品名第${record.nameSourceRow}列）` : `${source}表第${record.sourceRow}列`;
+    return `${rowText}｜${date}｜${doc}｜${quantityText(qty)}件`;
   }
 
   function buildBDemandLots(records) {

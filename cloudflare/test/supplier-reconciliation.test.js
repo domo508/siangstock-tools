@@ -92,6 +92,34 @@ describe("財務供應商對帳核心", () => {
     expect(report.records[1].qty).toBe(-2);
   });
 
+  it("補回普悠瑪客製尺寸錯置在下一列帳別欄的品名", () => {
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
+      ["帳款日", "進銷單號", "帳別", "品名", "數量", "單價", "合計"],
+      ["115/06/04", "S1", "銷貨", "", 1, 275, 275],
+      ["", "", "195*205*50可可咖床包組含2枕", "", "", "", ""],
+      ["", "", "銷退", "其他", 1, 640, 640],
+      ["", "", "180X186X44-60天絲床包[深灰雪松](含2枕)", "", "", "", ""],
+      ["", "", "銷貨", "正常商品", 2, 100, 200],
+      ["", "", "000123", "", "", "", ""],
+      ["", "", "銷貨", "", 1, 120, 120],
+      ["", "", "6/12進口運費", "", "", "", ""],
+      ["", "", "銷貨", "", 3, 240, 720],
+      ["", "", "48*78台灣之星打樣", "", "", "", ""]
+    ]), "對帳單");
+    const inspection = core.inspectWorkbook(book, XLSX, "b").sheets[0];
+    const report = core.extractSource(book, XLSX, "b", { sheetName: inspection.name, headerRowIndex: inspection.headerRowIndex, mapping: inspection.mapping, fileName: "B.xlsx" });
+    expect(report.records).toHaveLength(3);
+    expect(report.records[0]).toMatchObject({ sourceRow: 2, nameSourceRow: 3, name: "195*205*50可可咖床包組含2枕", qty: 1, unitPrice: 275, amount: 275, formatRepair: "帳別欄錯置品名補回" });
+    expect(report.records[1]).toMatchObject({ sourceRow: 4, nameSourceRow: 5, name: "180X186X44-60天絲床包[深灰雪松](含2枕)", qty: -1, unitPrice: 640, amount: -640 });
+    expect(report.rawRows.find((row) => row.sourceRow === 3).reason).toContain("已併入B表第2列");
+    expect(report.rawRows.find((row) => row.sourceRow === 5).reason).toContain("已併入B表第4列");
+    expect(report.rawRows.find((row) => row.sourceRow === 8).included).toBe(false);
+    expect(report.rawRows.find((row) => row.sourceRow === 10).included).toBe(false);
+    expect(report.rawRows.find((row) => row.sourceRow === 11).included).toBe(false);
+    expect(core.aggregateSource(report)[0].rows[0]).toBe("2（品名3）");
+  });
+
   it("輸出八頁籤並保留原始資料、差異、說明與跨月台帳", () => {
     const { aReport, bReport } = buildReports();
     const workbook = core.buildOutputWorkbook(core.analyzeReports(aReport, bReport), XLSX);
