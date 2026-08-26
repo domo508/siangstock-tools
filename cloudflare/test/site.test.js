@@ -114,6 +114,13 @@ describe("集中規則瀏覽器用戶端", () => {
 });
 
 describe("前台導覽", () => {
+  it("首頁提供一致的公司工具標題與分享卡片資訊", () => {
+    const homeHtml = readFileSync("../index.html", "utf8");
+    expect(homeHtml).toContain("<title>翔仔居家-公司工具</title>");
+    expect(homeHtml).toContain('property="og:title" content="翔仔居家-公司工具"');
+    expect(homeHtml).toContain('name="twitter:title" content="翔仔居家-公司工具"');
+  });
+
   it("清洗工具與規則頁都有清楚的上一層路徑", () => {
     const inventoryHtml = readFileSync("../inventory/index.html", "utf8");
     const adminHtml = readFileSync("../inventory/rules-admin/index.html", "utf8");
