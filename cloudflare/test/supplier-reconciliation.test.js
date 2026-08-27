@@ -177,6 +177,43 @@ describe("財務供應商對帳核心", () => {
     expect(analysis.bReport.rawRows.find((row) => row.sourceRow === 10).reason).toContain("整份帳款");
   });
 
+  it("讀取上林品名對照表，以我方貨號配對並略過一對多衝突", () => {
+    const mappingBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(mappingBook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "上林品名", "目前有進貨"],
+      ["P100", "我方完整商品名稱", "上林短品名", "v"],
+      ["P200", "停售商品甲", "停售", ""],
+      ["P300", "停售商品乙", "停售", ""]
+    ]), "上林對應");
+    const mapping = core.parseNameMappingWorkbook(mappingBook, XLSX, { fileName: "上林品名對應.xlsx" });
+    expect(mapping.usable).toHaveLength(1);
+    expect(mapping.conflicts).toHaveLength(1);
+    expect(mapping.conflicts[0]).toMatchObject({ bName: "停售", skus: ["P200", "P300"] });
+
+    const aReport = {
+      sourceType: "a", fileName: "A.xlsx", sheetName: "工作表1", headerRowIndex: 0,
+      records: [{ sourceRow: 2, date: "2026-06-01", doc: "R1", sku: "P100", name: "我方完整商品名稱", qty: 3, unitPrice: 120, amount: 360, supplier: "上林" }],
+      rawRows: [{ sourceRow: 2, date: "2026-06-01", doc: "R1", sku: "P100", name: "我方完整商品名稱", qty: 3, unitPrice: 120, amount: 360, supplier: "上林", included: true, reason: "納入比對" }]
+    };
+    const bReport = {
+      sourceType: "b", fileName: "B.xlsx", sheetName: "請款單", headerRowIndex: 0,
+      records: [{ sourceRow: 15, date: "2026-06-01", doc: "", sku: "", name: "上林短品名", qty: 3, unitPrice: 120, amount: 360, supplier: "上林" }],
+      rawRows: [{ sourceRow: 15, date: "2026-06-01", doc: "", sku: "", name: "上林短品名", qty: 3, unitPrice: 120, amount: 360, supplier: "上林", included: true, reason: "商品明細" }]
+    };
+    const mappedB = core.applyNameMappingToBReport(bReport, mapping);
+    expect(mappedB.records[0]).toMatchObject({ sku: "P100", nameMappingSourceRow: 2 });
+    expect(mappedB.rawRows[0].reason).toContain("品名對照表第2列 → P100");
+    expect(mappedB.nameMapping).toMatchObject({ mappedRecordCount: 1, mappedUniqueNameCount: 1, conflictCount: 1 });
+    const analysis = core.analyzeMonthlyReports(aReport, mappedB, { month: "2026-06", cutoff: "2026-07-03" });
+    expect(analysis.totals).toMatchObject({ matchedCount: 1, passCount: 1, aOnlyCount: 0, bOnlyCount: 0 });
+    expect(analysis.paired[0].matchBasis).toContain("貨號完全一致");
+    const output = core.buildOutputWorkbook(analysis, XLSX);
+    const rules = XLSX.utils.sheet_to_json(output.Sheets["07_比對說明"], { header: 1, defval: "" });
+    expect(rules.some((row) => row[0] === "品名對照表" && row[1].includes("1筆B明細"))).toBe(true);
+    const rawB = XLSX.utils.sheet_to_json(output.Sheets["06_B表原始資料"], { defval: "" });
+    expect(rawB[0]["排除／判斷原因"]).toContain("品名對照表第2列 → P100");
+  });
+
   it("輸出八頁籤並保留原始資料、差異、說明與跨月台帳", () => {
     const { aReport, bReport } = buildReports();
     const workbook = core.buildOutputWorkbook(core.analyzeReports(aReport, bReport), XLSX);
@@ -295,6 +332,7 @@ describe("財務供應商對帳前台", () => {
     expect(html).toContain("A表「未稅進貨價」對應B表「單價」");
     expect(html).toContain('id="period-month"');
     expect(html).toContain('id="prior-file"');
+    expect(html).toContain('id="name-mapping-file"');
     expect(html).toContain('id="summary-notes"');
     expect(html).toContain("第8頁籤");
     expect(html).toContain("每筆都檢查跨月");
@@ -302,6 +340,7 @@ describe("財務供應商對帳前台", () => {
     expect(html).toContain("原始列號、日期、單號與剩餘數量");
     expect(app).toContain("數量對價關係");
     expect(app).toContain("財務特別提醒");
+    expect(app).toContain("applyNameMappingToBReport");
     expect(html).toContain("下載結果Excel");
     expect(html).toContain("connect-src 'none'");
     expect(app).not.toContain("fetch(");
