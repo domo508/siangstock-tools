@@ -3,7 +3,7 @@
 
   const core = globalThis.SupplierReconciliationCore;
   const XLSX = globalThis.XLSX;
-  const state = { sources: {}, priorLedger: [], analysis: null, outputWorkbook: null, filter: "differences" };
+  const state = { sources: {}, priorLedger: [], nameMapping: null, nameMappingInvalid: false, analysis: null, outputWorkbook: null, filter: "differences" };
   const analyzeButton = document.getElementById("analyze-button");
   const downloadButton = document.getElementById("download-button");
   const mainStatus = document.getElementById("main-status");
@@ -14,6 +14,8 @@
   const periodMonth = document.getElementById("period-month");
   const cutoffDate = document.getElementById("cross-month-cutoff");
   const priorFileName = document.getElementById("prior-file-name");
+  const nameMappingFileName = document.getElementById("name-mapping-file-name");
+  const nameMappingStatus = document.getElementById("name-mapping-status");
 
   function escapeHtml(value) {
     return String(value == null ? "" : value)
@@ -116,11 +118,14 @@
     const missing = ["a", "b"].filter((type) => !state.sources[type]);
     const invalid = ["a", "b"].filter((type) => state.sources[type] && !core.validateMapping(type, state.sources[type].mapping).valid);
     const periodMissing = !periodMonth.value || !cutoffDate.value;
-    analyzeButton.disabled = missing.length > 0 || invalid.length > 0 || periodMissing;
+    analyzeButton.disabled = missing.length > 0 || invalid.length > 0 || periodMissing || state.nameMappingInvalid;
     if (missing.length) mainStatus.textContent = `尚缺：${missing.map((type) => core.SOURCE_SCHEMAS[type].label).join("、")}`;
     else if (invalid.length) mainStatus.textContent = "部分必要欄位尚未完成對應。";
+    else if (state.nameMappingInvalid) mainStatus.textContent = "上林品名對照表無法使用，請更換檔案或取消選取。";
     else if (periodMissing) mainStatus.textContent = "請選擇對帳月份與跨月補收截止日。";
-    else mainStatus.textContent = "兩份報表與必要欄位已就緒，可以開始比對。";
+    else mainStatus.textContent = state.nameMapping
+      ? `兩份報表已就緒；將套用品名對照表${formatNumber(state.nameMapping.usable.length)}組有效對應。`
+      : "兩份報表與必要欄位已就緒，可以開始比對。";
   }
 
   function setDefaultCutoff(month) {
@@ -164,6 +169,44 @@
       card.classList.add("error");
       fileName.textContent = `${file.name}：${error.message}`;
       mappingBox.hidden = true;
+    }
+    updateAvailability();
+  }
+
+  async function onNameMappingChange(event) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    const card = document.querySelector('[data-source="name-mapping"]');
+    resetResults("品名對照表已變更，請重新開始比對。");
+    state.nameMapping = null;
+    state.nameMappingInvalid = false;
+    card.classList.remove("ready", "error");
+    nameMappingStatus.hidden = true;
+    if (!file) {
+      nameMappingFileName.textContent = "未選擇（非上林可略過）";
+      updateAvailability();
+      return;
+    }
+    nameMappingFileName.textContent = `正在讀取：${file.name}`;
+    try {
+      const data = await readFile(file);
+      const workbook = XLSX.read(data, { type: "array", cellDates: true });
+      state.nameMapping = core.parseNameMappingWorkbook(workbook, XLSX, { fileName: file.name });
+      const mapping = state.nameMapping;
+      card.classList.add("ready");
+      nameMappingFileName.textContent = `${file.name}・已讀取`;
+      nameMappingStatus.hidden = false;
+      nameMappingStatus.className = `mapping-status ${mapping.conflicts.length ? "warn" : "ok"}`;
+      nameMappingStatus.textContent = mapping.conflicts.length
+        ? `可使用${formatNumber(mapping.usable.length)}組；另有${formatNumber(mapping.conflicts.length)}組一對多衝突將自動略過（例如停售或狀態文字）。`
+        : `已確認${formatNumber(mapping.usable.length)}組一對一品名對應。`;
+    } catch (error) {
+      state.nameMappingInvalid = true;
+      card.classList.add("error");
+      nameMappingFileName.textContent = `${file.name}：${error.message}`;
+      nameMappingStatus.hidden = false;
+      nameMappingStatus.className = "mapping-status bad";
+      nameMappingStatus.textContent = "此檔案不會被忽略；請更換正確對照表或取消選取。";
     }
     updateAvailability();
   }
@@ -242,11 +285,13 @@
         const source = state.sources[type];
         reports[type] = core.extractSource(source.workbook, XLSX, type, { sheetName: source.sheetName, headerRowIndex: source.headerRowIndex, mapping: source.mapping, fileName: source.file.name, format: source.format });
       }
+      reports.b = core.applyNameMappingToBReport(reports.b, state.nameMapping);
       state.analysis = core.analyzeMonthlyReports(reports.a, reports.b, { month: periodMonth.value, cutoff: cutoffDate.value, priorLedger: state.priorLedger });
       state.outputWorkbook = core.buildOutputWorkbook(state.analysis, XLSX);
       renderResults(state.analysis);
       const t = state.analysis.totals;
-      mainStatus.textContent = `比對完成：成功配對${formatNumber(t.matchedCount)}項，其中跨月${formatNumber(t.crossMonthCount)}項；完全通過${formatNumber(t.passCount)}項，差異${formatNumber(t.differenceCount)}項，僅A表${formatNumber(t.aOnlyCount)}項，僅B表${formatNumber(t.bOnlyCount)}項。`;
+      const mappingText = state.analysis.bReport.nameMapping ? `；品名對照已套用${formatNumber(state.analysis.bReport.nameMapping.mappedRecordCount)}筆B明細` : "";
+      mainStatus.textContent = `比對完成：成功配對${formatNumber(t.matchedCount)}項，其中跨月${formatNumber(t.crossMonthCount)}項；完全通過${formatNumber(t.passCount)}項，差異${formatNumber(t.differenceCount)}項，僅A表${formatNumber(t.aOnlyCount)}項，僅B表${formatNumber(t.bOnlyCount)}項${mappingText}。`;
       downloadButton.disabled = false;
     } catch (error) {
       resultPanel.hidden = true;
@@ -283,6 +328,7 @@
 
   document.getElementById("a-file").addEventListener("change", (event) => onFileChange("a", event));
   document.getElementById("b-file").addEventListener("change", (event) => onFileChange("b", event));
+  document.getElementById("name-mapping-file").addEventListener("change", onNameMappingChange);
   document.getElementById("prior-file").addEventListener("change", async (event) => {
     resetResults("上期結果已變更，請重新開始比對。");
     const file = event.currentTarget.files?.[0];
