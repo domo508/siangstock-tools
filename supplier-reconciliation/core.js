@@ -20,10 +20,11 @@
       label: "B表・供應商對帳報表",
       fields: {
         transactionType: ["帳別", "交易類型", "單據類型", "類型"],
+        sku: ["貨號", "貨品編號", "商品編號", "商品代號", "品號", "sku", "供應商貨號"],
         name: ["品名", "商品名稱", "商品品名"],
         qty: ["數量", "銷貨數量", "對帳數量"],
         unitPrice: ["單價", "未稅單價", "進貨價"],
-        amount: ["合計", "未稅合計", "未稅金額", "未稅總額"],
+        amount: ["合計", "總計", "銷貨小計", "未稅合計", "未稅金額", "未稅總額"],
         doc: ["進銷單號", "銷貨單號", "對帳單號", "單據編號", "單號"],
         date: ["帳款日", "對帳日期", "銷貨日期", "單據日期", "日期"]
       },
@@ -118,10 +119,21 @@
     return { headerRowIndex, headers, mapping, validation: validateMapping(sourceType, mapping), rows };
   }
 
+  function detectSourceFormat(rows, sheetName, sourceType) {
+    if (sourceType !== "b" || sheetName !== "帳款") return "";
+    const signature = rows.slice(0, 3).flat().map((value) => String(value || "")).join(" ");
+    return signature.includes("力榮興業有限公司") && signature.includes("收款對帳單明細表") ? "li-rong" : "";
+  }
+
   function inspectWorkbook(workbook, XLSX, sourceType) {
-    const sheets = workbook.SheetNames.map((name) => ({ name, ...inspectSheet(workbook.Sheets[name], XLSX, sourceType) }));
-    sheets.sort((left, right) => Number(right.validation.valid) - Number(left.validation.valid) || headerScore(right.headers, sourceType) - headerScore(left.headers, sourceType));
-    return { sourceType, sheets };
+    const sheets = workbook.SheetNames.map((name) => {
+      const inspected = inspectSheet(workbook.Sheets[name], XLSX, sourceType);
+      return { name, ...inspected, format: detectSourceFormat(inspected.rows, name, sourceType) };
+    });
+    sheets.sort((left, right) => Number(right.format === "li-rong") - Number(left.format === "li-rong")
+      || Number(right.validation.valid) - Number(left.validation.valid)
+      || headerScore(right.headers, sourceType) - headerScore(left.headers, sourceType));
+    return { sourceType, format: sheets[0]?.format || "", sheets };
   }
 
   function valueAt(row, mapping, field) {
@@ -223,6 +235,7 @@
   }
 
   function matchScore(a, b) {
+    const exactSku = Boolean(a.sku && b.sku && normalizeText(a.sku) === normalizeText(b.sku));
     const nameScore = diceSimilarity(a.canonicalName, b.canonicalName);
     const aType = productType(a.canonicalName);
     const bType = productType(b.canonicalName);
@@ -238,8 +251,8 @@
     const signatureScore = diceSimilarity(signatureName(a.canonicalName), signatureName(b.canonicalName));
     const priceScore = priceSimilarity(a.unitPrice, b.unitPrice);
     const qtyScore = quantitySimilarity(a.qty, b.qty);
-    const score = Math.max(0, Math.min(1, nameScore * 0.58 + priceScore * 0.24 + qtyScore * 0.06 + compatibility));
-    return { score, nameScore, signatureScore, priceScore, qtyScore, aType, bType, sizesCompatible };
+    const score = exactSku ? 1 : Math.max(0, Math.min(1, nameScore * 0.58 + priceScore * 0.24 + qtyScore * 0.06 + compatibility));
+    return { score, nameScore, signatureScore, priceScore, qtyScore, aType, bType, sizesCompatible, exactSku };
   }
 
   function effectiveUnitPrice(amount, qty, prices) {
@@ -288,6 +301,7 @@
     const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: true, defval: "" });
     const mapping = options.mapping;
     const headerRowIndex = options.headerRowIndex;
+    const format = options.format || detectSourceFormat(rows, sheetName, sourceType);
     const records = [];
     const rawRows = [];
     const carried = { date: "", doc: "", transactionType: "", supplier: "" };
@@ -323,6 +337,11 @@
         supplier ||= carried.supplier;
         transactionType ||= carried.transactionType;
       }
+      if (sourceType === "b" && format === "li-rong") {
+        supplier ||= "力榮";
+        doc ||= String(date || "");
+        transactionType ||= String(date || "").match(/\(([^)]+)\)/)?.[1] || "帳款";
+      }
       let included = true;
       let reason = recoveredName ? `納入比對；品名由B表第${recoveredName.nameSourceRow}列帳別欄補回` : "納入比對";
       if (!name || qtyValue == null || priceValue == null || amountValue == null) { included = false; reason = "缺少品名、數量、單價或金額"; }
@@ -340,13 +359,26 @@
       rawRows.push(record);
       if (included) records.push(record);
     }
-    return { sourceType, fileName: options.fileName || "", sheetName, headerRowIndex, mapping, records, rawRows };
+    return {
+      sourceType, fileName: options.fileName || "", sheetName, headerRowIndex, mapping, records, rawRows, format,
+      periodScope: format === "li-rong" ? "selected-month-statement" : "row-date"
+    };
+  }
+
+  function sourceItemKey(report, record) {
+    if (report.sourceType === "a") return record.sku;
+    if (record.sku) return `sku:${normalizeText(record.sku)}`;
+    return canonicalizeName(record.name);
+  }
+
+  function sourceRowLabel(record) {
+    return record.nameSourceRow ? `${record.sourceRow}（品名${record.nameSourceRow}）` : String(record.sourceRow);
   }
 
   function aggregateSource(report) {
     const map = new Map();
     for (const record of report.records) {
-      const key = report.sourceType === "a" ? record.sku : canonicalizeName(record.name);
+      const key = sourceItemKey(report, record);
       const current = map.get(key) || {
         key, source: report.sourceType.toUpperCase(), sku: record.sku, name: record.name,
         canonicalName: canonicalizeName(record.name), qty: 0, amount: 0, prices: [], rows: [], docs: new Set(), dates: new Set()
@@ -354,7 +386,7 @@
       current.qty += record.qty;
       current.amount += record.amount;
       current.prices.push(record.unitPrice);
-      current.rows.push(record.nameSourceRow ? `${record.sourceRow}（品名${record.nameSourceRow}）` : record.sourceRow);
+      current.rows.push(sourceRowLabel(record));
       if (record.doc) current.docs.add(String(record.doc));
       if (record.date) current.dates.add(parseDateValue(record.date)?.key || String(record.date));
       map.set(key, current);
@@ -387,10 +419,10 @@
       const aMargin = candidate.score - (aList[1] ? aList[1].score : 0);
       const bMargin = candidate.score - (bList[1] ? bList[1].score : 0);
       const exactName = aItems[candidate.aIndex].canonicalName === bItems[candidate.bIndex].canonicalName;
-      const strong = candidate.sizesCompatible && candidate.score >= 0.66 && (exactName || (mutualBest && aMargin >= 0.025 && bMargin >= 0.025));
+      const strong = candidate.exactSku || (candidate.sizesCompatible && candidate.score >= 0.66 && (exactName || (mutualBest && aMargin >= 0.025 && bMargin >= 0.025)));
       if (!strong) continue;
       usedA.add(candidate.aIndex); usedB.add(candidate.bIndex);
-      accepted.push({ ...candidate, confidence: exactName ? "名稱完全一致" : `名稱／規格相似度${Math.round(candidate.nameScore * 100)}%` });
+      accepted.push({ ...candidate, confidence: candidate.exactSku ? "貨號完全一致" : exactName ? "名稱完全一致" : `名稱／規格相似度${Math.round(candidate.nameScore * 100)}%` });
     }
     for (const candidate of sorted) {
       if (usedA.has(candidate.aIndex) || usedB.has(candidate.bIndex)) continue;
@@ -534,7 +566,9 @@
       if (!row.included) return { ...row };
       const detail = rawReasonByRow.get(row.sourceRow);
       const included = includedRows.has(row.sourceRow);
-      const includedReason = row.formatRepair ? `納入本期比對；${row.formatRepair}` : "納入本期比對";
+      const includedReason = report.periodScope === "selected-month-statement"
+        ? "納入指定月份整份帳款；原建單日期僅供稽核"
+        : row.formatRepair ? `納入本期比對；${row.formatRepair}` : "納入本期比對";
       return { ...row, included, reason: detail || (included ? includedReason : "不在本期比對範圍") };
     });
     return { ...report, records, rawRows };
@@ -654,6 +688,7 @@
   }
 
   function inferDominantMonth(report) {
+    if (report.periodScope === "selected-month-statement") return "";
     const counts = new Map();
     for (const record of report.records) {
       const parsed = parseDateValue(record.date);
@@ -675,7 +710,9 @@
       if (sameMonth(parsed, bounds)) baseRecords.push(record);
       else if (parsed && parsed.date >= bounds.next && parsed.date <= bounds.cutoff) crossRecords.push(record);
     }
-    const bRecords = bReport.records.filter((record) => sameMonth(parseDateValue(record.date), bounds));
+    const bRecords = bReport.periodScope === "selected-month-statement"
+      ? bReport.records.slice()
+      : bReport.records.filter((record) => sameMonth(parseDateValue(record.date), bounds));
     if (!bRecords.length) throw new Error(`${bounds.monthText}的B表沒有可比對商品，請確認帳款日與月份。`);
     const baseAReport = reportWithRecords(aReport, baseRecords);
     const scopedBReport = reportWithRecords(bReport, bRecords);
@@ -697,7 +734,7 @@
       rows.push(record); crossRecordsBySku.set(record.sku, rows);
     }
     for (const record of bRecords) {
-      const key = canonicalizeName(record.name);
+      const key = sourceItemKey(scopedBReport, record);
       const rows = bRecordsByKey.get(key) || [];
       rows.push(record); bRecordsByKey.set(key, rows);
     }
@@ -732,6 +769,8 @@
       else status = `${crossMonthQty > EPSILON ? "跨月" : ""}計算異常`;
 
       const crossDetails = audit.allocations.filter((row) => row.crossMonth).map((row) => `${auditRecordText("B", row.bRecord, row.qty)} ↔ ${auditRecordText("A", row.aRecord, row.qty)}`);
+      const priceDifferenceDetails = audit.allocations.filter((row) => Math.abs(row.aRecord.unitPrice - row.bRecord.unitPrice) > EPSILON)
+        .map((row) => `${auditRecordText("A", row.aRecord, row.qty)}・${quantityText(row.aRecord.unitPrice)}元 ↔ ${auditRecordText("B", row.bRecord, row.qty)}・${quantityText(row.bRecord.unitPrice)}元`);
       const suspectedDetails = audit.suspectedPrior.map((row) => auditRecordText("A", row.record, row.remaining));
       const aMissingDetails = audit.remainingB.map((row) => auditRecordText("B", row.record, row.remaining));
       const bMissingDetails = audit.remainingA.map((row) => auditRecordText("A", row.record, row.remaining));
@@ -740,6 +779,7 @@
       if (aMissingQty > EPSILON) explanation.push(`A表缺少可對應收貨${quantityText(aMissingQty)}件，請查B來源明細`);
       if (bMissingQty > EPSILON) explanation.push(`B表缺少可對應帳款${quantityText(bMissingQty)}件，請查A來源明細`);
       if (suspectedPriorQty > EPSILON) explanation.push(`其中${quantityText(suspectedPriorQty)}件位於月初，疑似應由上期跨月認列，需匯入上期台帳確認`);
+      if (priceDifferenceDetails.length) explanation.push(`逐筆單價差異：${priceDifferenceDetails.join("；")}`);
 
       for (const allocation of audit.allocations.filter((row) => row.crossMonth)) {
         const record = allocation.aRecord;
@@ -758,8 +798,15 @@
 
       const aQty = baseItem?.qty || 0;
       const aAmount = baseItem?.amount || 0;
-      const auditAmountDifference = audit.remainingA.reduce((sum, row) => sum + row.remaining * row.record.unitPrice, 0)
+      const recognizedPriceDifference = audit.allocations.reduce((sum, row) => sum + row.qty * (row.aRecord.unitPrice - row.bRecord.unitPrice), 0);
+      const auditAmountDifference = recognizedPriceDifference
+        + audit.remainingA.reduce((sum, row) => sum + row.remaining * row.record.unitPrice, 0)
         - audit.remainingB.reduce((sum, row) => sum + row.remaining * row.record.unitPrice, 0);
+      const pairedARecords = [
+        ...(baseRecordsBySku.get(combinedItem.sku) || []),
+        ...audit.allocations.filter((row) => row.crossMonth).map((row) => row.aRecord)
+      ];
+      const pairedARows = [...new Set(pairedARecords.map(sourceRowLabel))].join("、");
       paired.push({
         status, aSku: combinedItem.sku, aName: combinedItem.name, bName: bItem.name,
         aQty, bQty: bItem.qty, qtyDifference: aQty - bItem.qty, recognizedQty, crossMonthQty,
@@ -769,7 +816,7 @@
         aMissingDetail: aMissingDetails.join("；"), bMissingDetail: bMissingDetails.join("；"),
         crossMonthDetail: crossDetails.join("；"), suspectedPriorDetail: suspectedDetails.join("；"), auditExplanation: explanation.join("；"),
         matchBasis: `${match.confidence}；逐筆數量分配`, matchScore: match.score,
-        aRows: combinedItem.rows.join("、"), bRows: bItem.rows.join("、"), crossMonth: crossMonthQty > EPSILON
+        aRows: pairedARows, bRows: bItem.rows.join("、"), crossMonth: crossMonthQty > EPSILON
       });
     }
 
@@ -939,7 +986,7 @@
       ["保守原則", "名稱不夠可靠或多個候選太接近時，不強制沖銷，保留僅A／僅B及疑似候選。"],
       ["數量", "先按商品辨識，再逐筆分配A、B明細數量；優先配對等量明細，剩餘量才拆分。B表銷退以負數沖回。"], ["單價", "A表未稅進貨價減B表單價。"],
       ["金額", "A表未稅進貨額減B表合計；用來表示財務影響，不獨立重複分類。"],
-      ["月份範圍", "B表只核對指定月份；A表同時檢查本月與截止日前次月明細，次月資料只有逐筆配對成功的數量才認列。"],
+      ["月份範圍", "一般B表依帳款日核對指定月份；力榮帳款整份依使用者選定月份認列，原建單日期只保留稽核。A表同時檢查本月與截止日前次月明細。"],
       ["跨月標示", "任何B明細對到次月A收貨都標示跨月，不以商品月總量是否短少為前提；認列數量寫入08_跨月認列台帳，供下期排除。"],
       ["疑似前期", "本月月初仍找不到B明細的A收貨會特別標示疑似前期跨月；未匯入上期台帳前不會自動排除。"],
       ["明細追溯", "差異頁籤列出A／B缺少的數量，以及原始列號、日期、單號與剩餘數量，供稽核直接回查。"],
