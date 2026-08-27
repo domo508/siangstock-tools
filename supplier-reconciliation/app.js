@@ -71,6 +71,7 @@
       source.headerRowIndex = selected.headerRowIndex;
       source.headers = selected.headers;
       source.mapping = { ...selected.mapping };
+      source.format = selected.format || "";
       renderMapping(type);
       resetResults("工作表已變更，請確認欄位後重新比對。");
       updateAvailability();
@@ -105,7 +106,9 @@
     card.classList.toggle("ready", validation.valid);
     card.classList.toggle("error", !validation.valid);
     status.className = `mapping-status ${validation.valid ? "ok" : "bad"}`;
-    status.textContent = validation.valid ? "必要欄位檢查通過" : `仍缺少：${validation.missing.join("、")}`;
+    status.textContent = validation.valid
+      ? source.format === "li-rong" ? "已辨識力榮帳款格式；整份依選定月份認列，原建單日期保留稽核" : "必要欄位檢查通過"
+      : `仍缺少：${validation.missing.join("、")}`;
     return validation.valid;
   }
 
@@ -148,11 +151,11 @@
       const workbook = XLSX.read(data, { type: "array", cellDates: true });
       const inspection = core.inspectWorkbook(workbook, XLSX, type);
       const selected = inspection.sheets[0];
-      state.sources[type] = { file, workbook, inspection, sheetName: selected.name, headerRowIndex: selected.headerRowIndex, headers: selected.headers, mapping: { ...selected.mapping } };
-      fileName.textContent = `${file.name}・已讀取`;
+      state.sources[type] = { file, workbook, inspection, sheetName: selected.name, headerRowIndex: selected.headerRowIndex, headers: selected.headers, mapping: { ...selected.mapping }, format: selected.format || inspection.format || "" };
+      fileName.textContent = `${file.name}・已讀取${state.sources[type].format === "li-rong" ? "・力榮帳款格式" : ""}`;
       renderMapping(type);
       if (type === "b" && core.validateMapping(type, state.sources[type].mapping).valid) {
-        const report = core.extractSource(workbook, XLSX, type, { sheetName: selected.name, headerRowIndex: selected.headerRowIndex, mapping: selected.mapping, fileName: file.name });
+        const report = core.extractSource(workbook, XLSX, type, { sheetName: selected.name, headerRowIndex: selected.headerRowIndex, mapping: selected.mapping, fileName: file.name, format: state.sources[type].format });
         const inferred = core.inferDominantMonth(report);
         if (inferred && !periodMonth.value) { periodMonth.value = inferred; setDefaultCutoff(inferred); }
       }
@@ -237,7 +240,7 @@
       const reports = {};
       for (const type of ["a", "b"]) {
         const source = state.sources[type];
-        reports[type] = core.extractSource(source.workbook, XLSX, type, { sheetName: source.sheetName, headerRowIndex: source.headerRowIndex, mapping: source.mapping, fileName: source.file.name });
+        reports[type] = core.extractSource(source.workbook, XLSX, type, { sheetName: source.sheetName, headerRowIndex: source.headerRowIndex, mapping: source.mapping, fileName: source.file.name, format: source.format });
       }
       state.analysis = core.analyzeMonthlyReports(reports.a, reports.b, { month: periodMonth.value, cutoff: cutoffDate.value, priorLedger: state.priorLedger });
       state.outputWorkbook = core.buildOutputWorkbook(state.analysis, XLSX);
