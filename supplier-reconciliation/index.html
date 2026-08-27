@@ -38,7 +38,7 @@
     </section>
 
     <section class="steps" aria-label="使用步驟">
-      <div><span>1</span><strong>設定月份並選檔</strong><small>A表可包含次月補收；B表只核對指定月份。</small></div>
+      <div><span>1</span><strong>設定月份並選檔</strong><small>A表可包含次月補收；力榮帳款整份依選定月份認列。</small></div>
       <div><span>2</span><strong>逐筆核對明細</strong><small>等量明細優先，再拆分剩餘量並檢查截止日前跨月收貨。</small></div>
       <div><span>3</span><strong>下載並延續台帳</strong><small>跨月認列寫入第8頁籤，下期匯入即可排除。</small></div>
     </section>
@@ -70,7 +70,7 @@
         </article>
         <article class="upload-card" data-source="b">
           <div class="upload-card-header"><h3>B表・供應商對帳報表</h3><span class="source-badge required">必要</span></div>
-          <p class="upload-help">使用帳別、品名、數量、單價與合計；銷退會自動以負數沖回。</p>
+          <p class="upload-help">自動辨識普悠瑪及力榮等供應商格式；有貨號時優先精準配對，銷退會以負數沖回。</p>
           <label class="file-button">選擇B表<input id="b-file" type="file" accept=".xlsx,.xls,.csv"></label>
           <p id="b-file-name" class="file-name">尚未選擇</p>
           <div id="b-mapping" class="mapping-box" hidden></div>
@@ -115,7 +115,7 @@
     <section class="panel rules-panel" aria-labelledby="rules-title">
       <div class="section-heading compact"><div><p class="eyebrow">固定規則</p><h2 id="rules-title">這份對帳怎麼判斷？</h2></div></div>
       <div class="rule-grid">
-        <article><strong>先辨識商品身分</strong><p>比較品名、規格、商品類型與單價；名稱不夠可靠時保留待人工確認。</p></article>
+        <article><strong>先辨識商品身分</strong><p>B表有貨號時優先精準配對；沒有貨號才比較品名、規格、商品類型與單價。</p></article>
         <article><strong>數量與單價說明原因</strong><p>差異類型只分數量、單價、數量＋單價及計算異常。</p></article>
         <article><strong>金額表示財務影響</strong><p>金額差額保留、可排序，但不重複當成一般差異類型。</p></article>
         <article><strong>每筆都檢查跨月</strong><p>不等商品月總量短少；每張B帳款都會尋找同月及截止日前的次月A收貨。</p></article>
@@ -131,7 +131,7 @@
 
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="../cost-analysis/assets/jszip.min.js"></script>
-  <script src="core.js?v=20260825-misplaced-name-r5"></script>
-  <script src="app.js?v=20260821-line-audit-r4"></script>
+  <script src="core.js?v=20260827-lirong-r6"></script>
+  <script src="app.js?v=20260827-lirong-r6"></script>
 </body>
 </html>
