@@ -214,6 +214,39 @@ describe("財務供應商對帳核心", () => {
     expect(rawB[0]["排除／判斷原因"]).toContain("品名對照表第2列 → P100");
   });
 
+  it("上林先核對整張訂單，再將月底A表與脈絡衝突候選分開提醒", () => {
+    const makeReport = (sourceType, records, format = "") => ({
+      sourceType, format, fileName: `${sourceType}.xlsx`, sheetName: "資料", headerRowIndex: 0,
+      records: records.map((row, index) => ({ ...row, sourceRow: index + 2, included: true, reason: "納入比對" })),
+      rawRows: records.map((row, index) => ({ ...row, source: sourceType.toUpperCase(), sourceFile: `${sourceType}.xlsx`, sheetName: "資料", sourceRow: index + 2, included: true, reason: "納入比對" }))
+    });
+    const aReport = makeReport("a", [
+      { date: "2026-06-01", doc: "R1", sku: "P1", name: "商品一", qty: 3, unitPrice: 100, amount: 300, note: "請直送【倉庫】" },
+      { date: "2026-06-01", doc: "R1", sku: "P2", name: "商品二", qty: 1, unitPrice: 200, amount: 200, note: "請直送【倉庫】" },
+      { date: "2026-06-29", doc: "R2", sku: "P1", name: "商品一", qty: 2, unitPrice: 100, amount: 200, note: "請直送【倉庫】" },
+      { date: "2026-06-29", doc: "R2", sku: "P3", name: "商品三", qty: 1, unitPrice: 300, amount: 300, note: "請直送【倉庫】" },
+      { date: "2026-06-29", doc: "R3", sku: "G1", name: "候選商品", qty: 6, unitPrice: 1100, amount: 6600, note: "直送【文心門市】" }
+    ]);
+    const bReport = makeReport("b", [
+      { date: "2026-06-01", doc: "S-20260601-001", sku: "P1", name: "供應商商品一", qty: 3, unitPrice: 100, amount: 300, recipient: "翔仔總倉" },
+      { date: "2026-06-01", doc: "S-20260601-001", sku: "P2", name: "供應商商品二", qty: 1, unitPrice: 200, amount: 200, recipient: "翔仔總倉" },
+      { date: "2026-06-10", doc: "S-20260624-005", sku: "G1", name: "供應商候選", qty: 6, unitPrice: 1000, amount: 6000, recipient: "台中誠品480店" }
+    ], "shanglin");
+    const analysis = core.analyzeMonthlyReports(aReport, bReport, { month: "2026-06", cutoff: "2026-07-10" });
+    expect(analysis.vendorMode).toBe("shanglin-order");
+    expect(analysis.totals).toMatchObject({
+      aItemCount: 4, bItemCount: 3, matchedCount: 2, exactOrderCount: 1, exactLineCount: 2,
+      suspectedNextPeriodCount: 2, suspectedCandidateCount: 1, aOnlyCount: 1, bOnlyCount: 0, attentionCount: 3
+    });
+    expect(analysis.paired.find((row) => row.aSku === "P1").status).toBe("本期完全通過＋疑似次期上林帳款");
+    expect(analysis.reviewItems.find((row) => row.aSku === "G1")).toMatchObject({ status: "疑似配對待人工確認", unitPriceDifference: 100, aRows: "6", bRows: "4" });
+    const output = core.buildOutputWorkbook(analysis, XLSX);
+    const summary = XLSX.utils.sheet_to_json(output.Sheets["01_對帳總覽"], { header: 1, defval: "" });
+    expect(summary.some((row) => row[0] === "⚠ 財務特別提醒" && row[1].includes("3項待確認"))).toBe(true);
+    const rawA = XLSX.utils.sheet_to_json(output.Sheets["05_A表原始資料"], { defval: "" });
+    expect(rawA[0]["備註"]).toBe("請直送【倉庫】");
+  });
+
   it("輸出八頁籤並保留原始資料、差異、說明與跨月台帳", () => {
     const { aReport, bReport } = buildReports();
     const workbook = core.buildOutputWorkbook(core.analyzeReports(aReport, bReport), XLSX);
