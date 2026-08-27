@@ -120,6 +120,63 @@ describe("財務供應商對帳核心", () => {
     expect(core.aggregateSource(report)[0].rows[0]).toBe("2（品名3）");
   });
 
+  it("自動辨識力榮帳款頁，依選定月份整份納入並以貨號逐筆配對", () => {
+    const bBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(bBook, XLSX.utils.aoa_to_sheet([
+      ["力榮興業有限公司"], ["銷貨單"], [], [], [], [], [],
+      ["序", "貨品編號", "品名", "數量", "單位", "單價", "銷貨小計"],
+      [1, "P9", "不應選到的單張銷貨單", 99, "件", 99, 9801]
+    ]), "0520(一般)");
+    XLSX.utils.book_append_sheet(bBook, XLSX.utils.aoa_to_sheet([
+      ["力榮興業有限公司"], ["收款對帳單明細表"], [], [], [], [], [], ["結帳日期:2026/05/01~31"],
+      ["單據日期", "貨號", "品名", "單價", "數量", "總計"],
+      ["5/20(一般)", "P1", "供應商舊品名", 90, 10, 900],
+      ["", "P2", "第二項", 200, 20, 4000],
+      ["6/17(一般)", "P3", "第三項", 250, 10, 2500],
+      ["", "P3", "第三項", 300, 20, 6000],
+      ["合計金額 (未稅)", 13400]
+    ]), "帳款");
+    XLSX.utils.book_append_sheet(bBook, XLSX.utils.aoa_to_sheet([
+      ["力榮興業有限公司", "", "", "", "", "", "", "力榮興業有限公司"],
+      ["收款對帳單明細表", "", "", "", "", "", "", "收款對帳單明細表"]
+    ]), "背貼");
+
+    const inspection = core.inspectWorkbook(bBook, XLSX, "b");
+    expect(inspection.format).toBe("li-rong");
+    expect(inspection.sheets[0].name).toBe("帳款");
+    expect(inspection.sheets[0].validation.valid).toBe(true);
+    expect(inspection.sheets[0].headers[inspection.sheets[0].mapping.amount]).toBe("總計");
+    expect(inspection.sheets[0].headers[inspection.sheets[0].mapping.sku]).toBe("貨號");
+
+    const selected = inspection.sheets[0];
+    const bReport = core.extractSource(bBook, XLSX, "b", {
+      sheetName: selected.name, headerRowIndex: selected.headerRowIndex, mapping: selected.mapping, format: selected.format, fileName: "力榮.xlsx"
+    });
+    expect(bReport.periodScope).toBe("selected-month-statement");
+    expect(bReport.records).toHaveLength(4);
+    expect(bReport.records[1]).toMatchObject({ sourceRow: 11, date: "5/20(一般)", doc: "5/20(一般)", sku: "P2", supplier: "力榮" });
+    expect(core.inferDominantMonth(bReport)).toBe("");
+
+    const makeAReport = (records) => ({
+      sourceType: "a", fileName: "A.xlsx", sheetName: "工作表1", headerRowIndex: 0,
+      records: records.map((row, index) => ({ ...row, sourceRow: index + 2, transactionType: "", included: true, reason: "納入比對" })),
+      rawRows: records.map((row, index) => ({ ...row, source: "A", sourceFile: "A.xlsx", sheetName: "工作表1", sourceRow: index + 2, transactionType: "", included: true, reason: "納入比對" }))
+    });
+    const aReport = makeAReport([
+      { date: "2026-06-04", doc: "R1", sku: "P1", name: "我方完全不同品名", qty: 10, unitPrice: 100, amount: 1000, supplier: "力榮" },
+      { date: "2026-06-04", doc: "R1", sku: "P2", name: "第二項", qty: 20, unitPrice: 200, amount: 4000, supplier: "力榮" },
+      { date: "2026-06-25", doc: "R2", sku: "P3", name: "第三項", qty: 10, unitPrice: 300, amount: 3000, supplier: "力榮" },
+      { date: "2026-06-25", doc: "R2", sku: "P3", name: "第三項", qty: 20, unitPrice: 300, amount: 6000, supplier: "力榮" },
+      { date: "2026-07-03", doc: "R3", sku: "P8", name: "七月商品", qty: 1, unitPrice: 50, amount: 50, supplier: "力榮" }
+    ]);
+    const analysis = core.analyzeMonthlyReports(aReport, bReport, { month: "2026-06", cutoff: "2026-07-10" });
+    expect(analysis.totals).toMatchObject({ aItemCount: 3, bItemCount: 3, matchedCount: 3, passCount: 1, differenceCount: 2, aOnlyCount: 0, bOnlyCount: 0, aAmount: 14000, bAmount: 13400, absoluteDifference: 600 });
+    expect(analysis.paired.find((row) => row.aSku === "P1").matchBasis).toContain("貨號完全一致");
+    expect(analysis.paired.find((row) => row.aSku === "P3").auditExplanation).toContain("B表第12列");
+    expect(analysis.paired.find((row) => row.aSku === "P3").auditAmountDifference).toBe(500);
+    expect(analysis.bReport.rawRows.find((row) => row.sourceRow === 10).reason).toContain("整份帳款");
+  });
+
   it("輸出八頁籤並保留原始資料、差異、說明與跨月台帳", () => {
     const { aReport, bReport } = buildReports();
     const workbook = core.buildOutputWorkbook(core.analyzeReports(aReport, bReport), XLSX);
@@ -241,6 +298,7 @@ describe("財務供應商對帳前台", () => {
     expect(html).toContain('id="summary-notes"');
     expect(html).toContain("第8頁籤");
     expect(html).toContain("每筆都檢查跨月");
+    expect(html).toContain("力榮帳款整份依選定月份認列");
     expect(html).toContain("原始列號、日期、單號與剩餘數量");
     expect(app).toContain("數量對價關係");
     expect(app).toContain("財務特別提醒");
