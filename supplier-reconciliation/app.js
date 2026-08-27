@@ -109,7 +109,8 @@
     card.classList.toggle("error", !validation.valid);
     status.className = `mapping-status ${validation.valid ? "ok" : "bad"}`;
     status.textContent = validation.valid
-      ? source.format === "li-rong" ? "已辨識力榮帳款格式；整份依選定月份認列，原建單日期保留稽核" : "必要欄位檢查通過"
+      ? source.format === "li-rong" ? "已辨識力榮帳款格式；整份依選定月份認列，原建單日期保留稽核"
+        : source.format === "shanglin" ? "已辨識上林請款格式；將以訂單內容、來源與日期逐單核對" : "必要欄位檢查通過"
       : `仍缺少：${validation.missing.join("、")}`;
     return validation.valid;
   }
@@ -157,7 +158,8 @@
       const inspection = core.inspectWorkbook(workbook, XLSX, type);
       const selected = inspection.sheets[0];
       state.sources[type] = { file, workbook, inspection, sheetName: selected.name, headerRowIndex: selected.headerRowIndex, headers: selected.headers, mapping: { ...selected.mapping }, format: selected.format || inspection.format || "" };
-      fileName.textContent = `${file.name}・已讀取${state.sources[type].format === "li-rong" ? "・力榮帳款格式" : ""}`;
+      const formatText = state.sources[type].format === "li-rong" ? "・力榮帳款格式" : state.sources[type].format === "shanglin" ? "・上林請款格式" : "";
+      fileName.textContent = `${file.name}・已讀取${formatText}`;
       renderMapping(type);
       if (type === "b" && core.validateMapping(type, state.sources[type].mapping).valid) {
         const report = core.extractSource(workbook, XLSX, type, { sheetName: selected.name, headerRowIndex: selected.headerRowIndex, mapping: selected.mapping, fileName: file.name, format: state.sources[type].format });
@@ -249,6 +251,29 @@
 
   function renderResults(analysis) {
     const t = analysis.totals;
+    if (analysis.vendorMode === "shanglin-order") {
+      const cards = [
+        ["A表商品", formatNumber(t.aItemCount), "ERP收貨商品"], ["B表商品", formatNumber(t.bItemCount), "上林請款商品"],
+        ["本期核對通過", formatNumber(t.matchedCount), `${formatNumber(t.exactOrderCount)}張整單・${formatNumber(t.exactLineCount)}筆明細`],
+        ["疑似次期帳款", formatNumber(t.suspectedNextPeriodCount), "月底A表商品，等待次期B表"],
+        ["疑似配對待確認", formatNumber(t.suspectedCandidateCount), "來源或日期脈絡衝突"],
+        ["月底僅A商品", formatNumber(t.aOnlyCount), "尚未出現在本期B表"], ["僅B表存在", formatNumber(t.bOnlyCount), "沒有可靠A表候選"],
+        ["待確認商品", formatNumber(t.attentionCount), "含通過後仍有次期待核項目"],
+        ["候選價差影響", `$${formatNumber(t.absoluteDifference)}`, "僅供人工確認，不先認列差異"]
+      ];
+      summaryCards.innerHTML = cards.map(([label, value, sub]) => `<div class="summary-card ${label.includes("待確認") || label.includes("價差") ? "warn" : ""}"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong><span>${escapeHtml(sub)}</span></div>`).join("");
+      summaryNotes.innerHTML = `
+        <div class="equivalence-note">
+          <strong>上林逐單核對關係</strong>
+          <p>B表${formatNumber(t.bItemCount)}項＝本期核對通過${formatNumber(t.matchedCount)}項＋疑似配對${formatNumber(t.suspectedCandidateCount)}項＋僅B表${formatNumber(t.bOnlyCount)}項。</p>
+          <p>本期已有${formatNumber(t.exactOrderCount)}張訂單、${formatNumber(t.exactLineCount)}筆明細依內容雜湊、需求來源及日期通過；其中部分商品另有月底A表數量，分開標成疑似次期帳款，不當成本期數量差異。</p>
+        </div>
+        <div class="attention-alert" role="note">
+          <strong>財務特別提醒</strong>
+          <p>疑似次期帳款${formatNumber(t.suspectedNextPeriodCount)}項＋疑似配對${formatNumber(t.suspectedCandidateCount)}項＝<b>${formatNumber(t.attentionCount)}項待確認</b>；需取得上林次期報表後才能正式沖銷。</p>
+        </div>`;
+      applyFilter("differences"); resultPanel.hidden = false; resultPanel.scrollIntoView({ behavior: "smooth", block: "start" }); return;
+    }
     const crossDifferenceCount = Math.max(0, (t.crossMonthCount || 0) - (t.crossMonthPassCount || 0));
     const attentionCount = t.differenceCount + t.aOnlyCount + t.bOnlyCount;
     const cards = [
@@ -291,7 +316,9 @@
       renderResults(state.analysis);
       const t = state.analysis.totals;
       const mappingText = state.analysis.bReport.nameMapping ? `；品名對照已套用${formatNumber(state.analysis.bReport.nameMapping.mappedRecordCount)}筆B明細` : "";
-      mainStatus.textContent = `比對完成：成功配對${formatNumber(t.matchedCount)}項，其中跨月${formatNumber(t.crossMonthCount)}項；完全通過${formatNumber(t.passCount)}項，差異${formatNumber(t.differenceCount)}項，僅A表${formatNumber(t.aOnlyCount)}項，僅B表${formatNumber(t.bOnlyCount)}項${mappingText}。`;
+      mainStatus.textContent = state.analysis.vendorMode === "shanglin-order"
+        ? `上林逐單核對完成：${formatNumber(t.exactOrderCount)}張整單、${formatNumber(t.exactLineCount)}筆明細通過；疑似次期${formatNumber(t.suspectedNextPeriodCount)}項、疑似配對${formatNumber(t.suspectedCandidateCount)}項待確認${mappingText}。`
+        : `比對完成：成功配對${formatNumber(t.matchedCount)}項，其中跨月${formatNumber(t.crossMonthCount)}項；完全通過${formatNumber(t.passCount)}項，差異${formatNumber(t.differenceCount)}項，僅A表${formatNumber(t.aOnlyCount)}項，僅B表${formatNumber(t.bOnlyCount)}項${mappingText}。`;
       downloadButton.disabled = false;
     } catch (error) {
       resultPanel.hidden = true;
