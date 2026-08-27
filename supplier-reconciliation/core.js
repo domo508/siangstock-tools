@@ -36,6 +36,15 @@
     sku: "貨號", name: "品名", qty: "數量", unitPrice: "單價", amount: "合計／金額",
     supplier: "供應商", doc: "單據編號", date: "日期", transactionType: "帳別"
   };
+  const NAME_MAPPING_SCHEMA = {
+    fields: {
+      sku: ["貨號", "我方貨號", "A表貨號", "商品貨號"],
+      aName: ["品名", "我方品名", "A表品名", "商品名稱"],
+      bName: ["上林品名", "供應商品名", "B表品名", "對方品名"],
+      active: ["目前有進貨", "是否使用", "啟用"]
+    },
+    required: ["sku", "aName", "bName"]
+  };
   const EPSILON = 0.000001;
   const NON_PRODUCT_NAMES = ["運費", "其他", "樣品", "展示", "版費", "加工費", "處理費", "包裝費", "代客鋪棉費用"];
   const PRODUCT_TYPES = ["薄被套", "兩用被", "床包", "涼被", "枕套", "靠枕套", "抱枕套", "靠枕", "抱枕", "沙發墊", "床墊"];
@@ -134,6 +143,101 @@
       || Number(right.validation.valid) - Number(left.validation.valid)
       || headerScore(right.headers, sourceType) - headerScore(left.headers, sourceType));
     return { sourceType, format: sheets[0]?.format || "", sheets };
+  }
+
+  function inspectNameMappingWorkbook(workbook, XLSX) {
+    const sheets = workbook.SheetNames.map((name) => {
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: true, defval: "" });
+      let headerRowIndex = 0;
+      let bestScore = -1;
+      rows.slice(0, 30).forEach((row, index) => {
+        const score = Object.values(NAME_MAPPING_SCHEMA.fields).reduce((total, aliases) => total + (row.some((cell) => scoreHeader(cell, aliases) >= 60) ? 1 : 0), 0);
+        if (score > bestScore) { bestScore = score; headerRowIndex = index; }
+      });
+      const headers = (rows[headerRowIndex] || []).map((value, index) => String(value || `欄位${index + 1}`).trim());
+      const mapping = {};
+      const used = new Set();
+      for (const [field, aliases] of Object.entries(NAME_MAPPING_SCHEMA.fields)) {
+        let bestIndex = -1;
+        let fieldScore = 0;
+        headers.forEach((header, index) => {
+          if (used.has(index)) return;
+          const score = scoreHeader(header, aliases);
+          if (score > fieldScore) { fieldScore = score; bestIndex = index; }
+        });
+        mapping[field] = fieldScore >= 60 ? bestIndex : null;
+        if (mapping[field] != null) used.add(mapping[field]);
+      }
+      const missing = NAME_MAPPING_SCHEMA.required.filter((field) => mapping[field] == null).map((field) => ({ sku: "貨號", aName: "品名", bName: "上林品名" })[field]);
+      return { name, rows, headerRowIndex, headers, mapping, validation: { valid: missing.length === 0, missing }, score: bestScore };
+    });
+    sheets.sort((left, right) => Number(right.validation.valid) - Number(left.validation.valid) || right.score - left.score);
+    return { sheets };
+  }
+
+  function parseNameMappingWorkbook(workbook, XLSX, options = {}) {
+    const inspection = inspectNameMappingWorkbook(workbook, XLSX);
+    const selected = options.sheetName ? inspection.sheets.find((sheet) => sheet.name === options.sheetName) : inspection.sheets[0];
+    if (!selected || !selected.validation.valid) throw new Error(`品名對照表缺少：${selected?.validation.missing.join("、") || "可讀取的工作表"}`);
+    const records = [];
+    for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
+      const row = selected.rows[index];
+      const sku = String(row[selected.mapping.sku] || "").trim();
+      const aName = String(row[selected.mapping.aName] || "").trim();
+      const bName = String(row[selected.mapping.bName] || "").trim();
+      const active = selected.mapping.active == null ? "" : String(row[selected.mapping.active] || "").trim();
+      if (!sku && !aName && !bName) continue;
+      records.push({ sourceRow: index + 1, sku, aName, bName, active, aliasKey: canonicalizeName(bName) });
+    }
+    const grouped = new Map();
+    for (const record of records) {
+      if (!record.sku || !record.aName || !record.aliasKey) continue;
+      if (!grouped.has(record.aliasKey)) grouped.set(record.aliasKey, []);
+      grouped.get(record.aliasKey).push(record);
+    }
+    const usable = [];
+    const conflicts = [];
+    for (const [aliasKey, rows] of grouped) {
+      const uniqueSkus = [...new Set(rows.map((row) => row.sku))];
+      if (uniqueSkus.length === 1) usable.push({ ...rows[0], aliasKey, sourceRows: rows.map((row) => row.sourceRow) });
+      else conflicts.push({ aliasKey, bName: rows[0].bName, skus: uniqueSkus, sourceRows: rows.map((row) => row.sourceRow), rows });
+    }
+    if (!usable.length) throw new Error("品名對照表沒有可使用的一對一品名資料。");
+    return {
+      fileName: options.fileName || "", sheetName: selected.name, headerRowIndex: selected.headerRowIndex,
+      records, usable, conflicts, usableByAlias: new Map(usable.map((row) => [row.aliasKey, row]))
+    };
+  }
+
+  function applyNameMappingToBReport(report, nameMapping) {
+    if (!nameMapping) return report;
+    const mappedByRow = new Map();
+    let mappedRecordCount = 0;
+    const mappedNames = new Set();
+    const unmappedNames = new Set();
+    const records = report.records.map((record) => {
+      if (String(record.sku || "").trim()) return { ...record };
+      const mapped = nameMapping.usableByAlias.get(canonicalizeName(record.name));
+      if (!mapped) { unmappedNames.add(record.name); return { ...record }; }
+      mappedRecordCount += 1;
+      mappedNames.add(record.name);
+      const next = { ...record, sku: mapped.sku, nameMappingSourceRow: mapped.sourceRow, nameMappingAName: mapped.aName };
+      mappedByRow.set(record.sourceRow, next);
+      return next;
+    });
+    const rawRows = report.rawRows.map((row) => {
+      const mapped = mappedByRow.get(row.sourceRow);
+      if (!mapped) return { ...row };
+      return { ...row, sku: mapped.sku, nameMappingSourceRow: mapped.nameMappingSourceRow, reason: `${row.reason}；品名對照表第${mapped.nameMappingSourceRow}列 → ${mapped.sku}` };
+    });
+    return {
+      ...report, records, rawRows,
+      nameMapping: {
+        fileName: nameMapping.fileName, sheetName: nameMapping.sheetName,
+        usableCount: nameMapping.usable.length, conflictCount: nameMapping.conflicts.length,
+        mappedRecordCount, mappedUniqueNameCount: mappedNames.size, unmappedNames: [...unmappedNames].filter(Boolean).sort()
+      }
+    };
   }
 
   function valueAt(row, mapping, field) {
@@ -569,7 +673,8 @@
       const includedReason = report.periodScope === "selected-month-statement"
         ? "納入指定月份整份帳款；原建單日期僅供稽核"
         : row.formatRepair ? `納入本期比對；${row.formatRepair}` : "納入本期比對";
-      return { ...row, included, reason: detail || (included ? includedReason : "不在本期比對範圍") };
+      const mappingReason = row.nameMappingSourceRow ? `；品名對照表第${row.nameMappingSourceRow}列 → ${row.sku}` : "";
+      return { ...row, included, reason: detail || (included ? `${includedReason}${mappingReason}` : "不在本期比對範圍") };
     });
     return { ...report, records, rawRows };
   }
@@ -983,6 +1088,7 @@
 
     const rules = [
       ["比對規則", "說明"], ["商品配對", "依標準化品名、商品類型、規格、單價與數量計算；只有高可信且一對一時自動配對。"],
+      ["品名對照表", analysis.bReport.nameMapping ? `已套用${analysis.bReport.nameMapping.fileName || "對照表"}：${analysis.bReport.nameMapping.mappedRecordCount}筆B明細、${analysis.bReport.nameMapping.mappedUniqueNameCount}種品名轉為我方貨號；${analysis.bReport.nameMapping.conflictCount}組一對多衝突未使用。` : "未使用；上林等品名差異較大的供應商可選填對照表，以供應商品名轉為我方貨號。"],
       ["保守原則", "名稱不夠可靠或多個候選太接近時，不強制沖銷，保留僅A／僅B及疑似候選。"],
       ["數量", "先按商品辨識，再逐筆分配A、B明細數量；優先配對等量明細，剩餘量才拆分。B表銷退以負數沖回。"], ["單價", "A表未稅進貨價減B表單價。"],
       ["金額", "A表未稅進貨額減B表合計；用來表示財務影響，不獨立重複分類。"],
@@ -1031,7 +1137,8 @@
 
   global.SupplierReconciliationCore = {
     SOURCE_SCHEMAS, fieldLabel, parseNumber, normalizeHeader, canonicalizeName, autoMapHeaders, validateMapping,
-    inspectWorkbook, extractSource, aggregateSource, matchScore, findMatches, analyzeReports, parseDateValue, inferDominantMonth,
+    inspectWorkbook, inspectNameMappingWorkbook, parseNameMappingWorkbook, applyNameMappingToBReport,
+    extractSource, aggregateSource, matchScore, findMatches, analyzeReports, parseDateValue, inferDominantMonth,
     ledgerRowsFromWorkbook, analyzeMonthlyReports, buildOutputWorkbook, buildFrozenWorkbookBytes
   };
 })(globalThis);
