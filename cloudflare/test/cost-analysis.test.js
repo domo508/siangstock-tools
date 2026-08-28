@@ -834,6 +834,10 @@ describe("庫存成本分析前台", () => {
     const html = readFileSync("../cost-analysis/index.html", "utf8");
     const app = readFileSync("../cost-analysis/app.js", "utf8");
     expect(home).toContain('href="/cost-analysis/"');
+    expect(home).toContain("<h3>A、B庫存成本稽核分析</h3>");
+    expect(html).toContain("<title>A、B庫存成本稽核分析｜翔仔居家</title>");
+    expect(html).toContain("翔仔居家・A、B庫存成本稽核分析");
+    expect(html).toContain('<li aria-current="page">A、B庫存成本稽核分析</li>');
     expect(html).toContain("期初、期末請使用相同倉別範圍");
     expect(html).toContain("名稱含「快閃」的倉別");
     expect(html).toContain("請排除其餘加盟店倉");
