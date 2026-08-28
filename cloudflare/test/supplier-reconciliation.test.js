@@ -439,7 +439,10 @@ describe("財務供應商對帳前台", () => {
     expect(app).toContain("saveLocalLedger");
     expect(html).toContain("下載結果Excel");
     expect(html).toContain('href="manual.html"');
-    expect(html).toContain("查看操作手冊");
+    expect(html).toContain('class="guide-link"');
+    expect(html).toContain("操作手冊");
+    expect(html).not.toContain("manual-entry-icon");
+    expect(html).toContain("20260828-browser-ledger-r11");
     expect(manual).toContain("六步完成對帳");
     expect(manual).toContain("三家供應商注意事項");
     expect(manual).toContain("九個頁籤怎麼看");

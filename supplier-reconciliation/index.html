@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'">
   <title>財務供應商對帳比對｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260820-supplier-r1">
-  <link rel="stylesheet" href="style.css?v=20260828-browser-ledger-r10">
+  <link rel="stylesheet" href="style.css?v=20260828-browser-ledger-r11">
 </head>
 <body>
   <main class="page-shell">
@@ -22,14 +22,11 @@
 
     <nav class="breadcrumb" aria-label="頁面導覽">
       <ol><li><a href="/">公司工具首頁</a></li><li aria-current="page">財務供應商對帳比對</li></ol>
-      <a class="back-link" href="/">← 返回公司工具首頁</a>
+      <div class="breadcrumb-actions">
+        <a class="guide-link" href="manual.html">操作手冊 <span aria-hidden="true">→</span></a>
+        <a class="back-link" href="/">← 返回公司工具首頁</a>
+      </div>
     </nav>
-
-    <a class="manual-entry" href="manual.html">
-      <span class="manual-entry-icon" aria-hidden="true">冊</span>
-      <span><strong>第一次使用這支工具？</strong><small>六步完成每月對帳，並快速看懂差異、跨月與本機台帳。</small></span>
-      <b>查看操作手冊 <span aria-hidden="true">→</span></b>
-    </a>
 
     <section class="hero" aria-labelledby="page-title">
       <div>
@@ -159,8 +156,8 @@
 
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="../cost-analysis/assets/jszip.min.js"></script>
-  <script src="core.js?v=20260828-browser-ledger-r10"></script>
-  <script src="ledger-store.js?v=20260828-browser-ledger-r10"></script>
-  <script src="app.js?v=20260828-browser-ledger-r10"></script>
+  <script src="core.js?v=20260828-browser-ledger-r11"></script>
+  <script src="ledger-store.js?v=20260828-browser-ledger-r11"></script>
+  <script src="app.js?v=20260828-browser-ledger-r11"></script>
 </body>
 </html>
