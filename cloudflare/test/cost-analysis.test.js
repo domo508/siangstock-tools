@@ -393,7 +393,7 @@ describe("庫存成本分析核心規則", () => {
     expect(reportedReturnAnalysis.issues.some((issue) => issue.type === "採購退貨已由退廠報表認列")).toBe(true);
   });
 
-  it("下載版Excel的六個頁籤皆凍結第一列", async () => {
+  it("下載版Excel的六個頁籤皆凍結第一列，篩選範圍使用Excel相容工作表引用", async () => {
     const analysis = core.analyzeReports({ ...baseInventory("FREEZE", 1, 0, 10), sales: report("sales", [{ sku: "FREEZE", name: "凍結測試", qty: 1, purchasePrice: 10 }]) });
     const workbook = core.buildOutputWorkbook(analysis, XLSX);
     const bytes = await core.buildFrozenWorkbookBytes(workbook, XLSX, JSZip);
@@ -402,6 +402,16 @@ describe("庫存成本分析核心規則", () => {
       const xml = await archive.file(`xl/worksheets/sheet${index}.xml`).async("string");
       expect(xml).toContain('<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>');
     }
+    const workbookXml = await archive.file("xl/workbook.xml").async("string");
+    for (const sheetName of ["02_商品差異明細", "03_未配對資料", "04_C組調整明細", "05_來源檢查", "06_全部商品勾稽明細"]) {
+      expect(workbookXml).toContain(`>'${sheetName}'!`);
+    }
+    expect(workbookXml).not.toMatch(/>0[2-6]_[^<]+!\$/);
+    expect(workbookXml.match(/name="_xlnm\._FilterDatabase"[^>]*hidden="1"/g)).toHaveLength(5);
+
+    const reopened = XLSX.read(bytes, { type: "array" });
+    expect(reopened.SheetNames).toEqual(workbook.SheetNames);
+    expect(reopened.Sheets["06_全部商品勾稽明細"]["!autofilter"].ref).toBe("A1:AH2");
   });
 
   it("加盟請款以公司側報表成本四捨五入核對，內部倉不查請款金額", () => {

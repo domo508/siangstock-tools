@@ -1968,6 +1968,36 @@
     throw new Error("匯出工作表缺少sheetViews，無法安全凍結第一列表頭。");
   }
 
+  function repairAutoFilterDefinedNames(xml, workbook) {
+    const filterSheetIndexes = workbook.SheetNames
+      .map((sheetName, index) => (workbook.Sheets[sheetName] && workbook.Sheets[sheetName]["!autofilter"] ? index : -1))
+      .filter((index) => index >= 0);
+    if (!filterSheetIndexes.length) return xml;
+
+    const repairedIndexes = new Set();
+    const repairedXml = xml.replace(
+      /<definedName\b([^>]*)\bname="_xlnm\._FilterDatabase"([^>]*)>([^<]*)<\/definedName>/g,
+      (match, beforeName, afterName, currentReference) => {
+        const attributes = `${beforeName}name="_xlnm._FilterDatabase"${afterName}`;
+        const sheetIdMatch = attributes.match(/\blocalSheetId="(\d+)"/);
+        const sheetIndex = sheetIdMatch ? Number(sheetIdMatch[1]) : -1;
+        const sheetName = workbook.SheetNames[sheetIndex];
+        const separatorIndex = currentReference.lastIndexOf("!");
+        if (!sheetName || separatorIndex < 0) return match;
+
+        const escapedSheetName = sheetName.replace(/'/g, "''");
+        const reference = `'${escapedSheetName}'!${currentReference.slice(separatorIndex + 1)}`;
+        const hiddenAttributes = /\bhidden=/.test(attributes) ? attributes : `${attributes} hidden="1"`;
+        repairedIndexes.add(sheetIndex);
+        return `<definedName${hiddenAttributes}>${reference}</definedName>`;
+      }
+    );
+
+    const missingIndexes = filterSheetIndexes.filter((index) => !repairedIndexes.has(index));
+    if (missingIndexes.length) throw new Error("Excel篩選範圍無法建立相容格式，請重新整理後再下載。");
+    return repairedXml;
+  }
+
   async function buildFrozenWorkbookBytes(workbook, XLSX, JSZip) {
     if (!JSZip || typeof JSZip.loadAsync !== "function") throw new Error("Excel凍結窗格元件未載入，請重新整理後再下載。");
     const source = XLSX.write(workbook, { type: "array", bookType: "xlsx", compression: true });
@@ -1981,6 +2011,10 @@
       const xml = await entry.async("string");
       archive.file(path, freezeFirstRowInWorksheetXml(xml));
     }
+    const workbookEntry = archive.file("xl/workbook.xml");
+    if (!workbookEntry) throw new Error("匯出檔中找不到Excel活頁簿定義，無法建立相容格式。");
+    const workbookXml = await workbookEntry.async("string");
+    archive.file("xl/workbook.xml", repairAutoFilterDefinedNames(workbookXml, workbook));
     return archive.generateAsync({ type: "uint8array", compression: "DEFLATE", compressionOptions: { level: 6 } });
   }
 
