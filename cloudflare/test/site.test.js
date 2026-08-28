@@ -121,13 +121,56 @@ describe("前台導覽", () => {
     expect(homeHtml).toContain('name="twitter:title" content="翔仔居家-公司工具"');
   });
 
-  it("清洗工具與規則頁都有清楚的上一層路徑", () => {
+  it("資料整理工具與規則頁都有清楚的名稱和上一層路徑", () => {
+    const homeHtml = readFileSync("../index.html", "utf8");
     const inventoryHtml = readFileSync("../inventory/index.html", "utf8");
     const adminHtml = readFileSync("../inventory/rules-admin/index.html", "utf8");
+    const costAnalysisHtml = readFileSync("../cost-analysis/index.html", "utf8");
+    expect(homeHtml).toContain("期初期末庫存資料整理");
+    expect(inventoryHtml).toContain("<title>期初期末庫存資料整理｜翔仔居家</title>");
     expect(inventoryHtml).toContain("公司工具首頁");
     expect(inventoryHtml).toContain("← 返回公司工具首頁");
+    expect(adminHtml).toContain("期初期末庫存資料整理");
     expect(adminHtml).toContain("公司工具首頁");
-    expect(adminHtml).toContain("← 返回清洗工具");
-    expect(adminHtml).toContain("完成設定，返回清洗工具");
+    expect(adminHtml).toContain("← 返回資料整理工具");
+    expect(adminHtml).toContain("完成設定，返回資料整理工具");
+    expect(costAnalysisHtml).toContain("期初期末庫存資料整理");
+  });
+
+  it("操作手冊放在主要步驟後與選檔前，並提供鍵盤可操作的收合細節", () => {
+    const inventoryHtml = readFileSync("../inventory/index.html", "utf8");
+    const guideIndex = inventoryHtml.indexOf('id="operation-guide"');
+    const heroIndex = inventoryHtml.indexOf('class="hero"');
+    const rulesIndex = inventoryHtml.indexOf('id="rules-manager"');
+    const toolIndex = inventoryHtml.indexOf('class="tool-card"');
+    expect(guideIndex).toBeGreaterThan(heroIndex);
+    expect(guideIndex).toBeLessThan(rulesIndex);
+    expect(guideIndex).toBeLessThan(toolIndex);
+    expect(inventoryHtml.match(/<details class="guide-detail"/g)).toHaveLength(6);
+    expect(inventoryHtml).toContain('<details class="guide-detail" open>');
+    expect(inventoryHtml).toContain("第一次使用，先看 2 分鐘");
+    expect(inventoryHtml).toContain("實際庫存進貨額");
+    expect(inventoryHtml).toContain("工具不會比較期初與期末差異");
+  });
+
+  it("前台手冊與審閱文件都說明成功判斷、四工作表與資料安全", () => {
+    const inventoryHtml = readFileSync("../inventory/index.html", "utf8");
+    const manual = readFileSync("../inventory/操作手冊.md", "utf8");
+    for (const text of ["列數檢查", "乾淨商品", "排除項目", "待確認項目", "分類統計", "規則服務無法使用"]) {
+      expect(inventoryHtml).toContain(text);
+      expect(manual).toContain(text);
+    }
+    expect(inventoryHtml).toContain("網站不會上傳 Excel、檔名、商品列或輸出內容");
+    expect(manual).toContain("網站不會上傳 Excel、檔名、商品列資料或輸出內容");
+    expect(inventoryHtml).toContain("以畫面最新清單為準");
+    expect(manual).toContain("請以工具畫面當下顯示的最新清單為準");
+  });
+
+  it("手冊表格只在局部捲動，收合標題有清楚的鍵盤焦點", () => {
+    const style = readFileSync("../inventory/style.css", "utf8");
+    expect(style).toContain(".guide-table-wrap");
+    expect(style).toMatch(/\.guide-table-wrap\s*\{[^}]*overflow-x:\s*auto/s);
+    expect(style).toContain(".guide-detail summary:focus-visible");
+    expect(style).toMatch(/\.guide-concepts,[\s\S]*\.guide-quick-steps ol,[\s\S]*\.guide-problems\s*\{\s*grid-template-columns:\s*1fr/s);
   });
 });
