@@ -407,6 +407,7 @@ describe("財務供應商對帳前台", () => {
   it("入口、CIS導覽、本機處理及Excel下載均完整", () => {
     const home = readFileSync("../index.html", "utf8");
     const html = readFileSync("../supplier-reconciliation/index.html", "utf8");
+    const manual = readFileSync("../supplier-reconciliation/manual.html", "utf8");
     const app = readFileSync("../supplier-reconciliation/app.js", "utf8");
     expect(home).toContain('href="/supplier-reconciliation/"');
     expect(html).toContain("公司工具首頁");
@@ -431,6 +432,14 @@ describe("財務供應商對帳前台", () => {
     expect(app).toContain("applyNameMappingToBReport");
     expect(app).toContain("saveLocalLedger");
     expect(html).toContain("下載結果Excel");
+    expect(html).toContain('href="manual.html"');
+    expect(html).toContain("查看操作手冊");
+    expect(manual).toContain("六步完成對帳");
+    expect(manual).toContain("三家供應商注意事項");
+    expect(manual).toContain("九個頁籤怎麼看");
+    expect(manual).toContain('href="./">← 返回對帳工具');
+    expect(manual).toContain("script-src 'none'");
+    expect(manual).not.toContain("<script");
     expect(html).toContain("connect-src 'none'");
     expect(app).not.toContain("fetch(");
     expect(app).not.toContain("XMLHttpRequest");
