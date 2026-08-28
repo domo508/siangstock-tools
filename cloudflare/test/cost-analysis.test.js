@@ -36,7 +36,8 @@ describe("庫存成本分析核心規則", () => {
     for (const warehouse of included) expect(["included", "direct"]).toContain(core.classifyWarehouse(warehouse));
     expect(core.classifyWarehouse("台中文心秀泰專櫃")).toBe("franchise");
     expect(core.classifyWarehouse("新莊門巾")).toBe("franchise");
-    expect(core.classifyWarehouse("[快閃] 高雄漢神本館")).toBe("franchise");
+    expect(core.classifyWarehouse("[快閃] 高雄漢神本館")).toBe("included");
+    expect(core.classifyWarehouse("[快閃] 台南期間限定店")).toBe("included");
   });
 
   it("當月進貨的成本價視為進貨價，一般銷售的成本價只視為平均成本", () => {
@@ -72,7 +73,7 @@ describe("庫存成本分析核心規則", () => {
       storeMonthly: ["對帳門市名稱", "對帳種類", "單據日期", "單據編號", "貨號", "數量", "結帳額", "品名"],
       movements: ["出入庫單編碼", "開單日期", "狀態", "出入庫店倉", "出入庫原因", "數量", "成本價", "貨號", "品名", "出入庫審核日期"],
       supplierReturns: ["退貨單編碼", "狀態", "退貨倉庫", "貨號", "品名", "數量", "未稅退貨額", "成本價"],
-      transfers: ["單據編碼", "狀態", "調出倉庫名", "調入倉庫名", "貨號", "品名", "數量", "調出方成本價", "調入方成本價", "調出方成本額", "結算額", "開單日期"]
+      transfers: ["單據編碼", "狀態", "調出倉庫名", "調入倉庫名", "貨號", "品名", "數量", "調出方成本價", "調入方成本價", "調出方成本額", "結算額", "開單日期", "發貨日期", "收貨日期"]
     };
     for (const [type, headers] of Object.entries(cases)) {
       const mapping = core.autoMapHeaders(headers, type);
@@ -86,6 +87,8 @@ describe("庫存成本分析核心規則", () => {
     const transferMap = core.autoMapHeaders(cases.transfers, "transfers");
     expect(cases.transfers[transferMap.sourceCostAmount]).toBe("調出方成本額");
     expect(cases.transfers[transferMap.transferAmount]).toBe("結算額");
+    expect(cases.transfers[transferMap.dispatchDate]).toBe("發貨日期");
+    expect(cases.transfers[transferMap.receiptDate]).toBe("收貨日期");
   });
 
   it("排除報表合計列，並保留扣庫量為零但已有進貨價金額的銷售列", () => {
@@ -332,6 +335,62 @@ describe("庫存成本分析核心規則", () => {
     const workbook = core.buildOutputWorkbook(analysis, XLSX);
     expect(workbook.SheetNames).toEqual(["01_分析摘要", "02_商品差異明細", "03_未配對資料", "04_C組調整明細", "05_來源檢查", "06_全部商品勾稽明細"]);
     expect(workbook.Sheets["05_來源檢查"]["!autofilter"].ref).toBe("A1:Q9");
+  });
+
+  it("名稱含快閃的倉別視為公司內部倉，不誤列B2", () => {
+    const reports = {
+      opening: report("opening", [{ date: "2026-06-01", sku: "POPUP", name: "快閃商品", warehouse: "寬承總倉", qty: 1, purchasePrice: 10 }]),
+      closing: report("closing", [{ date: "2026-06-30", sku: "POPUP", name: "快閃商品", warehouse: "[快閃] 高雄漢神本館", qty: 1, purchasePrice: 10 }]),
+      storeMonthly: report("storeMonthly", [{ date: "2026-06-20", doc: "AT2606000200", store: "[快閃] 高雄漢神本館", reconcileType: "1 總倉調撥至對帳門市", sku: "POPUP", name: "快閃商品", qty: 1 }]),
+      transfers: report("transfers", [{ date: "2026-06-20", doc: "AT2606000200", sourceWarehouse: "寬承總倉", destinationWarehouse: "[快閃] 高雄漢神本館", sku: "POPUP", name: "快閃商品", qty: 1, purchasePrice: 10 }])
+    };
+    const item = core.analyzeReports(reports).details[0];
+    expect(item).toMatchObject({ closingQty: 1, b2Qty: 0, salesQty: 0, quantityDifference: 0, rawAmountDifference: 0 });
+  });
+
+  it("加盟退回本月發貨次月收貨時，以D抵銷B4與期末未入庫的在途差", () => {
+    const reports = {
+      ...baseInventory("RETURN-IN-TRANSIT", 0, 0, 10),
+      storeMonthly: report("storeMonthly", [{ date: "2026-06-28", doc: "AT2606000248", store: "台中文心秀泰專櫃", reconcileType: "2 對帳門市調撥至總倉", sku: "RETURN-IN-TRANSIT", name: "加盟退回在途", qty: 2 }]),
+      transfers: report("transfers", [{ date: "2026-06-28", dispatchDate: "2026-06-28", receiptDate: "2026-07-09", doc: "AT2606000248", sourceWarehouse: "台中文心秀泰專櫃", destinationWarehouse: "寬承總倉", sku: "RETURN-IN-TRANSIT", name: "加盟退回在途", qty: 2, purchasePrice: 10 }])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.details[0]).toMatchObject({ b4Qty: -2, b4Amount: -20, timingQty: 2, timingAmount: 20, quantityDifference: 0, rawAmountDifference: 0 });
+    expect(analysis.timingDetails.some((row) => row.type === "本月加盟退回／次月收貨" && row.status === "調撥在途已調整")).toBe(true);
+  });
+
+  it("公司內部調撥在月底尚未收貨時，以D保留公司在途庫存", () => {
+    const reports = {
+      ...baseInventory("INTERNAL-IN-TRANSIT", 5, 0, 10),
+      transfers: report("transfers", [{ date: "2026-06-28", dispatchDate: "2026-06-28", receiptDate: "2026-07-01", doc: "AT2606000234", sourceWarehouse: "台北中山門市", destinationWarehouse: "寬承總倉", sku: "INTERNAL-IN-TRANSIT", name: "內部在途", qty: 5, purchasePrice: 10 }])
+    };
+    const analysis = core.analyzeReports(reports);
+    expect(analysis.details[0]).toMatchObject({ salesQty: 0, timingQty: 5, timingAmount: 50, quantityDifference: 0, rawAmountDifference: 0 });
+    expect(analysis.timingDetails.some((row) => row.type === "公司內部調撥在途")).toBe(true);
+
+    const notDispatched = core.analyzeReports({
+      ...baseInventory("INTERNAL-NOT-DISPATCHED", 5, 5, 10),
+      transfers: report("transfers", [{ date: "2026-06-28", receiptDate: "2026-07-01", doc: "AT2606000235", sourceWarehouse: "台北中山門市", destinationWarehouse: "寬承總倉", sku: "INTERNAL-NOT-DISPATCHED", name: "尚未發貨", qty: 5, purchasePrice: 10 }])
+    });
+    expect(notDispatched.details[0]).toMatchObject({ timingQty: 0, quantityDifference: 0 });
+  });
+
+  it("採購退貨未列退廠報表時由C補列，已列退廠報表時不重複", () => {
+    const movement = { date: "2026-06-20", doc: "OT2026060019", sku: "PURCHASE-RETURN", name: "採購退貨商品", qty: -21, direction: "出庫單", reason: "[採購][採購退貨]", purchasePrice: 10 };
+    const missingReturnAnalysis = core.analyzeReports({
+      ...baseInventory("PURCHASE-RETURN", 21, 0, 10),
+      movements: report("movements", [movement])
+    });
+    expect(missingReturnAnalysis.details[0]).toMatchObject({ supplierReturnQty: 0, adjustmentQty: 21, quantityDifference: 0, rawAmountDifference: 0 });
+    expect(missingReturnAnalysis.issues.some((issue) => issue.type === "採購退貨未出現在退廠報表")).toBe(true);
+
+    const reportedReturnAnalysis = core.analyzeReports({
+      ...baseInventory("PURCHASE-RETURN", 21, 0, 10),
+      supplierReturns: report("supplierReturns", [{ date: "2026-06-20", doc: "RT2606000019", sku: "PURCHASE-RETURN", name: "採購退貨商品", qty: 21, purchasePrice: 10, untaxedAmount: 210 }]),
+      movements: report("movements", [movement])
+    });
+    expect(reportedReturnAnalysis.details[0]).toMatchObject({ supplierReturnQty: 21, adjustmentQty: 0, quantityDifference: 0, rawAmountDifference: 0 });
+    expect(reportedReturnAnalysis.issues.some((issue) => issue.type === "採購退貨已由退廠報表認列")).toBe(true);
   });
 
   it("下載版Excel的六個頁籤皆凍結第一列", async () => {
@@ -755,7 +814,8 @@ describe("庫存成本分析前台", () => {
     const app = readFileSync("../cost-analysis/app.js", "utf8");
     expect(home).toContain('href="/cost-analysis/"');
     expect(html).toContain("期初、期末請使用相同倉別範圍");
-    expect(html).toContain("請排除加盟店倉");
+    expect(html).toContain("名稱含「快閃」的倉別");
+    expect(html).toContain("請排除其餘加盟店倉");
     expect(html).toContain("選擇八類報表");
     expect(html).toContain("不會傳到網站、Cloudflare或其他伺服器");
     expect(html).toContain("公司最新版商品規則");

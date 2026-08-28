@@ -144,6 +144,8 @@
       label: "調撥單明細",
       fields: {
         date: ["開單日期", "調撥日期", "日期", "單據日期"],
+        dispatchDate: ["發貨日期", "出貨日期", "出庫日期"],
+        receiptDate: ["收貨日期", "到貨日期", "入庫日期"],
         doc: ["單據編碼", "調撥單號", "單據編號", "單號"],
         sourceWarehouse: ["調出倉庫名", "調出倉", "調出倉別", "來源倉", "出庫倉"],
         destinationWarehouse: ["調入倉庫名", "調入倉", "調入倉別", "目的倉", "入庫倉"],
@@ -191,8 +193,7 @@
     "高雄夢時代專櫃",
     "新竹東區門市",
     "新莊門巾",
-    "新莊門市",
-    "快閃高雄漢神本館"
+    "新莊門市"
   ];
 
   const CANCELLED_WORDS = ["取消", "作廢", "刪除", "不成立", "未成立"];
@@ -282,6 +283,7 @@
   function classifyWarehouse(value) {
     const text = normalizeText(value);
     if (!text) return "unknown";
+    if (text.includes("快閃")) return "included";
     if (FRANCHISE_STORES.some((name) => text.includes(normalizeText(name)))) return "franchise";
     if (DIRECT_STORES.some((name) => text.includes(normalizeText(name)))) return "direct";
     if (INCLUDED_WAREHOUSES.some((name) => text.includes(normalizeText(name)))) return "included";
@@ -299,6 +301,8 @@
       averageCost: "平均成本",
       averageCostAmount: "平均成本總額",
       date: "日期",
+      dispatchDate: "發貨日期",
+      receiptDate: "收貨日期",
       doc: "單據編號",
       sourceDoc: "來源單號",
       pickupDoc: "取貨單號",
@@ -480,6 +484,8 @@
         reportType,
         sourceRow: headerRowIndex + rowIndex + 2,
         date: valueAt(row, mapping, "date"),
+        dispatchDate: valueAt(row, mapping, "dispatchDate"),
+        receiptDate: valueAt(row, mapping, "receiptDate"),
         doc: String(valueAt(row, mapping, "doc") || "").trim(),
         supplier: String(valueAt(row, mapping, "supplier") || "").trim(),
         warehouse: String(valueAt(row, mapping, "warehouse") || "").trim(),
@@ -568,7 +574,8 @@
           const signature = reportType === "transfers"
             ? JSON.stringify([
               normalizeText(record.doc), String(record.date || "").trim(), normalizeText(record.sourceWarehouse),
-              normalizeText(record.destinationWarehouse), itemKey(record), Number(record.qty || 0), record.purchaseCostAmount,
+              normalizeText(record.destinationWarehouse), String(record.dispatchDate || "").trim(), String(record.receiptDate || "").trim(),
+              itemKey(record), Number(record.qty || 0), record.purchaseCostAmount,
               record.sourceCostPrice, record.destinationCostPrice, record.sourceCostAmount, record.destinationCostAmount,
               record.settlementPrice, record.transferAmount
             ])
@@ -806,6 +813,17 @@
 
   function recordMonthIndex(record) {
     return monthIndexFromDate(record && record.date) ?? monthIndexFromSalesDoc(record && record.doc);
+  }
+
+  function transferInTransitAtMonthEnd(record, analysisMonth, requireDispatchDate) {
+    if (!record || analysisMonth == null) return false;
+    const explicitDispatchMonth = monthIndexFromDate(record.dispatchDate);
+    const dispatchMonth = requireDispatchDate ? explicitDispatchMonth : (explicitDispatchMonth ?? recordMonthIndex(record));
+    const receiptMonth = monthIndexFromDate(record.receiptDate);
+    return dispatchMonth != null
+      && dispatchMonth <= analysisMonth
+      && receiptMonth != null
+      && receiptMonth > analysisMonth;
   }
 
   function sourceMonthCheck(type, reports) {
@@ -1081,7 +1099,8 @@
   function adjustmentRule(record) {
     const reason = normalizeText(record.reason);
     const mode = movementMode(record);
-    if (reason.includes("調撥") || reason.includes("客退") || reason.includes("銷退") || reason.includes("退貨入庫") || reason.includes("銷貨") || reason.includes("採購入庫") || reason.includes("採購退貨")) return null;
+    if (reason.includes("採購退貨")) return { sign: 1, label: "採購退貨補列" };
+    if (reason.includes("調撥") || reason.includes("客退") || reason.includes("銷退") || reason.includes("退貨入庫") || reason.includes("銷貨") || reason.includes("採購入庫")) return null;
     if (reason.includes("盤盈")) return { sign: -1, label: "盤盈" };
     if (reason.includes("盤虧")) return { sign: 1, label: "盤虧" };
     if (reason.includes("報廢")) return { sign: 1, label: "報廢" };
@@ -1257,12 +1276,14 @@
       addPrice(item, record.purchasePrice != null ? record.purchasePrice : (qty ? amount / qty : null), "當月進貨明細", record.date);
     }
 
+    const supplierReturnQtyByItem = new Map();
     for (const record of getRecords("supplierReturns")) {
       const item = getOrCreateItem(items, record);
       const qty = Math.abs(record.qty || 0);
       const amount = record.untaxedAmount != null ? Math.abs(record.untaxedAmount) : Math.abs(recordCost(record) || 0);
       item.supplierReturnQty += qty;
       item.supplierReturnAmount += amount;
+      supplierReturnQtyByItem.set(itemKey(record), (supplierReturnQtyByItem.get(itemKey(record)) || 0) + qty);
     }
 
     const monthCandidates = REPORT_ORDER.flatMap((type) => getRecords(type).map(recordMonthIndex)).filter((value) => value != null);
@@ -1284,6 +1305,12 @@
       _recordMonth: recordMonthIndex(record)
     }));
     const movements = getRecords("movements").map((record) => ({ ...record, _used: false }));
+    const purchaseReturnMovementQtyByItem = new Map();
+    for (const movement of movements) {
+      if (normalizeText(movement.reason).includes("採購退貨")) {
+        purchaseReturnMovementQtyByItem.set(itemKey(movement), (purchaseReturnMovementQtyByItem.get(itemKey(movement)) || 0) + Math.abs(movement.qty || 0));
+      }
+    }
     const transfers = getRecords("transfers").map((record, index) => ({
       ...record,
       _matchId: index,
@@ -1641,6 +1668,27 @@
         addIssue(issues, "error", "調撥倉別不明", transfer, `${transfer.sourceWarehouse}→${transfer.destinationWarehouse}含有無法分類的倉別。`);
         continue;
       }
+      const inboundInTransit = isCompanyScope(destinationScope)
+        && transferInTransitAtMonthEnd(transfer, analysisMonth, isCompanyScope(sourceScope));
+      if (inboundInTransit && (isCompanyScope(sourceScope) || (sourceScope === "franchise" && transfer._bRecognized))) {
+        const item = getOrCreateItem(items, transfer);
+        const qty = Math.abs(transfer.qty || 0);
+        const costBasis = costForQuantity(transfer, item, transfer.qty);
+        const amount = Math.abs(costBasis.amount || 0);
+        const internalTransfer = isCompanyScope(sourceScope);
+        addTimingAdjustment(
+          transfer,
+          internalTransfer ? "公司內部調撥在途" : "本月加盟退回／次月收貨",
+          qty,
+          amount,
+          internalTransfer ? "" : transfer.doc,
+          transfer.doc,
+          "調撥在途已調整",
+          `${transfer.dispatchDate || transfer.date || "本月"}已發貨、${transfer.receiptDate || "次月"}才收貨；期末仍在途，D列正數抵銷${internalTransfer ? "公司庫存尚未入目的倉的時點差" : "B4已認列但期末尚未入庫的時點差"}。`
+        );
+        addIssue(issues, "info", "調撥跨月在途已調整", transfer, `發貨日期${transfer.dispatchDate || transfer.date || "未提供"}、收貨日期${transfer.receiptDate || "未提供"}；已列入D，不視為真實庫存差異。`);
+        if (costBasis.amount == null) addIssue(issues, "error", "調撥在途缺少進貨價成本", transfer, "在途數量已納入D，但調撥與商品參考資料都沒有進貨價，D金額暫列0。");
+      }
       if (sign === 0) continue;
       if (transfer._bRecognized || transfer._monthlyMatched) continue;
       const item = getOrCreateItem(items, transfer);
@@ -1649,6 +1697,10 @@
       const amount = costBasis.amount == null ? 0 : costBasis.amount * sign;
       addIssue(issues, "error", "有調撥無月結／可能漏請款", transfer, "本月跨體系調撥沒有配對到門市月結；依月結主認列原則不加入B，僅以D反映已發生的庫存時間差。" );
       if (costBasis.amount == null) addIssue(issues, "error", "跨體系調撥缺少進貨價成本", transfer, "調撥已發生但沒有進貨價或商品參考進貨價，D金額暫列0。" );
+      if (inboundInTransit && sourceScope === "franchise") {
+        addIssue(issues, "info", "加盟退回在途尚未認列", transfer, `發貨日期${transfer.dispatchDate || transfer.date || "未提供"}、收貨日期${transfer.receiptDate || "未提供"}，且本月沒有相符月結B4；A與B都尚未認列，故不另加D。`);
+        continue;
+      }
       addTimingAdjustment(
         transfer,
         "本月調撥／尚未月結",
@@ -1775,10 +1827,31 @@
       addPrice(item, sale.purchasePrice != null ? sale.purchasePrice : (qty ? amount / qty : null), "銷售品項成本明細", sale.date);
     }
 
+    const auditedPurchaseReturnItems = new Set();
     for (const movement of movements) {
       if (movement._used) continue;
       const rule = adjustmentRule(movement);
       if (!rule) continue;
+      if (rule.label === "採購退貨補列") {
+        const key = itemKey(movement);
+        const reportedQty = supplierReturnQtyByItem.get(key) || 0;
+        const movementQty = purchaseReturnMovementQtyByItem.get(key) || 0;
+        if (reportedQty > EPSILON) {
+          if (!auditedPurchaseReturnItems.has(key)) {
+            auditedPurchaseReturnItems.add(key);
+            if (Math.abs(reportedQty - movementQty) < EPSILON) {
+              addIssue(issues, "info", "採購退貨已由退廠報表認列", movement, `出入庫採購退貨${displayNumber(movementQty)}件，已與退廠／供應商退貨報表${displayNumber(reportedQty)}件一致；A已扣除退廠數量，本列不再加入C。`);
+            } else {
+              addIssue(issues, "error", "採購退貨與退廠報表數量不一致", movement, `出入庫採購退貨共${displayNumber(movementQty)}件，退廠／供應商退貨報表共${displayNumber(reportedQty)}件；為避免重複認列，暫以退廠報表納入A且不把出入庫列入C，請核對缺漏。`);
+            }
+          }
+          continue;
+        }
+        if (!auditedPurchaseReturnItems.has(key)) {
+          auditedPurchaseReturnItems.add(key);
+          addIssue(issues, "warning", "採購退貨未出現在退廠報表", movement, `出入庫共有${displayNumber(movementQty)}件採購退貨，但退廠／供應商退貨報表沒有此商品；本次暫由C補列，避免實際出庫被遺漏。`);
+        }
+      }
       const item = getOrCreateItem(items, movement);
       const qty = Math.abs(movement.qty || 0) * rule.sign;
       const directMovementCost = recordCost(movement);
@@ -1801,7 +1874,9 @@
         : (fallbackMovementPrice ? "商品統一參考進貨價" : "缺少進貨價，C金額暫列0");
       const notice = rule.label === "員購待核對"
         ? "請確認是否另有銷貨單；若有，應歸B並避免與C重複。"
-        : (rule.uncertain ? "原因未命中既定規則，請人工確認分類及方向。" : "");
+        : (rule.label === "採購退貨補列"
+          ? "退廠／供應商退貨報表未列此商品，暫由C補列；補齊退廠報表後會自動避免重複。"
+          : (rule.uncertain ? "原因未命中既定規則，請人工確認分類及方向。" : ""));
       const resolvedDirection = movementMode(movement);
       adjustmentDetails.push({
         sourceRow: movement.sourceRow || "",
@@ -2017,7 +2092,7 @@
         : [["本次未執行來源月份檢查"]]),
       [],
       ["期初／期末應納入倉別"],
-      ["寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。"],
+      ["寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物，以及名稱含「快閃」的倉別。排除其餘加盟店倉。"],
       [],
       ["報表專用成本規則"],
       ["當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C／D成本優先採進貨價相關欄位。"],
@@ -2059,7 +2134,7 @@
     setNumberFormats(XLSX, sourceSheet, [`B${cancellationStartRow}:B${cancellationEndRow}`, `D${cancellationStartRow}:D${cancellationEndRow}`], "#,##0");
     setNumberFormats(XLSX, sourceSheet, [`M${cancellationStartRow}:P${cancellationEndRow}`], "#,##0");
     setNumberFormats(XLSX, sourceSheet, [`Q${cancellationStartRow}:T${cancellationEndRow}`], "#,##0.00");
-    const sourceMergeLabels = new Set(["來源月份檢查", "本次未執行來源月份檢查", "期初／期末應納入倉別", "寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。", "報表專用成本規則", "當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C／D成本優先採進貨價相關欄位。", "公司集中商品規則", "集中規則排除明細", "銷售流水嚴格沖銷明細"]);
+    const sourceMergeLabels = new Set(["來源月份檢查", "本次未執行來源月份檢查", "期初／期末應納入倉別", "寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物，以及名稱含「快閃」的倉別。排除其餘加盟店倉。", "報表專用成本規則", "當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C／D成本優先採進貨價相關欄位。", "公司集中商品規則", "集中規則排除明細", "銷售流水嚴格沖銷明細"]);
     sourceSheet["!merges"] = sourceRows
       .map((row, index) => sourceMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 20 } } : null)
       .filter(Boolean);

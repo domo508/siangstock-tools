@@ -7,7 +7,7 @@
   const rulesClient = globalThis.InventoryRulesClient;
   const requiredTypes = new Set(["opening", "closing", "purchases", "sales"]);
   const descriptions = {
-    opening: "含總倉、直營與公司內各專用倉；排除加盟店倉。",
+    opening: "含總倉、直營、名稱含「快閃」及公司內各專用倉；排除其餘加盟店倉。",
     closing: "倉別範圍必須與期初完全一致。",
     purchases: "本報表中的「成本價」例外視為供應商進貨價，並作為分析月份鎖定主報表。",
     sales: "可同時選擇本月及前2個月，不可包含未來月份；加盟總倉代出的R／T只作正式成本、扣庫與跨月稽核。客戶退貨已用負值呈現，不需另傳客退報表。",

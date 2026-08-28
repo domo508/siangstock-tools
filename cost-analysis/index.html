@@ -59,7 +59,7 @@
 
       <div class="warehouse-note" role="note">
         <strong>期初、期末請使用相同倉別範圍</strong>
-        <small>應包含：寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物。請排除加盟店倉；短期快閃「高雄漢神本館」亦屬加盟。</small>
+        <small>應包含：寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物，以及名稱含「快閃」的倉別。請排除其餘加盟店倉。</small>
       </div>
 
       <div class="warehouse-note" role="note">
@@ -112,7 +112,7 @@
         <article><strong>門市成本不進A／B</strong><p>門市成本原則為相關成本×1.11；加盟請款優先以報表成本欄位核對，1.11只作缺值時的輔助估算，均不直接作A／B成本。</p></article>
         <article><strong>內部倉互調不查請款差異</strong><p>非加盟的公司內部倉只核對單號與數量；月結請款為0及調撥成本均不列A／B，也不列金額異常。</p></article>
         <article><strong>加盟B值以月結為主</strong><p>B2加盟調撥、B3總倉代出與B4加盟退回均以門市月結為主要交易清單；沒有月結時，調撥或R／T不會單獨增加B。</p></article>
-        <article><strong>調撥只作稽核</strong><p>調撥單用於核對單號、品項、數量、成本及跨月；有調撥無月結時列待查，並由D反映庫存時間差。</p></article>
+        <article><strong>調撥只作稽核</strong><p>調撥單用於核對單號、品項、數量、成本及跨月；發貨與收貨跨月時由D反映在途庫存，有調撥無月結時仍列待查。</p></article>
         <article><strong>R認列、T扣庫</strong><p>加盟總倉代出由月結列入B3；R提供正式成本與認列月份，T確認總倉實際扣庫，跨月差異由D調整。</p></article>
         <article><strong>只依完整單號配對</strong><p>支援一張T合併多張R；完整取貨／來源單號、商品及數量吻合才自動配對。無法嚴格判定時列異常，不自行沖銷。</p></article>
         <article><strong>客退不另上傳</strong><p>銷售成本負值沖回B，客退入庫單只確認回到哪個倉，不再列為盤盈。</p></article>
@@ -132,7 +132,7 @@
   <script src="assets/jszip.min.js"></script>
   <script src="../inventory/core.js?v=20260816-shared-rules"></script>
   <script src="../inventory/rules-client.js?v=20260816-shared-rules"></script>
-  <script src="core.js?v=20260824-month-lock-r1"></script>
-  <script src="app.js?v=20260824-month-lock-r1"></script>
+  <script src="core.js?v=20260828-in-transit-r1"></script>
+  <script src="app.js?v=20260828-in-transit-r1"></script>
 </body>
 </html>
