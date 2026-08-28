@@ -184,6 +184,140 @@ h1 {
 
 .steps small { color: var(--muted); line-height: 1.5; }
 
+.manual-panel { overflow: hidden; }
+
+.manual-intro {
+  margin: -4px 0 20px;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.75;
+}
+
+.manual-formula-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.manual-formula-grid article {
+  padding: 16px;
+  border: 1px solid #cfe0e5;
+  border-radius: 16px;
+  background: var(--soft-blue);
+}
+
+.manual-formula-grid strong,
+.manual-formula-grid span { display: block; }
+.manual-formula-grid span { margin-top: 6px; color: var(--muted); font-size: 0.88rem; line-height: 1.55; }
+
+.manual-equation {
+  margin: 12px 0 20px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  color: var(--navy);
+  background: var(--soft-green);
+  text-align: center;
+}
+
+.manual-quick-steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 20px;
+  padding: 0;
+  list-style: none;
+  counter-reset: manual-step;
+}
+
+.manual-quick-steps li {
+  position: relative;
+  min-height: 134px;
+  padding: 48px 15px 15px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+  counter-increment: manual-step;
+}
+
+.manual-quick-steps li::before {
+  content: counter(manual-step);
+  position: absolute;
+  top: 14px;
+  left: 15px;
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--navy);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.manual-quick-steps strong,
+.manual-quick-steps span { display: block; }
+.manual-quick-steps span { margin-top: 6px; color: var(--muted); font-size: 0.84rem; line-height: 1.5; }
+
+.manual-sections {
+  display: grid;
+  gap: 10px;
+}
+
+.manual-sections details {
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: #fff;
+}
+
+.manual-sections summary {
+  padding: 16px 18px;
+  cursor: pointer;
+  color: var(--navy);
+  font-weight: 800;
+}
+
+.manual-sections summary:hover { color: var(--blue); }
+.manual-sections summary:focus-visible { border-radius: 14px; outline: 3px solid rgba(23, 107, 135, 0.22); outline-offset: 2px; }
+
+.manual-detail-body {
+  padding: 0 18px 18px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.manual-detail-body p { margin: 14px 0 0; }
+.manual-detail-body ol,
+.manual-detail-body ul { margin: 14px 0 0; padding-left: 1.4rem; }
+.manual-detail-body li + li { margin-top: 6px; }
+.manual-detail-body strong { color: var(--ink); }
+
+.manual-table-wrap { margin-top: 14px; overflow-x: auto; }
+.manual-table { min-width: 720px; border-collapse: collapse; }
+.manual-table th,
+.manual-table td { padding: 10px 9px; text-align: left; white-space: normal; }
+.manual-table th { color: var(--navy); background: #f4f9fa; }
+.manual-table th:first-child,
+.manual-table td:first-child { width: 64px; text-align: center; }
+.sheet-guide-table { min-width: 620px; }
+.sheet-guide-table th:first-child,
+.sheet-guide-table td:first-child { width: 235px; text-align: left; }
+
+.manual-security {
+  display: flex;
+  gap: 10px 16px;
+  margin-top: 16px;
+  padding: 16px 18px;
+  border: 1px solid #b9ddd1;
+  border-radius: 15px;
+  color: #4e6d61;
+  background: var(--soft-green);
+  line-height: 1.6;
+}
+
+.manual-security strong { flex: 0 0 auto; color: var(--green); }
+
 .panel {
   margin-bottom: 24px;
   padding: 32px;
@@ -339,6 +473,8 @@ footer p { margin: 0; }
   .hero { grid-template-columns: 1fr; gap: 28px; padding: 54px 0 48px; }
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
   .rule-grid { grid-template-columns: repeat(2, 1fr); }
+  .manual-formula-grid { grid-template-columns: repeat(2, 1fr); }
+  .manual-quick-steps { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 680px) {
@@ -348,9 +484,11 @@ footer p { margin: 0; }
   .section-heading > p { text-align: left; }
   .hero { padding-top: 44px; }
   h1 { font-size: clamp(2.7rem, 15vw, 4.2rem); }
-  .steps, .upload-grid, .rule-grid { grid-template-columns: 1fr; }
+  .steps, .upload-grid, .rule-grid, .manual-formula-grid, .manual-quick-steps { grid-template-columns: 1fr; }
   .panel { padding: 22px; }
   .mapping-list { grid-template-columns: 1fr; }
   .mapping-meta { grid-template-columns: 1fr 90px; }
   .summary-grid { grid-template-columns: 1fr; }
+  .manual-quick-steps li { min-height: 0; }
+  .manual-security { align-items: flex-start; flex-direction: column; }
 }

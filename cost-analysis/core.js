@@ -879,11 +879,17 @@
       if (futureMonths.length) {
         throw new Error(`${check.source}${check.fileName ? `（${check.fileName}）` : ""}包含晚於分析月份${displayMonth(analysisMonth)}的${futureMonths.map(displayMonth).join("、")}資料；請移除未來月份檔案後再分析。`);
       }
+      if (type === "sales") {
+        const olderMonths = check.months.filter((month) => month < analysisMonth - 1);
+        if (olderMonths.length) {
+          throw new Error(`${check.source}${check.fileName ? `（${check.fileName}）` : ""}包含早於前月的${olderMonths.map(displayMonth).join("、")}資料；銷售只可匯入本月及前月。`);
+        }
+      }
     }
 
     const salesCheck = checkByType.get("sales");
     if (!salesCheck.recordCount || !salesCheck.months.includes(analysisMonth)) {
-      throw new Error(`銷售品項成本明細未包含分析月份${displayMonth(analysisMonth)}；請至少匯入本月銷售，前1至2個月只作跨月稽核。`);
+      throw new Error(`銷售品項成本明細未包含分析月份${displayMonth(analysisMonth)}；請至少匯入本月銷售，前月資料只作跨月稽核。`);
     }
 
     const anchorTypeSet = new Set(currentMonthTypes);

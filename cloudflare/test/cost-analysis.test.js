@@ -799,6 +799,17 @@ describe("庫存成本分析核心規則", () => {
     expect(() => core.resolveAnalysisMonth(reports)).toThrow("包含晚於分析月份2026年5月的2026年6月資料");
   });
 
+  it("銷售只接受分析本月及前月，更早月份會停止分析", () => {
+    const reports = {
+      purchases: report("purchases", [{ date: "2026-05-02", sku: "OLD-SALES", name: "過早銷售商品", qty: 1 }]),
+      sales: report("sales", [
+        { date: "2026-03-03", doc: "R0100002603030001", sku: "OLD-SALES", name: "過早銷售商品", qty: 0, purchaseCostAmount: 0 },
+        { date: "2026-05-03", doc: "R0100002605030001", sku: "OLD-SALES", name: "過早銷售商品", qty: 1, purchaseCostAmount: 10 }
+      ])
+    };
+    expect(() => core.resolveAnalysisMonth(reports)).toThrow("包含早於前月的2026年3月資料；銷售只可匯入本月及前月");
+  });
+
   it("當月進貨與門市月結月份不一致時停止分析", () => {
     const reports = {
       purchases: report("purchases", [{ date: "2026-05-02", sku: "MISMATCH", name: "月份不符商品", qty: 1 }]),
@@ -830,9 +841,15 @@ describe("庫存成本分析前台", () => {
     expect(html).toContain("不會傳到網站、Cloudflare或其他伺服器");
     expect(html).toContain("公司最新版商品規則");
     expect(html).toContain("分析月份由本月主報表鎖定");
-    expect(html).toContain("若含未來月份，系統會停止分析");
+    expect(html).toContain("銷售若含更早月份，或任一稽核報表含未來月份，系統會停止分析");
     expect(html).toContain("凍結第一列");
     expect(html).toContain("assets/jszip.min.js");
+    expect(html).toContain("第一次使用，照這份做就可以");
+    expect(html).toContain("本月＋前月");
+    expect(html).toContain("最終未解釋差異＝A－B－C－D");
+    expect(html).toContain("03出現資料不代表一定形成最終差異");
+    expect(app).toContain("可同時選擇本月及前月");
+    expect(app).not.toContain("前2個月");
     expect(html).toContain("../inventory/rules-client.js");
     expect(app).toContain("rulesClient.fetchLatest");
     expect(app).toContain("core.resolveAnalysisMonth");

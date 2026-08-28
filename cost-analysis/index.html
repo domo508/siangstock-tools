@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex,nofollow">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'">
   <title>庫存成本分析｜翔仔居家</title>
-  <link rel="stylesheet" href="style.css?v=20260817-rt-timing-r1">
+  <link rel="stylesheet" href="style.css?v=20260828-manual-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -48,13 +48,127 @@
       <div><span>3</span><strong>分析並下載</strong><small>產生同一份Excel的六個頁籤。</small></div>
     </section>
 
+    <section class="panel manual-panel" aria-labelledby="manual-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">操作手冊</p>
+          <h2 id="manual-title">第一次使用，照這份做就可以。</h2>
+        </div>
+        <p>快速重點直接顯示；報表準備、頁籤說明與排查方式可依需要展開。</p>
+      </div>
+
+      <p class="manual-intro">本工具用來核對庫存推算耗用與商品成本，找出需要人工排查的商品、數量及金額；分析結果只供勾稽，不會自動修改庫存或會計資料。</p>
+
+      <div class="manual-formula-grid" aria-label="A B C D計算說明">
+        <article><strong>A 庫存推算</strong><span>期初＋進貨－退廠－期末</span></article>
+        <article><strong>B 商品成本</strong><span>淨銷售＋加盟調撥＋總倉代出＋加盟退回</span></article>
+        <article><strong>C 非銷售調整</strong><span>盤盈虧、報廢、贈品與其他出入庫</span></article>
+        <article><strong>D 時點調整</strong><span>跨月、在途或尚未月結差異</span></article>
+      </div>
+      <p class="manual-equation"><strong>最終未解釋差異＝A－B－C－D</strong></p>
+
+      <ol class="manual-quick-steps">
+        <li><strong>準備報表</strong><span>使用系統原始 .xlsx，不先刪列、改正負號或自行合併金額。</span></li>
+        <li><strong>依序選檔</strong><span>正常月份建議匯入8類報表；確定沒有資料的選填報表才可略過。</span></li>
+        <li><strong>確認欄位</strong><span>每份報表都要顯示「欄位檢查通過」；錯誤時再人工調整。</span></li>
+        <li><strong>開始分析</strong><span>確認已取得公司最新版商品規則，再按「開始分析」。</span></li>
+        <li><strong>下載結果</strong><span>先看摘要與差異，再下載含6個頁籤的完整Excel。</span></li>
+      </ol>
+
+      <div class="manual-sections">
+        <details open>
+          <summary>開始前：準備8類報表</summary>
+          <div class="manual-detail-body">
+            <p>期初、期末、進貨及銷售為必要來源；其餘報表只有在當月確定沒有相關資料時才可略過。</p>
+            <div class="manual-table-wrap">
+              <table class="manual-table">
+                <thead><tr><th>項次</th><th>報表</th><th>資料月份</th><th>使用提醒</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>期初庫存</td><td>上月底</td><td>必要</td></tr>
+                  <tr><td>2</td><td>期末庫存</td><td>本月底</td><td>必要，倉別範圍須與期初相同</td></tr>
+                  <tr><td>3</td><td>當月進貨明細</td><td>本月</td><td>必要</td></tr>
+                  <tr><td>4</td><td>銷售品項成本明細</td><td>本月＋前月</td><td>必要，可一次選擇多個檔案</td></tr>
+                  <tr><td>5</td><td>門市月結報表</td><td>本月</td><td>有加盟門市交易時應匯入</td></tr>
+                  <tr><td>6</td><td>出入庫明細列表</td><td>本月</td><td>有盤盈虧、報廢、贈送等異動時應匯入</td></tr>
+                  <tr><td>7</td><td>退廠／供應商退貨明細</td><td>本月</td><td>有退廠資料時應匯入</td></tr>
+                  <tr><td>8</td><td>調撥單明細</td><td>本月＋前月</td><td>有門市調撥時應匯入，可一次選擇多個檔案</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+
+        <details>
+          <summary>期初、期末應包含哪些倉別？</summary>
+          <div class="manual-detail-body">
+            <p>應包含：寬承總倉、台中北屯門市、台北中山門市、退貨倉、瑕疵倉、報廢倉、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物，以及名稱含「快閃」的倉別。</p>
+            <p><strong>請排除其餘加盟店倉，且期初與期末必須使用完全相同的倉別範圍。</strong></p>
+          </div>
+        </details>
+
+        <details>
+          <summary>下載後，6個頁籤怎麼看？</summary>
+          <div class="manual-detail-body">
+            <div class="manual-table-wrap">
+              <table class="manual-table sheet-guide-table">
+                <thead><tr><th>頁籤</th><th>用途</th></tr></thead>
+                <tbody>
+                  <tr><td>01_分析摘要</td><td>查看A、B、C、D及最終未解釋差異。</td></tr>
+                  <tr><td>02_商品差異明細</td><td>只列需要排查的商品，並提供建議排查方法。</td></tr>
+                  <tr><td>03_未配對資料</td><td>查看缺少單據、重複資料、跨月及來源配對問題。</td></tr>
+                  <tr><td>04_C組調整明細</td><td>查看盤盈虧、報廢、贈品等非銷售出入庫。</td></tr>
+                  <tr><td>05_來源檢查</td><td>確認檔案月份、有效列數、排除品項及來源統計。</td></tr>
+                  <tr><td>06_全部商品勾稽明細</td><td>完整底稿，包含通過及異常商品。</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>各頁籤第一列均已凍結，明細表頭可以直接篩選及排序。</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>發現差異時，建議怎麼查？</summary>
+          <div class="manual-detail-body">
+            <ol>
+              <li>先看01的「最終未解釋差異」。</li>
+              <li>到02依未解釋金額或數量由大到小排查。</li>
+              <li>用商品編號或單據編號到03查看缺單、跨月或重複資料。</li>
+              <li>商品有C組數量時，到04確認出入庫原因。</li>
+              <li>懷疑月份、排除品項或資料筆數不完整時，到05檢查來源。</li>
+              <li>需要完整計算過程或通過商品時，到06查詢。</li>
+            </ol>
+            <p><strong>03出現資料不代表一定形成最終差異：</strong>error優先查核；warning代表可能需要確認；info多為已處理或供稽核說明的紀錄。</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>重要成本規則</summary>
+          <div class="manual-detail-body">
+            <ul>
+              <li>A、B、C、D均優先使用報表中的「進貨價」相關欄位。</li>
+              <li>一般報表的「成本價」代表平均成本；當月進貨明細的「成本價」例外代表供應商進貨價。</li>
+              <li>門市月結的結帳額是加盟請款金額，不是商品成本。</li>
+              <li>門市成本×1.11只作輔助稽核，不直接作為A或B成本。</li>
+              <li>已確認的跨月或在途差異會列入D，不視為真實庫存差異。</li>
+              <li>未解釋金額絕對值未滿1元視為可接受尾差。</li>
+            </ul>
+          </div>
+        </details>
+      </div>
+
+      <div class="manual-security" role="note">
+        <strong>資料安全</strong>
+        <span>所有Excel只在目前電腦的瀏覽器內讀取及計算，不會上傳，也不會改寫原始報表。</span>
+      </div>
+    </section>
+
     <section class="panel" aria-labelledby="upload-title">
       <div class="section-heading">
         <div>
           <p class="eyebrow">資料來源</p>
           <h2 id="upload-title">選擇本月報表與前期稽核資料</h2>
         </div>
-        <p>期初、期末、進貨與銷售為必要來源；銷售可含前2個月，調撥可含前月。</p>
+        <p>期初、期末、進貨與銷售為必要來源；銷售與調撥可含前月。</p>
       </div>
 
       <div class="warehouse-note" role="note">
@@ -64,7 +178,7 @@
 
       <div class="warehouse-note" role="note">
         <strong>分析月份由本月主報表鎖定</strong>
-        <small>當月進貨與門市月結須為同一月份；銷售可選本月及前2個月，調撥請選本月及前月。若含未來月份，系統會停止分析，不會產生混月結果。</small>
+        <small>當月進貨與門市月結須為同一月份；銷售及調撥請選本月與前月。銷售若含更早月份，或任一稽核報表含未來月份，系統會停止分析。</small>
       </div>
 
       <div class="warehouse-note" role="note">
@@ -132,7 +246,7 @@
   <script src="assets/jszip.min.js"></script>
   <script src="../inventory/core.js?v=20260816-shared-rules"></script>
   <script src="../inventory/rules-client.js?v=20260816-shared-rules"></script>
-  <script src="core.js?v=20260828-excel-filter-r1"></script>
-  <script src="app.js?v=20260828-excel-filter-r1"></script>
+  <script src="core.js?v=20260828-manual-r1"></script>
+  <script src="app.js?v=20260828-manual-r1"></script>
 </body>
 </html>
