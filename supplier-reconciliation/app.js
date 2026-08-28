@@ -454,7 +454,7 @@
       const date = new Date();
       const stamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
       link.href = url;
-      link.download = `財務供應商對帳比對_${state.analysis.period?.month || stamp}.xlsx`;
+      link.download = core.buildDownloadFileName(state.analysis, state.currentVendor, stamp);
       document.body.appendChild(link);
       link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 0);

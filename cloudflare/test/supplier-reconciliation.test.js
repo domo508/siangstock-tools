@@ -55,6 +55,12 @@ describe("財務供應商對帳核心", () => {
     expect(bReport.rawRows.some((row) => row.name === "運費" && row.reason === "非商品項目")).toBe(true);
   });
 
+  it("下載檔名包含對帳供應商與月份，並清除不合法字元", () => {
+    const analysis = { period: { month: "2026-06" }, bReport: { fileName: "6月-普優瑪(B表供應商).xlsx", records: [] } };
+    expect(core.buildDownloadFileName(analysis)).toBe("財務供應商對帳比對_普悠瑪_2026-06.xlsx");
+    expect(core.buildDownloadFileName(analysis, { label: '上林/寬承:*?"<>|' })).toBe("財務供應商對帳比對_上林 寬承_2026-06.xlsx");
+  });
+
   it("以A未稅進貨價對B單價，並用數量與單價說明差異", () => {
     const { aReport, bReport } = buildReports();
     const analysis = core.analyzeReports(aReport, bReport);

@@ -856,6 +856,21 @@
     return { key: `file:${fallback || "unknown"}`, label: fallback || "未辨識供應商" };
   }
 
+  function sanitizeFileNameSegment(value) {
+    return String(value || "")
+      .replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/^[. ]+|[. ]+$/g, "")
+      .slice(0, 80);
+  }
+
+  function buildDownloadFileName(analysis, vendor, fallbackStamp) {
+    const resolvedVendor = vendor || inferLedgerVendor(analysis?.bReport);
+    const vendorLabel = sanitizeFileNameSegment(resolvedVendor?.label) || "未辨識供應商";
+    const period = sanitizeFileNameSegment(analysis?.period?.month || fallbackStamp) || "未指定月份";
+    return `財務供應商對帳比對_${vendorLabel}_${period}.xlsx`;
+  }
+
   function shanglinSource(record, sourceType) {
     const sourceValue = sourceType === "a" ? (record.note || record.detailNote || "") : (record.recipient || "");
     const text = normalizeText(sourceValue);
@@ -1538,6 +1553,7 @@
     SOURCE_SCHEMAS, fieldLabel, parseNumber, normalizeHeader, canonicalizeName, autoMapHeaders, validateMapping,
     inspectWorkbook, inspectNameMappingWorkbook, parseNameMappingWorkbook, applyNameMappingToBReport,
     extractSource, aggregateSource, matchScore, findMatches, analyzeReports, parseDateValue, inferDominantMonth,
-    ledgerRowsFromWorkbook, shanglinRowsFromWorkbook, inferLedgerVendor, analyzeMonthlyReports, buildOutputWorkbook, buildFrozenWorkbookBytes
+    ledgerRowsFromWorkbook, shanglinRowsFromWorkbook, inferLedgerVendor, buildDownloadFileName,
+    analyzeMonthlyReports, buildOutputWorkbook, buildFrozenWorkbookBytes
   };
 })(globalThis);
