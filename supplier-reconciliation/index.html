@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'">
   <title>財務供應商對帳比對｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260820-supplier-r1">
-  <link rel="stylesheet" href="style.css?v=20260827-shanglin-map-r7">
+  <link rel="stylesheet" href="style.css?v=20260828-browser-ledger-r10">
 </head>
 <body>
   <main class="page-shell">
@@ -33,14 +33,14 @@
       </div>
       <aside class="privacy-card" aria-label="資料安全說明">
         <span class="privacy-icon" aria-hidden="true">✓</span>
-        <div><strong>Excel只留在目前分頁</strong><p>所有讀取、比對與下載均在這台電腦的瀏覽器完成，不上傳、不會修改原始檔。</p></div>
+        <div><strong>Excel不離開這台電腦</strong><p>原始Excel不保存、不上傳；只有跨月追蹤台帳會留在這個瀏覽器，並可隨時清除或用結果Excel復原。</p></div>
       </aside>
     </section>
 
     <section class="steps" aria-label="使用步驟">
       <div><span>1</span><strong>設定月份並選檔</strong><small>A、B表為必要；上林可加用品名對照表，力榮帳款整份依選定月份認列。</small></div>
       <div><span>2</span><strong>逐筆核對明細</strong><small>等量明細優先，再拆分剩餘量並檢查截止日前跨月收貨。</small></div>
-      <div><span>3</span><strong>下載並延續台帳</strong><small>跨月認列寫入第8頁籤，下期匯入即可排除。</small></div>
+      <div><span>3</span><strong>下載並延續台帳</strong><small>第8頁籤避免重複認列；第9頁籤反查上林月底待驗證明細。</small></div>
     </section>
 
     <section class="panel" aria-labelledby="upload-title">
@@ -58,6 +58,18 @@
       <div class="reconciliation-note" role="note">
         <strong>本次成本口徑</strong>
         <small>A表「未稅進貨價」對應B表「單價」；A表「未稅進貨額」對應B表「合計」。金額差額保留供財務排序，但不重複列為一般差異類型。</small>
+      </div>
+
+      <div class="local-ledger-panel" aria-labelledby="local-ledger-title">
+        <div>
+          <strong id="local-ledger-title">瀏覽器本機台帳</strong>
+          <p id="local-ledger-status" role="status">正在檢查本機台帳……</p>
+          <small>同一台電腦與瀏覽器會自動帶入該供應商最近一期台帳；最多保留24個月。下載的結果Excel仍是換機與稽核備份。</small>
+        </div>
+        <div class="ledger-actions">
+          <button id="use-local-ledger" class="secondary-button compact-button" type="button">改用本機台帳</button>
+          <button id="clear-local-ledger" class="danger-button compact-button" type="button" disabled>清除這家供應商台帳</button>
+        </div>
       </div>
 
       <div class="upload-grid four-sources">
@@ -83,8 +95,8 @@
           <p id="name-mapping-status" class="mapping-status" hidden></p>
         </article>
         <article class="upload-card prior-card">
-          <div class="upload-card-header"><h3>上期對帳結果</h3><span class="source-badge optional">第二期起建議</span></div>
-          <p class="upload-help">讀取第8頁籤的跨月認列台帳，排除已在前期使用的收貨數量。</p>
+          <div class="upload-card-header"><h3>上期對帳結果</h3><span class="source-badge optional">換機／復原選填</span></div>
+          <p class="upload-help">本機台帳無法使用或換電腦時，匯入第8、9頁籤復原；本次會優先採用手動匯入內容。</p>
           <label class="file-button">選擇上期結果<input id="prior-file" type="file" accept=".xlsx"></label>
           <p id="prior-file-name" class="file-name">未選擇（首期可略過）</p>
         </article>
@@ -130,7 +142,9 @@
         <article><strong>疑似前期另外標示</strong><p>月初A收貨找不到本期B帳款時，保留差異並提醒匯入上期台帳確認。</p></article>
         <article><strong>已認列數量不重複</strong><p>下期匯入上期結果後，先扣除已用於前期的收貨數量，再進行本月對帳。</p></article>
         <article><strong>退貨以負值沖回</strong><p>B表帳別為銷退時，數量與合計會以負數併入同品項。</p></article>
-        <article><strong>匯出可完整追溯</strong><p>結果包含總覽、差異、未配對、通過、原始資料、說明及跨月認列台帳。</p></article>
+        <article><strong>上林反向跨月</strong><p>下期會先從瀏覽器本機台帳反查當期B表；已驗證訂單不會重複進入本期對帳，換機時可匯入第9頁籤復原。</p></article>
+        <article><strong>本機台帳可復原</strong><p>只保存跨月追蹤欄位與摘要，最多24個月；清除網站資料或更換電腦後，可用上期結果Excel重新接續。</p></article>
+        <article><strong>匯出可完整追溯</strong><p>結果包含總覽、差異、未配對、通過、原始資料、說明、跨月認列及上林反向跨月台帳。</p></article>
       </div>
     </section>
 
@@ -139,7 +153,8 @@
 
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="../cost-analysis/assets/jszip.min.js"></script>
-  <script src="core.js?v=20260827-shanglin-orders-r8"></script>
-  <script src="app.js?v=20260827-shanglin-orders-r8"></script>
+  <script src="core.js?v=20260828-browser-ledger-r10"></script>
+  <script src="ledger-store.js?v=20260828-browser-ledger-r10"></script>
+  <script src="app.js?v=20260828-browser-ledger-r10"></script>
 </body>
 </html>

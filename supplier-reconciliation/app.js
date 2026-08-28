@@ -3,7 +3,11 @@
 
   const core = globalThis.SupplierReconciliationCore;
   const XLSX = globalThis.XLSX;
-  const state = { sources: {}, priorLedger: [], nameMapping: null, nameMappingInvalid: false, analysis: null, outputWorkbook: null, filter: "differences" };
+  const ledgerStore = globalThis.SupplierReconciliationLedgerStore.createStore();
+  const state = {
+    sources: {}, priorLedger: [], priorShanglin: [], priorSource: "local", currentVendor: null, localSnapshot: null,
+    nameMapping: null, nameMappingInvalid: false, analysis: null, outputWorkbook: null, filter: "differences", ledgerLoadToken: 0
+  };
   const analyzeButton = document.getElementById("analyze-button");
   const downloadButton = document.getElementById("download-button");
   const mainStatus = document.getElementById("main-status");
@@ -16,6 +20,10 @@
   const priorFileName = document.getElementById("prior-file-name");
   const nameMappingFileName = document.getElementById("name-mapping-file-name");
   const nameMappingStatus = document.getElementById("name-mapping-status");
+  const localLedgerStatus = document.getElementById("local-ledger-status");
+  const useLocalLedgerButton = document.getElementById("use-local-ledger");
+  const clearLocalLedgerButton = document.getElementById("clear-local-ledger");
+  const priorFileInput = document.getElementById("prior-file");
 
   function escapeHtml(value) {
     return String(value == null ? "" : value)
@@ -30,6 +38,89 @@
 
   function formatPercent(value) {
     return new Intl.NumberFormat("zh-TW", { style: "percent", maximumFractionDigits: 1 }).format(Number(value || 0));
+  }
+
+  function formatDateTime(value) {
+    if (!value) return "—";
+    return new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  }
+
+  function extractCurrentReport(type) {
+    const source = state.sources[type];
+    if (!source || !core.validateMapping(type, source.mapping).valid) return null;
+    return core.extractSource(source.workbook, XLSX, type, {
+      sheetName: source.sheetName, headerRowIndex: source.headerRowIndex, mapping: source.mapping,
+      fileName: source.file.name, format: source.format
+    });
+  }
+
+  function renderLocalLedgerStatus() {
+    clearLocalLedgerButton.disabled = !state.currentVendor;
+    if (state.priorSource === "manual") {
+      localLedgerStatus.textContent = `本次採用手動匯入：${formatNumber(state.priorLedger.length)}筆跨月認列、${formatNumber(state.priorShanglin.length)}筆上林反向追蹤。`;
+      return;
+    }
+    if (!state.currentVendor) {
+      localLedgerStatus.textContent = "選擇B表與對帳月份後，會自動尋找該供應商最近一期台帳。";
+      return;
+    }
+    if (!state.localSnapshot) {
+      localLedgerStatus.textContent = `${state.currentVendor.label}：${periodMonth.value}以前沒有本機台帳，本次將從空白台帳開始。`;
+      return;
+    }
+    const snapshot = state.localSnapshot;
+    localLedgerStatus.textContent = `${state.currentVendor.label}：已自動帶入${snapshot.period}台帳（跨月認列${formatNumber(state.priorLedger.length)}筆、上林反向追蹤${formatNumber(state.priorShanglin.length)}筆），最後更新${formatDateTime(snapshot.updatedAt)}。`;
+  }
+
+  async function loadLocalLedger(bReport = null, force = false) {
+    if (state.priorSource === "manual" && !force) { renderLocalLedgerStatus(); return; }
+    const report = bReport || extractCurrentReport("b");
+    if (!report || !periodMonth.value) {
+      state.currentVendor = report ? core.inferLedgerVendor(report) : null;
+      state.localSnapshot = null;
+      renderLocalLedgerStatus();
+      return;
+    }
+    const token = ++state.ledgerLoadToken;
+    const vendor = core.inferLedgerVendor(report);
+    state.currentVendor = vendor;
+    localLedgerStatus.textContent = `正在尋找${vendor.label}最近一期本機台帳……`;
+    try {
+      const snapshot = await ledgerStore.loadPrior(vendor.key, periodMonth.value);
+      if (token !== state.ledgerLoadToken) return;
+      state.priorSource = "local";
+      state.localSnapshot = snapshot;
+      state.priorLedger = snapshot?.ledgerRows || [];
+      state.priorShanglin = snapshot?.shanglinRows || [];
+      renderLocalLedgerStatus();
+    } catch (error) {
+      if (token !== state.ledgerLoadToken) return;
+      state.localSnapshot = null;
+      state.priorLedger = [];
+      state.priorShanglin = [];
+      localLedgerStatus.textContent = `${error.message} 本次仍可正常比對，建議匯入上期結果Excel。`;
+    }
+  }
+
+  function minimumRetainedMonth(period) {
+    const [year, month] = period.split("-").map(Number);
+    const date = new Date(year, month - 24, 1);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  }
+
+  async function saveLocalLedger(analysis, workbook, vendor) {
+    const minimumMonth = minimumRetainedMonth(analysis.period.month);
+    const ledgerRows = core.ledgerRowsFromWorkbook(workbook, XLSX).filter((row) => !row.recognitionMonth || row.recognitionMonth >= minimumMonth);
+    const shanglinRows = core.shanglinRowsFromWorkbook(workbook, XLSX);
+    return ledgerStore.save({
+      vendorKey: vendor.key, vendorLabel: vendor.label, period: analysis.period.month,
+      ledgerRows, shanglinRows,
+      summary: {
+        matchedCount: analysis.totals.matchedCount || 0, differenceCount: analysis.totals.differenceCount || 0,
+        aOnlyCount: analysis.totals.aOnlyCount || 0, bOnlyCount: analysis.totals.bOnlyCount || 0,
+        reversePendingCount: shanglinRows.length
+      }
+    });
   }
 
   function resetResults(message) {
@@ -76,6 +167,7 @@
       source.format = selected.format || "";
       renderMapping(type);
       resetResults("工作表已變更，請確認欄位後重新比對。");
+      if (type === "b" && state.priorSource !== "manual") void loadLocalLedger();
       updateAvailability();
     });
 
@@ -88,6 +180,7 @@
       source.mapping = core.autoMapHeaders(source.headers, type);
       renderMapping(type);
       resetResults("表頭列已變更，請確認欄位後重新比對。");
+      if (type === "b" && state.priorSource !== "manual") void loadLocalLedger();
       updateAvailability();
     });
 
@@ -95,6 +188,7 @@
       source.mapping[event.target.dataset.field] = event.target.value === "" ? null : Number(event.target.value);
       resetResults("欄位設定已變更，請重新開始比對。");
       validateSource(type);
+      if (type === "b" && state.priorSource !== "manual") void loadLocalLedger();
       updateAvailability();
     }));
     validateSource(type);
@@ -143,10 +237,13 @@
     const mappingBox = document.getElementById(`${type}-mapping`);
     resetResults("檔案已變更，請重新開始比對。");
     card.classList.remove("ready", "error");
+    if (type === "b") { state.currentVendor = null; state.localSnapshot = null; }
     if (!input.files || !input.files[0]) {
       delete state.sources[type];
       fileName.textContent = "尚未選擇";
       mappingBox.hidden = true;
+      if (type === "b" && state.priorSource !== "manual") { state.priorLedger = []; state.priorShanglin = []; }
+      renderLocalLedgerStatus();
       updateAvailability();
       return;
     }
@@ -162,15 +259,19 @@
       fileName.textContent = `${file.name}・已讀取${formatText}`;
       renderMapping(type);
       if (type === "b" && core.validateMapping(type, state.sources[type].mapping).valid) {
-        const report = core.extractSource(workbook, XLSX, type, { sheetName: selected.name, headerRowIndex: selected.headerRowIndex, mapping: selected.mapping, fileName: file.name, format: state.sources[type].format });
+        const report = extractCurrentReport("b");
+        state.currentVendor = core.inferLedgerVendor(report);
         const inferred = core.inferDominantMonth(report);
         if (inferred && !periodMonth.value) { periodMonth.value = inferred; setDefaultCutoff(inferred); }
+        if (state.priorSource !== "manual") await loadLocalLedger(report);
+        else renderLocalLedgerStatus();
       }
     } catch (error) {
       delete state.sources[type];
       card.classList.add("error");
       fileName.textContent = `${file.name}：${error.message}`;
       mappingBox.hidden = true;
+      if (type === "b") renderLocalLedgerStatus();
     }
     updateAvailability();
   }
@@ -253,8 +354,10 @@
     const t = analysis.totals;
     if (analysis.vendorMode === "shanglin-order") {
       const cards = [
-        ["A表商品", formatNumber(t.aItemCount), "ERP收貨商品"], ["B表商品", formatNumber(t.bItemCount), "上林請款商品"],
+        ["A表商品", formatNumber(t.aItemCount), "ERP收貨商品"], ["B表本期商品", formatNumber(t.bItemCount), `整份${formatNumber(t.bStatementItemCount)}項，已先反查上期`],
         ["本期核對通過", formatNumber(t.matchedCount), `${formatNumber(t.exactOrderCount)}張整單・${formatNumber(t.exactLineCount)}筆明細`],
+        ["上期反查通過", formatNumber(t.reverseResolvedOrderCount), `${formatNumber(t.reverseResolvedLineCount)}筆・${formatNumber(t.reverseResolvedQty)}件`],
+        ["上期仍待追蹤", formatNumber(t.reverseUnresolvedOrderCount), `${formatNumber(t.reverseUnresolvedLineCount)}筆延續至下期`],
         ["疑似次期帳款", formatNumber(t.suspectedNextPeriodCount), "月底A表商品，等待次期B表"],
         ["疑似配對待確認", formatNumber(t.suspectedCandidateCount), "來源或日期脈絡衝突"],
         ["月底僅A商品", formatNumber(t.aOnlyCount), "尚未出現在本期B表"], ["僅B表存在", formatNumber(t.bOnlyCount), "沒有可靠A表候選"],
@@ -266,6 +369,7 @@
         <div class="equivalence-note">
           <strong>上林逐單核對關係</strong>
           <p>B表${formatNumber(t.bItemCount)}項＝本期核對通過${formatNumber(t.matchedCount)}項＋疑似配對${formatNumber(t.suspectedCandidateCount)}項＋僅B表${formatNumber(t.bOnlyCount)}項。</p>
+          <p>上期反向跨月已驗證${formatNumber(t.reverseResolvedOrderCount)}張訂單、${formatNumber(t.reverseResolvedLineCount)}筆明細；這些B表明細會先移出本期一般對帳，避免重複配對。</p>
           <p>本期已有${formatNumber(t.exactOrderCount)}張訂單、${formatNumber(t.exactLineCount)}筆明細依內容雜湊、需求來源及日期通過；其中部分商品另有月底A表數量，分開標成疑似次期帳款，不當成本期數量差異。</p>
         </div>
         <div class="attention-alert" role="note">
@@ -300,25 +404,35 @@
     resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  analyzeButton.addEventListener("click", () => {
+  analyzeButton.addEventListener("click", async () => {
     analyzeButton.disabled = true;
     downloadButton.disabled = true;
     mainStatus.textContent = "正在逐筆分配A、B明細數量並核對跨月差異……";
     try {
       const reports = {};
       for (const type of ["a", "b"]) {
-        const source = state.sources[type];
-        reports[type] = core.extractSource(source.workbook, XLSX, type, { sheetName: source.sheetName, headerRowIndex: source.headerRowIndex, mapping: source.mapping, fileName: source.file.name, format: source.format });
+        reports[type] = extractCurrentReport(type);
       }
       reports.b = core.applyNameMappingToBReport(reports.b, state.nameMapping);
-      state.analysis = core.analyzeMonthlyReports(reports.a, reports.b, { month: periodMonth.value, cutoff: cutoffDate.value, priorLedger: state.priorLedger });
+      const vendor = core.inferLedgerVendor(reports.b);
+      state.currentVendor = vendor;
+      if (state.priorSource !== "manual") await loadLocalLedger(reports.b);
+      state.analysis = core.analyzeMonthlyReports(reports.a, reports.b, { month: periodMonth.value, cutoff: cutoffDate.value, priorLedger: state.priorLedger, priorShanglin: state.priorShanglin });
       state.outputWorkbook = core.buildOutputWorkbook(state.analysis, XLSX);
       renderResults(state.analysis);
       const t = state.analysis.totals;
       const mappingText = state.analysis.bReport.nameMapping ? `；品名對照已套用${formatNumber(state.analysis.bReport.nameMapping.mappedRecordCount)}筆B明細` : "";
-      mainStatus.textContent = state.analysis.vendorMode === "shanglin-order"
-        ? `上林逐單核對完成：${formatNumber(t.exactOrderCount)}張整單、${formatNumber(t.exactLineCount)}筆明細通過；疑似次期${formatNumber(t.suspectedNextPeriodCount)}項、疑似配對${formatNumber(t.suspectedCandidateCount)}項待確認${mappingText}。`
+      const resultText = state.analysis.vendorMode === "shanglin-order"
+        ? `上林逐單核對完成：上期反查通過${formatNumber(t.reverseResolvedOrderCount)}張；本期${formatNumber(t.exactOrderCount)}張整單、${formatNumber(t.exactLineCount)}筆明細通過；疑似次期${formatNumber(t.suspectedNextPeriodCount)}項、疑似配對${formatNumber(t.suspectedCandidateCount)}項待確認${mappingText}。`
         : `比對完成：成功配對${formatNumber(t.matchedCount)}項，其中跨月${formatNumber(t.crossMonthCount)}項；完全通過${formatNumber(t.passCount)}項，差異${formatNumber(t.differenceCount)}項，僅A表${formatNumber(t.aOnlyCount)}項，僅B表${formatNumber(t.bOnlyCount)}項${mappingText}。`;
+      try {
+        const saved = await saveLocalLedger(state.analysis, state.outputWorkbook, vendor);
+        localLedgerStatus.textContent = `${vendor.label}：${saved.period}本機台帳已更新；下期會自動帶入。最後更新${formatDateTime(saved.updatedAt)}。`;
+        mainStatus.textContent = `${resultText} 本機台帳已更新。`;
+      } catch (storageError) {
+        localLedgerStatus.textContent = `${storageError.message} 請下載結果Excel作為下期備援。`;
+        mainStatus.textContent = `${resultText} 本機台帳未能保存，請下載結果Excel備援。`;
+      }
       downloadButton.disabled = false;
     } catch (error) {
       resultPanel.hidden = true;
@@ -356,25 +470,66 @@
   document.getElementById("a-file").addEventListener("change", (event) => onFileChange("a", event));
   document.getElementById("b-file").addEventListener("change", (event) => onFileChange("b", event));
   document.getElementById("name-mapping-file").addEventListener("change", onNameMappingChange);
-  document.getElementById("prior-file").addEventListener("change", async (event) => {
+  priorFileInput.addEventListener("change", async (event) => {
     resetResults("上期結果已變更，請重新開始比對。");
     const file = event.currentTarget.files?.[0];
     state.priorLedger = [];
-    if (!file) { priorFileName.textContent = "未選擇（首期可略過）"; updateAvailability(); return; }
+    state.priorShanglin = [];
+    if (!file) {
+      state.priorSource = "local";
+      priorFileName.textContent = "未選擇（首期可略過）";
+      await loadLocalLedger(null, true);
+      updateAvailability(); return;
+    }
+    state.priorSource = "manual";
     priorFileName.textContent = `正在讀取：${file.name}`;
     try {
       const data = await readFile(file);
       const workbook = XLSX.read(data, { type: "array", cellDates: true });
       state.priorLedger = core.ledgerRowsFromWorkbook(workbook, XLSX);
-      priorFileName.textContent = `${file.name}・已讀取${formatNumber(state.priorLedger.length)}筆跨月認列`;
+      state.priorShanglin = core.shanglinRowsFromWorkbook(workbook, XLSX);
+      priorFileName.textContent = `${file.name}・已讀取${formatNumber(state.priorLedger.length)}筆跨月認列、${formatNumber(state.priorShanglin.length)}筆上林反向追蹤`;
+      renderLocalLedgerStatus();
     } catch (error) {
       state.priorLedger = [];
+      state.priorShanglin = [];
       priorFileName.textContent = `${file.name}：${error.message}`;
+      localLedgerStatus.textContent = "手動匯入失敗；請更換正確結果Excel，或按「改用本機台帳」。";
     }
     updateAvailability();
   });
-  periodMonth.addEventListener("change", () => { setDefaultCutoff(periodMonth.value); resetResults("對帳月份已變更，請重新開始比對。"); updateAvailability(); });
+  useLocalLedgerButton.addEventListener("click", async () => {
+    state.priorSource = "local";
+    priorFileInput.value = "";
+    priorFileName.textContent = "未選擇（目前自動使用本機台帳）";
+    resetResults("已改用瀏覽器本機台帳，請重新開始比對。");
+    await loadLocalLedger(null, true);
+    updateAvailability();
+  });
+  clearLocalLedgerButton.addEventListener("click", async () => {
+    const report = extractCurrentReport("b");
+    const vendor = report ? core.inferLedgerVendor(report) : state.currentVendor;
+    if (!vendor || !globalThis.confirm(`確定清除「${vendor.label}」在這個瀏覽器的全部台帳快照嗎？已下載的Excel不受影響。`)) return;
+    clearLocalLedgerButton.disabled = true;
+    try {
+      const count = await ledgerStore.clearVendor(vendor.key);
+      if (state.priorSource !== "manual") {
+        state.priorLedger = []; state.priorShanglin = []; state.localSnapshot = null;
+      }
+      localLedgerStatus.textContent = `${vendor.label}本機台帳已清除${formatNumber(count)}個月份；需要時可匯入結果Excel復原。`;
+    } catch (error) {
+      localLedgerStatus.textContent = `清除失敗：${error.message}`;
+    } finally {
+      clearLocalLedgerButton.disabled = false;
+    }
+  });
+  periodMonth.addEventListener("change", () => {
+    setDefaultCutoff(periodMonth.value); resetResults("對帳月份已變更，請重新開始比對。");
+    if (state.priorSource !== "manual") void loadLocalLedger();
+    updateAvailability();
+  });
   cutoffDate.addEventListener("change", () => { resetResults("跨月截止日已變更，請重新開始比對。"); updateAvailability(); });
   document.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => applyFilter(button.dataset.filter)));
+  renderLocalLedgerStatus();
   updateAvailability();
 })();

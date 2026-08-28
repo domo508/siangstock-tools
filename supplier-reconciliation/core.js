@@ -473,9 +473,11 @@
       rawRows.push(record);
       if (included) records.push(record);
     }
+    const statementMonthMatch = format === "shanglin" ? String(sheetName).match(/(20\d{2})(0[1-9]|1[0-2])/) : null;
     return {
       sourceType, fileName: options.fileName || "", sheetName, headerRowIndex, mapping, records, rawRows, format,
-      periodScope: format === "li-rong" ? "selected-month-statement" : "row-date"
+      periodScope: ["li-rong", "shanglin"].includes(format) ? "selected-month-statement" : "row-date",
+      statementMonth: statementMonthMatch ? `${statementMonthMatch[1]}-${statementMonthMatch[2]}` : ""
     };
   }
 
@@ -802,7 +804,28 @@
     }));
   }
 
+  function shanglinRowsFromWorkbook(workbook, XLSX) {
+    const sheetName = workbook.SheetNames.find((name) => name === "09_上林反向跨月");
+    if (!sheetName) return [];
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: true, defval: "" });
+    return rows.filter((row) => ["待次期B表驗證", "仍待追蹤"].includes(String(row["追蹤狀態"] || ""))
+      && row["A收貨單號"] && row["A貨號"] && parseNumber(row["A數量"]) != null).map((row) => ({
+      trackingMonth: String(row["追蹤來源月份"] || ""), originalStatus: String(row["原始判斷"] || "疑似次期上林帳款"),
+      source: "A", sourceFile: String(row["A來源檔案"] || "上期結果"), sheetName: String(row["A工作表"] || ""),
+      sourceRow: parseNumber(row["A原始列"]) || 0, date: row["A收貨日"], doc: String(row["A收貨單號"] || ""),
+      note: String(row["A原始備註"] || row["A需求來源"] || ""), detailNote: String(row["A明細備註"] || ""),
+      sku: String(row["A貨號"] || ""), name: String(row["A品名"] || ""), qty: parseNumber(row["A數量"]) || 0,
+      unitPrice: parseNumber(row["A未稅單價"]) || 0, amount: parseNumber(row["A未稅金額"]) || 0,
+      originalBDate: row["原上期B日期"], originalBDoc: String(row["原上期B候選單號"] || ""),
+      originalBRecipient: String(row["原上期B收件人"] || ""), originalBRow: parseNumber(row["原上期B候選列"]) || 0,
+      originalBName: String(row["原上期B品名"] || ""), originalBQty: parseNumber(row["原上期B數量"]),
+      originalBUnitPrice: parseNumber(row["原上期B單價"]), originalBAmount: parseNumber(row["原上期B金額"]),
+      included: true, reason: "由上期第9頁籤延續追蹤"
+    }));
+  }
+
   function inferDominantMonth(report) {
+    if (report.statementMonth) return report.statementMonth;
     if (report.periodScope === "selected-month-statement") return "";
     const counts = new Map();
     for (const record of report.records) {
@@ -812,6 +835,25 @@
       counts.set(month, (counts.get(month) || 0) + 1);
     }
     return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0] || "";
+  }
+
+  function inferLedgerVendor(report) {
+    if (report?.format === "shanglin") return { key: "shanglin", label: "上林" };
+    if (report?.format === "li-rong") return { key: "li-rong", label: "力榮" };
+    const supplierCounts = new Map();
+    for (const record of report?.records || []) {
+      const label = String(record.supplier || "").trim();
+      if (!label) continue;
+      const key = normalizeText(label);
+      const current = supplierCounts.get(key) || { key, label, count: 0 };
+      current.count += 1; supplierCounts.set(key, current);
+    }
+    const supplier = [...supplierCounts.values()].sort((left, right) => right.count - left.count || left.key.localeCompare(right.key))[0];
+    if (supplier) return { key: `supplier:${supplier.key}`, label: supplier.label };
+    const fileName = String(report?.fileName || "");
+    if (/普[悠優]瑪/.test(fileName)) return { key: "puyuma", label: "普悠瑪" };
+    const fallback = normalizeText(fileName.replace(/\.xlsx?$|\.csv$/i, "").replace(/20\d{2}|\d{1,2}月|[()（）]|a表|b表|供應商|對帳|報表/gi, ""));
+    return { key: `file:${fallback || "unknown"}`, label: fallback || "未辨識供應商" };
   }
 
   function shanglinSource(record, sourceType) {
@@ -868,35 +910,104 @@
     };
   }
 
-  function analyzeShanglinMonthlyReports(aReport, bReport, options) {
-    const bounds = periodBounds(options.month, options.cutoff);
-    const priorLedger = Array.isArray(options.priorLedger) ? options.priorLedger : [];
-    const priorResult = applyPriorAllocations(aReport, priorLedger);
-    const aRecords = priorResult.records.filter((record) => sameMonth(parseDateValue(record.date), bounds));
-    const bRecords = bReport.records.filter((record) => sameMonth(parseDateValue(record.date), bounds));
-    if (!bRecords.length) throw new Error(`${bounds.monthText}的上林B表沒有可比對商品，請確認訂單日期與月份。`);
-    const aOrders = groupOrders(aRecords, "a");
-    const bOrders = groupOrders(bRecords, "b");
+  function matchShanglinOrderGroups(aOrders, bOrders, maxGapDays) {
     const candidates = [];
     for (const aOrder of aOrders) for (const bOrder of bOrders) {
       if (!aOrder.signature || aOrder.signature !== bOrder.signature || aOrder.source !== bOrder.source) continue;
       const gap = dayGap(aOrder.date, bOrder.date);
-      if (Math.abs(gap) <= 3) candidates.push({ aOrder, bOrder, gap });
+      if (Math.abs(gap) <= maxGapDays) candidates.push({ aOrder, bOrder, gap });
     }
     candidates.sort((left, right) => Math.abs(left.gap) - Math.abs(right.gap) || left.aOrder.doc.localeCompare(right.aOrder.doc));
     const usedADocs = new Set();
     const usedBDocs = new Set();
-    const exactPairs = [];
+    const pairs = [];
     for (const candidate of candidates) {
       if (usedADocs.has(candidate.aOrder.doc) || usedBDocs.has(candidate.bOrder.doc)) continue;
-      usedADocs.add(candidate.aOrder.doc); usedBDocs.add(candidate.bOrder.doc); exactPairs.push(candidate);
+      usedADocs.add(candidate.aOrder.doc); usedBDocs.add(candidate.bOrder.doc); pairs.push(candidate);
     }
+    return pairs;
+  }
+
+  function shanglinLineKey(record) {
+    return [normalizeText(record.sku), quantityText(record.qty), quantityText(record.unitPrice)].join("|");
+  }
+
+  function shanglinRecordKey(record) {
+    return [record.trackingMonth || "", record.sourceFile || "", record.sheetName || "", record.doc || "", record.sku || "", record.sourceRow || ""].join("|");
+  }
+
+  function shanglinTrackingRow(record, trackingMonth, status, originalStatus, bRecord = null, explanation = "") {
+    return {
+      processingMonth: "", trackingMonth, status, originalStatus,
+      aSourceFile: record.sourceFile || "", aSheetName: record.sheetName || "", aDate: parseDateValue(record.date)?.key || record.date,
+      aDoc: String(record.doc || ""), aSource: shanglinSource(record, "a"), aRow: record.sourceRow,
+      aSku: record.sku, aName: record.name, aQty: record.qty, aUnitPrice: record.unitPrice, aAmount: record.amount,
+      aNote: record.note || "", aDetailNote: record.detailNote || "",
+      bDate: bRecord ? parseDateValue(bRecord.date)?.key || bRecord.date : "", bDoc: String(bRecord?.doc || ""),
+      bRecipient: bRecord?.recipient || "", bRow: bRecord?.sourceRow || "", bName: bRecord?.name || "",
+      bQty: bRecord?.qty ?? "", bUnitPrice: bRecord?.unitPrice ?? "", bAmount: bRecord?.amount ?? "",
+      qtyDifference: bRecord ? record.qty - bRecord.qty : "", unitPriceDifference: bRecord ? record.unitPrice - bRecord.unitPrice : "",
+      amountDifference: bRecord ? record.amount - bRecord.amount : "", explanation,
+      originalBDate: record.originalBDate || "", originalBDoc: record.originalBDoc || "", originalBRecipient: record.originalBRecipient || "",
+      originalBRow: record.originalBRow || "", originalBName: record.originalBName || "", originalBQty: record.originalBQty ?? "",
+      originalBUnitPrice: record.originalBUnitPrice ?? "", originalBAmount: record.originalBAmount ?? ""
+    };
+  }
+
+  function resolveShanglinPriorRows(priorRecords, bRecords, bounds) {
+    const priorOrders = groupOrders(priorRecords, "a");
+    const bOrders = groupOrders(bRecords, "b");
+    const pairs = matchShanglinOrderGroups(priorOrders, bOrders, 10);
+    const resolvedARows = new Set();
+    const usedBRows = new Set();
+    const results = [];
+    for (const pair of pairs) {
+      const bQueues = new Map();
+      for (const record of pair.bOrder.records) {
+        const key = shanglinLineKey(record);
+        const rows = bQueues.get(key) || []; rows.push(record); bQueues.set(key, rows);
+        usedBRows.add(shanglinRecordKey(record));
+      }
+      for (const record of pair.aOrder.records) {
+        const bRecord = bQueues.get(shanglinLineKey(record))?.shift() || null;
+        resolvedARows.add(shanglinRecordKey(record));
+        const hasOldCandidate = Boolean(record.originalBDoc || record.originalBRow);
+        const explanation = hasOldCandidate
+          ? `A表已由次期B表整單驗證；原上期B候選${record.originalBDoc || `第${record.originalBRow}列`}仍須人工確認，不可重複沖銷`
+          : `上期A表已由本期B表整單驗證；來源${pair.aOrder.source}，日期差${Math.abs(pair.gap)}天`;
+        const row = shanglinTrackingRow(record, record.trackingMonth, hasOldCandidate ? "A端已驗證／原B候選待確認" : "已由次期B表驗證", record.originalStatus, bRecord, explanation);
+        row.processingMonth = bounds.monthText;
+        results.push(row);
+      }
+    }
+    const unresolved = priorRecords.filter((record) => !resolvedARows.has(shanglinRecordKey(record)));
+    for (const record of unresolved) {
+      const row = shanglinTrackingRow(record, record.trackingMonth, "仍待追蹤", record.originalStatus, null, "本期B表仍找不到內容、來源與日期均一致的整張訂單，延續至下期");
+      row.processingMonth = bounds.monthText; results.push(row);
+    }
+    return { pairs, results, unresolved, usedBRows };
+  }
+
+  function analyzeShanglinMonthlyReports(aReport, bReport, options) {
+    const bounds = periodBounds(options.month, options.cutoff);
+    const priorLedger = Array.isArray(options.priorLedger) ? options.priorLedger : [];
+    const priorShanglin = Array.isArray(options.priorShanglin) ? options.priorShanglin : [];
+    const priorResult = applyPriorAllocations(aReport, priorLedger);
+    const aRecords = priorResult.records.filter((record) => sameMonth(parseDateValue(record.date), bounds));
+    const statementBRecords = bReport.periodScope === "selected-month-statement"
+      ? bReport.records.slice() : bReport.records.filter((record) => sameMonth(parseDateValue(record.date), bounds));
+    if (!statementBRecords.length) throw new Error(`${bounds.monthText}的上林B表沒有可比對商品，請確認請款月份。`);
+    const reverse = resolveShanglinPriorRows(priorShanglin, statementBRecords, bounds);
+    const bRecords = statementBRecords.filter((record) => !reverse.usedBRows.has(shanglinRecordKey(record)));
+    const aOrders = groupOrders(aRecords, "a");
+    const bOrders = groupOrders(bRecords, "b");
+    const exactPairs = matchShanglinOrderGroups(aOrders, bOrders, 3);
     const exactARecords = exactPairs.flatMap((pair) => pair.aOrder.records);
     const exactBRecords = exactPairs.flatMap((pair) => pair.bOrder.records);
-    const exactAnalysis = analyzeMonthlyReports(
+    const exactAnalysis = exactPairs.length ? analyzeMonthlyReports(
       reportWithRecords(aReport, exactARecords), reportWithRecords(bReport, exactBRecords),
-      { ...options, priorLedger: [], disableShanglin: true }
-    );
+      { ...options, priorLedger: [], priorShanglin: [], disableShanglin: true }
+    ) : { paired: [], differences: [], totals: { matchedAmountDifference: 0 } };
     const exactARows = new Set(exactARecords.map((record) => record.sourceRow));
     const exactBRows = new Set(exactBRecords.map((record) => record.sourceRow));
     let remainingA = aRecords.filter((record) => !exactARows.has(record.sourceRow));
@@ -989,14 +1100,32 @@
     pendingRecords.forEach((record) => rawAReasons.set(record.sourceRow, "上林月底A表，疑似次期帳款"));
     manualCandidates.forEach(({ aRecord }) => rawAReasons.set(aRecord.sourceRow, "上林疑似候選，來源／日期需人工確認"));
     const rawBReasons = new Map();
+    reverse.pairs.forEach((pair) => pair.bOrder.records.forEach((record) => rawBReasons.set(record.sourceRow, `上林反向跨月通過：${pair.bOrder.doc} ↔ 上期${pair.aOrder.doc}；來源${pair.bOrder.source}`)));
     exactPairs.forEach((pair) => pair.bOrder.records.forEach((record) => rawBReasons.set(record.sourceRow, `上林整單配對通過：${pair.bOrder.doc} ↔ ${pair.aOrder.doc}；來源${pair.bOrder.source}`)));
     manualCandidates.forEach(({ bRecord }) => rawBReasons.set(bRecord.sourceRow, "上林疑似候選，來源／日期需人工確認"));
     const finalAReport = reportWithRecords(aReport, aRecords, rawAReasons);
-    const finalBReport = reportWithRecords(bReport, bRecords, rawBReasons);
+    const finalBReport = reportWithRecords(bReport, statementBRecords, rawBReasons);
     const aItems = aggregateSource(finalAReport);
-    const bItems = aggregateSource(finalBReport);
+    const bItems = aggregateSource(reportWithRecords(bReport, bRecords));
+    const statementBItems = aggregateSource(finalBReport);
+    const candidateByARow = new Map(manualCandidates.map(({ aRecord, bRecord }) => [aRecord.sourceRow, bRecord]));
+    const currentTrackingRecords = [...pendingRecords, ...manualCandidates.map((item) => item.aRecord)]
+      .filter((record, index, rows) => rows.findIndex((row) => row.sourceRow === record.sourceRow) === index);
+    const currentTrackingRows = currentTrackingRecords.map((record) => {
+      const originalB = candidateByARow.get(record.sourceRow);
+      const trackedRecord = originalB ? {
+        ...record, originalBDate: originalB.date, originalBDoc: originalB.doc, originalBRecipient: originalB.recipient,
+        originalBRow: originalB.sourceRow, originalBName: originalB.name, originalBQty: originalB.qty,
+        originalBUnitPrice: originalB.unitPrice, originalBAmount: originalB.amount
+      } : record;
+      const row = shanglinTrackingRow(trackedRecord, bounds.monthText, "待次期B表驗證", originalB ? "疑似配對待人工確認" : "疑似次期上林帳款", null,
+        originalB ? `A表月底明細等待次期B表整單驗證；原本期B候選${originalB.doc || `第${originalB.sourceRow}列`}另保留人工確認` : "A表月底明細等待次期上林B表整單驗證");
+      row.processingMonth = bounds.monthText; return row;
+    });
+    const shanglinReverseRows = [...reverse.results, ...currentTrackingRows];
     const suspectedNextPeriodCount = reviewItems.filter((row) => row.suspectedNextPeriod).length;
     const attentionCount = reviewItems.length;
+    const reverseResolvedRows = reverse.results.filter((row) => row.status !== "仍待追蹤");
     const totals = {
       aItemCount: aItems.length, bItemCount: bItems.length, matchedCount: paired.length, passCount: paired.length,
       differenceCount: candidateRows.length + exactAnalysis.differences.length, aOnlyCount: aOnly.length, bOnlyCount: bOnly.length,
@@ -1004,16 +1133,22 @@
       exactOrderCount: exactPairs.length, exactLineCount: exactARecords.length,
       aPairRate: aItems.length ? paired.length / aItems.length : 0, bPairRate: bItems.length ? paired.length / bItems.length : 0,
       aAmount: aItems.reduce((sum, item) => sum + item.amount, 0), bAmount: bItems.reduce((sum, item) => sum + item.amount, 0),
+      bStatementItemCount: statementBItems.length, bStatementAmount: statementBItems.reduce((sum, item) => sum + item.amount, 0),
       matchedAmountDifference: exactAnalysis.totals.matchedAmountDifference,
       absoluteDifference: candidateRows.reduce((sum, item) => sum + Math.abs(item.auditAmountDifference), 0) + bOnly.reduce((sum, item) => sum + Math.abs(item.auditAmountDifference), 0),
-      crossMonthCount: 0, crossMonthPassCount: 0, priorExcludedCount: priorResult.exclusions.length,
+      crossMonthCount: 0, crossMonthPassCount: 0,
+      reverseResolvedOrderCount: reverse.pairs.length, reverseResolvedLineCount: reverseResolvedRows.length,
+      reverseResolvedQty: reverseResolvedRows.reduce((sum, row) => sum + Number(row.aQty || 0), 0),
+      reverseResolvedAmount: reverseResolvedRows.reduce((sum, row) => sum + Number(row.aAmount || 0), 0),
+      reverseUnresolvedOrderCount: groupOrders(reverse.unresolved, "a").length, reverseUnresolvedLineCount: reverse.unresolved.length,
+      priorExcludedCount: priorResult.exclusions.length,
       priorExcludedQty: priorResult.exclusions.reduce((sum, row) => sum + row.excludedQty, 0)
     };
     return {
       vendorMode: "shanglin-order", generatedAt: new Date().toISOString(), aReport: finalAReport, bReport: finalBReport,
       aItems, bItems, paired, passed: paired, differences: reviewItems, reviewItems, unmatched: [...aOnly, ...candidateRows, ...bOnly],
-      aOnly, bOnly, totals, period: { month: bounds.monthText, cutoff: bounds.cutoffKey }, priorLedger,
-      crossMonthAllocations: [], ledgerAllocations: priorLedger, priorPeriodExclusions: priorResult.exclusions
+      aOnly, bOnly, totals, period: { month: bounds.monthText, cutoff: bounds.cutoffKey }, priorLedger, priorShanglin,
+      shanglinReverseRows, crossMonthAllocations: [], ledgerAllocations: priorLedger, priorPeriodExclusions: priorResult.exclusions
     };
   }
 
@@ -1249,6 +1384,23 @@
     return [["來源檔案", "工作表", "原始列", "是否納入", "排除／判斷原因", "日期", "單據編號", "帳別", "貨號", "品名", "數量", "單價", "金額", "收件人名稱", "備註", "明細備註"], ...report.rawRows.map((row) => [row.sourceFile, row.sheetName, row.sourceRow, row.included ? "是" : "否", row.reason, row.date, row.doc, row.transactionType, row.sku, row.name, row.qty, row.unitPrice, row.amount, row.recipient || "", row.note || "", row.detailNote || ""])];
   }
 
+  const SHANGLIN_REVERSE_HEADERS = [
+    "處理月份", "追蹤來源月份", "追蹤狀態", "原始判斷", "A來源檔案", "A工作表", "A收貨日", "A收貨單號", "A需求來源", "A原始列",
+    "A貨號", "A品名", "A數量", "A未稅單價", "A未稅金額", "A原始備註", "A明細備註",
+    "當期B訂單日期", "當期B訂單編號", "當期B收件人", "當期B原始列", "當期B品名", "B數量", "B單價", "B小計",
+    "數量差", "單價差", "金額差", "處理說明", "原上期B日期", "原上期B候選單號", "原上期B收件人", "原上期B候選列",
+    "原上期B品名", "原上期B數量", "原上期B單價", "原上期B金額"
+  ];
+  function shanglinReverseValues(row) {
+    return [
+      row.processingMonth, row.trackingMonth, row.status, row.originalStatus, row.aSourceFile, row.aSheetName, row.aDate, row.aDoc, row.aSource, row.aRow,
+      row.aSku, row.aName, row.aQty, row.aUnitPrice, row.aAmount, row.aNote, row.aDetailNote,
+      row.bDate, row.bDoc, row.bRecipient, row.bRow, row.bName, row.bQty, row.bUnitPrice, row.bAmount,
+      row.qtyDifference, row.unitPriceDifference, row.amountDifference, row.explanation,
+      row.originalBDate, row.originalBDoc, row.originalBRecipient, row.originalBRow, row.originalBName, row.originalBQty, row.originalBUnitPrice, row.originalBAmount
+    ];
+  }
+
   function buildOutputWorkbook(analysis, XLSX) {
     const workbook = XLSX.utils.book_new();
     const t = analysis.totals;
@@ -1276,22 +1428,26 @@
       ["A表來源", analysis.aReport.fileName], ["B表來源", analysis.bReport.fileName],
       ["成本口徑", "A表未稅進貨價 ↔ B表單價；候選價差只供人工確認，未確認前不認列為本期差異"],
       ["對帳月份", analysis.period?.month || "未指定"], ["跨月補收截止日", analysis.period?.cutoff || "未使用"], ["", ""],
-      ["指標", "結果"], ["A表商品數", t.aItemCount], ["B表商品數", t.bItemCount], ["本期核對通過商品", t.matchedCount],
+      ["指標", "結果"], ["A表商品數", t.aItemCount], ["B表整份請款商品數", t.bStatementItemCount], ["反查後B表本期商品數", t.bItemCount], ["本期核對通過商品", t.matchedCount],
       ["A表本期核對率", t.aPairRate], ["B表本期核對率", t.bPairRate], ["整單通過張數", t.exactOrderCount], ["整單通過明細筆數", t.exactLineCount],
+      ["上期反查通過張數", t.reverseResolvedOrderCount], ["上期反查通過明細", t.reverseResolvedLineCount], ["上期反查通過數量", t.reverseResolvedQty], ["上期反查通過金額", t.reverseResolvedAmount],
+      ["上期仍待追蹤張數", t.reverseUnresolvedOrderCount], ["上期仍待追蹤明細", t.reverseUnresolvedLineCount],
       ["疑似次期上林帳款商品", t.suspectedNextPeriodCount], ["疑似配對待人工確認", t.suspectedCandidateCount],
       ["月底僅A商品", t.aOnlyCount], ["僅B表存在", t.bOnlyCount], ["待確認商品", t.attentionCount], ["", ""],
       ["上林逐單核對關係", "說明"],
-      ["B表對價", `B表${t.bItemCount}項＝本期核對通過${t.matchedCount}項＋疑似配對${t.suspectedCandidateCount}項＋僅B表${t.bOnlyCount}項`],
+      ["B表對價", `整份B表${t.bStatementItemCount}項；先反查上期${t.reverseResolvedOrderCount}張訂單，再由剩餘${t.bItemCount}項進行本期核對`],
+      ["上期反查", `通過${t.reverseResolvedOrderCount}張、${t.reverseResolvedLineCount}筆、${t.reverseResolvedQty}件、${t.reverseResolvedAmount}元；仍待追蹤${t.reverseUnresolvedOrderCount}張`],
       ["整單通過", `${t.exactOrderCount}張訂單、${t.exactLineCount}筆明細已通過內容雜湊、需求來源與日期核對`],
       ["月底A表", `疑似次期${t.suspectedNextPeriodCount}項；其中${t.aOnlyCount}項本期B表完全未出現，其餘與已通過商品重疊`],
       ["⚠ 財務特別提醒", `疑似次期帳款${t.suspectedNextPeriodCount}項＋疑似配對${t.suspectedCandidateCount}項＝${t.attentionCount}項待確認；取得上林次期報表後再正式沖銷`], ["", ""],
-      ["A表未稅進貨總額", t.aAmount], ["B表合計總額", t.bAmount], ["已確認配對淨金額差額", t.matchedAmountDifference], ["候選價差影響", t.absoluteDifference]
+      ["A表未稅進貨總額", t.aAmount], ["B表整份請款總額", t.bStatementAmount], ["反查後B表本期總額", t.bAmount], ["已確認配對淨金額差額", t.matchedAmountDifference], ["候選價差影響", t.absoluteDifference]
     ];
     const summaryRows = analysis.vendorMode === "shanglin-order" ? shanglinSummaryRows : standardSummaryRows;
     const summarySheet = makeSheet(XLSX, summaryRows, [30, 78]);
-    setNumberFormats(XLSX, summarySheet, ["B13:B14"], "0.0%");
+    const rateRows = summaryRows.map((row, index) => row[0].includes("配對率") ? index + 1 : 0).filter(Boolean).map((row) => `B${row}`);
+    if (rateRows.length) setNumberFormats(XLSX, summarySheet, rateRows, "0.0%");
     const amountStartRow = summaryRows.findIndex((row) => row[0] === "A表未稅進貨總額") + 1;
-    setNumberFormats(XLSX, summarySheet, [`B${amountStartRow}:B${amountStartRow + 3}`], "#,##0;[Red](#,##0);-");
+    setNumberFormats(XLSX, summarySheet, [`B${amountStartRow}:B${summaryRows.length}`], "#,##0;[Red](#,##0);-");
     const alertRow = summaryRows.findIndex((row) => row[0] === "⚠ 財務特別提醒") + 1;
     for (const address of [`A${alertRow}`, `B${alertRow}`]) {
       if (summarySheet[address]) summarySheet[address].s = { font: { bold: true, color: { rgb: "9C2F27" } }, fill: { fgColor: { rgb: "FBE9E7" } } };
@@ -1325,6 +1481,7 @@
       ["上林逐單規則", analysis.vendorMode === "shanglin-order" ? "先以整張A收貨單與B訂單的貨號、數量、單價內容雜湊，再核對A備註需求來源、B收件人及日期；整單通過後才彙整商品。" : "只在辨識到上林請款格式時啟用，不影響普悠瑪與力榮。"],
       ["上林月底待次期", analysis.vendorMode === "shanglin-order" ? "對帳月底三日內、尚未出現在B表的A明細標為疑似次期上林帳款；不先列為本期數量差異，待取得次期B表再確認。" : "不適用。"],
       ["上林人工候選", analysis.vendorMode === "shanglin-order" ? "單筆貨號與數量相同，但來源或日期脈絡未同時通過時，只列疑似配對；單價差僅顯示潛在影響，未經人工確認不自動沖銷。" : "不適用。"],
+      ["上林反向跨月", analysis.vendorMode === "shanglin-order" ? "第9頁籤保留月底A表待次期驗證明細；下期匯入上期結果後，先以整張訂單內容、來源與日期反查本期B表，通過的B明細不再重複進入本期一般對帳。" : "不適用。"],
       ["保守原則", "名稱不夠可靠或多個候選太接近時，不強制沖銷，保留僅A／僅B及疑似候選。"],
       ["數量", "先按商品辨識，再逐筆分配A、B明細數量；優先配對等量明細，剩餘量才拆分。B表銷退以負數沖回。"], ["單價", "A表未稅進貨價減B表單價。"],
       ["金額", "A表未稅進貨額減B表合計；用來表示財務影響，不獨立重複分類。"],
@@ -1345,6 +1502,12 @@
     const ledger = makeSheet(XLSX, ledgerRows, [14, 20, 15, 20, 42, 15, 20, 15, 42, 14, 14, 16, 12, 54], `A1:N${Math.max(1, ledgerRows.length)}`);
     if (ledgerRows.length > 1) setNumberFormats(XLSX, ledger, [`J2:M${ledgerRows.length}`], "#,##0;[Red](#,##0);-");
     XLSX.utils.book_append_sheet(workbook, ledger, "08_跨月認列台帳");
+
+    const reverseRows = [SHANGLIN_REVERSE_HEADERS, ...(analysis.shanglinReverseRows || []).map(shanglinReverseValues)];
+    const reverseWidths = [14, 16, 26, 24, 28, 18, 14, 20, 16, 10, 14, 38, 11, 14, 14, 52, 48, 16, 22, 22, 12, 38, 11, 12, 14, 11, 11, 14, 72, 16, 22, 22, 12, 38, 14, 14, 14];
+    const reverseSheet = makeSheet(XLSX, reverseRows, reverseWidths, `A1:AK${Math.max(1, reverseRows.length)}`);
+    if (reverseRows.length > 1) setNumberFormats(XLSX, reverseSheet, [`M2:O${reverseRows.length}`, `W2:AB${reverseRows.length}`, `AI2:AK${reverseRows.length}`], "#,##0;[Red](#,##0);-");
+    XLSX.utils.book_append_sheet(workbook, reverseSheet, "09_上林反向跨月");
     return workbook;
   }
 
@@ -1375,6 +1538,6 @@
     SOURCE_SCHEMAS, fieldLabel, parseNumber, normalizeHeader, canonicalizeName, autoMapHeaders, validateMapping,
     inspectWorkbook, inspectNameMappingWorkbook, parseNameMappingWorkbook, applyNameMappingToBReport,
     extractSource, aggregateSource, matchScore, findMatches, analyzeReports, parseDateValue, inferDominantMonth,
-    ledgerRowsFromWorkbook, analyzeMonthlyReports, buildOutputWorkbook, buildFrozenWorkbookBytes
+    ledgerRowsFromWorkbook, shanglinRowsFromWorkbook, inferLedgerVendor, analyzeMonthlyReports, buildOutputWorkbook, buildFrozenWorkbookBytes
   };
 })(globalThis);

@@ -214,6 +214,12 @@ describe("財務供應商對帳核心", () => {
     expect(rawB[0]["排除／判斷原因"]).toContain("品名對照表第2列 → P100");
   });
 
+  it("本機台帳會以固定供應商識別分開保存", () => {
+    expect(core.inferLedgerVendor({ format: "shanglin", records: [] })).toEqual({ key: "shanglin", label: "上林" });
+    expect(core.inferLedgerVendor({ format: "li-rong", records: [] })).toEqual({ key: "li-rong", label: "力榮" });
+    expect(core.inferLedgerVendor({ format: "", fileName: "6月-普優瑪(B表供應商).xlsx", records: [] })).toEqual({ key: "puyuma", label: "普悠瑪" });
+  });
+
   it("上林先核對整張訂單，再將月底A表與脈絡衝突候選分開提醒", () => {
     const makeReport = (sourceType, records, format = "") => ({
       sourceType, format, fileName: `${sourceType}.xlsx`, sheetName: "資料", headerRowIndex: 0,
@@ -247,10 +253,54 @@ describe("財務供應商對帳核心", () => {
     expect(rawA[0]["備註"]).toBe("請直送【倉庫】");
   });
 
-  it("輸出八頁籤並保留原始資料、差異、說明與跨月台帳", () => {
+  it("上林第9頁籤會在下期先反查整單，通過的B明細不重複進入本期對帳", () => {
+    const makeReport = (sourceType, records, extra = {}) => ({
+      sourceType, fileName: `${sourceType}.xlsx`, sheetName: "資料", headerRowIndex: 0, ...extra,
+      records: records.map((row, index) => ({ ...row, sourceRow: index + 2, included: true, reason: "納入比對" })),
+      rawRows: records.map((row, index) => ({ ...row, source: sourceType.toUpperCase(), sourceFile: `${sourceType}.xlsx`, sheetName: "資料", sourceRow: index + 2, included: true, reason: "納入比對" }))
+    });
+    const juneA = makeReport("a", [
+      { date: "2026-06-29", doc: "R2", sku: "P1", name: "商品一", qty: 2, unitPrice: 100, amount: 200, note: "請直送【倉庫】" },
+      { date: "2026-06-29", doc: "R2", sku: "P3", name: "商品三", qty: 1, unitPrice: 300, amount: 300, note: "請直送【倉庫】" },
+      { date: "2026-06-29", doc: "R3", sku: "G1", name: "候選商品", qty: 6, unitPrice: 1100, amount: 6600, note: "直送【文心門市】" }
+    ]);
+    const juneB = makeReport("b", [
+      { date: "2026-06-10", doc: "S-20260624-005", sku: "G1", name: "錯誤候選", qty: 6, unitPrice: 1000, amount: 6000, recipient: "台中誠品480店" }
+    ], { format: "shanglin" });
+    const june = core.analyzeMonthlyReports(juneA, juneB, { month: "2026-06", cutoff: "2026-07-10" });
+    const juneOutput = core.buildOutputWorkbook(june, XLSX);
+    const priorShanglin = core.shanglinRowsFromWorkbook(juneOutput, XLSX);
+    expect(priorShanglin).toHaveLength(3);
+    expect(priorShanglin.find((row) => row.sku === "G1")).toMatchObject({ originalStatus: "疑似配對待人工確認", originalBDoc: "S-20260624-005", originalBUnitPrice: 1000 });
+
+    const julyA = makeReport("a", [
+      { date: "2026-07-10", doc: "R4", sku: "P4", name: "本期商品", qty: 1, unitPrice: 400, amount: 400, note: "請直送【倉庫】" }
+    ]);
+    const julyB = makeReport("b", [
+      { date: "2026-06-30", doc: "S-20260701-001", sku: "P1", name: "商品一", qty: 2, unitPrice: 100, amount: 200, recipient: "翔仔總倉" },
+      { date: "2026-06-30", doc: "S-20260701-001", sku: "P3", name: "商品三", qty: 1, unitPrice: 300, amount: 300, recipient: "翔仔總倉" },
+      { date: "2026-06-30", doc: "S-20260701-002", sku: "G1", name: "候選商品", qty: 6, unitPrice: 1100, amount: 6600, recipient: "台中文心秀泰" },
+      { date: "2026-07-10", doc: "S-20260710-001", sku: "P4", name: "本期商品", qty: 1, unitPrice: 400, amount: 400, recipient: "翔仔總倉" }
+    ], { format: "shanglin", periodScope: "selected-month-statement", statementMonth: "2026-07" });
+    const july = core.analyzeMonthlyReports(julyA, julyB, { month: "2026-07", cutoff: "2026-08-10", priorShanglin });
+    expect(july.totals).toMatchObject({
+      reverseResolvedOrderCount: 2, reverseResolvedLineCount: 3, reverseResolvedQty: 9, reverseResolvedAmount: 7100,
+      reverseUnresolvedOrderCount: 0, bStatementItemCount: 4, bItemCount: 1, exactOrderCount: 1, exactLineCount: 1
+    });
+    expect(july.paired).toHaveLength(1);
+    expect(july.paired[0].aSku).toBe("P4");
+    expect(july.shanglinReverseRows.find((row) => row.aSku === "G1")).toMatchObject({ status: "A端已驗證／原B候選待確認", bDoc: "S-20260701-002", unitPriceDifference: 0 });
+    const julyOutput = core.buildOutputWorkbook(july, XLSX);
+    expect(core.shanglinRowsFromWorkbook(julyOutput, XLSX)).toHaveLength(0);
+    const reverseRows = XLSX.utils.sheet_to_json(julyOutput.Sheets["09_上林反向跨月"], { defval: "" });
+    expect(reverseRows).toHaveLength(3);
+    expect(reverseRows.find((row) => row["A貨號"] === "G1")["處理說明"]).toContain("原上期B候選");
+  });
+
+  it("輸出九頁籤並保留原始資料、差異、說明與兩種跨月台帳", () => {
     const { aReport, bReport } = buildReports();
     const workbook = core.buildOutputWorkbook(core.analyzeReports(aReport, bReport), XLSX);
-    expect(workbook.SheetNames).toEqual(["01_對帳總覽", "02_差異明細", "03_未配對品項", "04_完全通過", "05_A表原始資料", "06_B表原始資料", "07_比對說明", "08_跨月認列台帳"]);
+    expect(workbook.SheetNames).toEqual(["01_對帳總覽", "02_差異明細", "03_未配對品項", "04_完全通過", "05_A表原始資料", "06_B表原始資料", "07_比對說明", "08_跨月認列台帳", "09_上林反向跨月"]);
     expect(workbook.Sheets["02_差異明細"]["!autofilter"]).toBeTruthy();
     expect(workbook.Sheets["05_A表原始資料"]["!autofilter"]).toBeTruthy();
     const summary = XLSX.utils.sheet_to_json(workbook.Sheets["01_對帳總覽"], { header: 1, defval: "" });
@@ -361,19 +411,25 @@ describe("財務供應商對帳前台", () => {
     expect(home).toContain('href="/supplier-reconciliation/"');
     expect(html).toContain("公司工具首頁");
     expect(html).toContain("← 返回公司工具首頁");
-    expect(html).toContain("不上傳、不會修改原始檔");
+    expect(html).toContain("原始Excel不保存、不上傳");
     expect(html).toContain("A表「未稅進貨價」對應B表「單價」");
     expect(html).toContain('id="period-month"');
     expect(html).toContain('id="prior-file"');
+    expect(html).toContain('id="local-ledger-status"');
+    expect(html).toContain('id="clear-local-ledger"');
+    expect(html).toContain("最多保留24個月");
+    expect(html).toContain('src="ledger-store.js');
     expect(html).toContain('id="name-mapping-file"');
     expect(html).toContain('id="summary-notes"');
     expect(html).toContain("第8頁籤");
+    expect(html).toContain("第9頁籤");
     expect(html).toContain("每筆都檢查跨月");
     expect(html).toContain("力榮帳款整份依選定月份認列");
     expect(html).toContain("原始列號、日期、單號與剩餘數量");
     expect(app).toContain("數量對價關係");
     expect(app).toContain("財務特別提醒");
     expect(app).toContain("applyNameMappingToBReport");
+    expect(app).toContain("saveLocalLedger");
     expect(html).toContain("下載結果Excel");
     expect(html).toContain("connect-src 'none'");
     expect(app).not.toContain("fetch(");
