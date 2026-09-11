@@ -1,5 +1,6 @@
 import { verifyAdmin } from "./access";
 import { RequestValidationError, validateRules, validateUpdateBody } from "./schema";
+import { cleanupNotifications, procurementRoute } from "./procurement";
 
 const API_HEADERS = {
   "Cache-Control": "no-store, max-age=0",
@@ -84,6 +85,8 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     try {
+      const procurementResponse = await procurementRoute(request, env);
+      if (procurementResponse) return procurementResponse;
       if (url.pathname === "/api/rules" && (request.method === "GET" || request.method === "HEAD")) return await publicRules(request, env);
       if (url.pathname === "/api/rules/admin" && request.method === "PUT") return await updateRules(request, env);
       if (url.pathname.startsWith("/api/rules")) return errorResponse("不支援此方法或路徑。", 405);
@@ -93,5 +96,8 @@ export default {
       if (error instanceof RequestValidationError) return errorResponse(error.message, error.status);
       return errorResponse("規則服務暫時無法使用。", 503);
     }
+  },
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(cleanupNotifications(env));
   }
 } satisfies ExportedHandler<Env>;

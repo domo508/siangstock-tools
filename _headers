@@ -22,6 +22,14 @@
 /supplier-reconciliation/index.html
   Cache-Control: no-cache
 
+/procurement-planning/index.html
+  Cache-Control: no-cache
+  Content-Security-Policy: default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+
+/procurement-planning/manual.html
+  Cache-Control: no-cache
+
 /inventory/*.js
   Cache-Control: public, max-age=3600
 
@@ -38,6 +46,12 @@
   Cache-Control: public, max-age=3600
 
 /supplier-reconciliation/*.css
+  Cache-Control: public, max-age=3600
+
+/procurement-planning/*.js
+  Cache-Control: public, max-age=3600
+
+/procurement-planning/*.css
   Cache-Control: public, max-age=3600
 
 /site.css

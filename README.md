@@ -6,6 +6,7 @@
 - `/inventory/`：期初期末庫存資料整理。
 - `/cost-analysis/`：A、B庫存成本稽核分析；在瀏覽器內整合八類 Excel 來源，比對 A 庫存推算耗用、B 淨銷售／跨體系成本與 C 非銷售調整。
 - `/supplier-reconciliation/`：財務供應商對帳比對；在瀏覽器內按月比對 ERP 收貨單與供應商對帳報表，支援次月補收、前期認列扣抵及上林反向跨月追蹤，並輸出含兩種跨月台帳的九頁籤 Excel。跨月台帳會依供應商自動保存於目前瀏覽器的 IndexedDB、同月份重跑覆蓋且最多保留24個月；原始 Excel 不保存，換機仍可用結果 Excel 復原。
+- `/procurement-planning/`：庫存採購規劃正式流程；原始 Excel 留在瀏覽器，固定 Google 來源唯讀取得，產生分供應商採購／寄庫建議、人工回匯二次覆核、付款月份、集中額度台帳、核准摘要郵件與 ERP 採購檔。
 
 ## 庫存工具會做什麼
 
@@ -17,6 +18,8 @@
 
 所有同事都會使用 Cloudflare D1 中的公司集中規則。`/inventory/` 與 `/cost-analysis/` 都會在「開啟頁面」及每次按「開始分析」前，透過同源的 `/api/rules` 再取最新版；若規則服務無法使用，會直接禁止分析，不會偷偷改用舊規則。`/supplier-reconciliation/` 不需呼叫規則 API，商品與金額只在瀏覽器內比對。
 
+`/procurement-planning/` 的銷售需求採「銷貨＋訂貨＋退貨＋退訂、排除取貨」；SKU近期6／12週模型為主，類別模型只做季節需求池校正。上林固定28天檢視並獨立分頁；力榮逐品號採0或10的倍數；凱信達、歐必斯與總部贈品排除一般自動採購。普優瑪現貨拉貨5天、製作45天，寄庫目標依熱銷120／穩定105／低銷90天；力榮現貨5天、製作14天、製作後最早19天，寄庫目標依熱銷90／其餘60天。工廠寄倉仍不得扣減公司淨採購需求。第一次回匯會重算可售至、AI判斷、規則阻擋、付款月份與額度；第二次回匯須逐列明確確認，通過後才可送待核准。只有正式核准後才寫入採購承諾、建立可重送的電子郵件通知並開放ERP檔案；完成ERP開單後只轉換互斥狀態，不重複占額。完整規格與尚待逐步擴充的門市展示、B3及耗材流程見 [`procurement-planning/NEXT_PHASE.md`](procurement-planning/NEXT_PHASE.md)。
+
 - `/inventory/`：一般工具頁，可查看及下載目前規則，不能修改。
 - `/inventory/rules-admin/`：規則管理頁；以公司 Google 帳號登入，只允許指定管理者。
 - 管理頁可新增、刪除、匯入及匯出 JSON；發布時有版本衝突保護。
@@ -25,9 +28,9 @@
 
 ## 資料安全
 
-這個儲存庫的 Cloudflare Worker 只保存「分類規則文字、版本、更新時間、管理者」；沒有 Excel 或檔案上傳 API。
+Cloudflare Worker 保存集中分類規則，以及採購流程必要的批次編號、供應商摘要、金額、互斥狀態、付款月份、核准事件與通知稽核；沒有 Excel 或檔案上傳 API，也不保存檔名或逐列商品內容。通知紀錄預設12個月後由每日排程刪除。
 
-Excel 的讀取、分類、統計與輸出全部在使用者目前的瀏覽器分頁內完成，不會傳送到網站伺服器。Content Security Policy 的 `connect-src 'self'` 只允許頁面讀取同網域規則 API，不允許連往其他網域。Worker 不記錄 request body，也不儲存 Excel、檔名、列資料或輸出資料。
+Excel 的讀取、分類、統計與輸出全部在使用者目前的瀏覽器分頁內完成，不會傳送到網站伺服器。採購頁的 CSP 只額外允許 Google Identity、Drive、Sheets、Gmail 與同源 API；OAuth access token 只留在分頁記憶體，不進 D1、localStorage 或伺服器日誌。
 
 請勿將真實庫存 Excel、測試輸出、客戶資料、密碼、API key 或環境設定提交到這個公開儲存庫。
 
@@ -97,7 +100,7 @@ D1 的 `rules_current` 只保留一份現行規則；每次更新會由資料庫
 3. Zeabur 偵測到根目錄的 `index.html` 後，會以靜態網站模式提供服務。
 4. 先使用 Zeabur 產生的測試網址驗證 `/` 與 `/inventory/`，確認後再另外處理正式網域。
 
-`_headers` 提供安全標頭。`/inventory/` 與 `/cost-analysis/` 使用同源集中規則服務；`/supplier-reconciliation/` 不建立任何對外連線；Excel 處理仍完全在瀏覽器本機完成。
+`_headers` 提供安全標頭。`/inventory/` 與 `/cost-analysis/` 使用同源集中規則服務；`/procurement-planning/` 只連接同源流程 API 與白名單 Google API；`/supplier-reconciliation/` 不建立對外連線。Excel 處理仍完全在瀏覽器本機完成。
 
 ## 第三方元件
 

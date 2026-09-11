@@ -1,0 +1,2269 @@
+(function (global) {
+  "use strict";
+
+  const LOCKED_RULES = Object.freeze({
+    netDemandFormula: "MAX(預估未來出貨需求＋安全庫存－總倉可用庫存－已採購未到貨, 0)",
+    consignmentRule: "工廠寄倉可拉貨量不得扣減淨採購需求；只用於供貨分配、交期核對與缺貨警示。",
+    shortageAction: "寄倉現貨與可按時完成量不足時，顯示缺貨警示並新增寄庫單；不提供改向其他供應商採購。",
+    pendingPurchaseRule: "未到貨採購單每次完整重匯，不沿用上次清單。",
+    blacklistRule: "一次性代工品由人工以ERP品號或完整品名加入黑名單，不做系統猜測。",
+    sellThroughStopRule: "只有品名結尾的獨立括號標記(S)視為已斷貨、售完即停；停止對外採購與新增寄庫，但保留線上銷售及門市由總倉現貨調撥去化。",
+    sellThroughTransferRule: "(S)商品先保留總倉已知訂單及必要安全庫存，再以剩餘可調撥現貨供門市去化；不足只顯示缺貨，不得轉成供應商採購或寄庫需求。"
+  });
+
+  const CONFIRMED_OVERRIDES = Object.freeze({
+    "A42359-A": "A068-TBA3-5062-00064"
+  });
+
+  const CONFIRMED_EXCLUSIONS = Object.freeze({
+    "A43359-A": "原規劃製作、後續已放棄；供應商寄倉表可保留，工具固定忽略。"
+  });
+
+  const DEMAND_SALE_TYPES = Object.freeze(["銷貨", "訂貨", "退貨", "退訂"]);
+
+  const PROCUREMENT_POLICY = Object.freeze({
+    reviewDays: 14,
+    supplyProfiles: Object.freeze({
+      puyouma: Object.freeze({
+        key: "puyouma",
+        label: "寄倉快速補貨",
+        leadDays: 5,
+        safetyBufferDays: Object.freeze({ "熱銷": 7, "穩定": 4, "低銷": 0 })
+      }),
+      shortLead: Object.freeze({
+        key: "shortLead",
+        label: "短交期製作",
+        leadDays: 14,
+        safetyBufferDays: Object.freeze({ "熱銷": 7, "穩定": 0, "低銷": 0 })
+      }),
+      default: Object.freeze({
+        key: "default",
+        label: "標準交期（待確認）",
+        leadDays: 14,
+        safetyBufferDays: Object.freeze({ "熱銷": 7, "穩定": 0, "低銷": 0 })
+      })
+    }),
+    storeSafetyDays: Object.freeze({ "熱銷": "7～10天", "穩定": "5～7天", "低銷": "0或1件" }),
+    puyoumaFactoryLeadDays: 45,
+    puyoumaFactoryTargetDays: Object.freeze({ "熱銷": 120, "穩定": 105, "低銷": 90 }),
+    lirongPullLeadDays: 5,
+    lirongProductionDays: 14,
+    lirongDeliveryAfterProductionDays: 5,
+    lirongFactoryTargetDays: Object.freeze({ "熱銷": 90, "穩定": 60, "低銷": 60 }),
+    abcThresholds: Object.freeze({ A: 0.7, B: 0.9 }),
+    xyzThresholds: Object.freeze({ XActiveWeeks: 8, XCv: 0.75, YActiveWeeks: 4, YCv: 1.25 })
+  });
+
+  const SUPPLIER_RULES = Object.freeze([
+    { name: "家禾", country: "國內", leadDays: 40 },
+    { name: "上林", country: "國內", leadDays: 5, reviewDays: 28 },
+    { name: "力榮", country: "國內", leadDays: 14 },
+    { name: "普優瑪寢具有限公司", aliases: ["普優瑪", "普悠碼"], country: "國內", leadDays: 5 },
+    { name: "歐必斯", country: "國內", leadDays: 10, automaticPurchase: false, exclusionReason: "接單後採購／客訂型供應商" },
+    { name: "昭元棉業", country: "國內", leadDays: 50 },
+    { name: "尚美", country: "國內", leadDays: 7 },
+    { name: "超越嗅覺", country: "國內", leadDays: 40 },
+    { name: "凱信達", country: "國外", leadDays: 70, automaticPurchase: false, exclusionReason: "一次性採購供應商" },
+    { name: "寧波同一", country: "國外", leadDays: 70 },
+    { name: "潤泰羽絨", country: "國外", leadDays: 70 },
+    { name: "泰能脊康", country: "國外", leadDays: 70 },
+    { name: "逸寐", country: "國外", leadDays: 70 },
+    { name: "特娜鞋業", country: "國外", leadDays: 30 },
+    { name: "南通（小霞）包裝", aliases: ["南通(小霞)包裝", "南通小霞包裝"], country: "國外", leadDays: 30 },
+    { name: "禾鑫匠月", country: "國外", leadDays: 14 }
+  ]);
+
+  const SCHEMAS = {
+    master: {
+      fields: {
+        sku: ["貨號", "ERP品號", "商品編號", "品號", "sku"],
+        name: ["品名", "商品名稱", "商品品名"],
+        supplierSku: ["供應商貨號", "廠商貨號", "產品編號"],
+        supplier: ["供應商簡稱", "供應商名稱", "供應商", "廠商名稱"],
+        unitCost: ["進貨價", "採購價", "標準成本", "成本"],
+        moq: ["MOQ", "最低採購量", "最小訂購量", "最小配貨數", "箱入數"],
+        sizeGroup: ["尺碼組"],
+        size: ["尺碼"],
+        mainCategory: ["主類別"],
+        style1: ["1級款式"],
+        style2: ["2級款式"],
+        season: ["季節"],
+        stockType: ["存貨種類"],
+        productStatus: ["貨品狀態", "商品狀態"],
+        discontinued: ["已下架"],
+        listedDate: ["上市日期", "開賣日期"]
+      },
+      required: ["sku", "name"]
+    },
+    inventory: {
+      fields: {
+        sku: ["貨號", "ERP品號", "商品編號", "品號", "sku"],
+        name: ["品名", "商品名稱", "商品品名"],
+        warehouseCode: ["店倉編號", "倉別編號", "倉庫編號"],
+        warehouseName: ["店倉名稱", "倉別名稱", "倉庫名稱"],
+        quantity: ["實際庫存", "可用庫存", "庫存數量", "現有庫存"],
+        inventoryCost: ["實際庫存成本額", "庫存成本額", "庫存成本", "成本額"]
+      },
+      required: ["sku", "quantity"]
+    },
+    pending: {
+      fields: {
+        sku: ["貨號", "ERP品號", "商品編號", "品號", "sku"],
+        name: ["品名", "商品名稱", "商品品名"],
+        quantity: ["數量", "採購數量", "未到貨數量"],
+        unitCost: ["採購價", "進貨價", "未稅進貨價", "單價"],
+        amount: ["金額", "採購金額", "未稅金額", "合計"],
+        remark: ["備註", "明細備註"]
+      },
+      required: ["sku", "quantity"]
+    },
+    sales: {
+      fields: {
+        saleType: ["銷別"],
+        transactionDate: ["結帳時間", "銷售日期", "日期"],
+        sku: ["貨號", "ERP品號", "商品編號", "品號", "sku"],
+        name: ["品名", "商品名稱", "商品品名"],
+        salesQuantity: ["銷售量", "數量"],
+        actualAmount: ["實收金額", "銷售金額"],
+        warehouseCode: ["開單倉編號", "店倉編號"],
+        warehouseName: ["開單倉名稱", "店倉名稱"],
+        shipWarehouseCode: ["出貨倉編號"],
+        shipWarehouseName: ["出貨倉名稱"],
+        deductQuantity: ["扣庫量"],
+        ecommercePlatform: ["電商平台"],
+        sourceOrder: ["來源單號"],
+        pickupOrder: ["取貨單號"]
+      },
+      required: ["saleType", "transactionDate", "sku", "salesQuantity"]
+    }
+  };
+
+  const FIELD_LABELS = {
+    sku: "ERP品號",
+    name: "品名",
+    supplierSku: "供應商貨號",
+    supplier: "供應商",
+    unitCost: "進貨價／採購價",
+    warehouseCode: "店倉編號",
+    warehouseName: "店倉名稱",
+    quantity: "數量",
+    inventoryCost: "庫存成本",
+    amount: "金額",
+    remark: "備註",
+    saleType: "銷別",
+    transactionDate: "結帳時間",
+    salesQuantity: "銷售量",
+    actualAmount: "實收金額",
+    shipWarehouseCode: "出貨倉編號",
+    shipWarehouseName: "出貨倉名稱",
+    deductQuantity: "扣庫量",
+    ecommercePlatform: "電商平台"
+  };
+
+  function normalizeText(value) {
+    return String(value == null ? "" : value).normalize("NFKC").trim().toLocaleLowerCase("zh-Hant");
+  }
+
+  function normalizeHeader(value) {
+    return normalizeText(value).replace(/[\s\-_–—／/＆&()（）【】\[\]：:．.*\n\r]/g, "");
+  }
+
+  function normalizeSku(value) {
+    return String(value == null ? "" : value).normalize("NFKC").trim().toUpperCase();
+  }
+
+  function normalizeName(value) {
+    return normalizeText(value).replace(/[\s\-_–—／/＆&()（）【】\[\]：:．.,，。'’"“”]/g, "");
+  }
+
+  function isSellThroughStopName(value) {
+    return /\(\s*S\s*\)\s*$/i.test(String(value == null ? "" : value).normalize("NFKC"));
+  }
+
+  function parseNumber(value) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
+    if (value == null || value === "") return null;
+    let text = String(value).trim();
+    if (!text) return null;
+    const negative = /^\(.*\)$/.test(text);
+    text = text.replace(/[(),，$＄元%％\s]/g, "");
+    if (!/^[-+]?\d*(?:\.\d+)?$/.test(text) || text === "" || text === ".") return null;
+    const parsed = Number(text);
+    return Number.isFinite(parsed) ? (negative ? -Math.abs(parsed) : parsed) : null;
+  }
+
+  function scoreHeader(header, aliases) {
+    const normalized = normalizeHeader(header);
+    if (!normalized) return 0;
+    let best = 0;
+    for (const alias of aliases) {
+      const target = normalizeHeader(alias);
+      if (normalized === target) best = Math.max(best, 100);
+      else if (normalized.includes(target)) best = Math.max(best, 70);
+      else if (normalized.length >= 2 && target.includes(normalized)) best = Math.max(best, 60);
+    }
+    return best;
+  }
+
+  function autoMapHeaders(headers, schemaName) {
+    const schema = SCHEMAS[schemaName];
+    const mapping = {};
+    const used = new Set();
+    for (const [field, aliases] of Object.entries(schema.fields)) {
+      let bestIndex = -1;
+      let bestScore = 0;
+      headers.forEach((header, index) => {
+        if (used.has(index)) return;
+        const score = scoreHeader(header, aliases);
+        if (score > bestScore) {
+          bestIndex = index;
+          bestScore = score;
+        }
+      });
+      mapping[field] = bestScore >= 60 ? bestIndex : null;
+      if (mapping[field] != null) used.add(mapping[field]);
+    }
+    return mapping;
+  }
+
+  function validateMapping(schemaName, mapping) {
+    const missing = SCHEMAS[schemaName].required
+      .filter((field) => mapping[field] == null)
+      .map((field) => FIELD_LABELS[field] || field);
+    return { valid: missing.length === 0, missing };
+  }
+
+  function headerScore(row, schemaName) {
+    if (!Array.isArray(row)) return 0;
+    return Object.values(SCHEMAS[schemaName].fields).reduce((total, aliases) => (
+      total + (row.some((value) => scoreHeader(value, aliases) >= 60) ? 1 : 0)
+    ), 0);
+  }
+
+  function inspectWorkbook(workbook, XLSX, schemaName) {
+    const sheets = workbook.SheetNames.map((name) => {
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: true, defval: "" });
+      let headerRowIndex = 0;
+      let bestScore = -1;
+      rows.slice(0, 35).forEach((row, index) => {
+        const score = headerScore(row, schemaName);
+        if (score > bestScore) {
+          headerRowIndex = index;
+          bestScore = score;
+        }
+      });
+      const headers = (rows[headerRowIndex] || []).map((value, index) => String(value || `欄位${index + 1}`).trim());
+      const mapping = autoMapHeaders(headers, schemaName);
+      return {
+        name,
+        rows,
+        headers,
+        mapping,
+        headerRowIndex,
+        score: bestScore,
+        validation: validateMapping(schemaName, mapping)
+      };
+    });
+    sheets.sort((left, right) => {
+      const preferredLeft = schemaName === "inventory" && left.name === "乾淨商品" ? 1 : 0;
+      const preferredRight = schemaName === "inventory" && right.name === "乾淨商品" ? 1 : 0;
+      return preferredRight - preferredLeft
+        || Number(right.validation.valid) - Number(left.validation.valid)
+        || right.score - left.score;
+    });
+    return { schemaName, sheets };
+  }
+
+  function valueAt(row, mapping, field) {
+    const index = mapping[field];
+    return index == null ? "" : row[index];
+  }
+
+  function selectSheet(workbook, XLSX, schemaName) {
+    const inspection = inspectWorkbook(workbook, XLSX, schemaName);
+    const selected = inspection.sheets[0];
+    if (!selected || !selected.validation.valid) {
+      const sourceLabel = ({ master: "商品主檔", inventory: "庫存檔", pending: "未到貨採購單", sales: "銷售明細" })[schemaName] || schemaName;
+      throw new Error(`${sourceLabel}缺少：${selected?.validation.missing.join("、") || "可讀取的工作表"}`);
+    }
+    return selected;
+  }
+
+  function parseProductMasterWorkbook(workbook, XLSX, options = {}) {
+    const selected = selectSheet(workbook, XLSX, "master");
+    const records = [];
+    const bySku = new Map();
+    const bySupplierSku = new Map();
+    const byExactName = new Map();
+    for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
+      const row = selected.rows[index];
+      const sku = normalizeSku(valueAt(row, selected.mapping, "sku"));
+      const name = String(valueAt(row, selected.mapping, "name") || "").trim();
+      if (!sku || !name) continue;
+      const sellThroughStop = isSellThroughStopName(name);
+      const masterDiscontinued = !["", "否", "0", "false"].includes(normalizeText(valueAt(row, selected.mapping, "discontinued")));
+      const record = {
+        sourceRow: index + 1,
+        sku,
+        name,
+        supplierSku: normalizeSku(valueAt(row, selected.mapping, "supplierSku")),
+        supplier: String(valueAt(row, selected.mapping, "supplier") || "").trim(),
+        unitCost: parseNumber(valueAt(row, selected.mapping, "unitCost")),
+        moq: parseNumber(valueAt(row, selected.mapping, "moq")),
+        sizeGroup: String(valueAt(row, selected.mapping, "sizeGroup") || "").trim(),
+        size: String(valueAt(row, selected.mapping, "size") || "").trim(),
+        mainCategory: String(valueAt(row, selected.mapping, "mainCategory") || "").trim(),
+        style1: String(valueAt(row, selected.mapping, "style1") || "").trim(),
+        style2: String(valueAt(row, selected.mapping, "style2") || "").trim(),
+        season: String(valueAt(row, selected.mapping, "season") || "").trim(),
+        stockType: String(valueAt(row, selected.mapping, "stockType") || "").trim(),
+        productStatus: String(valueAt(row, selected.mapping, "productStatus") || "").trim(),
+        sellThroughStop,
+        externalPurchaseBlocked: masterDiscontinued || sellThroughStop,
+        discontinued: masterDiscontinued,
+        discontinuedReason: sellThroughStop
+          ? "品名含停採標記(S)：已斷貨、售完即停"
+          : (masterDiscontinued ? "商品主檔標示已下架" : ""),
+        listedDate: String(valueAt(row, selected.mapping, "listedDate") || "").trim()
+      };
+      records.push(record);
+      if (!bySku.has(sku)) bySku.set(sku, record);
+      if (record.supplierSku) {
+        if (!bySupplierSku.has(record.supplierSku)) bySupplierSku.set(record.supplierSku, []);
+        bySupplierSku.get(record.supplierSku).push(record);
+      }
+      const nameKey = normalizeName(name);
+      if (nameKey) {
+        if (!byExactName.has(nameKey)) byExactName.set(nameKey, []);
+        byExactName.get(nameKey).push(record);
+      }
+    }
+    return {
+      fileName: options.fileName || "",
+      sheetName: selected.name,
+      records,
+      bySku,
+      bySupplierSku,
+      byExactName
+    };
+  }
+
+  function parseInventoryWorkbook(workbook, XLSX, options = {}) {
+    const selected = selectSheet(workbook, XLSX, "inventory");
+    const records = [];
+    const bySku = new Map();
+    for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
+      const row = selected.rows[index];
+      const sku = normalizeSku(valueAt(row, selected.mapping, "sku"));
+      const quantity = parseNumber(valueAt(row, selected.mapping, "quantity"));
+      if (!sku || quantity == null) continue;
+      const record = {
+        sourceRow: index + 1,
+        sku,
+        name: String(valueAt(row, selected.mapping, "name") || "").trim(),
+        warehouseCode: normalizeSku(valueAt(row, selected.mapping, "warehouseCode")),
+        warehouseName: String(valueAt(row, selected.mapping, "warehouseName") || "").trim(),
+        quantity,
+        inventoryCost: parseNumber(valueAt(row, selected.mapping, "inventoryCost")) || 0
+      };
+      record.procurementAvailable = !/^O0[0-6]$/.test(record.warehouseCode);
+      records.push(record);
+      if (!bySku.has(sku)) {
+        bySku.set(sku, {
+          sku,
+          name: record.name,
+          quantity: 0,
+          availableQuantity: 0,
+          excludedQuantity: 0,
+          inventoryCost: 0,
+          warehouses: new Set(),
+          sourceRows: []
+        });
+      }
+      const aggregated = bySku.get(sku);
+      aggregated.quantity += record.quantity;
+      if (record.procurementAvailable) aggregated.availableQuantity += record.quantity;
+      else aggregated.excludedQuantity += record.quantity;
+      aggregated.inventoryCost += record.inventoryCost;
+      aggregated.sourceRows.push(record.sourceRow);
+      if (record.warehouseCode || record.warehouseName) {
+        aggregated.warehouses.add(`${record.warehouseCode} ${record.warehouseName}`.trim());
+      }
+    }
+    return { fileName: options.fileName || "", sheetName: selected.name, records, bySku };
+  }
+
+  function findLabelValue(rows, label) {
+    const target = normalizeHeader(label);
+    for (const row of rows.slice(0, 20)) {
+      for (let index = 0; index < row.length; index += 1) {
+        if (normalizeHeader(row[index]) !== target) continue;
+        for (let next = index + 1; next < row.length; next += 1) {
+          if (row[next] !== "" && row[next] != null) return String(row[next]).trim();
+        }
+      }
+    }
+    return "";
+  }
+
+  function parsePendingPurchaseWorkbook(workbook, XLSX, options = {}) {
+    const selected = selectSheet(workbook, XLSX, "pending");
+    const records = [];
+    for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
+      const row = selected.rows[index];
+      const sku = normalizeSku(valueAt(row, selected.mapping, "sku"));
+      const quantity = parseNumber(valueAt(row, selected.mapping, "quantity"));
+      if (!sku || quantity == null || quantity === 0) continue;
+      const unitCost = parseNumber(valueAt(row, selected.mapping, "unitCost"));
+      let amount = parseNumber(valueAt(row, selected.mapping, "amount"));
+      if (amount == null && unitCost != null) amount = quantity * unitCost;
+      records.push({
+        sourceRow: index + 1,
+        sku,
+        name: String(valueAt(row, selected.mapping, "name") || "").trim(),
+        quantity,
+        unitCost,
+        amount: amount || 0,
+        remark: String(valueAt(row, selected.mapping, "remark") || "").trim(),
+        fileName: options.fileName || ""
+      });
+    }
+    return {
+      fileName: options.fileName || "",
+      sheetName: selected.name,
+      records,
+      metadata: {
+        documentCode: findLabelValue(selected.rows, "單據編碼"),
+        purchaseDate: findLabelValue(selected.rows, "採購日期"),
+        deliveryDate: findLabelValue(selected.rows, "交貨日期"),
+        supplier: findLabelValue(selected.rows, "廠商名稱"),
+        remark: findLabelValue(selected.rows, "備註")
+      }
+    };
+  }
+
+  function parseDateValue(value) {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const epoch = new Date(Date.UTC(1899, 11, 30));
+      const date = new Date(epoch.getTime() + Math.round(value * 86400000));
+      return date.toISOString().slice(0, 10);
+    }
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const match = text.match(/(20\d{2})[-/]([01]?\d)[-/]([0-3]?\d)/);
+    if (!match) return "";
+    const normalized = `${match[1]}-${String(Number(match[2])).padStart(2, "0")}-${String(Number(match[3])).padStart(2, "0")}`;
+    const date = new Date(`${normalized}T00:00:00Z`);
+    return Number.isNaN(date.getTime()) ? "" : normalized;
+  }
+
+  function parseSalesWorkbook(workbook, XLSX, options = {}) {
+    const selected = selectSheet(workbook, XLSX, "sales");
+    const records = [];
+    const excluded = { "排除銷別：取貨": 0, "排除非需求銷別": 0, "缺品號或日期": 0 };
+    let minDate = "";
+    let maxDate = "";
+    for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
+      const row = selected.rows[index];
+      const saleType = String(valueAt(row, selected.mapping, "saleType") || "").trim();
+      if (saleType === "取貨") {
+        excluded["排除銷別：取貨"] += 1;
+        continue;
+      }
+      if (!DEMAND_SALE_TYPES.includes(saleType)) {
+        excluded["排除非需求銷別"] += 1;
+        continue;
+      }
+      const sku = normalizeSku(valueAt(row, selected.mapping, "sku"));
+      const date = parseDateValue(valueAt(row, selected.mapping, "transactionDate"));
+      const quantity = parseNumber(valueAt(row, selected.mapping, "salesQuantity"));
+      if (!sku || !date || quantity == null) {
+        excluded["缺品號或日期"] += 1;
+        continue;
+      }
+      const record = {
+        sourceRow: index + 1,
+        fileName: options.fileName || "",
+        saleType,
+        date,
+        sku,
+        name: String(valueAt(row, selected.mapping, "name") || "").trim(),
+        quantity,
+        actualAmount: parseNumber(valueAt(row, selected.mapping, "actualAmount")) || 0,
+        warehouseCode: normalizeSku(valueAt(row, selected.mapping, "warehouseCode")),
+        warehouseName: String(valueAt(row, selected.mapping, "warehouseName") || "").trim(),
+        shipWarehouseCode: normalizeSku(valueAt(row, selected.mapping, "shipWarehouseCode")),
+        shipWarehouseName: String(valueAt(row, selected.mapping, "shipWarehouseName") || "").trim(),
+        deductQuantity: parseNumber(valueAt(row, selected.mapping, "deductQuantity")) || 0,
+        ecommercePlatform: String(valueAt(row, selected.mapping, "ecommercePlatform") || "").trim(),
+        sourceOrder: String(valueAt(row, selected.mapping, "sourceOrder") || "").trim(),
+        pickupOrder: String(valueAt(row, selected.mapping, "pickupOrder") || "").trim()
+      };
+      records.push(record);
+      if (!minDate || date < minDate) minDate = date;
+      if (!maxDate || date > maxDate) maxDate = date;
+    }
+    return { fileName: options.fileName || "", sheetName: selected.name, records, excluded, minDate, maxDate };
+  }
+
+  function findHeaderTable(workbook, XLSX, sheetNames, requiredHeaders) {
+    const candidateName = sheetNames.find((name) => workbook.SheetNames.includes(name));
+    if (!candidateName) return null;
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[candidateName], { header: 1, raw: true, defval: "" });
+    let headerRowIndex = -1;
+    for (let index = 0; index < Math.min(rows.length, 30); index += 1) {
+      const normalized = rows[index].map(normalizeHeader);
+      if (requiredHeaders.every((header) => normalized.includes(normalizeHeader(header)))) {
+        headerRowIndex = index;
+        break;
+      }
+    }
+    if (headerRowIndex < 0) return null;
+    const headers = rows[headerRowIndex].map((value) => String(value || "").trim());
+    const indexByHeader = new Map(headers.map((header, index) => [normalizeHeader(header), index]));
+    return { sheetName: candidateName, rows, headerRowIndex, headers, indexByHeader };
+  }
+
+  function tableCell(table, row, aliases) {
+    for (const alias of aliases) {
+      const index = table.indexByHeader.get(normalizeHeader(alias));
+      if (index != null) return row[index];
+    }
+    return "";
+  }
+
+  function parseForecastModelWorkbook(workbook, XLSX, options = {}) {
+    const skuTable = findHeaderTable(workbook, XLSX, ["SKU模型建議"], ["ERP品號", "品名"]);
+    if (!skuTable) throw new Error("季節模型回測檔缺少「SKU模型建議」頁籤或必要欄位。");
+    const bySku = new Map();
+    for (let index = skuTable.headerRowIndex + 1; index < skuTable.rows.length; index += 1) {
+      const row = skuTable.rows[index];
+      const sku = normalizeSku(tableCell(skuTable, row, ["ERP品號"]));
+      if (!sku) continue;
+      bySku.set(sku, {
+        sku,
+        name: String(tableCell(skuTable, row, ["品名"]) || "").trim(),
+        supplier: String(tableCell(skuTable, row, ["供應商"]) || "").trim(),
+        skuModel: String(tableCell(skuTable, row, ["SKU建議模型", "建議模型"]) || "近期6週").trim(),
+        skuWape: parseNumber(tableCell(skuTable, row, ["SKU最佳WAPE", "最佳WAPE"])),
+        materialCategory: String(tableCell(skuTable, row, ["材質類別", "商品群"]) || "其他").trim(),
+        categoryLevel: String(tableCell(skuTable, row, ["輔助類別層級"]) || "材質").trim(),
+        categoryName: String(tableCell(skuTable, row, ["輔助類別名稱", "材質類別", "商品群"]) || "其他").trim(),
+        categoryModel: String(tableCell(skuTable, row, ["類別建議模型"]) || "").trim(),
+        categoryWape: parseNumber(tableCell(skuTable, row, ["類別WAPE"])),
+        categoryReliability: String(tableCell(skuTable, row, ["類別可信度"]) || "").trim()
+      });
+    }
+
+    const categoryTable = findHeaderTable(workbook, XLSX, ["類別模型總覽"], ["範圍", "材質類別", "類別最佳模型"]);
+    const byMaterial = new Map();
+    if (categoryTable) {
+      for (let index = categoryTable.headerRowIndex + 1; index < categoryTable.rows.length; index += 1) {
+        const row = categoryTable.rows[index];
+        const scope = String(tableCell(categoryTable, row, ["範圍"]) || "").trim();
+        const material = String(tableCell(categoryTable, row, ["材質類別"]) || "").trim();
+        if (!material || (scope && scope !== "普優瑪" && byMaterial.has(material))) continue;
+        byMaterial.set(material, {
+          material,
+          scope,
+          model: String(tableCell(categoryTable, row, ["類別最佳模型"]) || "近期6週").trim(),
+          wape: parseNumber(tableCell(categoryTable, row, ["類別WAPE"])),
+          reliability: String(tableCell(categoryTable, row, ["可信度"]) || "").trim()
+        });
+      }
+    }
+
+    const periodTable = findHeaderTable(workbook, XLSX, ["類別期間回測"], ["範圍", "類別名稱", "期間起日", "模型", "實際量"]);
+    const seasonalIndexByMaterial = new Map();
+    if (periodTable) {
+      const actualByMaterialYearSlot = new Map();
+      for (let index = periodTable.headerRowIndex + 1; index < periodTable.rows.length; index += 1) {
+        const row = periodTable.rows[index];
+        const scope = String(tableCell(periodTable, row, ["範圍"]) || "").trim();
+        const level = String(tableCell(periodTable, row, ["類別層級"]) || "").trim();
+        const modelName = String(tableCell(periodTable, row, ["模型"]) || "").trim();
+        if (scope !== "普優瑪" || (level && level !== "材質") || modelName !== "近期6週") continue;
+        const material = String(tableCell(periodTable, row, ["類別名稱"]) || "").trim();
+        const date = parseDateValue(tableCell(periodTable, row, ["期間起日"]));
+        const actual = parseNumber(tableCell(periodTable, row, ["實際量"]));
+        if (!material || !date || actual == null) continue;
+        const dateObject = new Date(`${date}T00:00:00Z`);
+        const year = dateObject.getUTCFullYear();
+        const start = Date.UTC(year, 0, 1);
+        const slot = Math.max(0, Math.min(26, Math.floor((dateObject.getTime() - start) / 86400000 / 14)));
+        actualByMaterialYearSlot.set(`${material}||${year}||${slot}`, { material, year, slot, actual: Math.max(0, actual) });
+      }
+      const byMaterialYear = new Map();
+      for (const record of actualByMaterialYearSlot.values()) {
+        const key = `${record.material}||${record.year}`;
+        if (!byMaterialYear.has(key)) byMaterialYear.set(key, []);
+        byMaterialYear.get(key).push(record);
+      }
+      const indexValues = new Map();
+      for (const records of byMaterialYear.values()) {
+        if (records.length < 18) continue;
+        const mean = records.reduce((sum, record) => sum + record.actual, 0) / records.length;
+        if (mean <= 0) continue;
+        for (const record of records) {
+          const key = `${record.material}||${record.slot}`;
+          if (!indexValues.has(key)) indexValues.set(key, []);
+          indexValues.get(key).push(record.actual / mean);
+        }
+      }
+      for (const [key, values] of indexValues) {
+        const separator = key.lastIndexOf("||");
+        const material = key.slice(0, separator);
+        const slot = Number(key.slice(separator + 2));
+        if (!seasonalIndexByMaterial.has(material)) seasonalIndexByMaterial.set(material, new Map());
+        seasonalIndexByMaterial.get(material).set(slot, values.reduce((sum, value) => sum + value, 0) / values.length);
+      }
+    }
+    return {
+      fileName: options.fileName || "",
+      skuSheetName: skuTable.sheetName,
+      categorySheetName: categoryTable?.sheetName || "",
+      bySku,
+      byMaterial,
+      seasonalIndexByMaterial,
+      categoryModelAvailable: Boolean(categoryTable),
+      seasonalIndexAvailable: seasonalIndexByMaterial.size > 0
+    };
+  }
+
+  function cellFillRgb(cell) {
+    if (!cell || !cell.s) return "";
+    const candidates = [
+      cell.s?.fgColor?.rgb,
+      cell.s?.fill?.fgColor?.rgb,
+      cell.s?.fill?.fgColor,
+      cell.s?.patternFill?.fgColor?.rgb,
+      cell.s?.patternFill?.fgColor
+    ];
+    const found = candidates.find((value) => typeof value === "string" && /^[A-Fa-f0-9]{6,8}$/.test(value));
+    return found ? found.toUpperCase() : "";
+  }
+
+  function isPinkFill(rgb) {
+    const normalized = String(rgb || "").toUpperCase();
+    return ["F4CCCC", "FFF4CCCC", "FFC7CE", "FFFFC7CE", "FFC0CB", "FFFFC0CB", "FFD9E1", "FFFFD9E1"]
+      .some((value) => normalized.endsWith(value.replace(/^FF(?=.{6}$)/, "")) || normalized === value);
+  }
+
+  function parseConsignmentWorkbook(workbook, XLSX, options = {}) {
+    const sheetName = workbook.SheetNames.includes("庫存+下單") ? "庫存+下單" : workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet || !sheet["!ref"]) throw new Error("寄倉表沒有可讀取的資料。");
+    const range = XLSX.utils.decode_range(sheet["!ref"]);
+    const headers = [];
+    for (let column = range.s.c; column <= range.e.c; column += 1) {
+      headers[column] = String(sheet[XLSX.utils.encode_cell({ r: range.s.r, c: column })]?.v || "").trim();
+    }
+    const findColumn = (aliases) => {
+      let bestIndex = null;
+      let bestScore = 0;
+      headers.forEach((header, index) => {
+        const score = scoreHeader(header, aliases);
+        if (score > bestScore) { bestIndex = index; bestScore = score; }
+      });
+      return bestScore >= 60 ? bestIndex : null;
+    };
+    const columns = {
+      supplierSku: findColumn(["產品編號", "供應商貨號"]),
+      sku: findColumn(["編號", "ERP品號", "貨號"]),
+      labelName: findColumn(["貼標名稱"]),
+      name: findColumn(["商品名稱", "品名"]),
+      spec: findColumn(["規格"]),
+      unitCost: findColumn(["成品價", "採購價"])
+    };
+    let currentColumn = null;
+    headers.forEach((header, index) => {
+      const normalized = normalizeHeader(header);
+      if (normalized.includes("最新") && normalized.includes("庫存")) currentColumn = index;
+    });
+    if (columns.sku == null || columns.supplierSku == null || columns.name == null || currentColumn == null) {
+      throw new Error("寄倉表缺少「產品編號、編號、商品名稱、最新庫存」欄位。");
+    }
+
+    const cellValue = (row, column) => sheet[XLSX.utils.encode_cell({ r: row, c: column })]?.v;
+    const records = [];
+    const exceptions = [];
+    const confirmedExclusions = [];
+    let numericStyledCells = 0;
+    let pinkCells = 0;
+    for (let row = range.s.r + 1; row <= range.e.r; row += 1) {
+      const supplierSku = normalizeSku(cellValue(row, columns.supplierSku));
+      const sku = normalizeSku(cellValue(row, columns.sku));
+      const labelName = columns.labelName == null ? "" : String(cellValue(row, columns.labelName) || "").trim();
+      const name = String(cellValue(row, columns.name) || "").trim();
+      const spec = columns.spec == null ? "" : String(cellValue(row, columns.spec) || "").trim();
+      if (!supplierSku && !sku && !labelName && !name && !spec) continue;
+
+      const confirmedExclusionReason = CONFIRMED_EXCLUSIONS[sku];
+      if (confirmedExclusionReason) {
+        confirmedExclusions.push({
+          type: "已確認放棄品號",
+          sourceRow: row + 1,
+          sku,
+          supplierSku,
+          name,
+          action: `排除；${confirmedExclusionReason}`
+        });
+        continue;
+      }
+
+      const expectedSupplierSku = CONFIRMED_OVERRIDES[sku];
+      if (expectedSupplierSku && supplierSku !== expectedSupplierSku) {
+        confirmedExclusions.push({
+          type: "已確認重複品號",
+          sourceRow: row + 1,
+          sku,
+          supplierSku,
+          name,
+          action: `排除；保留供應商貨號${expectedSupplierSku}`
+        });
+        continue;
+      }
+
+      let scheduledQty = 0;
+      const scheduleNotes = new Set();
+      for (let column = currentColumn + 1; column <= range.e.c; column += 1) {
+        const address = XLSX.utils.encode_cell({ r: row, c: column });
+        const cell = sheet[address];
+        const value = parseNumber(cell?.v);
+        if (value == null || value === 0) continue;
+        const rgb = cellFillRgb(cell);
+        if (rgb) numericStyledCells += 1;
+        if (isPinkFill(rgb)) {
+          pinkCells += 1;
+          scheduledQty += value;
+          if (headers[column]) scheduleNotes.add(headers[column]);
+        }
+      }
+      records.push({
+        sourceRow: row + 1,
+        supplierSku,
+        sku,
+        labelName,
+        name,
+        spec,
+        unitCost: parseNumber(cellValue(row, columns.unitCost)),
+        currentQty: parseNumber(cellValue(row, currentColumn)) || 0,
+        scheduledQty,
+        scheduleNotes: [...scheduleNotes]
+      });
+    }
+    return {
+      fileName: options.fileName || "",
+      sheetName,
+      currentHeader: headers[currentColumn],
+      records,
+      exceptions,
+      confirmedExclusions,
+      styleAudit: {
+        numericStyledCells,
+        pinkCells,
+        pinkDetected: pinkCells > 0
+      }
+    };
+  }
+
+  function parseLirongConsignmentWorkbook(workbook, XLSX, options = {}) {
+    const sheetName = workbook.SheetNames.includes("工作表1") ? "工作表1" : workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet || !sheet["!ref"]) throw new Error("力榮寄庫表沒有可讀取的資料。");
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true });
+    let headerRowIndex = -1;
+    let headers = [];
+    for (let index = 0; index < Math.min(rows.length, 30); index += 1) {
+      const candidate = rows[index].map((value) => String(value || "").trim());
+      const normalized = candidate.map(normalizeHeader);
+      if (normalized.some((value) => /^(erp)?品號$|^貨號$|^編號$/.test(value))
+        && normalized.some((value) => /品名|商品名稱/.test(value))
+        && normalized.some((value) => /庫存|現貨/.test(value))) {
+        headerRowIndex = index;
+        headers = candidate;
+        break;
+      }
+    }
+    if (headerRowIndex < 0) throw new Error("力榮寄庫表缺少品號、品名與寄庫現貨欄位。");
+    const findColumn = (patterns) => headers.findIndex((header) => patterns.some((pattern) => pattern.test(normalizeHeader(header))));
+    const skuColumn = findColumn([/^(erp)?品號$/, /^貨號$/, /^編號$/]);
+    const supplierSkuColumn = findColumn([/供應商貨號/, /產品編號/]);
+    const nameColumn = findColumn([/商品名稱/, /品名/]);
+    const currentColumn = findColumn([/最新.*庫存/, /寄庫.*現貨/, /^現貨$/, /庫存數量/]);
+    const scheduleColumns = headers.map((header, index) => ({ header, index })).filter(({ header, index }) => index !== currentColumn && /(排程|製作|下單|預計.*庫)/.test(normalizeHeader(header)));
+    if ([skuColumn, nameColumn, currentColumn].some((index) => index < 0)) throw new Error("力榮寄庫表欄位辨識失敗，已停止計算。");
+    const records = [];
+    const seen = new Set();
+    for (let index = headerRowIndex + 1; index < rows.length; index += 1) {
+      const row = rows[index];
+      const sku = normalizeSku(row[skuColumn]);
+      const name = String(row[nameColumn] || "").trim();
+      if (!sku && !name) continue;
+      if (!sku) throw new Error(`力榮寄庫表第${index + 1}列缺少ERP品號。`);
+      if (seen.has(sku)) throw new Error(`力榮寄庫表ERP品號重複：${sku}。`);
+      seen.add(sku);
+      const currentQty = parseNumber(row[currentColumn]);
+      if (currentQty == null || currentQty < 0) throw new Error(`力榮寄庫表${sku}的現貨數量不是有效非負數。`);
+      let scheduledQty = 0;
+      const scheduleNotes = [];
+      for (const column of scheduleColumns) {
+        const value = row[column.index];
+        if (value === "" || value == null) continue;
+        const quantity = parseNumber(value);
+        if (quantity == null || quantity < 0) throw new Error(`力榮寄庫表${sku}的排程數量格式異常。`);
+        scheduledQty += quantity;
+        if (quantity > 0) scheduleNotes.push(column.header);
+      }
+      records.push({
+        sourceRow: index + 1, sku, supplierSku: supplierSkuColumn < 0 ? "" : normalizeSku(row[supplierSkuColumn]), name,
+        currentQty, scheduledQty, scheduleNotes
+      });
+    }
+    if (!records.length) throw new Error("力榮寄庫表沒有可辨識的商品列。");
+    return { fileName: options.fileName || "", sheetName, records, bySku: new Map(records.map((row) => [row.sku, row])) };
+  }
+
+  function buildLirongConsignmentRecommendations(recommendations, lirongConsignment, options = {}) {
+    const orderDate = parseDateValue(options.orderDate || recommendations.asOfDate) || recommendations.asOfDate;
+    return recommendations.rows.filter((row) => /力榮/.test(row.supplier)).map((row) => {
+      const consignment = lirongConsignment.bySku.get(row.sku);
+      const currentQty = consignment?.currentQty || 0;
+      const scheduledQty = consignment?.scheduledQty || 0;
+      const targetDays = PROCUREMENT_POLICY.lirongFactoryTargetDays[row.tier];
+      const approvedPullQty = Math.max(0, Number(options.approvedPullBySku?.[row.sku] || 0));
+      const rawQty = Math.max(approvedPullQty + row.forecastDailyQty * (PROCUREMENT_POLICY.lirongProductionDays + targetDays) - currentQty - scheduledQty, 0);
+      const down = Math.floor(rawQty / 10) * 10;
+      const coverageWithDown = row.forecastDailyQty > 0 ? Math.max(currentQty + scheduledQty + down - approvedPullQty, 0) / row.forecastDailyQty : 9999;
+      const packed = roundByPack(rawQty, 10, coverageWithDown, targetDays + PROCUREMENT_POLICY.lirongProductionDays);
+      const blocked = row.externalPurchaseBlocked;
+      const suggestedQty = blocked ? 0 : packed.quantity;
+      return {
+        sku: row.sku, supplierSku: row.supplierSku, sourceName: consignment?.name || "", masterName: row.name, tier: row.tier,
+        forecastDailyQty: row.forecastDailyQty, pullLeadDays: 5, productionDays: 14, earliestDeliveryDays: 19, targetLowDays: 60,
+        targetHighDays: 90, targetDays, currentQty, scheduledQty, approvedPullQty,
+        productionCompleteDate: addDays(orderDate, 14), expectedArrivalDate: addDays(orderDate, currentQty >= approvedPullQty ? 5 : 19),
+        rawQty, downQty: packed.down, upQty: packed.up, suggestedQty, unitCost: row.unitCost,
+        futureCost: suggestedQty * row.unitCost, availableDaysAfter: row.forecastDailyQty > 0 ? (currentQty + scheduledQty + suggestedQty - approvedPullQty) / row.forecastDailyQty : null,
+        beforePullRisk: currentQty < approvedPullQty, beforeProductionRisk: currentQty < approvedPullQty + row.forecastDailyQty * 14,
+        beforeDeliveryRisk: currentQty + scheduledQty < approvedPullQty + row.forecastDailyQty * 19,
+        status: blocked ? (row.automaticExclusionReason || "(S)／下架禁止新增寄庫") : (consignment ? "已命中力榮寄庫表" : "寄庫表未命中，待人工確認"),
+        scheduleNotes: consignment?.scheduleNotes || []
+      };
+    });
+  }
+
+  function normalizeBlacklist(entries) {
+    const list = Array.isArray(entries) ? entries : String(entries || "").split(/\r?\n/);
+    return list.map((value) => String(value || "").trim()).filter(Boolean).map((value) => ({
+      original: value,
+      sku: normalizeSku(value),
+      name: normalizeName(value)
+    }));
+  }
+
+  function blacklistMatch(record, blacklist) {
+    const sku = normalizeSku(record.sku);
+    const supplierSku = normalizeSku(record.supplierSku);
+    const names = [record.name, record.labelName, record.spec].map(normalizeName).filter(Boolean);
+    return blacklist.find((entry) => (
+      (sku && entry.sku === sku)
+      || (supplierSku && entry.sku === supplierSku)
+      || names.some((name) => entry.name === name)
+    )) || null;
+  }
+
+  function resolveConsignment(consignment, master, blacklistInput) {
+    const blacklist = normalizeBlacklist(blacklistInput);
+    const bySku = new Map();
+    const exceptions = [...consignment.exceptions];
+    const confirmedExclusions = [...(consignment.confirmedExclusions || [])];
+    const excluded = [];
+    for (const row of consignment.records) {
+      const blocked = blacklistMatch(row, blacklist);
+      if (blocked) {
+        excluded.push({ ...row, blacklistEntry: blocked.original, reason: "人工黑名單" });
+        continue;
+      }
+
+      let sku = row.sku;
+      let matchBasis = sku ? "寄倉表ERP品號" : "";
+      if (!sku && row.supplierSku) {
+        const candidates = master.bySupplierSku.get(row.supplierSku) || [];
+        if (candidates.length === 1) {
+          sku = candidates[0].sku;
+          matchBasis = "商品主檔供應商貨號完全一致";
+        } else if (candidates.length > 1) {
+          exceptions.push({ type: "供應商貨號一對多", sourceRow: row.sourceRow, sku: "", supplierSku: row.supplierSku, name: row.name, action: "待人工確認" });
+          continue;
+        }
+      }
+      if (!sku && row.name) {
+        const candidates = master.byExactName.get(normalizeName(row.name)) || [];
+        if (candidates.length === 1) {
+          sku = candidates[0].sku;
+          matchBasis = "商品主檔完整品名完全一致";
+        } else if (candidates.length > 1) {
+          exceptions.push({ type: "完整品名一對多", sourceRow: row.sourceRow, sku: "", supplierSku: row.supplierSku, name: row.name, action: "待人工確認" });
+          continue;
+        }
+      }
+      if (!sku) {
+        exceptions.push({ type: "缺ERP品號", sourceRow: row.sourceRow, sku: "", supplierSku: row.supplierSku, name: row.name, action: "加入人工黑名單或補品號" });
+        continue;
+      }
+      if (!master.bySku.has(sku)) {
+        exceptions.push({ type: "商品主檔未命中", sourceRow: row.sourceRow, sku, supplierSku: row.supplierSku, name: row.name, action: "待人工確認" });
+      }
+      if (!bySku.has(sku)) {
+        bySku.set(sku, {
+          sku,
+          name: master.bySku.get(sku)?.name || row.name,
+          currentQty: 0,
+          scheduledQty: 0,
+          scheduleNotes: new Set(),
+          sourceRows: [],
+          matchBases: new Set()
+        });
+      }
+      const aggregated = bySku.get(sku);
+      aggregated.currentQty += row.currentQty;
+      aggregated.scheduledQty += row.scheduledQty;
+      aggregated.sourceRows.push(row.sourceRow);
+      row.scheduleNotes.forEach((note) => aggregated.scheduleNotes.add(note));
+      aggregated.matchBases.add(matchBasis);
+    }
+    return { bySku, exceptions, confirmedExclusions, excluded, blacklist };
+  }
+
+  function aggregatePendingReports(reports) {
+    const bySku = new Map();
+    const records = reports.flatMap((report) => report.records);
+    for (const row of records) {
+      if (!bySku.has(row.sku)) {
+        bySku.set(row.sku, { sku: row.sku, name: row.name, quantity: 0, amount: 0, files: new Set(), sourceRows: [] });
+      }
+      const aggregated = bySku.get(row.sku);
+      aggregated.quantity += row.quantity;
+      aggregated.amount += row.amount;
+      aggregated.files.add(row.fileName);
+      aggregated.sourceRows.push(`${row.fileName || "採購單"}#${row.sourceRow}`);
+      if (!aggregated.name && row.name) aggregated.name = row.name;
+    }
+    return { records, bySku };
+  }
+
+  function calculateNetProcurementDemand(input) {
+    const forecastDemandQty = Math.max(0, Number(input.forecastDemandQty || 0));
+    const safetyStockQty = Math.max(0, Number(input.safetyStockQty || 0));
+    const availableInventoryQty = Math.max(0, Number(input.availableInventoryQty || 0));
+    const pendingPurchaseQty = Math.max(0, Number(input.pendingPurchaseQty || 0));
+    // factoryConsignmentQty is deliberately not referenced here. This is a locked rule.
+    return Math.max(forecastDemandQty + safetyStockQty - availableInventoryQty - pendingPurchaseQty, 0);
+  }
+
+  function roundSuggestedQuantity(quantity, weightedScore) {
+    const raw = Math.max(0, Number(quantity || 0));
+    const score = Number(weightedScore || 0);
+    if (raw < 1 && score < 0.5) return 0;
+    return Math.ceil(raw);
+  }
+
+  function roundByPack(quantity, packSize, coverageWithDown, minimumCoverageDays) {
+    const raw = Math.max(0, Number(quantity || 0));
+    const pack = Math.max(1, Math.round(Number(packSize || 1)));
+    if (!raw) return { raw, packSize: pack, down: 0, up: 0, quantity: 0, direction: "無需求" };
+    const down = Math.floor(raw / pack) * pack;
+    const up = Math.ceil(raw / pack) * pack;
+    const useDown = down > 0 && Number(coverageWithDown || 0) >= Number(minimumCoverageDays || 0);
+    return { raw, packSize: pack, down, up, quantity: useDown ? down : up, direction: useDown ? "向下" : "向上" };
+  }
+
+  function puyoumaPackSize(masterRecord, fallbackName = "") {
+    const text = [masterRecord?.name, masterRecord?.size, masterRecord?.sizeGroup, fallbackName].filter(Boolean).join(" ").normalize("NFKC");
+    if (/床包/.test(text) && /(5尺|6尺)/.test(text)) return 20;
+    if (/床包/.test(text) && /(3\.5尺|7尺)/.test(text)) return 10;
+    if (/(單人.*薄被套|薄被套.*單人)/.test(text)) return 10;
+    if (/(雙人.*薄被套|薄被套.*雙人)/.test(text)) return 20;
+    if (/兩用被套/.test(text)) return 10;
+    return 1;
+  }
+
+  function addDays(dateValue, days) {
+    const key = parseDateValue(dateValue);
+    if (!key) return "";
+    const date = new Date(`${key}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + Math.round(Number(days || 0)));
+    return date.toISOString().slice(0, 10);
+  }
+
+  function findSupplierRule(supplier, suppliedRules = []) {
+    const normalized = normalizeText(supplier);
+    return [...suppliedRules, ...SUPPLIER_RULES].find((row) => {
+      const names = [row.name, row.supplierName, row.shortName, row.supplierShortName, ...(row.aliases || [])]
+        .map(normalizeText).filter(Boolean);
+      return normalized && names.some((name) => normalized === name || normalized.includes(name) || name.includes(normalized));
+    }) || null;
+  }
+
+  function calculatePaymentSchedule(input) {
+    const supplierRule = findSupplierRule(input.supplier, input.supplierRules || []);
+    const amount = Math.max(0, Number(input.amount || 0));
+    const orderDate = parseDateValue(input.orderDate);
+    if (!supplierRule || !orderDate || !Number.isFinite(Number(supplierRule.leadDays))) {
+      return { status: "REVIEW", supplierCountry: "", leadDays: null, expectedShipmentDate: "", expectedArrivalDate: "", entries: [], message: "供應商分類、平均採購週期或下單日缺漏。" };
+    }
+    const leadDays = Math.max(0, Number(supplierRule.leadDays));
+    const isLirongConsignment = /力榮/.test(normalizeText(input.supplier)) && input.supplyMode === "consignment";
+    const expectedShipmentDate = supplierRule.country === "國外" ? addDays(orderDate, leadDays) : "";
+    const arrivalLeadDays = isLirongConsignment ? (Number(input.consignmentAvailableQty || 0) >= Number(input.confirmedQty || 0) ? 5 : 19) : leadDays;
+    const expectedArrivalDate = supplierRule.country === "國內" ? addDays(orderDate, arrivalLeadDays) : "";
+    const entries = supplierRule.country === "國外"
+      ? [
+        { trigger: "下單訂金30%", date: orderDate, month: orderDate.slice(0, 7), amount: Math.round(amount * 30) / 100 },
+        { trigger: "預計出貨70%", date: expectedShipmentDate, month: expectedShipmentDate.slice(0, 7), amount: Math.round(amount * 70) / 100 }
+      ]
+      : [{ trigger: "預計到貨100%", date: expectedArrivalDate, month: expectedArrivalDate.slice(0, 7), amount }];
+    return {
+      status: "PASS", supplierCountry: supplierRule.country, leadDays, expectedShipmentDate, expectedArrivalDate, entries,
+      message: supplierRule.country === "國外" ? "國外：下單30%、預計出貨70%。" : "國內：預計到貨100%。"
+    };
+  }
+
+  function evaluateConsignmentSupply(input) {
+    const confirmedPurchaseQty = Math.max(0, Number(input.confirmedPurchaseQty || 0));
+    const currentConsignmentQty = Math.max(0, Number(input.currentConsignmentQty || 0));
+    const scheduledBeforeDueQty = Math.max(0, Number(input.scheduledBeforeDueQty || 0));
+    const currentGap = Math.max(confirmedPurchaseQty - currentConsignmentQty, 0);
+    const gapAfterSchedule = Math.max(confirmedPurchaseQty - currentConsignmentQty - scheduledBeforeDueQty, 0);
+    let status = "現有寄倉可直接覆蓋";
+    if (currentGap > 0 && gapAfterSchedule === 0) status = "排程量可覆蓋；交期待確認";
+    if (gapAfterSchedule > 0) status = "缺貨警示：需新增寄庫單";
+    return { currentGap, gapAfterSchedule, status };
+  }
+
+  function calculatePurchaseBudget(input) {
+    const forecastCostOutflow = Number(input.forecastCostOutflow || 0);
+    const targetEndingInventoryCost = Number(input.targetEndingInventoryCost || 0);
+    const openingInventoryCost = Number(input.openingInventoryCost || 0);
+    const expectedSupplierReturns = Number(input.expectedSupplierReturns || 0);
+    const purchasedAmountToDate = Number(input.purchasedAmountToDate || 0);
+    const availableBudget = forecastCostOutflow + targetEndingInventoryCost - openingInventoryCost + expectedSupplierReturns;
+    return {
+      availableBudget,
+      purchasedAmountToDate,
+      remainingBudget: availableBudget - purchasedAmountToDate
+    };
+  }
+
+  function inferMaterialCategory(masterRecord, fallbackName = "") {
+    const combined = [
+      masterRecord?.name,
+      masterRecord?.style1,
+      masterRecord?.style2,
+      masterRecord?.mainCategory,
+      fallbackName
+    ].filter(Boolean).join(" ").replace(/\s/g, "");
+    const mainCategory = String(masterRecord?.mainCategory || "").replace(/\s/g, "");
+    const nameOnly = [masterRecord?.name, fallbackName].filter(Boolean).join(" ").replace(/\s/g, "");
+    const pillowAccessory = /(枕套|枕頭套|枕巾|抱枕套|靠枕套|床包|被套)/.test(nameOnly);
+    const pillowCore = /^(枕頭|枕芯)$/.test(mainCategory)
+      || (!mainCategory && !pillowAccessory && /(枕頭|枕芯|羽絨枕|乳膠枕|記憶枕|纖維枕|飯店枕|機能枕|水洗枕|軟枕|硬枕)/.test(nameOnly));
+    if (pillowCore) return "枕芯";
+    if (combined.includes("天絲棉")) return "天絲棉";
+    if (combined.includes("天絲")) return "天絲";
+    if (combined.includes("熊冷")) return "熊冷";
+    if (combined.includes("麻糬被")) return "麻糬被";
+    if (combined.includes("華爾紗")) return "華爾紗";
+    if (combined.includes("水洗棉")) return "水洗棉";
+    if (combined.includes("雙層紗")) return "雙層紗";
+    if (combined.includes("有機棉")) return "有機棉";
+    if (combined.includes("長絨棉")) return "長絨棉";
+    if (combined.includes("純棉") || /(?:40|60|80|100)(?:支)?棉/.test(combined)) return "精梳純棉";
+    if (/(涼感|涼被|冷被)/.test(combined)) return "涼感其他";
+    if (/(暖被|冬被|羊羔絨|法蘭絨|保暖|厚被)/.test(combined)) return "冬季保暖其他";
+    return "其他";
+  }
+
+  function classifyPuyoumaPurchaseTab(masterRecord, fallbackName = "") {
+    const combined = [masterRecord?.name, masterRecord?.style1, masterRecord?.style2, fallbackName]
+      .filter(Boolean).join(" ").replace(/\s/g, "");
+    if (combined.includes("天絲")) return "天絲＋天絲棉";
+    if (/(華爾紗|水洗棉|雙層紗|有機棉|純棉|長絨棉|(?:40|60|80|100)(?:支)?棉)/.test(combined)) return "長絨棉";
+    return "無尺寸品項";
+  }
+
+  function applyDemandModel(modelName, recent6Daily, recent12Daily, lastYearDaily) {
+    const name = String(modelName || "近期6週");
+    const hasLastYear = Number.isFinite(lastYearDaily) && lastYearDaily > 0;
+    if (name.includes("近期12週")) return { daily: recent12Daily, usedModel: "近期12週", seasonalDataReady: true };
+    if (name === "去年同期") {
+      return hasLastYear
+        ? { daily: lastYearDaily, usedModel: name, seasonalDataReady: true }
+        : { daily: recent6Daily, usedModel: "近期6週（去年同期不足）", seasonalDataReady: false };
+    }
+    const blend = name.match(/近期(\d+)%＋同期(\d+)%/);
+    if (blend) {
+      if (!hasLastYear) return { daily: recent6Daily, usedModel: "近期6週（去年同期不足）", seasonalDataReady: false };
+      const recentWeight = Number(blend[1]) / 100;
+      const lastYearWeight = Number(blend[2]) / 100;
+      return {
+        daily: recent6Daily * recentWeight + lastYearDaily * lastYearWeight,
+        usedModel: name,
+        seasonalDataReady: true
+      };
+    }
+    return { daily: recent6Daily, usedModel: "近期6週", seasonalDataReady: true };
+  }
+
+  function coefficientOfVariation(values) {
+    if (!values.length) return null;
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    if (mean <= 0) return null;
+    const variance = values.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / values.length;
+    return Math.sqrt(variance) / mean;
+  }
+
+  function classifyXyz(weeklyQuantities) {
+    const nonnegative = weeklyQuantities.map((value) => Math.max(0, value));
+    const activeWeeks = nonnegative.filter((value) => value > 0).length;
+    const cv = coefficientOfVariation(nonnegative);
+    if (activeWeeks >= PROCUREMENT_POLICY.xyzThresholds.XActiveWeeks && cv != null && cv <= PROCUREMENT_POLICY.xyzThresholds.XCv) {
+      return { xyzClass: "X", activeWeeks, cv };
+    }
+    if (activeWeeks >= PROCUREMENT_POLICY.xyzThresholds.YActiveWeeks && cv != null && cv <= PROCUREMENT_POLICY.xyzThresholds.YCv) {
+      return { xyzClass: "Y", activeWeeks, cv };
+    }
+    return { xyzClass: "Z", activeWeeks, cv };
+  }
+
+  function demandTier(abcClass, xyzClass, recent6Qty, trendRatio, activeWeeks6) {
+    if ((abcClass === "A" && xyzClass !== "Z") || (recent6Qty >= 12 && trendRatio >= 1.35 && activeWeeks6 >= 4)) return "熱銷";
+    if ((abcClass === "A" && xyzClass === "Z") || (abcClass === "B" && xyzClass !== "Z")) return "穩定";
+    return "低銷";
+  }
+
+  function recommendationScore(tier, xyzClass, activeWeeks6) {
+    let score = ({ "熱銷": 0.9, "穩定": 0.65, "低銷": 0.3 })[tier] || 0.3;
+    if (xyzClass === "X") score += 0.1;
+    if (xyzClass === "Z") score -= 0.1;
+    if (activeWeeks6 <= 1) score -= 0.1;
+    return Math.min(1, Math.max(0, score));
+  }
+
+  function resolveSupplyProfile(supplier) {
+    const normalized = normalizeText(supplier);
+    const supplierRules = arguments[1] || [];
+    const tier = arguments[2] || "穩定";
+    const baseProfile = /普優[瑪碼]/.test(normalized)
+      ? PROCUREMENT_POLICY.supplyProfiles.puyouma
+      : (/力榮/.test(normalized) ? PROCUREMENT_POLICY.supplyProfiles.shortLead : PROCUREMENT_POLICY.supplyProfiles.default);
+    const rule = findSupplierRule(supplier, supplierRules);
+    if (!rule) {
+      return {
+        ...baseProfile,
+        reviewDays: PROCUREMENT_POLICY.reviewDays,
+        reviewPeriodLabel: `${PROCUREMENT_POLICY.reviewDays}天（預設）`,
+        manualReview: false,
+        paymentRule: ""
+      };
+    }
+    const leadDays = Math.max(0, parseNumber(rule.leadDays ?? rule.productLeadDays) || baseProfile.leadDays);
+    const rawReview = /上林/.test(normalized) ? 28 : (rule.reviewPeriod ?? rule.reviewDays ?? "");
+    const reviewText = String(rawReview ?? "").normalize("NFKC").trim();
+    const rangeMatch = reviewText.match(/^(\d+(?:\.\d+)?)\s*[-~～至]\s*(\d+(?:\.\d+)?)$/);
+    const numericReview = reviewText === "" ? Number.NaN : Number(reviewText);
+    let reviewDays = PROCUREMENT_POLICY.reviewDays;
+    let reviewPeriodLabel = `${PROCUREMENT_POLICY.reviewDays}天（預設）`;
+    let manualReview = false;
+    if (rangeMatch) {
+      const minimum = Math.min(Number(rangeMatch[1]), Number(rangeMatch[2]));
+      const maximum = Math.max(Number(rangeMatch[1]), Number(rangeMatch[2]));
+      reviewDays = tier === "熱銷" ? minimum : (tier === "低銷" ? maximum : (minimum + maximum) / 2);
+      reviewPeriodLabel = `${minimum}～${maximum}天（${tier}${reviewDays}天）`;
+    } else if (Number.isFinite(numericReview) && numericReview > 0) {
+      reviewDays = numericReview;
+      reviewPeriodLabel = `${numericReview}天`;
+    } else if (Number.isFinite(numericReview) && numericReview === 0) {
+      reviewDays = 0;
+      reviewPeriodLabel = "未定（人工判斷）";
+      manualReview = true;
+    }
+    return {
+      ...baseProfile,
+      leadDays,
+      reviewDays,
+      reviewPeriodLabel,
+      manualReview,
+      paymentRule: String(rule.paymentRule || "").trim()
+    };
+  }
+
+  function dateToUtcMs(value) {
+    const key = parseDateValue(value);
+    return key ? new Date(`${key}T00:00:00Z`).getTime() : null;
+  }
+
+  function seasonalSlotFromMs(timestamp) {
+    const date = new Date(timestamp);
+    const start = Date.UTC(date.getUTCFullYear(), 0, 1);
+    return Math.max(0, Math.min(26, Math.floor((timestamp - start) / 86400000 / 14)));
+  }
+
+  function buildProcurementRecommendations(input) {
+    const pending = aggregatePendingReports(input.pendingReports || []);
+    const resolvedConsignment = resolveConsignment(input.consignment, input.master, input.blacklist || []);
+    const blacklist = normalizeBlacklist(input.blacklist || []);
+    const salesRecords = (input.salesReports || []).flatMap((report) => report.records || []);
+    const maxSalesDate = salesRecords.reduce((max, row) => (!max || row.date > max ? row.date : max), "");
+    const asOfDate = parseDateValue(input.asOfDate) || maxSalesDate;
+    const asOfMs = dateToUtcMs(asOfDate);
+    if (!asOfMs) throw new Error("無法判斷銷售資料截止日，請確認結帳時間與銷售截止日。");
+    const maxSalesMs = dateToUtcMs(maxSalesDate);
+    const salesDateGapDays = maxSalesMs == null ? null : Math.abs(Math.round((asOfMs - maxSalesMs) / 86400000));
+    const priorYearDate = new Date(asOfMs);
+    priorYearDate.setUTCFullYear(priorYearDate.getUTCFullYear() - 1);
+    const priorYearMs = priorYearDate.getTime();
+    const demandBySku = new Map();
+
+    const ensureDemand = (sku, name = "") => {
+      if (!demandBySku.has(sku)) {
+        demandBySku.set(sku, {
+          sku,
+          name,
+          recent6Qty: 0,
+          recent12Qty: 0,
+          lastYear6Qty: 0,
+          weekly12: Array(12).fill(0),
+          hqRecent12Qty: 0,
+          storeRecent12Qty: 0,
+          actualAmount12: 0,
+          sourceFiles: new Set()
+        });
+      }
+      return demandBySku.get(sku);
+    };
+
+    for (const sale of salesRecords) {
+      const saleMs = dateToUtcMs(sale.date);
+      if (saleMs == null || saleMs > asOfMs) continue;
+      const demand = ensureDemand(sale.sku, sale.name);
+      const ageDays = Math.floor((asOfMs - saleMs) / 86400000);
+      if (ageDays >= 0 && ageDays < 84) {
+        demand.recent12Qty += sale.quantity;
+        demand.actualAmount12 += sale.actualAmount;
+        demand.weekly12[Math.floor(ageDays / 7)] += sale.quantity;
+        const isHeadquarters = /^(T|W)/.test(sale.warehouseCode || "") || /(總倉|線上|電商)/.test(`${sale.warehouseName || ""}${sale.ecommercePlatform || ""}`);
+        if (isHeadquarters) demand.hqRecent12Qty += sale.quantity;
+        else demand.storeRecent12Qty += sale.quantity;
+        if (ageDays < 42) demand.recent6Qty += sale.quantity;
+      }
+      const lastYearAgeDays = Math.floor((priorYearMs - saleMs) / 86400000);
+      if (lastYearAgeDays >= 0 && lastYearAgeDays < 42) demand.lastYear6Qty += sale.quantity;
+      if (sale.fileName) demand.sourceFiles.add(sale.fileName);
+    }
+    for (const [sku, purchase] of pending.bySku) ensureDemand(sku, purchase.name);
+
+    const candidates = [];
+    const productExclusions = [];
+    for (const demand of demandBySku.values()) {
+      const masterRecord = input.master.bySku.get(demand.sku);
+      const inventory = input.inventory.bySku.get(demand.sku);
+      const purchase = pending.bySku.get(demand.sku);
+      if (Math.max(0, demand.recent12Qty) <= 0 && !purchase) continue;
+      const effectiveName = masterRecord?.name || demand.name;
+      if (masterRecord?.sellThroughStop || isSellThroughStopName(effectiveName)) {
+        productExclusions.push({
+          type: "品名結尾停採標記(S)",
+          sourceRow: masterRecord?.sourceRow || "",
+          sku: demand.sku,
+          supplierSku: masterRecord?.supplierSku || "",
+          name: effectiveName,
+          action: "停止對外採購與新增寄庫；保留線上銷售、庫存追蹤及門市由總倉現貨調撥"
+        });
+      }
+      const blocked = blacklistMatch({
+        sku: demand.sku,
+        supplierSku: masterRecord?.supplierSku || "",
+        name: masterRecord?.name || demand.name,
+        labelName: "",
+        spec: ""
+      }, blacklist);
+      if (blocked || CONFIRMED_EXCLUSIONS[demand.sku]) continue;
+      const q12 = Math.max(0, demand.recent12Qty);
+      const unitCost = Math.max(0, Number(masterRecord?.unitCost || 0));
+      candidates.push({
+        demand,
+        masterRecord,
+        inventory,
+        purchase,
+        demandValue: q12 * (unitCost || 1)
+      });
+    }
+
+    const totalDemandValue = candidates.reduce((sum, row) => sum + row.demandValue, 0);
+    let cumulativeValue = 0;
+    for (const row of [...candidates].sort((left, right) => right.demandValue - left.demandValue)) {
+      const startingShare = totalDemandValue > 0 ? cumulativeValue / totalDemandValue : 1;
+      row.abcClass = startingShare < PROCUREMENT_POLICY.abcThresholds.A ? "A" : startingShare < PROCUREMENT_POLICY.abcThresholds.B ? "B" : "C";
+      cumulativeValue += row.demandValue;
+    }
+
+    const preliminary = candidates.map((candidate) => {
+      const { demand, masterRecord } = candidate;
+      const modelRow = input.model?.bySku?.get(demand.sku);
+      const recent6Daily = Math.max(0, demand.recent6Qty) / 42;
+      const recent12Daily = Math.max(0, demand.recent12Qty) / 84;
+      const lastYearDaily = Math.max(0, demand.lastYear6Qty) / 42;
+      const selected = applyDemandModel(modelRow?.skuModel || "近期6週", recent6Daily, recent12Daily, lastYearDaily);
+      const xyz = classifyXyz(demand.weekly12);
+      const activeWeeks6 = demand.weekly12.slice(0, 6).filter((value) => value > 0).length;
+      const trendRatio = recent12Daily > 0 ? recent6Daily / recent12Daily : (recent6Daily > 0 ? 2 : 0);
+      const tier = demandTier(candidate.abcClass, xyz.xyzClass, Math.max(0, demand.recent6Qty), trendRatio, activeWeeks6);
+      const materialCategory = modelRow?.materialCategory || inferMaterialCategory(masterRecord, demand.name);
+      const categoryFallback = input.model?.byMaterial?.get(materialCategory);
+      return {
+        ...candidate,
+        modelRow,
+        recent6Daily,
+        recent12Daily,
+        lastYearDaily,
+        skuForecastDaily: Math.max(0, selected.daily),
+        skuUsedModel: selected.usedModel,
+        skuSeasonalDataReady: selected.seasonalDataReady,
+        xyzClass: xyz.xyzClass,
+        activeWeeks12: xyz.activeWeeks,
+        activeWeeks6,
+        variabilityCv: xyz.cv,
+        trendRatio,
+        tier,
+        materialCategory,
+        categoryKey: modelRow?.categoryName && modelRow.categoryName !== "無" ? modelRow.categoryName : materialCategory,
+        categoryModel: modelRow?.categoryModel || categoryFallback?.model || "近期6週",
+        categoryWape: modelRow?.categoryWape ?? categoryFallback?.wape ?? null,
+        categoryReliability: modelRow?.categoryReliability || categoryFallback?.reliability || "無"
+      };
+    });
+
+    const categoryPools = new Map();
+    for (const row of preliminary) {
+      const key = `${row.categoryKey}||${row.categoryModel}`;
+      if (!categoryPools.has(key)) {
+        categoryPools.set(key, { key, recent6Daily: 0, recent12Daily: 0, lastYearDaily: 0, skuBaseDaily: 0, rows: [] });
+      }
+      const pool = categoryPools.get(key);
+      pool.recent6Daily += row.recent6Daily;
+      pool.recent12Daily += row.recent12Daily;
+      pool.lastYearDaily += row.lastYearDaily;
+      pool.skuBaseDaily += row.skuForecastDaily;
+      pool.rows.push(row);
+    }
+    for (const pool of categoryPools.values()) {
+      const sample = pool.rows[0];
+      const categoryForecast = applyDemandModel(sample.categoryModel, pool.recent6Daily, pool.recent12Daily, pool.lastYearDaily);
+      const rawFactor = pool.skuBaseDaily > 0 ? categoryForecast.daily / pool.skuBaseDaily : 1;
+      let factor = Number.isFinite(rawFactor) ? rawFactor : 1;
+      let usedModel = categoryForecast.usedModel;
+      let seasonalDataReady = categoryForecast.seasonalDataReady;
+      if (!seasonalDataReady) {
+        const indices = input.model?.seasonalIndexByMaterial?.get(sample.materialCategory);
+        if (indices?.size) {
+          const currentSlot = seasonalSlotFromMs(asOfMs);
+          const targetSlot = seasonalSlotFromMs(asOfMs + (PROCUREMENT_POLICY.reviewDays * 86400000));
+          const recentIndices = [currentSlot, (currentSlot + 26) % 27, (currentSlot + 25) % 27]
+            .map((slot) => indices.get(slot)).filter((value) => Number.isFinite(value) && value > 0);
+          const targetIndex = indices.get(targetSlot);
+          if (recentIndices.length && Number.isFinite(targetIndex) && targetIndex > 0) {
+            const recentIndex = recentIndices.reduce((sum, value) => sum + value, 0) / recentIndices.length;
+            factor = targetIndex / recentIndex;
+            usedModel = `${sample.categoryModel}＋類別季節指數`;
+            seasonalDataReady = true;
+          }
+        }
+      }
+      pool.factor = Math.max(0.6, Math.min(1.4, factor));
+      pool.usedModel = usedModel;
+      pool.seasonalDataReady = seasonalDataReady;
+    }
+
+    const factoryTargetDays = Number(input.factoryTargetDays || 90);
+    const rows = preliminary.map((row) => {
+      const pool = categoryPools.get(`${row.categoryKey}||${row.categoryModel}`);
+      const adjustedDaily = row.skuForecastDaily * (pool?.factor || 1);
+      const supplier = row.masterRecord?.supplier || "未辨識供應商";
+      const supplyProfile = resolveSupplyProfile(supplier, input.supplierRules || [], row.tier);
+      const supplierLeadDays = supplyProfile.leadDays;
+      const reviewDays = supplyProfile.reviewDays;
+      const safetyBufferDays = supplyProfile.safetyBufferDays[row.tier];
+      const targetCoverageDays = reviewDays + supplierLeadDays + safetyBufferDays;
+      const forecastFutureQty = adjustedDaily * (reviewDays + supplierLeadDays);
+      const safetyStockQty = adjustedDaily * safetyBufferDays;
+      const inventoryQty = row.inventory?.availableQuantity ?? row.inventory?.quantity ?? 0;
+      const excludedInventoryQty = row.inventory?.excludedQuantity || 0;
+      const pendingQty = row.purchase?.quantity || 0;
+      const rawPurchaseQty = calculateNetProcurementDemand({
+        forecastDemandQty: forecastFutureQty,
+        safetyStockQty,
+        availableInventoryQty: inventoryQty,
+        pendingPurchaseQty: pendingQty,
+        factoryConsignmentQty: resolvedConsignment.bySku.get(row.demand.sku)?.currentQty || 0
+      });
+      const score = recommendationScore(row.tier, row.xyzClass, row.activeWeeks6);
+      const sellThroughStop = Boolean(row.masterRecord?.sellThroughStop || isSellThroughStopName(row.masterRecord?.name || row.demand.name));
+      const supplierRule = findSupplierRule(supplier, input.supplierRules || []);
+      const isGift = /贈品/.test(`${row.masterRecord?.name || row.demand.name} ${row.masterRecord?.stockType || ""}`);
+      const supplierAutomaticBlocked = supplierRule?.automaticPurchase === false;
+      const masterDataIncomplete = !row.masterRecord?.supplier || !(Number(row.masterRecord?.unitCost) > 0) || !(Number(row.masterRecord?.moq) > 0) || !row.masterRecord?.productStatus;
+      const externalPurchaseBlocked = Boolean(row.masterRecord?.discontinued || sellThroughStop || isGift || supplierAutomaticBlocked || masterDataIncomplete);
+      if ((isGift || supplierAutomaticBlocked || masterDataIncomplete) && !sellThroughStop && !row.masterRecord?.discontinued) {
+        productExclusions.push({
+          type: masterDataIncomplete ? "商品主檔必要資料不完整" : (isGift ? "贈品排除一般採購" : "供應商專屬週期"),
+          sourceRow: row.masterRecord?.sourceRow || "",
+          sku: row.demand.sku,
+          supplierSku: row.masterRecord?.supplierSku || "",
+          name: row.masterRecord?.name || row.demand.name,
+          action: masterDataIncomplete ? "補齊供應商、正數進貨價、MOQ與貨品狀態前禁止核准" : (isGift ? "排除總部一般自動採購；活動需求另行管理" : `${supplierRule.exclusionReason}；只追蹤人工下單`)
+        });
+      }
+      const manualSupplierReview = Boolean(supplyProfile.manualReview);
+      const baseSuggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview ? 0 : roundSuggestedQuantity(rawPurchaseQty, score);
+      const unitCost = Math.max(0, Number(row.masterRecord?.unitCost || 0));
+      const consignment = resolvedConsignment.bySku.get(row.demand.sku);
+      const normalizedSupplier = normalizeText(supplier);
+      const packSize = /力榮/.test(normalizedSupplier) ? 10 : (/普優[瑪碼]/.test(normalizedSupplier) ? puyoumaPackSize(row.masterRecord, row.demand.name) : 1);
+      const downQty = Math.floor(baseSuggestedPurchaseQty / packSize) * packSize;
+      const coverageWithDown = adjustedDaily > 0 ? (inventoryQty + pendingQty + downQty) / adjustedDaily : 9999;
+      const minimumCoverageDays = /力榮/.test(normalizedSupplier) ? PROCUREMENT_POLICY.lirongProductionDays : reviewDays + supplierLeadDays;
+      const packed = roundByPack(baseSuggestedPurchaseQty, packSize, coverageWithDown, minimumCoverageDays);
+      const suggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview ? 0 : packed.quantity;
+      const factoryPullQty = pendingQty + suggestedPurchaseQty;
+      const consignmentCurrentQty = consignment?.currentQty || 0;
+      const consignmentScheduledQty = consignment?.scheduledQty || 0;
+      const immediateConsignmentGap = consignment && !externalPurchaseBlocked ? Math.max(factoryPullQty - consignmentCurrentQty, 0) : 0;
+      const tierFactoryTargetDays = /普優[瑪碼]/.test(normalizedSupplier) ? PROCUREMENT_POLICY.puyoumaFactoryTargetDays[row.tier] : factoryTargetDays;
+      const factoryTargetQty = consignment && !externalPurchaseBlocked ? adjustedDaily * tierFactoryTargetDays : 0;
+      const rawConsignmentOrderQty = consignment
+        ? Math.max(factoryPullQty + adjustedDaily * PROCUREMENT_POLICY.puyoumaFactoryLeadDays + factoryTargetQty - consignmentCurrentQty - consignmentScheduledQty, immediateConsignmentGap, 0)
+        : 0;
+      const suggestedConsignmentQty = externalPurchaseBlocked ? 0 : roundSuggestedQuantity(rawConsignmentOrderQty, Math.max(score, 0.5));
+      let supplyStatus = "非寄倉供應商／寄倉品號未命中";
+      if (sellThroughStop) {
+        supplyStatus = "售完即停：不對外採購、不新增寄庫；可用總倉現貨銷售或調撥";
+      } else if (row.masterRecord?.discontinued) {
+        supplyStatus = "商品主檔已下架：不對外採購、不新增寄庫";
+      } else if (isGift) {
+        supplyStatus = "贈品：排除總部一般自動採購，保留稽核";
+      } else if (supplierAutomaticBlocked) {
+        supplyStatus = `${supplierRule.exclusionReason}：排除一般自動採購`;
+      } else if (masterDataIncomplete) {
+        supplyStatus = "商品主檔缺供應商、正數進貨價、MOQ或貨品狀態：禁止自動採購與核准";
+      } else if (manualSupplierReview) {
+        supplyStatus = "檢視期未定：保留需求與缺貨風險，採購量由人工判斷";
+      } else if (consignment) {
+        supplyStatus = immediateConsignmentGap > 0
+          ? "缺貨警示：寄倉現貨不足，需新增寄庫單"
+          : (suggestedConsignmentQty > 0 ? "現有採購可供應；仍需補足工廠目標" : "寄倉供貨充足");
+      }
+      return {
+        sku: row.demand.sku,
+        name: row.masterRecord?.name || row.demand.name,
+        supplierSku: row.masterRecord?.supplierSku || "",
+        supplier,
+        supplyProfileKey: supplyProfile.key,
+        supplyProfileLabel: supplyProfile.label,
+        supplierLeadDays,
+        reviewDays,
+        reviewPeriodLabel: supplyProfile.reviewPeriodLabel,
+        manualSupplierReview,
+        paymentRule: supplyProfile.paymentRule,
+        supplierCountry: supplierRule?.country || "待確認",
+        unitCost,
+        materialCategory: row.materialCategory,
+        purchaseTab: classifyPuyoumaPurchaseTab(row.masterRecord, row.demand.name),
+        recent6Qty: row.demand.recent6Qty,
+        recent12Qty: row.demand.recent12Qty,
+        lastYear6Qty: row.demand.lastYear6Qty,
+        abcClass: row.abcClass,
+        xyzClass: row.xyzClass,
+        tier: row.tier,
+        activeWeeks12: row.activeWeeks12,
+        variabilityCv: row.variabilityCv,
+        trendRatio: row.trendRatio,
+        skuModel: row.skuUsedModel,
+        categoryModel: pool?.usedModel || row.categoryModel,
+        categorySeasonFactor: pool?.factor || 1,
+        categoryReliability: row.categoryReliability,
+        categoryWape: row.categoryWape,
+        seasonalDataReady: row.skuSeasonalDataReady && (pool?.seasonalDataReady ?? true),
+        forecastDailyQty: adjustedDaily,
+        reviewDays,
+        safetyDays: safetyBufferDays,
+        safetyBufferDays,
+        targetCoverageDays,
+        forecastFutureQty,
+        safetyStockQty,
+        inventoryQty,
+        excludedInventoryQty,
+        pendingQty,
+        rawPurchaseQty,
+        packSize,
+        packDownQty: packed.down,
+        packUpQty: packed.up,
+        packDirection: packed.direction,
+        recommendationScore: score,
+        suggestedPurchaseQty,
+        suggestedPurchaseAmount: suggestedPurchaseQty * unitCost,
+        consignmentCurrentQty,
+        consignmentScheduledQty,
+        immediateConsignmentGap,
+        factoryTargetDays: tierFactoryTargetDays,
+        factoryTargetQty,
+        suggestedConsignmentQty,
+        supplyStatus,
+        sellThroughStop,
+        externalPurchaseBlocked,
+        automaticExclusionReason: isGift ? "贈品排除一般自動採購" : (supplierAutomaticBlocked ? supplierRule.exclusionReason : ""),
+        hqDemandQty: row.demand.recent12Qty > 0 ? (forecastFutureQty + safetyStockQty) * Math.max(0, row.demand.hqRecent12Qty) / Math.max(0.0001, row.demand.recent12Qty) : 0,
+        storeDemandQty: row.demand.recent12Qty > 0 ? (forecastFutureQty + safetyStockQty) * Math.max(0, row.demand.storeRecent12Qty) / Math.max(0.0001, row.demand.recent12Qty) : 0,
+        discontinued: Boolean(row.masterRecord?.discontinued),
+        isNewProduct: Boolean(row.masterRecord?.listedDate && dateToUtcMs(row.masterRecord.listedDate) != null && (asOfMs - dateToUtcMs(row.masterRecord.listedDate)) / 86400000 < 42),
+        sourceFiles: [...row.demand.sourceFiles],
+        scheduleNotes: consignment ? [...consignment.scheduleNotes] : []
+      };
+    }).sort((left, right) => (
+      right.suggestedPurchaseAmount - left.suggestedPurchaseAmount
+      || right.suggestedPurchaseQty - left.suggestedPurchaseQty
+      || left.sku.localeCompare(right.sku)
+    ));
+
+    const suggestedRows = rows.filter((row) => row.suggestedPurchaseQty > 0);
+    const consignmentRows = rows.filter((row) => row.suggestedConsignmentQty > 0 || row.immediateConsignmentGap > 0);
+    return {
+      asOfDate,
+      sourceMaxSalesDate: maxSalesDate,
+      salesDateGapDays,
+      salesDateStatus: salesDateGapDays != null && salesDateGapDays <= 3 ? "PASS" : "REVIEW",
+      checkpoint: input.checkpoint || "month-start",
+      rows,
+      suggestedRows,
+      consignmentRows,
+      pending,
+      consignment: resolvedConsignment,
+      productExclusions,
+      factoryTargetDays,
+      model: input.model,
+      totals: {
+        analyzedSkuCount: rows.length,
+        suggestedSkuCount: suggestedRows.length,
+        suggestedPurchaseQty: suggestedRows.reduce((sum, row) => sum + row.suggestedPurchaseQty, 0),
+        suggestedPurchaseAmount: suggestedRows.reduce((sum, row) => sum + row.suggestedPurchaseAmount, 0),
+        hotSkuCount: rows.filter((row) => row.tier === "熱銷").length,
+        stableSkuCount: rows.filter((row) => row.tier === "穩定").length,
+        lowSkuCount: rows.filter((row) => row.tier === "低銷").length,
+        immediateShortageSkuCount: consignmentRows.filter((row) => row.immediateConsignmentGap > 0).length,
+        consignmentSuggestionSkuCount: consignmentRows.length,
+        seasonalFallbackSkuCount: rows.filter((row) => !row.seasonalDataReady).length,
+        sellThroughStopExcludedCount: productExclusions.length
+      }
+    };
+  }
+
+  function dateKey(value) {
+    const text = String(value || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return "";
+    const date = new Date(`${text}T00:00:00Z`);
+    return Number.isNaN(date.getTime()) ? "" : text;
+  }
+
+  function validateSourceDates(dates, maxGapDays = 14) {
+    const valid = Object.entries(dates || {}).filter(([, value]) => dateKey(value));
+    if (valid.length < 2) return { status: "REVIEW", gapDays: null, message: "請填入各來源的資料截止日。" };
+    const times = valid.map(([, value]) => new Date(`${value}T00:00:00Z`).getTime());
+    const gapDays = Math.round((Math.max(...times) - Math.min(...times)) / 86400000);
+    return gapDays <= maxGapDays
+      ? { status: "PASS", gapDays, message: `來源日期相差${gapDays}天，可進行同時點判斷。` }
+      : { status: "REVIEW", gapDays, message: `來源日期相差${gapDays}天；可驗證品號串接，但不可直接判定實際淨需求。` };
+  }
+
+  function buildAnalysis(input) {
+    const pending = aggregatePendingReports(input.pendingReports || []);
+    const resolvedConsignment = resolveConsignment(input.consignment, input.master, input.blacklist || []);
+    const rows = [];
+    for (const [sku, purchase] of [...pending.bySku.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      const inventory = input.inventory.bySku.get(sku);
+      const consignment = resolvedConsignment.bySku.get(sku);
+      const supply = evaluateConsignmentSupply({
+        confirmedPurchaseQty: purchase.quantity,
+        currentConsignmentQty: consignment?.currentQty || 0,
+        scheduledBeforeDueQty: consignment?.scheduledQty || 0
+      });
+      rows.push({
+        sku,
+        name: input.master.bySku.get(sku)?.name || purchase.name || inventory?.name || consignment?.name || "",
+        pendingQty: purchase.quantity,
+        pendingAmount: purchase.amount,
+        inventoryQty: inventory?.quantity || 0,
+        consignmentCurrentQty: consignment?.currentQty || 0,
+        consignmentScheduledQty: consignment?.scheduledQty || 0,
+        currentGap: supply.currentGap,
+        gapAfterSchedule: supply.gapAfterSchedule,
+        supplyStatus: consignment ? supply.status : "寄倉品號未命中／非寄倉供應商",
+        inventoryMatched: Boolean(inventory),
+        consignmentMatched: Boolean(consignment),
+        scheduleNotes: consignment ? [...consignment.scheduleNotes] : [],
+        purchaseSources: [...purchase.files]
+      });
+    }
+    const dateCheck = validateSourceDates(input.dates || {});
+    return {
+      rows,
+      pending,
+      consignment: resolvedConsignment,
+      dateCheck,
+      dates: input.dates || {},
+      totals: {
+        skuCount: rows.length,
+        pendingQty: rows.reduce((sum, row) => sum + row.pendingQty, 0),
+        pendingAmount: rows.reduce((sum, row) => sum + row.pendingAmount, 0),
+        inventoryMatched: rows.filter((row) => row.inventoryMatched).length,
+        consignmentMatched: rows.filter((row) => row.consignmentMatched).length,
+        consignmentCurrentQty: rows.reduce((sum, row) => sum + row.consignmentCurrentQty, 0),
+        consignmentScheduledQty: rows.reduce((sum, row) => sum + row.consignmentScheduledQty, 0),
+        shortageSkuCount: rows.filter((row) => row.gapAfterSchedule > 0 && row.consignmentMatched).length,
+        exceptionCount: resolvedConsignment.exceptions.length,
+        confirmedExclusionCount: resolvedConsignment.confirmedExclusions.length,
+        excludedCount: resolvedConsignment.excluded.length
+      }
+    };
+  }
+
+  function setColumnWidths(sheet, widths) {
+    sheet["!cols"] = widths.map((wch) => ({ wch }));
+  }
+
+  function addAutoFilter(sheet) {
+    if (sheet["!ref"]) sheet["!autofilter"] = { ref: sheet["!ref"] };
+  }
+
+  function buildOutputWorkbook(analysis, XLSX) {
+    const workbook = XLSX.utils.book_new();
+    const summaryRows = [
+      ["三來源品號串接與採購規則稽核"],
+      ["資料安全", "本檔由瀏覽器本機產生；不修改原始Excel。"],
+      ["日期檢核", analysis.dateCheck.status, analysis.dateCheck.message],
+      [],
+      ["指標", "結果"],
+      ["未到貨採購SKU", analysis.totals.skuCount],
+      ["未到貨採購數量", analysis.totals.pendingQty],
+      ["未到貨採購金額", analysis.totals.pendingAmount],
+      ["庫存品號命中", analysis.totals.inventoryMatched],
+      ["寄倉品號命中", analysis.totals.consignmentMatched],
+      ["寄倉現貨可拉量", analysis.totals.consignmentCurrentQty],
+      ["粉紅底未完成排程量", analysis.totals.consignmentScheduledQty],
+      ["寄倉排程後仍缺貨SKU", analysis.totals.shortageSkuCount],
+      ["例外筆數", analysis.totals.exceptionCount],
+      ["已確認固定排除", analysis.totals.confirmedExclusionCount],
+      ["人工黑名單排除", analysis.totals.excludedCount]
+    ];
+    const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+    setColumnWidths(summarySheet, [28, 20, 70]);
+    XLSX.utils.book_append_sheet(workbook, summarySheet, "01_資料摘要");
+
+    const detailRows = analysis.rows.map((row) => ({
+      "ERP品號": row.sku,
+      "商品品名": row.name,
+      "未到貨採購量": row.pendingQty,
+      "未到貨採購金額": row.pendingAmount,
+      "目前公司庫存": row.inventoryQty,
+      "寄倉現貨可拉量": row.consignmentCurrentQty,
+      "粉紅底未完成量": row.consignmentScheduledQty,
+      "現貨缺口": row.currentGap,
+      "排程後缺口": row.gapAfterSchedule,
+      "寄倉供貨狀態": row.supplyStatus,
+      "庫存命中": row.inventoryMatched ? "是" : "否",
+      "寄倉命中": row.consignmentMatched ? "是" : "否",
+      "排程欄首原文": row.scheduleNotes.join("｜"),
+      "採購單來源": row.purchaseSources.join("｜")
+    }));
+    const detailSheet = XLSX.utils.json_to_sheet(detailRows);
+    setColumnWidths(detailSheet, [15, 46, 16, 18, 16, 18, 18, 14, 14, 30, 12, 12, 60, 28]);
+    addAutoFilter(detailSheet);
+    XLSX.utils.book_append_sheet(workbook, detailSheet, "02_品號串接");
+
+    const exceptionRows = [
+      ...analysis.consignment.confirmedExclusions.map((row) => ({
+        "例外類型": row.type,
+        "來源列": row.sourceRow,
+        "ERP品號": row.sku,
+        "供應商貨號": row.supplierSku,
+        "商品名稱": row.name,
+        "處理方式": row.action
+      })),
+      ...analysis.consignment.exceptions.map((row) => ({
+        "例外類型": row.type,
+        "來源列": row.sourceRow,
+        "ERP品號": row.sku,
+        "供應商貨號": row.supplierSku,
+        "商品名稱": row.name,
+        "處理方式": row.action
+      })),
+      ...analysis.consignment.excluded.map((row) => ({
+        "例外類型": "人工黑名單",
+        "來源列": row.sourceRow,
+        "ERP品號": row.sku,
+        "供應商貨號": row.supplierSku,
+        "商品名稱": row.name,
+        "處理方式": `排除；黑名單：${row.blacklistEntry}`
+      }))
+    ];
+    const exceptionSheet = XLSX.utils.json_to_sheet(exceptionRows.length ? exceptionRows : [{ "例外類型": "無", "處理方式": "本次未發現例外" }]);
+    setColumnWidths(exceptionSheet, [20, 12, 16, 28, 50, 50]);
+    addAutoFilter(exceptionSheet);
+    XLSX.utils.book_append_sheet(workbook, exceptionSheet, "03_例外清單");
+
+    const ruleSheet = XLSX.utils.aoa_to_sheet([
+      ["規則", "公式／定義", "狀態"],
+      ["淨採購需求", LOCKED_RULES.netDemandFormula, "核心鎖定"],
+      ["寄倉處理", LOCKED_RULES.consignmentRule, "核心鎖定"],
+      ["缺貨處理", LOCKED_RULES.shortageAction, "核心鎖定"],
+      ["未到貨採購單", LOCKED_RULES.pendingPurchaseRule, "核心鎖定"],
+      ["一次性代工", LOCKED_RULES.blacklistRule, "核心鎖定"],
+      ["售完即停(S)", LOCKED_RULES.sellThroughStopRule, "核心鎖定"],
+      ["(S)門市調撥", LOCKED_RULES.sellThroughTransferRule, "核心鎖定"],
+      ["A42359-A", `只保留供應商貨號${CONFIRMED_OVERRIDES["A42359-A"]}`, "已確認"],
+      ["A43359-A", CONFIRMED_EXCLUSIONS["A43359-A"], "已確認固定排除"]
+    ]);
+    setColumnWidths(ruleSheet, [22, 80, 18]);
+    XLSX.utils.book_append_sheet(workbook, ruleSheet, "04_核心規則");
+    return workbook;
+  }
+
+  function recommendationSheetRows(rows) {
+    return rows.map((row) => ({
+      "供應商": row.supplier,
+      "採購分頁": row.purchaseTab,
+      "ERP品號": row.sku,
+      "供應商貨號": row.supplierSku,
+      "商品品名": row.name,
+      "商品狀態": row.tier,
+      "ABC": row.abcClass,
+      "XYZ": row.xyzClass,
+      "近6週淨需求": row.recent6Qty,
+      "近12週淨需求": row.recent12Qty,
+      "去年同期6週": row.lastYear6Qty,
+      "SKU模型": row.skuModel,
+      "類別模型": row.categoryModel,
+      "類別季節係數": row.categorySeasonFactor,
+      "預估日需求": row.forecastDailyQty,
+      "供應交期類型": row.supplyProfileLabel,
+      "到貨交期天數": row.supplierLeadDays,
+      "檢視頻率天數": row.reviewDays,
+      "安全緩衝天數": row.safetyBufferDays,
+      "目標覆蓋天數": row.targetCoverageDays,
+      "檢視週期＋到貨交期需求": row.forecastFutureQty,
+      "安全庫存量": row.safetyStockQty,
+      "總部需求（系統）": row.hqDemandQty,
+      "總部需求（人工）": "",
+      "門市需求（系統）": row.storeDemandQty,
+      "門市需求（人工）": "",
+      "加總需求（鎖定公式）": "",
+      "可用公司庫存": row.inventoryQty,
+      "非採購可用庫存": row.excludedInventoryQty,
+      "已採購未到貨": row.pendingQty,
+      "未進位淨採購需求": row.rawPurchaseQty,
+      "箱入／採購單位": row.packSize,
+      "單位向下量": row.packDownQty,
+      "單位向上量": row.packUpQty,
+      "系統取整方向": row.packDirection,
+      "建議採購量": row.suggestedPurchaseQty,
+      "寄倉現貨": row.consignmentCurrentQty,
+      "粉紅排程": row.consignmentScheduledQty,
+      "寄倉缺口": Math.max(row.suggestedPurchaseQty - row.consignmentCurrentQty - row.consignmentScheduledQty, 0),
+      "目前實際可採購量": /普優[瑪碼]/.test(row.supplier) ? Math.min(row.suggestedPurchaseQty, row.consignmentCurrentQty) : row.suggestedPurchaseQty,
+      "人工確認採購量": "",
+      "人工調整原因": "",
+      "人工填寫可售至": "",
+      "AI判斷": "待回匯後重算",
+      "進貨價": row.unitCost,
+      "建議採購金額": row.suggestedPurchaseAmount,
+      "已下架": row.discontinued ? "是" : "否",
+      "季節資料完整": row.seasonalDataReady ? "是" : "否",
+      "銷售來源": row.sourceFiles.join("｜")
+    }));
+  }
+
+  function appendJsonSheet(workbook, XLSX, sheetName, rows, widths) {
+    const safeRows = rows.length ? rows : [{ "狀態": "本次無資料" }];
+    const sheet = XLSX.utils.json_to_sheet(safeRows);
+    if (rows.length) {
+      const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, range: 0, defval: "" })[0] || [];
+      const hqSystem = headers.indexOf("總部需求（系統）");
+      const hqManual = headers.indexOf("總部需求（人工）");
+      const storeSystem = headers.indexOf("門市需求（系統）");
+      const storeManual = headers.indexOf("門市需求（人工）");
+      const total = headers.indexOf("加總需求（鎖定公式）");
+      if ([hqSystem, hqManual, storeSystem, storeManual, total].every((index) => index >= 0)) {
+        rows.forEach((_row, index) => {
+          const excelRow = index + 2;
+          const hqSystemCell = XLSX.utils.encode_cell({ r: excelRow - 1, c: hqSystem });
+          const hqManualCell = XLSX.utils.encode_cell({ r: excelRow - 1, c: hqManual });
+          const storeSystemCell = XLSX.utils.encode_cell({ r: excelRow - 1, c: storeSystem });
+          const storeManualCell = XLSX.utils.encode_cell({ r: excelRow - 1, c: storeManual });
+          const totalCell = XLSX.utils.encode_cell({ r: excelRow - 1, c: total });
+          sheet[totalCell] = { t: "n", f: `IF(${hqManualCell}="",${hqSystemCell},${hqManualCell})+IF(${storeManualCell}="",${storeSystemCell},${storeManualCell})`, s: { protection: { locked: true } } };
+        });
+      }
+      const editableHeaders = new Set(["總部需求（人工）", "門市需求（人工）", "人工確認採購量", "人工調整原因", "二次確認採購量", "二次確認原因"]);
+      const editableColumns = headers.map((header, index) => editableHeaders.has(String(header)) ? index : -1).filter((index) => index >= 0);
+      if (editableColumns.length) {
+        rows.forEach((_row, rowIndex) => editableColumns.forEach((columnIndex) => {
+          const address = XLSX.utils.encode_cell({ r: rowIndex + 1, c: columnIndex });
+          if (!sheet[address]) sheet[address] = { t: "s", v: "" };
+          sheet[address].s = { ...(sheet[address].s || {}), protection: { locked: false } };
+        }));
+        sheet["!protect"] = { selectLockedCells: false, selectUnlockedCells: true, formatCells: false, formatColumns: false, formatRows: false, insertColumns: false, insertRows: false, deleteColumns: false, deleteRows: false, sort: false, autoFilter: true };
+      }
+    }
+    setColumnWidths(sheet, widths);
+    addAutoFilter(sheet);
+    XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
+  }
+
+  function buildRecommendationWorkbook(recommendations, XLSX, options = {}) {
+    const workbook = XLSX.utils.book_new();
+    const budget = options.budget || null;
+    const sourceDateCheck = recommendations.validation?.dateCheck || null;
+    const summaryRows = [
+      ["庫存採購與寄庫建議"],
+      ["資料安全", "本檔由瀏覽器本機產生；不修改或上傳原始Excel。"],
+      ["銷售截止日", recommendations.asOfDate],
+      ["銷售檔最新結帳日", recommendations.sourceMaxSalesDate],
+      ["銷售日期檢核", recommendations.salesDateStatus, recommendations.salesDateGapDays == null ? "未辨識" : `相差${recommendations.salesDateGapDays}天`],
+      ["工廠寄倉目標", `${recommendations.factoryTargetDays}天`],
+      ["採購時點", recommendations.checkpoint === "mid-month" ? "月中採購" : recommendations.checkpoint === "month-end" ? "月底驗證" : "月初採購"],
+      ["固定來源模式", recommendations.meta?.sourceMode || "未標示"],
+      ...Object.entries(recommendations.meta?.sourceHashes || {}).map(([source, hash]) => [`來源SHA-256：${source}`, String(hash)]),
+      ["四來源日期檢核", sourceDateCheck?.status || "未提供", sourceDateCheck?.message || "下載前請確認庫存、未到貨、寄倉與銷售截止日。"],
+      ...(sourceDateCheck?.status === "PASS" ? [] : [["使用限制", "資料時點未通過檢核；本檔只供串接驗收，不可直接下單。"]]),
+      [],
+      ["指標", "結果"],
+      ["分析SKU", recommendations.totals.analyzedSkuCount],
+      ["建議採購SKU", recommendations.totals.suggestedSkuCount],
+      ["建議採購數量", recommendations.totals.suggestedPurchaseQty],
+      ["建議採購金額", recommendations.totals.suggestedPurchaseAmount],
+      ["熱銷／穩定／低銷", `${recommendations.totals.hotSkuCount}／${recommendations.totals.stableSkuCount}／${recommendations.totals.lowSkuCount}`],
+      ["寄倉現貨不足SKU", recommendations.totals.immediateShortageSkuCount],
+      ["需新增寄庫SKU", recommendations.totals.consignmentSuggestionSkuCount],
+      ["去年同期資料不足SKU", recommendations.totals.seasonalFallbackSkuCount],
+      ["品名結尾(S)停止外採SKU", recommendations.totals.sellThroughStopExcludedCount],
+      [],
+      ["人工確認採購量填寫規則"],
+      ["① 空白", "依建議採購量"],
+      ["② 填0", "本次不採購"],
+      ["③ 填正整數", "改採填入數量"],
+      ["④ 禁止負數或文字", "若有人工修改，人工調整原因必填"]
+    ];
+    if (budget) {
+      summaryRows.push(
+        [],
+        ["採購預算"],
+        ["當月預估可採購金額", budget.availableBudget],
+        ["目前已採購金額", budget.purchasedAmountToDate],
+        ["尚可採購金額", budget.remainingBudget],
+        ["本次建議採購金額", recommendations.totals.suggestedPurchaseAmount],
+        ["建議後剩餘額度", budget.remainingBudget - recommendations.totals.suggestedPurchaseAmount]
+      );
+    }
+    const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+    setColumnWidths(summarySheet, [32, 72]);
+    XLSX.utils.book_append_sheet(workbook, summarySheet, "01_採購摘要");
+
+    const allSuggested = recommendationSheetRows(recommendations.suggestedRows);
+    const recommendationWidths = [20, 18, 16, 28, 48, 12, 8, 8, 16, 16, 16, 24, 24, 16, 16, 20, 16, 16, 16, 16, 22, 18, 16, 18, 18, 18, 20, 16, 18, 28, 14, 18, 12, 16, 36];
+    appendJsonSheet(workbook, XLSX, "02_全部採購建議", allSuggested, recommendationWidths);
+
+    const puyoumaRows = recommendations.suggestedRows.filter((row) => /普優[瑪碼]/.test(row.supplier));
+    const lirongRows = recommendations.suggestedRows.filter((row) => /力榮/.test(row.supplier));
+    const shanglinRows = recommendations.suggestedRows.filter((row) => /上林/.test(row.supplier));
+    const dedicated = (row) => /普優[瑪碼]|力榮|上林/.test(row.supplier);
+    appendJsonSheet(workbook, XLSX, "03A_力榮採購", recommendationSheetRows(lirongRows), recommendationWidths);
+    appendJsonSheet(workbook, XLSX, "03B1_普優瑪_天絲", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "天絲＋天絲棉")), recommendationWidths);
+    appendJsonSheet(workbook, XLSX, "03B2_普優瑪_長絨棉", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "長絨棉")), recommendationWidths);
+    appendJsonSheet(workbook, XLSX, "03B3_普優瑪_無尺寸", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "無尺寸品項")), recommendationWidths);
+    appendJsonSheet(workbook, XLSX, "03C_上林採購", recommendationSheetRows(shanglinRows), recommendationWidths);
+    appendJsonSheet(workbook, XLSX, "03D_其它供應商", recommendationSheetRows(recommendations.suggestedRows.filter((row) => !dedicated(row))), recommendationWidths);
+
+    const consignmentRows = recommendations.consignmentRows.map((row) => ({
+      "採購分頁": row.purchaseTab,
+      "ERP品號": row.sku,
+      "供應商貨號": row.supplierSku,
+      "商品品名": row.name,
+      "商品狀態": row.tier,
+      "預估日需求": row.forecastDailyQty,
+      "已採購未到貨": row.pendingQty,
+      "本次建議採購量": row.suggestedPurchaseQty,
+      "寄倉現貨": row.consignmentCurrentQty,
+      "粉紅底未完成量": row.consignmentScheduledQty,
+      "寄倉現貨缺口": row.immediateConsignmentGap,
+      "工廠目標天數": row.factoryTargetDays,
+      "工廠目標量": row.factoryTargetQty,
+      "建議新增寄庫量": row.suggestedConsignmentQty,
+      "缺貨／供貨狀態": row.supplyStatus,
+      "排程欄首原文": row.scheduleNotes.join("｜")
+    }));
+    appendJsonSheet(workbook, XLSX, "04A_普優瑪寄庫建議", consignmentRows.filter((row) => /普優[瑪碼]/.test(recommendations.rows.find((item) => item.sku === row["ERP品號"])?.supplier || "")), [18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
+    appendJsonSheet(workbook, XLSX, "04B_力榮寄庫建議", consignmentRows.filter((row) => /力榮/.test(recommendations.rows.find((item) => item.sku === row["ERP品號"])?.supplier || "")), [18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
+    if (recommendations.lirongConsignmentRows?.length) {
+      const replacement = XLSX.utils.json_to_sheet(recommendations.lirongConsignmentRows.map((row) => ({
+        "ERP品號": row.sku, "供應商貨號": row.supplierSku, "來源品名": row.sourceName, "最新主檔品名": row.masterName,
+        "商品狀態": row.tier, "預估日需求": row.forecastDailyQty, "現貨拉貨交期": row.pullLeadDays, "製作期": row.productionDays,
+        "製作後最早到貨": row.earliestDeliveryDays, "目標低標": row.targetLowDays, "目標高標": row.targetHighDays, "本次採用目標": row.targetDays,
+        "工廠現貨": row.currentQty, "已確認製作中": row.scheduledQty, "已核准本次拉貨": row.approvedPullQty,
+        "預計製作完成日": row.productionCompleteDate, "預計到貨日": row.expectedArrivalDate, "未取整需求": row.rawQty,
+        "10件向下量": row.downQty, "10件向上量": row.upQty, "系統建議量": row.suggestedQty, "人工確認量": "", "人工調整原因": "",
+        "寄庫後可售天數": row.availableDaysAfter, "現貨到貨前風險": row.beforePullRisk ? "有" : "無", "製作完成前風險": row.beforeProductionRisk ? "有" : "無",
+        "製作後送達前風險": row.beforeDeliveryRisk ? "有" : "無", "例外狀態": row.status, "未來可能成本": row.futureCost,
+        "排程欄首原文": row.scheduleNotes.join("｜")
+      })));
+      setColumnWidths(replacement, Array(30).fill(18));
+      workbook.Sheets["04B_力榮寄庫建議"] = replacement;
+    }
+    appendJsonSheet(workbook, XLSX, "05_新品採購建議", recommendationSheetRows(recommendations.rows.filter((row) => row.isNewProduct)), recommendationWidths);
+    appendJsonSheet(workbook, XLSX, "06_普優瑪新品寄庫", consignmentRows.filter((row) => recommendations.rows.find((item) => item.sku === row["ERP品號"])?.isNewProduct && /普優[瑪碼]/.test(recommendations.rows.find((item) => item.sku === row["ERP品號"])?.supplier || "")), [18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
+
+    const exceptionRows = [
+      ...(recommendations.productExclusions || []).map((row) => ({
+        "類型": row.type,
+        "來源列": row.sourceRow,
+        "ERP品號": row.sku,
+        "供應商貨號": row.supplierSku,
+        "商品名稱": row.name,
+        "處理方式": row.action
+      })),
+      ...recommendations.consignment.confirmedExclusions.map((row) => ({
+        "類型": row.type,
+        "來源列": row.sourceRow,
+        "ERP品號": row.sku,
+        "供應商貨號": row.supplierSku,
+        "商品名稱": row.name,
+        "處理方式": row.action
+      })),
+      ...recommendations.consignment.exceptions.map((row) => ({
+        "類型": row.type,
+        "來源列": row.sourceRow,
+        "ERP品號": row.sku,
+        "供應商貨號": row.supplierSku,
+        "商品名稱": row.name,
+        "處理方式": row.action
+      })),
+      ...recommendations.consignment.excluded.map((row) => ({
+        "類型": "人工黑名單",
+        "來源列": row.sourceRow,
+        "ERP品號": row.sku,
+        "供應商貨號": row.supplierSku,
+        "商品名稱": row.name,
+        "處理方式": `排除；黑名單：${row.blacklistEntry}`
+      }))
+    ];
+    appendJsonSheet(workbook, XLSX, "07_排除與例外", exceptionRows, [20, 12, 16, 28, 50, 65]);
+
+    const ruleSheet = XLSX.utils.aoa_to_sheet([
+      ["規則", "公式／定義", "狀態"],
+      ["銷售需求口徑", "銷貨＋訂貨＋退貨＋退訂；排除取貨，避免總倉代出重複計算", "核心鎖定"],
+      ["SKU模型", "依回測檔在近期6週與12週間選擇；類別模型只做季節需求池校正", "核心鎖定"],
+      ["ABC／XYZ", "12週成本貢獻做ABC；有銷售週數與變異係數做XYZ", "第一版"],
+      ["淨採購需求", LOCKED_RULES.netDemandFormula, "核心鎖定"],
+      ["公司備貨", "目標覆蓋＝供應商檢視期＋到貨交期＋商品分級安全緩衝；90～120天依熱銷90／穩定105／低銷120；0轉人工判斷", "第三版"],
+      ["普優瑪採購與寄庫", "寄倉現貨拉貨5天；成品製作45天；寄庫目標熱銷120／穩定105／低銷90天", "已確認"],
+      ["力榮採購與寄庫", "現貨拉貨5天；製作14天；製作後最早19天到貨；每品號0或10的倍數；寄庫熱銷90／其餘60天", "已確認"],
+      ["上林檢視期", "固定28天；另加到貨交期與分級安全緩衝；總部／門市／加總需求使用鎖定公式", "已確認"],
+      ["付款認列", "國內預計到貨100%；國外下單30%、預計出貨70%；付款分配合計必須等於核准總額", "已確認"],
+      ["一般自動採購排除", "凱信達一次性、歐必斯客訂型、所有總部贈品均不產生一般自動採購", "已確認"],
+      ["寄倉處理", LOCKED_RULES.consignmentRule, "核心鎖定"],
+      ["售完即停(S)", LOCKED_RULES.sellThroughStopRule, "核心鎖定"],
+      ["(S)門市調撥", LOCKED_RULES.sellThroughTransferRule, "核心鎖定"],
+      ["寄庫建議", `工廠目標${recommendations.factoryTargetDays}天；寄倉現貨不足採購需求時必列缺貨警示`, "核心鎖定"],
+      ["普優瑪工廠製作交期", `${PROCUREMENT_POLICY.puyoumaFactoryLeadDays}天`, "已確認"],
+      ["A42359-A", `只保留供應商貨號${CONFIRMED_OVERRIDES["A42359-A"]}`, "已確認"],
+      ["A43359-A", CONFIRMED_EXCLUSIONS["A43359-A"], "已確認固定排除"]
+    ]);
+    setColumnWidths(ruleSheet, [24, 90, 18]);
+    XLSX.utils.book_append_sheet(workbook, ruleSheet, "08_核心規則");
+    return workbook;
+  }
+
+  function reviewReturnedWorkbook(workbook, XLSX, options = {}) {
+    const preferredSheets = workbook.SheetNames.filter((name) => /^03(?:A|B\d|C|D)_/.test(name));
+    const sourceSheets = preferredSheets.length ? preferredSheets : workbook.SheetNames.filter((name) => name === "02_全部採購建議");
+    if (!sourceSheets.length) throw new Error("回匯檔缺少採購建議分頁。");
+    const rows = [];
+    const errors = [];
+    const seen = new Set();
+    for (const sheetName of sourceSheets) {
+      const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "", raw: true });
+      for (let index = 0; index < data.length; index += 1) {
+        const source = data[index];
+        const sku = normalizeSku(source["ERP品號"]);
+        if (!sku || source["狀態"] === "本次無資料") continue;
+        if (seen.has(sku)) {
+          errors.push({ sheetName, sourceRow: index + 2, sku, message: "ERP品號在採購分頁重複。" });
+          continue;
+        }
+        seen.add(sku);
+        const supplier = String(source["供應商"] || "").trim();
+        const name = String(source["商品品名"] || "").trim();
+        const suggestedQty = parseNumber(source["建議採購量"]);
+        const manualCell = source["人工確認採購量"];
+        const manualBlank = manualCell === "" || manualCell == null;
+        const confirmedQty = manualBlank ? Math.max(0, suggestedQty || 0) : parseNumber(manualCell);
+        const reason = String(source["人工調整原因"] || "").trim();
+        const unitCost = parseNumber(source["進貨價"]);
+        const baseline = options.baselineBySku?.get?.(sku);
+        if (options.baselineBySku && !baseline) errors.push({ sheetName, sourceRow: index + 2, sku, message: "品號不在本次計算批次，禁止加入。" });
+        if (baseline) {
+          if (normalizeText(supplier) !== normalizeText(baseline.supplier)) errors.push({ sheetName, sourceRow: index + 2, sku, message: "供應商與本次計算結果不同，禁止修改。" });
+          if (Math.abs(Number(unitCost || 0) - Number(baseline.unitCost || 0)) >= 0.01) errors.push({ sheetName, sourceRow: index + 2, sku, message: "進貨價與本次商品主檔不同，請重新產生報表。" });
+          if (Math.abs(Number(suggestedQty || 0) - Number(baseline.suggestedPurchaseQty || 0)) >= 0.01) errors.push({ sheetName, sourceRow: index + 2, sku, message: "系統建議量已被修改，請只填人工欄位。" });
+        }
+        if (confirmedQty == null || confirmedQty < 0 || !Number.isInteger(confirmedQty)) errors.push({ sheetName, sourceRow: index + 2, sku, message: "人工確認採購量必須為0或正整數。" });
+        if (!manualBlank && confirmedQty !== suggestedQty && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "修改採購量時必須填人工調整原因。" });
+        if (/力榮/.test(supplier) && confirmedQty != null && confirmedQty % 10 !== 0) errors.push({ sheetName, sourceRow: index + 2, sku, message: "力榮每個品號必須為0或10的倍數。" });
+        if (unitCost == null || unitCost < 0) errors.push({ sheetName, sourceRow: index + 2, sku, message: "缺少有效進貨價，禁止核准金額。" });
+        const supplierRule = findSupplierRule(supplier, options.supplierRules || []);
+        const blockedReason = isSellThroughStopName(name)
+          ? "最新主檔為(S)，禁止新增外採"
+          : (/贈品/.test(`${name} ${source["存貨種類"] || ""}`) ? "贈品排除一般自動採購" : (supplierRule?.automaticPurchase === false ? supplierRule.exclusionReason : ""));
+        const finalQty = blockedReason ? 0 : Math.max(0, Number(confirmedQty || 0));
+        const forecastDaily = Math.max(0, Number(source["預估日需求"] || 0));
+        const inventoryQty = Math.max(0, Number(source["可用公司庫存"] || 0));
+        const pendingQty = Math.max(0, Number(source["已採購未到貨"] || 0));
+        const availableDays = forecastDaily > 0 ? (inventoryQty + pendingQty + finalQty) / forecastDaily : null;
+        const availableTo = availableDays == null ? "需求為0" : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
+        const comparison = Number(suggestedQty || 0) > 0 ? finalQty / Number(suggestedQty) : (finalQty > 0 ? Infinity : 1);
+        const aiJudgment = blockedReason ? "規則阻擋" : (comparison > 1.2 ? "偏高" : comparison < 0.8 ? "偏低" : "合理");
+        rows.push({
+          sheetName, sourceRow: index + 2, supplier, supplierCountry: supplierRule?.country || "待確認", sku,
+          supplierSku: String(source["供應商貨號"] || "").trim(), name, suggestedQty: Math.max(0, Number(suggestedQty || 0)),
+          confirmedQty: Math.max(0, Number(confirmedQty || 0)), finalQty, unitCost: Math.max(0, Number(unitCost || 0)), reason,
+          blockedReason, suggestedAmount: Math.max(0, Number(suggestedQty || 0)) * Math.max(0, Number(unitCost || 0)),
+          manualAmount: Math.max(0, Number(confirmedQty || 0)) * Math.max(0, Number(unitCost || 0)),
+          blockedAmount: blockedReason ? Math.max(0, Number(confirmedQty || 0)) * Math.max(0, Number(unitCost || 0)) : 0,
+          approvedAmount: finalQty * Math.max(0, Number(unitCost || 0)), forecastDaily, inventoryQty, pendingQty,
+          availableTo, aiJudgment, currentAvailableQty: Math.max(0, Number(source["目前實際可採購量"] || finalQty)),
+          packSize: Math.max(1, Number(source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)))
+        });
+      }
+    }
+    const orderDate = parseDateValue(options.orderDate) || new Date().toISOString().slice(0, 10);
+    const suppliers = new Map();
+    for (const row of rows.filter((item) => item.approvedAmount > 0)) {
+      if (!suppliers.has(row.supplier)) suppliers.set(row.supplier, { supplier: row.supplier, amount: 0, confirmedQty: 0, consignmentAvailableQty: 0 });
+      const supplier = suppliers.get(row.supplier);
+      supplier.amount += row.approvedAmount;
+      supplier.confirmedQty += row.finalQty;
+      supplier.consignmentAvailableQty += row.currentAvailableQty;
+    }
+    const payments = [...suppliers.values()].map((supplier) => ({
+      ...supplier,
+      ...calculatePaymentSchedule({ ...supplier, orderDate, supplyMode: /力榮|普優[瑪碼]/.test(supplier.supplier) ? "consignment" : "direct", supplierRules: options.supplierRules || [] })
+    }));
+    payments.filter((item) => item.status !== "PASS").forEach((item) => errors.push({ sheetName: "付款月份", sourceRow: "", sku: "", message: `${item.supplier}：${item.message}` }));
+    const suggestedAmount = rows.reduce((sum, row) => sum + row.suggestedAmount, 0);
+    const manualAmount = rows.reduce((sum, row) => sum + row.manualAmount, 0);
+    const blockedAmount = rows.reduce((sum, row) => sum + row.blockedAmount, 0);
+    const approvedAmount = rows.reduce((sum, row) => sum + row.approvedAmount, 0);
+    return {
+      rows, errors, payments, orderDate,
+      totals: { suggestedAmount, manualAmount, blockedAmount, approvedAmount, adjustmentAmount: approvedAmount - suggestedAmount }
+    };
+  }
+
+  function buildSecondReviewWorkbook(review, XLSX, options = {}) {
+    const workbook = XLSX.utils.book_new();
+    const summary = XLSX.utils.aoa_to_sheet([
+      ["第二次回匯覆核摘要"], ["批次編號", options.batchId || "待建立"], ["下單日", review.orderDate],
+      ["系統建議金額", review.totals.suggestedAmount], ["人工回匯採購總額", review.totals.manualAmount],
+      ["規則阻擋金額", review.totals.blockedAmount], ["最終可核准金額", review.totals.approvedAmount],
+      ["人工調整增減金額", review.totals.adjustmentAmount], ["檢核結果", review.errors.length ? `阻擋：${review.errors.length}項` : "通過，可送正式核准"],
+      ["通知規則", "本步驟不寄信；正式核准／撤銷／更正才寄送摘要。"]
+    ]);
+    setColumnWidths(summary, [30, 70]);
+    XLSX.utils.book_append_sheet(workbook, summary, "01_回匯摘要");
+    appendJsonSheet(workbook, XLSX, "02_二次覆核", review.rows.map((row) => ({
+      "供應商": row.supplier, "供應商分類": row.supplierCountry, "ERP品號": row.sku, "供應商貨號": row.supplierSku,
+      "商品品名": row.name, "系統建議量": row.suggestedQty, "人工回匯量": row.confirmedQty, "規則阻擋原因": row.blockedReason,
+      "最終可核准量": row.finalQty, "進貨價": row.unitCost, "人工回匯金額": row.manualAmount, "規則阻擋金額": row.blockedAmount,
+      "最終可核准金額": row.approvedAmount, "人工調整原因": row.reason, "人工填寫可售至": row.availableTo, "AI判斷": row.aiJudgment,
+      "預估日需求": row.forecastDaily, "可用公司庫存": row.inventoryQty, "已採購未到貨": row.pendingQty,
+      "目前實際可採購量": row.currentAvailableQty, "箱入／採購單位": row.packSize,
+      "二次確認採購量": "", "二次確認原因": ""
+    })), [18, 14, 16, 28, 52, 16, 16, 30, 18, 14, 18, 18, 20, 32, 18, 14, 16, 16, 16, 18, 16, 18, 30]);
+    appendJsonSheet(workbook, XLSX, "03_付款月份", review.payments.flatMap((supplier) => supplier.entries.map((entry) => ({
+      "供應商": supplier.supplier, "供應商分類": supplier.supplierCountry, "平均採購週期": supplier.leadDays,
+      "付款觸發": entry.trigger, "預計日期": entry.date, "付款月份": entry.month, "預計付款金額": entry.amount,
+      "預計出貨日": supplier.expectedShipmentDate, "預計到貨日": supplier.expectedArrivalDate
+    }))), [20, 14, 16, 20, 16, 14, 20, 16, 16]);
+    appendJsonSheet(workbook, XLSX, "04_阻擋與警示", review.errors.map((error) => ({
+      "來源分頁": error.sheetName, "來源列": error.sourceRow, "ERP品號": error.sku, "阻擋原因": error.message
+    })), [26, 12, 18, 70]);
+    return workbook;
+  }
+
+  function reviewSecondApprovalWorkbook(workbook, XLSX, options = {}) {
+    const sheet = workbook.Sheets["02_二次覆核"];
+    if (!sheet) throw new Error("確認版缺少02_二次覆核分頁。");
+    const sourceRows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: true });
+    const rows = [];
+    const errors = [];
+    const seen = new Set();
+    for (let index = 0; index < sourceRows.length; index += 1) {
+      const source = sourceRows[index];
+      const sku = normalizeSku(source["ERP品號"]);
+      if (!sku) continue;
+      if (seen.has(sku)) {
+        errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "ERP品號重複。" });
+        continue;
+      }
+      seen.add(sku);
+      const supplier = String(source["供應商"] || "").trim();
+      const name = String(source["商品品名"] || "").trim();
+      const suggestedQty = Math.max(0, Number(parseNumber(source["系統建議量"]) || 0));
+      const firstConfirmedQty = Math.max(0, Number(parseNumber(source["人工回匯量"]) || 0));
+      const firstFinalQty = Math.max(0, Number(parseNumber(source["最終可核准量"]) || 0));
+      const confirmationCell = source["二次確認採購量"];
+      const confirmationBlank = confirmationCell === "" || confirmationCell == null;
+      const finalQty = confirmationBlank ? firstFinalQty : parseNumber(confirmationCell);
+      const firstReason = String(source["人工調整原因"] || "").trim();
+      const secondReason = String(source["二次確認原因"] || "").trim();
+      const reason = secondReason || firstReason;
+      const blockedReason = String(source["規則阻擋原因"] || "").trim();
+      const unitCost = parseNumber(source["進貨價"]);
+      const baseline = options.baselineBySku?.get?.(sku);
+      if (options.baselineBySku && !baseline) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "品號不在第一次覆核結果，禁止加入。" });
+      if (baseline) {
+        if (normalizeText(supplier) !== normalizeText(baseline.supplier)) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "供應商與第一次覆核結果不同，禁止修改。" });
+        if (Math.abs(Number(unitCost || 0) - Number(baseline.unitCost || 0)) >= 0.01) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "進貨價與第一次覆核結果不同，禁止修改。" });
+        if (Math.abs(firstFinalQty - Number(baseline.finalQty || 0)) >= 0.01 || blockedReason !== String(baseline.blockedReason || "")) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "第一次覆核結果欄位已被修改，請重新下載確認版。" });
+      }
+      if (confirmationBlank) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "必須填寫二次確認採購量，0也需明確填入。" });
+      if (finalQty == null || finalQty < 0 || !Number.isInteger(finalQty)) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "二次確認採購量必須為0或正整數。" });
+      if (/力榮/.test(supplier) && finalQty != null && finalQty % 10 !== 0) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "力榮每個品號必須為0或10的倍數。" });
+      if (blockedReason && finalQty !== 0) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: `規則阻擋品項必須維持0：${blockedReason}` });
+      if (!confirmationBlank && finalQty !== firstFinalQty && !secondReason) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "二次修改數量時必須填二次確認原因。" });
+      if (unitCost == null || unitCost < 0) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "缺少有效進貨價，禁止核准金額。" });
+      const forecastDaily = Math.max(0, Number(source["預估日需求"] || 0));
+      const inventoryQty = Math.max(0, Number(source["可用公司庫存"] || 0));
+      const pendingQty = Math.max(0, Number(source["已採購未到貨"] || 0));
+      const availableDays = forecastDaily > 0 ? (inventoryQty + pendingQty + Math.max(0, Number(finalQty || 0))) / forecastDaily : null;
+      const availableTo = availableDays == null ? String(source["人工填寫可售至"] || "需求為0") : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
+      const comparison = suggestedQty > 0 ? Number(finalQty || 0) / suggestedQty : (Number(finalQty || 0) > 0 ? Infinity : 1);
+      const aiJudgment = blockedReason ? "規則阻擋" : (comparison > 1.2 ? "偏高" : comparison < 0.8 ? "偏低" : "合理");
+      rows.push({
+        sheetName: "02_二次覆核", sourceRow: index + 2, supplier,
+        supplierCountry: String(source["供應商分類"] || "待確認"), sku, supplierSku: String(source["供應商貨號"] || "").trim(), name,
+        suggestedQty, confirmedQty: firstConfirmedQty, finalQty: Math.max(0, Number(finalQty || 0)), unitCost: Math.max(0, Number(unitCost || 0)), reason,
+        blockedReason, suggestedAmount: suggestedQty * Math.max(0, Number(unitCost || 0)), manualAmount: firstConfirmedQty * Math.max(0, Number(unitCost || 0)),
+        blockedAmount: blockedReason ? firstConfirmedQty * Math.max(0, Number(unitCost || 0)) : 0,
+        approvedAmount: Math.max(0, Number(finalQty || 0)) * Math.max(0, Number(unitCost || 0)), forecastDaily, inventoryQty, pendingQty,
+        availableTo, aiJudgment, currentAvailableQty: Math.max(0, Number(source["目前實際可採購量"] || finalQty || 0)),
+        packSize: Math.max(1, Number(source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)))
+      });
+    }
+    const orderDate = parseDateValue(options.orderDate) || new Date().toISOString().slice(0, 10);
+    const suppliers = new Map();
+    for (const row of rows.filter((item) => item.approvedAmount > 0)) {
+      if (!suppliers.has(row.supplier)) suppliers.set(row.supplier, { supplier: row.supplier, amount: 0, confirmedQty: 0, consignmentAvailableQty: 0 });
+      const supplier = suppliers.get(row.supplier);
+      supplier.amount += row.approvedAmount;
+      supplier.confirmedQty += row.finalQty;
+      supplier.consignmentAvailableQty += row.currentAvailableQty;
+    }
+    const payments = [...suppliers.values()].map((supplier) => ({
+      ...supplier,
+      ...calculatePaymentSchedule({ ...supplier, orderDate, supplyMode: /力榮|普優[瑪碼]/.test(supplier.supplier) ? "consignment" : "direct", supplierRules: options.supplierRules || [] })
+    }));
+    payments.filter((item) => item.status !== "PASS").forEach((item) => errors.push({ sheetName: "付款月份", sourceRow: "", sku: "", message: `${item.supplier}：${item.message}` }));
+    const suggestedAmount = rows.reduce((sum, row) => sum + row.suggestedAmount, 0);
+    const manualAmount = rows.reduce((sum, row) => sum + row.manualAmount, 0);
+    const blockedAmount = rows.reduce((sum, row) => sum + row.blockedAmount, 0);
+    const approvedAmount = rows.reduce((sum, row) => sum + row.approvedAmount, 0);
+    return { rows, errors, payments, orderDate, totals: { suggestedAmount, manualAmount, blockedAmount, approvedAmount, adjustmentAmount: approvedAmount - suggestedAmount } };
+  }
+
+  function buildErpPurchaseWorkbook(review, XLSX, options = {}) {
+    if (!options.approved) throw new Error("尚未完成正式核准，禁止產生ERP檔案。");
+    if (review.errors.length) throw new Error("回匯仍有阻擋項目，禁止產生ERP檔案。");
+    const workbook = XLSX.utils.book_new();
+    const bySupplier = new Map();
+    review.rows.filter((row) => row.finalQty > 0).forEach((row) => {
+      if (!bySupplier.has(row.supplier)) bySupplier.set(row.supplier, []);
+      bySupplier.get(row.supplier).push(row);
+    });
+    let index = 0;
+    for (const [supplier, rows] of bySupplier) {
+      index += 1;
+      const aoa = [
+        ["批次編號:", options.batchId || "", "供應商:", supplier, "採購日期:", review.orderDate], [],
+        ["貨號", "品名", "採購價", "數量", "金額", "備註"],
+        ...rows.map((row) => [row.sku, row.name, row.unitCost, row.finalQty, row.approvedAmount, row.reason || "工具正式核准"])
+      ];
+      const sheet = XLSX.utils.aoa_to_sheet(aoa);
+      setColumnWidths(sheet, [18, 52, 14, 12, 16, 36]);
+      XLSX.utils.book_append_sheet(workbook, sheet, `${String(index).padStart(2, "0")}_${supplier}`.slice(0, 31));
+    }
+    return workbook;
+  }
+
+  global.ProcurementPlanningCore = {
+    LOCKED_RULES,
+    CONFIRMED_OVERRIDES,
+    CONFIRMED_EXCLUSIONS,
+    DEMAND_SALE_TYPES,
+    PROCUREMENT_POLICY,
+    SUPPLIER_RULES,
+    normalizeText,
+    normalizeHeader,
+    normalizeSku,
+    normalizeName,
+    isSellThroughStopName,
+    parseNumber,
+    inspectWorkbook,
+    parseProductMasterWorkbook,
+    parseInventoryWorkbook,
+    parsePendingPurchaseWorkbook,
+    parseSalesWorkbook,
+    parseForecastModelWorkbook,
+    parseConsignmentWorkbook,
+    parseLirongConsignmentWorkbook,
+    buildLirongConsignmentRecommendations,
+    normalizeBlacklist,
+    blacklistMatch,
+    resolveConsignment,
+    aggregatePendingReports,
+    calculateNetProcurementDemand,
+    roundSuggestedQuantity,
+    roundByPack,
+    puyoumaPackSize,
+    findSupplierRule,
+    calculatePaymentSchedule,
+    evaluateConsignmentSupply,
+    calculatePurchaseBudget,
+    inferMaterialCategory,
+    classifyPuyoumaPurchaseTab,
+    applyDemandModel,
+    classifyXyz,
+    resolveSupplyProfile,
+    buildProcurementRecommendations,
+    validateSourceDates,
+    buildAnalysis,
+    buildOutputWorkbook,
+    buildRecommendationWorkbook,
+    reviewReturnedWorkbook,
+    buildSecondReviewWorkbook,
+    reviewSecondApprovalWorkbook,
+    buildErpPurchaseWorkbook,
+    cellFillRgb,
+    isPinkFill
+  };
+})(typeof globalThis !== "undefined" ? globalThis : window);

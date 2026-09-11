@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="在瀏覽器本機整理庫存、未到貨採購單與工廠寄倉供貨狀態">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'">
+  <title>庫存採購規劃｜翔仔居家</title>
+  <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
+  <link rel="stylesheet" href="style.css?v=20260828-procurement-r3">
+</head>
+<body>
+  <main class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="回到公司工具首頁">
+        <span class="brand-mark" aria-hidden="true">採</span>
+        <span>翔仔居家・庫存採購規劃</span>
+      </a>
+      <span id="account-badge" class="privacy-badge">正在確認公司帳號…</span>
+    </header>
+
+    <nav class="breadcrumb" aria-label="頁面導覽">
+      <ol><li><a href="/">公司工具首頁</a></li><li aria-current="page">庫存採購規劃</li></ol>
+      <div><a class="back-link" href="manual.html">操作手冊</a>　<a class="back-link" href="/">← 返回公司工具首頁</a></div>
+    </nav>
+
+    <section class="hero" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">PROCUREMENT PLANNING</p>
+        <h1 id="page-title">先把庫存與供貨，<br>算在正確的位置。</h1>
+        <p class="hero-description">整合近期銷售、公司庫存、未到貨與固定 Google 資料源，產生分供應商採購、寄庫、回匯覆核、付款月份與額度摘要。</p>
+      </div>
+      <aside class="privacy-card" aria-label="資料安全說明">
+        <span class="privacy-icon" aria-hidden="true">✓</span>
+        <div><strong>Excel只留在目前分頁</strong><p>所有讀取、計算與下載均在這台電腦的瀏覽器完成，不上傳、不會修改原始檔。</p></div>
+      </aside>
+    </section>
+
+    <section class="steps" aria-label="使用步驟">
+      <div><span>1</span><strong>取得資料並計算</strong><small>固定來源自動唯讀取得；Excel仍只在目前瀏覽器解析。</small></div>
+      <div><span>2</span><strong>回匯並二次覆核</strong><small>重算可售至、AI判斷、規則阻擋、付款月份與額度。</small></div>
+      <div><span>3</span><strong>正式核准</strong><small>核准後寫入台帳、寄送摘要，再產生ERP檔案。</small></div>
+    </section>
+
+    <section class="panel" aria-labelledby="source-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">正式流程・採購建議</p><h2 id="source-title">設定分析時點並取得資料</h2></div>
+        <p>固定 Google 來源須先用公司帳號授權；銷售、庫存與未到貨仍由人員選檔。</p>
+      </div>
+
+      <div class="period-grid procurement-period" aria-label="分析期間設定">
+        <label><span>分析月份＊</span><input id="analysis-month" type="month" required></label>
+        <label><span>使用時點＊</span><select id="checkpoint"><option value="month-start">月初採購</option><option value="mid-month">月中採購</option><option value="month-end">月底驗證</option></select></label>
+        <label><span>庫存截止日＊</span><input id="inventory-date" type="date" required></label>
+        <label><span>未到貨清單截止日＊</span><input id="pending-date" type="date" required></label>
+        <label><span>寄倉表截止日＊</span><input id="consignment-date" type="date" required></label>
+        <label><span>銷售資料截止日＊</span><input id="sales-date" type="date" required></label>
+        <label><span>預計下單日＊</span><input id="order-date" type="date" required></label>
+        <p>庫存、未到貨、寄倉與銷售四個截止日相差14天內才會通過同時點檢核；超過時仍可檢查品號，但不應直接採用實際淨需求。</p>
+      </div>
+
+      <div class="upload-grid four-sources procurement-sources">
+        <article class="upload-card" data-source="master">
+          <div class="upload-card-header"><h3>商品主檔</h3><span class="source-badge recommended">建議更新</span></div>
+          <p class="upload-help">自動選取白名單資料夾內修改時間最新且唯一有效的.xlsx；無新品或異動可沿用最近有效版本。</p>
+          <button id="google-connect-button" class="secondary-button" type="button">公司 Google 授權</button>
+          <button id="auto-source-button" class="secondary-button" type="button" disabled>自動取得最新資料</button>
+          <label class="file-button">選擇商品主檔<input id="master-file" type="file" accept=".xlsx"></label>
+          <p id="master-file-name" class="file-name">尚未取得</p>
+        </article>
+
+        <article class="upload-card" data-source="inventory">
+          <div class="upload-card-header"><h3>目前公司庫存</h3><span class="source-badge required">必要</span></div>
+          <p class="upload-help">建議使用庫存清理工具輸出的「乾淨商品」檔案。</p>
+          <label class="file-button">選擇最新庫存<input id="inventory-file" type="file" accept=".xlsx"></label>
+          <p id="inventory-file-name" class="file-name">尚未選擇</p>
+        </article>
+
+        <article class="upload-card" data-source="pending">
+          <div class="upload-card-header"><h3>未到貨採購單</h3><span class="source-badge required">必要・可多選</span></div>
+          <p class="upload-help">每次重新匯入完整清單；不要沿用上次未到貨資料。</p>
+          <label class="file-button">選擇未到貨採購單<input id="pending-files" type="file" accept=".xlsx,.xls,.csv" multiple></label>
+          <p id="pending-files-name" class="file-name">尚未選擇</p>
+        </article>
+
+        <article class="upload-card" data-source="consignment">
+          <div class="upload-card-header"><h3>普優瑪寄倉表</h3><span class="source-badge required">必要</span></div>
+          <p class="upload-help">讀取最新庫存、粉紅底未完成量及黃色欄首原文。</p>
+          <label class="file-button">選擇寄倉表<input id="consignment-file" type="file" accept=".xlsx"></label>
+          <p id="consignment-file-name" class="file-name">尚未選擇</p>
+        </article>
+
+        <article class="upload-card" data-source="lirong-consignment">
+          <div class="upload-card-header"><h3>力榮寄庫表</h3><span class="source-badge recommended">自動／備援</span></div>
+          <p class="upload-help">現貨拉貨5天、製作14天、製作後最早19天；依欄名與日期辨識。</p>
+          <label class="file-button">手動備援<input id="lirong-consignment-file" type="file" accept=".xlsx"></label>
+          <p id="lirong-consignment-file-name" class="file-name">尚未取得</p>
+        </article>
+
+        <article class="upload-card" data-source="marketing">
+          <div class="upload-card-header"><h3>整體行銷策略</h3><span class="source-badge recommended">自動／備援</span></div>
+          <p class="upload-help">固定 Drive Excel，供活動、新品與檔期風險判斷；預估營收仍以已核准金額為準。</p>
+          <label class="file-button">手動備援<input id="marketing-file" type="file" accept=".xlsx"></label>
+          <p id="marketing-file-name" class="file-name">尚未取得</p>
+        </article>
+
+        <article class="upload-card" data-source="sales">
+          <div class="upload-card-header"><h3>銷售明細</h3><span class="source-badge required">必要・可多選</span></div>
+          <p class="upload-help">建議選近三個月明細；取貨會自動排除。季節趨勢由回測檔的類別指數補強，不需每次重匯全部歷史資料。</p>
+          <label class="file-button">選擇銷售明細<input id="sales-files" type="file" accept=".xlsx,.xls" multiple></label>
+          <p id="sales-files-name" class="file-name">尚未選擇</p>
+        </article>
+
+        <article class="upload-card" data-source="model">
+          <div class="upload-card-header"><h3>季節模型回測檔</h3><span class="source-badge required">必要</span></div>
+          <p class="upload-help">使用最新的「普優瑪分類稽核與季節模型回測」；讀取SKU與類別建議模型。</p>
+          <label class="file-button">選擇季節模型<input id="model-file" type="file" accept=".xlsx"></label>
+          <p id="model-file-name" class="file-name">尚未選擇</p>
+        </article>
+      </div>
+
+      <div class="blacklist-panel" aria-labelledby="blacklist-title">
+        <div>
+          <p class="eyebrow">人工控制</p>
+          <h3 id="blacklist-title">排除採購商品黑名單</h3>
+          <p>每行填一個ERP品號、供應商貨號或完整品名。採完全一致才排除，不使用模糊判斷。</p>
+        </div>
+        <textarea id="blacklist-input" rows="6" placeholder="例如：&#10;ERP品號&#10;一次性代工商品完整品名"></textarea>
+        <div class="blacklist-actions">
+          <button id="save-blacklist-button" class="secondary-button" type="button">儲存於這個瀏覽器</button>
+          <span id="blacklist-status">目前0項・尚未共用至其他電腦</span>
+        </div>
+      </div>
+
+      <div class="locked-formula" role="note">
+        <strong>核心公式已鎖定</strong>
+        <p>淨採購需求＝MAX（預估未來出貨需求＋安全庫存－總倉可用庫存－已採購未到貨，0）</p>
+        <small>工廠寄倉可拉貨量不在這個扣除公式中；寄倉只用於後續供貨與缺貨警示。</small>
+      </div>
+
+      <div class="action-bar">
+        <button id="analyze-button" class="primary-button" type="button" disabled>產生採購建議</button>
+        <button id="download-button" class="secondary-button" type="button" disabled>下載採購建議Excel</button>
+        <p id="main-status" class="main-status" role="status">請先完成日期與六類檔案。</p>
+      </div>
+      <div id="source-status" class="result-alert" role="status">固定來源尚未完成公司 Google 授權；可先使用各來源的手動備援。</div>
+    </section>
+
+    <section id="result-panel" class="panel results" aria-labelledby="result-title" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow">計算結果</p><h2 id="result-title">總部採購與工廠寄庫建議</h2></div>
+        <p id="date-check-message"></p>
+      </div>
+      <div id="summary-cards" class="summary-grid procurement-summary"></div>
+      <div id="result-alert" class="result-alert" role="status"></div>
+      <div class="result-table-wrap">
+        <table class="procurement-table">
+          <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>狀態</th><th>供應交期類型</th><th>到貨天數</th><th>目標覆蓋天數</th><th>近6週</th><th>近12週</th><th>日需求</th><th>可用庫存</th><th>未到貨</th><th>建議採購量</th><th>建議金額</th><th>寄倉現貨</th><th>建議寄庫</th><th>供貨狀態</th></tr></thead>
+          <tbody id="result-rows"></tbody>
+        </table>
+      </div>
+      <p class="result-note">淨採購需求只扣公司可用庫存與未到貨採購；工廠寄倉不會被扣除。寄倉現貨不足「未到貨＋本次建議採購」時，必列缺貨警示並加入寄庫建議。</p>
+    </section>
+
+    <section class="panel budget-panel" aria-labelledby="budget-title">
+      <div class="section-heading compact">
+        <div><p class="eyebrow">中性情境</p><h2 id="budget-title">整月預估可採購額度</h2></div>
+        <p>本次建議採購金額會一併與尚可採購額度比較。</p>
+      </div>
+      <div class="budget-grid">
+        <label><span>中性情境整月預估營收</span><input id="forecast-revenue" type="number" min="0" step="1" value="0"></label>
+        <label><span>預估當月成本流出</span><input id="forecast-cost" type="number" min="0" step="1" value="0"></label>
+        <label><span>目標期末庫存成本</span><input id="target-ending-cost" type="number" min="0" step="1" value="0"></label>
+        <label><span>期初庫存成本</span><input id="opening-cost" type="number" min="0" step="1" value="0"></label>
+        <label><span>預計供應商退貨</span><input id="supplier-returns" type="number" step="1" value="0"></label>
+        <label><span>截至目前已承諾（台帳自動）</span><input id="purchased-to-date" type="number" min="0" step="1" value="0" readonly></label>
+      </div>
+      <div class="budget-equation">中性情境－整月預估可採購額度 − 截至目前已承諾採購金額 ＝ 截至目前尚可承諾額度</div>
+      <div id="budget-summary" class="summary-grid budget-summary"></div>
+      <p id="ledger-status" class="budget-note">正式核准、核准更正與撤銷會即時更新集中台帳；未到貨採購單不再用來反推整月已承諾金額。</p>
+    </section>
+
+    <section class="panel workflow-panel" aria-labelledby="workflow-title">
+      <div class="section-heading"><div><p class="eyebrow">回匯・核准・ERP</p><h2 id="workflow-title">第二次覆核與正式核准</h2></div><p>回匯本工具輸出的採購建議；待核准階段不寄信。</p></div>
+      <div class="workflow-grid">
+        <label class="file-button">1. 選擇第一次人工回匯<input id="review-file" type="file" accept=".xlsx" disabled></label>
+        <button id="review-button" class="secondary-button" type="button" disabled>產生二次覆核報表</button>
+        <label class="file-button">2. 回匯二次確認版<input id="second-review-file" type="file" accept=".xlsx" disabled></label>
+        <button id="confirm-review-button" class="secondary-button" type="button" disabled>檢查二次確認版</button>
+        <button id="submit-approval-button" class="secondary-button" type="button" disabled>送出待核准台帳</button>
+        <button id="approve-button" class="primary-button" type="button" disabled>正式核准並寄送摘要</button>
+        <button id="retry-notification-button" class="secondary-button" type="button" disabled>重送摘要郵件</button>
+        <button id="erp-button" class="secondary-button" type="button" disabled>下載ERP採購檔</button>
+        <label class="workflow-field"><span>ERP採購單號／確認註記</span><input id="erp-reference" type="text" maxlength="120" disabled></label>
+        <button id="erp-created-button" class="secondary-button" type="button" disabled>確認ERP已建立</button>
+      </div>
+      <p id="workflow-status" class="main-status" role="status">尚未選擇人工回匯檔。</p>
+      <div id="workflow-summary" class="summary-grid budget-summary"></div>
+    </section>
+
+    <section class="panel rules-panel" aria-labelledby="rules-title">
+      <div class="section-heading compact"><div><p class="eyebrow">固定防呆</p><h2 id="rules-title">目前已鎖定哪些規則？</h2></div></div>
+      <div class="rule-grid">
+        <article><strong>寄倉不扣淨需求</strong><p>寄倉是外部供貨池，不是公司帳上已購入庫存。</p></article>
+        <article><strong>未到貨每次重匯</strong><p>已到貨單據不再出現，不保留舊清單避免重複扣除。</p></article>
+        <article><strong>粉紅底另列排程</strong><p>尚未完成數量不得當成現貨；排程原文保留人工核對。</p></article>
+        <article><strong>寄倉不足新增寄庫單</strong><p>缺口不提供改向其他供應商採購的選項。</p></article>
+        <article><strong>黑名單只採完全一致</strong><p>避免關鍵字誤傷其他長銷商品。</p></article>
+        <article><strong>品名結尾(S)只停止外採</strong><p>不新增供應商採購或寄庫；線上可繼續銷售，門市可調撥總倉剩餘現貨，不足只警示。</p></article>
+        <article><strong>已確認寄倉例外</strong><p>A42359-A只採正確供應商貨號；A43359-A為放棄品號，固定忽略。</p></article>
+        <article><strong>需求不重複</strong><p>銷貨、訂貨、退貨與退訂納入；取貨排除，避免總倉代出重複。</p></article>
+        <article><strong>依供應商檢視期</strong><p>目標覆蓋＝供應商檢視期＋到貨交期＋分級安全緩衝；檢視期0轉人工判斷。</p></article>
+        <article><strong>普優瑪採購與寄庫分開</strong><p>現貨拉貨5天、製作45天；寄庫目標熱銷120、穩定105、低銷90天。</p></article>
+        <article><strong>力榮採購與寄庫分開</strong><p>現貨5天、製作14天、製作後最早19天；每個品號只能0或10的倍數。</p></article>
+        <article><strong>上林獨立檢視</strong><p>固定28天檢視期；總部、門市與加總需求使用公式。</p></article>
+        <article><strong>付款月份分流</strong><p>國內到貨100%；國外下單30%、預計出貨70%。</p></article>
+      </div>
+    </section>
+
+    <footer><p>翔仔居家・庫存採購規劃</p><p>原始Excel不上傳；後端只保存必要批次、金額、狀態、核准與通知稽核摘要。</p></footer>
+  </main>
+
+  <script src="../inventory/assets/xlsx.full.min.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="core.js?v=20260828-procurement-r3"></script>
+  <script src="google-sources.js?v=20260911-deploy-r1"></script>
+  <script src="app.js?v=20260828-procurement-r3"></script>
+</body>
+</html>
