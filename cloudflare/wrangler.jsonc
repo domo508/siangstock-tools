@@ -24,7 +24,7 @@
   "vars": {
     "ALLOWED_ORIGINS": "https://siangstock.com",
     "ADMIN_EMAILS": "evan0728@siangapato.com.tw,siang01@siangapato.com.tw",
-    "GOOGLE_OAUTH_CLIENT_ID": "",
+    "GOOGLE_OAUTH_CLIENT_ID": "911829041789-nchtp93ot5e617g2pshq01ktq5a90r7g.apps.googleusercontent.com",
     "ACCESS_TEAM_DOMAIN": "https://restless-band-7fc2.cloudflareaccess.com",
     "ACCESS_AUD": "fbba64a4f03b08aed53ef51bc84ac02ea756acb40e1ccc6ade275104f708932d",
     "PROCUREMENT_ACCESS_AUD": "1c1f9c08ffe0a08629dd5e89d4c2e03d79fa61fa7182475513e2fc685202360b"
