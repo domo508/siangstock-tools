@@ -115,6 +115,54 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
   });
 }
 
+function serializeMonthPlan(row: Record<string, unknown>) {
+  return {
+    analysisMonth: String(row.analysis_month),
+    scenario: String(row.scenario),
+    forecastRevenue: Number(row.forecast_revenue),
+    forecastCostOutflow: Number(row.forecast_cost_outflow),
+    targetEndingInventoryCost: Number(row.target_ending_inventory_cost),
+    openingInventoryCost: Number(row.opening_inventory_cost),
+    expectedSupplierReturns: Number(row.expected_supplier_returns),
+    budgetAmount: Number(row.budget_amount),
+    sourceNote: String(row.source_note),
+    updatedAt: String(row.updated_at),
+    updatedBy: String(row.updated_by)
+  };
+}
+
+async function monthPlan(request: Request, env: ProcurementEnv): Promise<Response> {
+  await verifyCompanyUser(request, procurementAccess(env));
+  const requestedMonth = month(new URL(request.url).searchParams.get("month"));
+  const row = await env.DB.prepare(
+    "SELECT analysis_month, scenario, forecast_revenue, forecast_cost_outflow, target_ending_inventory_cost, opening_inventory_cost, expected_supplier_returns, budget_amount, source_note, updated_at, updated_by FROM procurement_month_plans WHERE analysis_month = ?"
+  ).bind(requestedMonth).first<Record<string, unknown>>();
+  return json({ month: requestedMonth, plan: row ? serializeMonthPlan(row) : null });
+}
+
+async function saveMonthPlan(request: Request, env: ProcurementEnv): Promise<Response> {
+  requireSameOrigin(request, env);
+  const actor = await verifyAdmin(request, { ...procurementAccess(env), ADMIN_EMAILS: ADMIN_EMAIL });
+  const input = await body(request);
+  const analysisMonth = month(input.analysisMonth);
+  const forecastRevenue = money(input.forecastRevenue, "整月預估營收");
+  const forecastCostOutflow = money(input.forecastCostOutflow, "整月預估成本耗用");
+  const targetEndingInventoryCost = money(input.targetEndingInventoryCost, "目標期末庫存成本");
+  const openingInventoryCost = money(input.openingInventoryCost, "期初庫存成本");
+  const expectedSupplierReturns = money(input.expectedSupplierReturns, "預計供應商退貨", true);
+  const budgetAmount = money(input.budgetAmount, "整月預估可採購額度");
+  const sourceNote = string(input.sourceNote, "額度來源註記", 500);
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    "INSERT INTO procurement_month_plans (analysis_month, scenario, forecast_revenue, forecast_cost_outflow, target_ending_inventory_cost, opening_inventory_cost, expected_supplier_returns, budget_amount, source_note, created_at, created_by, updated_at, updated_by) VALUES (?, 'neutral', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month) DO UPDATE SET forecast_revenue = excluded.forecast_revenue, forecast_cost_outflow = excluded.forecast_cost_outflow, target_ending_inventory_cost = excluded.target_ending_inventory_cost, opening_inventory_cost = excluded.opening_inventory_cost, expected_supplier_returns = excluded.expected_supplier_returns, budget_amount = excluded.budget_amount, source_note = excluded.source_note, updated_at = excluded.updated_at, updated_by = excluded.updated_by"
+  ).bind(analysisMonth, forecastRevenue, forecastCostOutflow, targetEndingInventoryCost, openingInventoryCost, expectedSupplierReturns, budgetAmount, sourceNote, now, actor, now, actor).run();
+  const row = await env.DB.prepare(
+    "SELECT analysis_month, scenario, forecast_revenue, forecast_cost_outflow, target_ending_inventory_cost, opening_inventory_cost, expected_supplier_returns, budget_amount, source_note, updated_at, updated_by FROM procurement_month_plans WHERE analysis_month = ?"
+  ).bind(analysisMonth).first<Record<string, unknown>>();
+  if (!row) throw new RequestValidationError("本月額度資料儲存失敗。", 503);
+  return json({ month: analysisMonth, plan: serializeMonthPlan(row) });
+}
+
 function validatedBatch(input: Record<string, unknown>, actor: string) {
   const suggested = money(input.suggestedAmount, "系統建議金額");
   const manual = money(input.manualAmount, "人工回匯金額");
@@ -329,6 +377,8 @@ export async function procurementRoute(request: Request, env: ProcurementEnv): P
   if (!url.pathname.startsWith("/api/procurement")) return null;
   if (url.pathname === "/api/procurement/config" && request.method === "GET") return config(request, env);
   if (url.pathname === "/api/procurement/ledger" && request.method === "GET") return ledger(request, env);
+  if (url.pathname === "/api/procurement/month-plan" && request.method === "GET") return monthPlan(request, env);
+  if (url.pathname === "/api/procurement/month-plan" && request.method === "PUT") return saveMonthPlan(request, env);
   if (url.pathname === "/api/procurement/batches" && request.method === "POST") return submit(request, env);
   const approveMatch = url.pathname.match(/^\/api\/procurement\/batches\/([^/]+)\/approve$/);
   if (approveMatch && request.method === "POST") return approve(request, env, decodeURIComponent(approveMatch[1]));

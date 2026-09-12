@@ -176,8 +176,10 @@
         <label><span>期初庫存成本</span><input id="opening-cost" type="number" min="0" step="1" value="0"></label>
         <label><span>預計供應商退貨</span><input id="supplier-returns" type="number" step="1" value="0"></label>
         <label><span>截至目前已承諾（台帳自動）</span><input id="purchased-to-date" type="number" min="0" step="1" value="0" readonly></label>
+        <label class="budget-source-field"><span>額度來源註記</span><input id="budget-source-note" type="text" maxlength="500" value="" placeholder="例如：9月月初核准快照"></label>
       </div>
-      <div class="budget-equation">中性情境－整月預估可採購額度 − 截至目前已承諾採購金額 ＝ 截至目前尚可承諾額度</div>
+      <div class="budget-actions"><button id="save-budget-button" class="secondary-button" type="button" disabled>儲存本月額度</button><span id="budget-plan-status">尚未同步月份額度。</span></div>
+      <div class="budget-equation">中性情境－整月預估可採購額度 − 截至目前已承諾採購金額 ＝ 截至目前尚可承諾額度；已核准月份快照優先沿用。</div>
       <div id="budget-summary" class="summary-grid budget-summary"></div>
       <p id="ledger-status" class="budget-note">正式核准、核准更正與撤銷會即時更新集中台帳；未到貨採購單不再用來反推整月已承諾金額。</p>
     </section>
@@ -226,6 +228,6 @@
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="core.js?v=20260828-procurement-r3"></script>
   <script src="google-sources.js?v=20260911-deploy-r1"></script>
-  <script src="app.js?v=20260828-procurement-r3"></script>
+  <script src="app.js?v=20260912-history-r1"></script>
 </body>
 </html>

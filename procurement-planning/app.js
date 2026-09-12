@@ -8,7 +8,7 @@
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [],
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
     salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, firstReview: null,
-    secondReviewFile: null, review: null, ledger: null, sourceMetadata: null, batchId: "", approved: false, erpDownloaded: false
+    secondReviewFile: null, review: null, ledger: null, monthPlan: null, budgetDirty: false, sourceMetadata: null, batchId: "", approved: false, erpDownloaded: false
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -24,7 +24,8 @@
     blacklistStatus: get("#blacklist-status"), analyze: get("#analyze-button"), download: get("#download-button"), status: get("#main-status"),
     resultPanel: get("#result-panel"), dateCheck: get("#date-check-message"), summaryCards: get("#summary-cards"), resultAlert: get("#result-alert"), resultRows: get("#result-rows"),
     forecastRevenue: get("#forecast-revenue"), forecastCost: get("#forecast-cost"), targetEndingCost: get("#target-ending-cost"), openingCost: get("#opening-cost"),
-    supplierReturns: get("#supplier-returns"), purchasedToDate: get("#purchased-to-date"), budgetSummary: get("#budget-summary"), ledgerStatus: get("#ledger-status"),
+    supplierReturns: get("#supplier-returns"), purchasedToDate: get("#purchased-to-date"), budgetSourceNote: get("#budget-source-note"),
+    saveBudget: get("#save-budget-button"), budgetPlanStatus: get("#budget-plan-status"), budgetSummary: get("#budget-summary"), ledgerStatus: get("#ledger-status"),
     reviewFile: get("#review-file"), reviewButton: get("#review-button"), secondReviewFile: get("#second-review-file"), confirmReview: get("#confirm-review-button"),
     submitApproval: get("#submit-approval-button"), approve: get("#approve-button"), retryNotification: get("#retry-notification-button"),
     erp: get("#erp-button"), erpReference: get("#erp-reference"), erpCreated: get("#erp-created-button"), workflowStatus: get("#workflow-status"), workflowSummary: get("#workflow-summary")
@@ -113,6 +114,34 @@
       elements.ledgerStatus.classList.add("error");
     }
   }
+  function applyMonthPlan(plan) {
+    state.monthPlan = plan;
+    state.budgetDirty = false;
+    elements.forecastRevenue.value = String(plan?.forecastRevenue ?? 0);
+    elements.forecastCost.value = String(plan?.forecastCostOutflow ?? 0);
+    elements.targetEndingCost.value = String(plan?.targetEndingInventoryCost ?? 0);
+    elements.openingCost.value = String(plan?.openingInventoryCost ?? 0);
+    elements.supplierReturns.value = String(plan?.expectedSupplierReturns ?? 0);
+    elements.budgetSourceNote.value = plan?.sourceNote || "";
+    elements.budgetPlanStatus.textContent = plan
+      ? `已同步${plan.analysisMonth}中性情境快照：額度${formatCurrency(plan.budgetAmount)}・更新${String(plan.updatedAt || "").replace("T", " ").slice(0, 19)}。`
+      : `${elements.month.value}尚無已核准月份快照；目前欄位只在本頁暫存。`;
+    renderBudget();
+  }
+  async function loadMonthPlan() {
+    if (!state.config || !elements.month.value) return;
+    try {
+      const response = await fetch(`/api/procurement/month-plan?month=${encodeURIComponent(elements.month.value)}`, { headers: { Accept: "application/json" }, cache: "no-store" });
+      const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      applyMonthPlan(result.plan || null);
+    } catch (error) {
+      state.monthPlan = null;
+      state.budgetDirty = true;
+      elements.budgetPlanStatus.textContent = `月份額度同步失敗：${error.message}；正式核准前請重新整理。`;
+      renderBudget();
+    }
+  }
   async function loadConfig() {
     try {
       const response = await fetch("/api/procurement/config", { headers: { Accept: "application/json" }, cache: "no-store" });
@@ -125,7 +154,8 @@
         elements.sourceStatus.textContent = "Cloudflare 尚未設定 GOOGLE_OAUTH_CLIENT_ID；自動來源與郵件暫停。";
         elements.sourceStatus.classList.add("error");
       }
-      await loadLedger();
+      elements.saveBudget.disabled = state.config.role !== "admin";
+      await Promise.all([loadLedger(), loadMonthPlan()]);
     } catch (error) {
       state.config = null; elements.accountBadge.textContent = "公司登入驗證失敗";
       elements.sourceStatus.textContent = error.message; elements.sourceStatus.classList.add("error");
@@ -243,8 +273,13 @@
   }
   function currentBudget() {
     const read = (element) => Number.isFinite(Number(element.value)) ? Number(element.value) : 0;
-    return core.calculatePurchaseBudget({ forecastCostOutflow: read(elements.forecastCost), targetEndingInventoryCost: read(elements.targetEndingCost),
+    const calculated = core.calculatePurchaseBudget({ forecastCostOutflow: read(elements.forecastCost), targetEndingInventoryCost: read(elements.targetEndingCost),
       openingInventoryCost: read(elements.openingCost), expectedSupplierReturns: read(elements.supplierReturns), purchasedAmountToDate: read(elements.purchasedToDate) });
+    if (!state.budgetDirty && Number.isFinite(Number(state.monthPlan?.budgetAmount))) {
+      const availableBudget = Number(state.monthPlan.budgetAmount);
+      return { ...calculated, availableBudget, remainingBudget: availableBudget - calculated.purchasedAmountToDate };
+    }
+    return calculated;
   }
   function renderBudget() {
     const result = currentBudget(); const revenue = Number(elements.forecastRevenue.value || 0); const cost = Number(elements.forecastCost.value || 0);
@@ -261,6 +296,34 @@
       cards.push(createSummaryCard("本批本月／未來付款", `${formatCurrency(currentPayment)}／${formatCurrency(state.review.totals.approvedAmount - currentPayment)}`, "依供應商付款觸發點", "currency"));
     }
     elements.budgetSummary.replaceChildren(...cards);
+  }
+  function markBudgetDirty() {
+    state.budgetDirty = true;
+    elements.budgetPlanStatus.textContent = state.config?.role === "admin"
+      ? "月份額度有尚未儲存的變更；儲存後其他使用者才會讀到。"
+      : "目前是本頁暫算；只有siang01可儲存為公司共用月份快照。";
+    renderBudget();
+  }
+  async function saveMonthPlan() {
+    if (state.config?.role !== "admin") return;
+    elements.saveBudget.disabled = true;
+    const budget = currentBudget();
+    const sourceNote = elements.budgetSourceNote.value.trim() || `${elements.month.value}中性情境管理輸入`;
+    try {
+      const result = await postJson("/api/procurement/month-plan", {
+        analysisMonth: elements.month.value,
+        forecastRevenue: Number(elements.forecastRevenue.value || 0),
+        forecastCostOutflow: Number(elements.forecastCost.value || 0),
+        targetEndingInventoryCost: Number(elements.targetEndingCost.value || 0),
+        openingInventoryCost: Number(elements.openingCost.value || 0),
+        expectedSupplierReturns: Number(elements.supplierReturns.value || 0),
+        budgetAmount: budget.availableBudget,
+        sourceNote
+      }, {}, "PUT");
+      applyMonthPlan(result.plan);
+    } catch (error) {
+      elements.budgetPlanStatus.textContent = `月份額度儲存失敗：${error.message}`;
+    } finally { elements.saveBudget.disabled = false; }
   }
   function downloadRecommendation() {
     if (!state.analysis) return;
@@ -316,8 +379,8 @@
       idempotencyKey: `${state.batchId}:submit`
     };
   }
-  async function postJson(url, payload, headers = {}) {
-    const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(payload) });
+  async function postJson(url, payload, headers = {}, method = "POST") {
+    const response = await fetch(url, { method, headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(payload) });
     const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`); return result;
   }
@@ -396,8 +459,10 @@
     setWorkflowStatus(state.secondReviewFile ? `已選擇確認版${state.secondReviewFile.name}；請執行最終檢查。` : "請回匯已填寫二次確認量的覆核報表。");
   });
   [elements.orderDate, elements.inventoryDate, elements.pendingDate, elements.consignmentDate, elements.salesDate].forEach((element) => element.addEventListener("change", updateReadyState));
-  elements.month.addEventListener("change", () => { updateReadyState(); loadLedger(); });
-  [elements.forecastRevenue, elements.forecastCost, elements.targetEndingCost, elements.openingCost, elements.supplierReturns, elements.purchasedToDate].forEach((element) => element.addEventListener("input", renderBudget));
+  elements.month.addEventListener("change", () => { updateReadyState(); Promise.all([loadLedger(), loadMonthPlan()]); });
+  [elements.forecastRevenue, elements.forecastCost, elements.targetEndingCost, elements.openingCost, elements.supplierReturns].forEach((element) => element.addEventListener("input", markBudgetDirty));
+  elements.budgetSourceNote.addEventListener("input", () => { elements.budgetPlanStatus.textContent = "額度來源註記尚未儲存。"; });
+  elements.purchasedToDate.addEventListener("input", renderBudget); elements.saveBudget.addEventListener("click", saveMonthPlan);
   elements.blacklist.addEventListener("input", () => updateBlacklistStatus(false)); elements.saveBlacklist.addEventListener("click", saveBlacklist);
   elements.googleConnect.addEventListener("click", connectGoogle); elements.autoSource.addEventListener("click", loadAutomaticSources);
   elements.analyze.addEventListener("click", analyze); elements.download.addEventListener("click", downloadRecommendation);

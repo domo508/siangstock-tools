@@ -439,8 +439,25 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("正式核准並寄送摘要");
     expect(toolHtml).toContain("回匯二次確認版");
     expect(toolHtml).toContain("重送摘要郵件");
+    expect(toolHtml).toContain("儲存本月額度");
+    expect(toolHtml).toContain("已核准月份快照優先沿用");
+    const toolApp = readFileSync("../procurement-planning/app.js", "utf8");
+    expect(toolApp).toContain("/api/procurement/month-plan");
     const toolCss = readFileSync("../procurement-planning/style.css", "utf8");
     expect(toolCss).toContain("@media (max-width: 620px)");
     expect(toolCss).toMatch(/\.procurement-period,[\s\S]*\.budget-grid,[\s\S]*\.procurement-summary,[\s\S]*\.budget-summary \{ grid-template-columns: 1fr; \}/);
+  });
+
+  it("9月歷史接續資料固定為可追溯月份快照且不補寄舊通知", () => {
+    const migration = readFileSync("worker/migrations/0003_procurement_month_plan_and_history.sql", "utf8");
+    expect(migration).toContain("5936068.44");
+    expect(migration).toContain("2659538.30");
+    expect(migration).toContain("1329769.15");
+    expect(migration).toContain("166750.60");
+    expect(migration).toContain("84040");
+    expect(migration).toContain("259110");
+    expect(migration).toContain("123380");
+    expect(migration).toContain("歷史匯入不建立通知工作");
+    expect(migration).not.toContain("INSERT INTO procurement_notifications");
   });
 });

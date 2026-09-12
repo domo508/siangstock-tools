@@ -108,6 +108,15 @@
   gap: 14px;
 }
 .budget-grid label { display: grid; gap: 7px; color: var(--navy); font-weight: 800; }
+.budget-grid .budget-source-field { grid-column: span 4; }
+.budget-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
 .budget-equation {
   margin: 18px 0 14px;
   padding: 13px 16px;
