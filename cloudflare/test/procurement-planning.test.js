@@ -238,6 +238,21 @@ describe("四來源匯入與品號串接", () => {
     ]));
   });
 
+  it("依力榮線上表單現行欄名辨識日期庫存與新增完工排程", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["翔仔貨號", "翔仔品名", "成品價", "9/1庫存", "9/2新增\n預計9/16完工"],
+      ["A42349-A", "5尺床包 [沐堇 A]", "", 40, 40],
+      ["A43349-A", "6尺床包 [沐堇 A]", "", 0, 40]
+    ]), "工作表1");
+    const consignment = core.parseLirongConsignmentWorkbook(workbook, XLSX, { fileName: "翔仔 X 力榮寄庫" });
+    expect(consignment.records).toEqual([
+      expect.objectContaining({ sku: "A42349-A", name: "5尺床包 [沐堇 A]", currentQty: 40, scheduledQty: 40 }),
+      expect.objectContaining({ sku: "A43349-A", name: "6尺床包 [沐堇 A]", currentQty: 0, scheduledQty: 40 })
+    ]);
+    expect(consignment.records[0].scheduleNotes).toEqual(["9/2新增\n預計9/16完工"]);
+  });
+
   it("人工黑名單優先排除一次性代工品", () => {
     const resolved = core.resolveConsignment(makeConsignment(), makeMaster(), ["一次性代工品"]);
     expect(resolved.excluded).toHaveLength(1);

@@ -778,7 +778,7 @@
     for (let index = 0; index < Math.min(rows.length, 30); index += 1) {
       const candidate = rows[index].map((value) => String(value || "").trim());
       const normalized = candidate.map(normalizeHeader);
-      if (normalized.some((value) => /^(erp)?品號$|^貨號$|^編號$/.test(value))
+      if (normalized.some((value) => /^(?:erp|翔仔)?(?:品號|貨號)$|^編號$/.test(value))
         && normalized.some((value) => /品名|商品名稱/.test(value))
         && normalized.some((value) => /庫存|現貨/.test(value))) {
         headerRowIndex = index;
@@ -788,11 +788,11 @@
     }
     if (headerRowIndex < 0) throw new Error("力榮寄庫表缺少品號、品名與寄庫現貨欄位。");
     const findColumn = (patterns) => headers.findIndex((header) => patterns.some((pattern) => pattern.test(normalizeHeader(header))));
-    const skuColumn = findColumn([/^(erp)?品號$/, /^貨號$/, /^編號$/]);
+    const skuColumn = findColumn([/^(?:erp|翔仔)?(?:品號|貨號)$/, /^編號$/]);
     const supplierSkuColumn = findColumn([/供應商貨號/, /產品編號/]);
     const nameColumn = findColumn([/商品名稱/, /品名/]);
-    const currentColumn = findColumn([/最新.*庫存/, /寄庫.*現貨/, /^現貨$/, /庫存數量/]);
-    const scheduleColumns = headers.map((header, index) => ({ header, index })).filter(({ header, index }) => index !== currentColumn && /(排程|製作|下單|預計.*庫)/.test(normalizeHeader(header)));
+    const currentColumn = findColumn([/最新.*庫存/, /寄庫.*現貨/, /^現貨$/, /庫存數量/, /^(?:\d{2,4}|\d{1,2}月\d{1,2}日?)庫存$/]);
+    const scheduleColumns = headers.map((header, index) => ({ header, index })).filter(({ header, index }) => index !== currentColumn && /(排程|製作|下單|新增|預計.*(?:入庫|完工)|完工)/.test(normalizeHeader(header)));
     if ([skuColumn, nameColumn, currentColumn].some((index) => index < 0)) throw new Error("力榮寄庫表欄位辨識失敗，已停止計算。");
     const records = [];
     const seen = new Set();
