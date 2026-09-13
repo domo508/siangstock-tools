@@ -512,7 +512,10 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("class=\"rules-entry-button\"");
     expect(toolHtml).toContain("新增、移除或調整公司共用黑名單");
     expect(toolHtml).toContain('id="model-badge"');
-    expect(toolHtml).toContain("每6個月到期月份才改為必要更新");
+    expect(toolHtml).toContain("每6個月到期才重跑近三年歷史銷售");
+    expect(toolHtml).toContain('id="model-refresh-button"');
+    expect(toolHtml).toContain('id="model-approve-button"');
+    expect(toolHtml).toContain('worker-src \'self\'');
     expect(toolHtml).toContain("規則管理");
     expect(toolHtml.indexOf('id="budget-title"')).toBeLessThan(toolHtml.indexOf('id="source-title"'));
     expect(toolHtml.indexOf('id="source-title"')).toBeLessThan(toolHtml.indexOf('id="workflow-title"'));

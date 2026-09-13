@@ -9,7 +9,8 @@
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
     salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, firstReview: null,
     secondReviewFile: null, review: null, ledger: null, monthPlan: null, procurementRules: null, revenueChannels: [], budgetDirty: false, sourceMetadata: null, modelMetadata: null, batchId: "", approved: false, erpDownloaded: false,
-    selectedSuppliers: new Set(), returnScope: null, consignmentSource: null
+    selectedSuppliers: new Set(), returnScope: null, consignmentSource: null,
+    googleAuthorized: false, modelWorker: null, modelDraft: null
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -23,6 +24,9 @@
     masterFileName: get("#master-file-name"), inventoryFileName: get("#inventory-file-name"), pendingFilesName: get("#pending-files-name"),
     consignmentFileName: get("#consignment-file-name"), lirongConsignmentFileName: get("#lirong-consignment-file-name"), salesFilesName: get("#sales-files-name"),
     modelFileName: get("#model-file-name"), modelBadge: get("#model-badge"), marketingFileName: get("#marketing-file-name"), blacklist: get("#blacklist-input"),
+    modelRunBadge: get("#model-run-badge"), modelRefresh: get("#model-refresh-button"), modelRefreshLabel: get("#model-refresh-label"),
+    modelDownloadDraft: get("#model-download-draft-button"), modelApprove: get("#model-approve-button"), modelProgressBar: get("#model-progress-bar"),
+    modelProgressText: get("#model-progress-text"), modelRunSummary: get("#model-run-summary"),
     blacklistStatus: get("#blacklist-status"), analyze: get("#analyze-button"), download: get("#download-button"), status: get("#main-status"),
     resultPanel: get("#result-panel"), dateCheck: get("#date-check-message"), summaryCards: get("#summary-cards"), resultAlert: get("#result-alert"), resultRows: get("#result-rows"),
     supplierFilterList: get("#supplier-filter-list"), supplierScopeStatus: get("#supplier-scope-status"), selectAllSuppliers: get("#select-all-suppliers"), clearSuppliers: get("#clear-suppliers"),
@@ -167,6 +171,162 @@
       setStatus(`季節模型未採用：${error.message}`, "error");
       updateReadyState();
     }
+  }
+  function updateModelControls() {
+    const canBuild = Boolean(state.googleAuthorized && state.config?.permissions?.canApprove && !state.modelWorker);
+    elements.modelRefresh.disabled = !canBuild;
+    elements.modelDownloadDraft.disabled = !state.modelDraft?.blob;
+    elements.modelApprove.disabled = !(state.googleAuthorized && state.config?.permissions?.canApprove && state.modelWorker && state.modelDraft?.blob && state.modelDraft?.driveFile);
+  }
+  function setModelProgress(message, type = "") {
+    elements.modelProgressText.textContent = message;
+    elements.modelProgressText.className = `model-progress-text ${type}`.trim();
+  }
+  function renderModelRunSummary(summary) {
+    if (!summary) { elements.modelRunSummary.hidden = true; elements.modelRunSummary.replaceChildren(); return; }
+    const values = [
+      ["歷史範圍", `${summary.minDate}～${summary.maxDate}`],
+      ["來源Excel", `${summary.sourceFileCount}份・${formatNumber(summary.sourceBytes / 1024 / 1024)} MB`],
+      ["納入／去重", `${formatNumber(summary.acceptedRows)}／${formatNumber(summary.duplicateRows)}列`],
+      ["活躍SKU／WAPE", `${formatNumber(summary.activeSkuCount)}／${summary.skuWape == null ? "—" : `${(summary.skuWape * 100).toFixed(2)}%`}`]
+    ];
+    elements.modelRunSummary.replaceChildren(...values.map(([label, value]) => {
+      const article = document.createElement("article");
+      const small = document.createElement("small"); small.textContent = label;
+      const strong = document.createElement("strong"); strong.textContent = value;
+      article.append(small, strong); return article;
+    }));
+    elements.modelRunSummary.hidden = false;
+  }
+  function workerRequest(worker, payload, transfer = []) {
+    return new Promise((resolve, reject) => {
+      const onMessage = (event) => {
+        worker.removeEventListener("message", onMessage);
+        worker.removeEventListener("error", onError);
+        if (event.data?.type === "error") reject(new Error(event.data.message));
+        else resolve(event.data);
+      };
+      const onError = (event) => {
+        worker.removeEventListener("message", onMessage);
+        worker.removeEventListener("error", onError);
+        reject(new Error(event.message || "背景回測工作失敗。"));
+      };
+      worker.addEventListener("message", onMessage);
+      worker.addEventListener("error", onError);
+      worker.postMessage(payload, transfer);
+    });
+  }
+  function modelStamp() { return new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 12); }
+  async function loadApprovedSeasonalModel() {
+    const folderId = state.config?.fixedSources?.seasonalApprovedFolderId;
+    if (!folderId) return;
+    elements.modelRunBadge.textContent = "正在取得正式版";
+    try {
+      const approved = await googleSources.loadLatestApprovedModel(folderId);
+      if (!approved) {
+        elements.modelRunBadge.className = "source-badge required";
+        elements.modelRunBadge.textContent = "尚無正式版";
+        setModelProgress("正式模型資料夾尚無檔案；請由採購核准者建立第一次回測草稿。", "error");
+        return;
+      }
+      core.parseForecastModelWorkbook(await readWorkbook(approved.file), XLSX, { fileName: approved.file.name });
+      state.modelFile = approved.file;
+      state.modelMetadata = approved.metadata;
+      await writeCachedModel({ file: approved.file, metadata: approved.metadata });
+      elements.modelRunBadge.className = "source-badge recommended";
+      elements.modelRunBadge.textContent = "正式版已自動取得";
+      setModelProgress(`已自動取得公司正式版：${approved.file.name}。平常直接沿用，到期月份再重跑。`, "success");
+      renderModelStatus(); updateReadyState();
+    } catch (error) {
+      elements.modelRunBadge.className = "source-badge required";
+      elements.modelRunBadge.textContent = "正式版取得失敗";
+      setModelProgress(`無法取得正式模型：${error.message}；仍可使用本機快取或手動備援。`, "error");
+    } finally { updateModelControls(); }
+  }
+  async function buildSeasonalModelDraft() {
+    if (!state.googleAuthorized || !state.config?.permissions?.canApprove || state.modelWorker) return;
+    const fixed = state.config.fixedSources || {};
+    elements.modelProgressBar.hidden = false; elements.modelProgressBar.value = 0;
+    elements.modelRefresh.classList.add("is-loading"); elements.modelRefreshLabel.textContent = "正在準備歷史銷售…";
+    elements.modelRunBadge.className = "source-badge required"; elements.modelRunBadge.textContent = "回測進行中";
+    state.modelDraft = null; renderModelRunSummary(null);
+    try {
+      if (!state.masterFile) {
+        setModelProgress("正在取得最新版商品主檔…");
+        const master = await googleSources.loadLatestMaster(fixed.productMasterFolderId);
+        state.masterFile = master.file; state.masterWorkbook = null;
+        elements.masterFileName.textContent = `自動取得：${master.file.name}`;
+      }
+      const sourceFiles = await googleSources.listDriveExcelFiles(fixed.seasonalSalesFolderId);
+      if (!sourceFiles.length) throw new Error("近三年歷史銷售資料夾沒有直屬.xlsx檔案。");
+      const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
+      setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
+      const worker = new Worker("seasonal-model-worker.js?v=20260914-seasonal-auto-r1");
+      state.modelWorker = worker; updateModelControls();
+      const masterBuffer = await state.masterFile.arrayBuffer();
+      await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
+      for (let index = 0; index < sourceFiles.length; index += 1) {
+        const file = sourceFiles[index];
+        elements.modelRefreshLabel.textContent = `正在處理 ${index + 1}/${sourceFiles.length}`;
+        setModelProgress(`下載並分析 ${file.name}（${index + 1}/${sourceFiles.length}）…`);
+        const downloaded = await googleSources.downloadDriveFile(file.id, file.name);
+        const buffer = await downloaded.arrayBuffer();
+        const response = await workerRequest(worker, { type: "ingest", index, file, buffer }, [buffer]);
+        elements.modelProgressBar.value = Math.round(((index + 1) / (sourceFiles.length + 1)) * 100);
+        setModelProgress(`${file.name}完成：納入${formatNumber(response.stats.acceptedRows)}列、跨檔去重${formatNumber(response.stats.duplicateRows)}列。`);
+      }
+      elements.modelRefreshLabel.textContent = "正在彙整回測結果…";
+      const draft = await workerRequest(worker, { type: "finalize", metadata: { generatedAt: new Date().toISOString(), generatedBy: state.config.email, sourceFolderId: fixed.seasonalSalesFolderId } });
+      const fileName = `季節模型回測_草稿_${modelStamp()}.xlsx`;
+      const blob = new Blob([draft.buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const driveFile = await googleSources.uploadDriveExcel(fixed.seasonalDraftFolderId, fileName, blob, { status: "draft", generatedBy: state.config.email });
+      state.modelDraft = { blob, fileName, summary: draft.summary, metadata: draft.metadata, driveFile };
+      elements.modelProgressBar.value = 100;
+      elements.modelRunBadge.className = "source-badge recommended"; elements.modelRunBadge.textContent = "草稿待核准";
+      setModelProgress(`草稿已寫入Google Drive：${fileName}。請先看下方摘要；核准後才會成為公司共用正式版。`, "success");
+      renderModelRunSummary(draft.summary);
+    } catch (error) {
+      elements.modelRunBadge.className = "source-badge required"; elements.modelRunBadge.textContent = "回測未完成";
+      setModelProgress(`季節模型回測停止：${error.message}`, "error");
+      if (state.modelWorker) { state.modelWorker.terminate(); state.modelWorker = null; }
+    } finally {
+      elements.modelRefresh.classList.remove("is-loading"); elements.modelRefreshLabel.textContent = "建立／更新回測草稿";
+      updateModelControls();
+    }
+  }
+  function downloadModelDraft() {
+    if (!state.modelDraft?.blob) return;
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(state.modelDraft.blob); link.download = state.modelDraft.fileName; link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  }
+  async function approveSeasonalModel() {
+    if (!state.modelWorker || !state.modelDraft?.driveFile || !state.config?.permissions?.canApprove) return;
+    elements.modelApprove.disabled = true;
+    const approvedAt = new Date().toISOString();
+    setModelProgress("正在建立正式版、寫入Google Drive並寄送核准摘要…");
+    try {
+      const formal = await workerRequest(state.modelWorker, { type: "approve", approvedBy: state.config.email, approvedAt });
+      const fileName = `季節模型回測_正式版_${modelStamp()}.xlsx`;
+      const blob = new Blob([formal.buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const driveFile = await googleSources.uploadDriveExcel(state.config.fixedSources.seasonalApprovedFolderId, fileName, blob, { status: "approved", approvedBy: state.config.email, approvedAt });
+      const file = new File([blob], fileName, { type: blob.type, lastModified: Date.now() });
+      core.parseForecastModelWorkbook(await readWorkbook(file), XLSX, { fileName });
+      const metadata = { ...formal.metadata, name: fileName, importedAt: approvedAt, source: "Google Drive正式版", approved: true, fileId: driveFile.id };
+      state.modelFile = file; state.modelMetadata = metadata;
+      await writeCachedModel({ file, metadata });
+      let mailMessage = "核准摘要已寄出";
+      try {
+        await googleSources.sendSeasonalModelSummary(state.config.notification?.recipient || "siang01@siangapato.com.tw", formal.summary, metadata, driveFile);
+      } catch (error) { mailMessage = `正式版已發布，但摘要寄送失敗：${error.message}`; }
+      state.modelDraft = null;
+      state.modelWorker.terminate(); state.modelWorker = null;
+      elements.modelRunBadge.className = "source-badge recommended"; elements.modelRunBadge.textContent = "正式版已發布";
+      setModelProgress(`公司正式版已發布：${fileName}；${mailMessage}。`, mailMessage.includes("失敗") ? "error" : "success");
+      renderModelStatus(); updateReadyState();
+    } catch (error) {
+      setModelProgress(`正式版發布失敗：${error.message}；草稿仍保留，可重試核准。`, "error");
+    } finally { updateModelControls(); }
   }
   function createSummaryCard(label, value, note, className = "") {
     const card = document.createElement("article"); card.className = "summary-card";
@@ -371,11 +531,16 @@
       googleSources.initialize(state.config.googleOAuthClientId);
       await googleSources.authorize(); const identity = await googleSources.verifyCompanyIdentity();
       if (identity.email !== state.config.email) throw new Error("Google 授權帳號與公司登入帳號不一致。");
+      state.googleAuthorized = true;
       elements.googleConnect.textContent = "Google 已授權"; elements.autoSource.disabled = false;
-      elements.sourceStatus.textContent = "授權完成；access token只保存在目前分頁記憶體，不會寫入D1或瀏覽器儲存。";
+      elements.sourceStatus.textContent = "授權完成；正在確認公司共用的最新季節模型。access token只保存在目前分頁記憶體。";
       elements.sourceStatus.className = "result-alert";
+      updateModelControls();
+      await loadApprovedSeasonalModel();
     } catch (error) {
+      state.googleAuthorized = false;
       elements.sourceStatus.textContent = error.message; elements.sourceStatus.className = "result-alert error"; elements.googleConnect.disabled = false;
+      updateModelControls();
     }
   }
   async function loadAutomaticSources() {
@@ -773,6 +938,9 @@
   bindFileInput(elements.lirongConsignmentFile, "lirongConsignmentFile", elements.lirongConsignmentFileName, false, "lirongConsignmentWorkbook");
   bindFileInput(elements.salesFiles, "salesFiles", elements.salesFilesName, true);
   elements.modelFile.addEventListener("change", selectSeasonalModel);
+  elements.modelRefresh.addEventListener("click", buildSeasonalModelDraft);
+  elements.modelDownloadDraft.addEventListener("click", downloadModelDraft);
+  elements.modelApprove.addEventListener("click", approveSeasonalModel);
   bindFileInput(elements.marketingFile, "marketingFile", elements.marketingFileName);
   elements.reviewFile.addEventListener("change", () => {
     state.reviewFile = elements.reviewFile.files[0] || null; state.firstReview = null; state.secondReviewFile = null; state.review = null; state.approved = false;
@@ -816,5 +984,5 @@
   elements.retryNotification.addEventListener("click", retryNotification); elements.erp.addEventListener("click", downloadErp);
   elements.erpReference.addEventListener("input", () => { elements.erpCreated.disabled = !(state.erpDownloaded && elements.erpReference.value.trim()); });
   elements.erpCreated.addEventListener("click", confirmErpCreated);
-  setInitialDates(); renderChannels(); renderBudget(); renderModelStatus(); updateReadyState(); hydrateCachedModel(); loadConfig();
+  setInitialDates(); renderChannels(); renderBudget(); renderModelStatus(); updateModelControls(); updateReadyState(); hydrateCachedModel(); loadConfig();
 })();

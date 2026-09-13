@@ -131,6 +131,7 @@
         shipWarehouseName: ["出貨倉名稱"],
         deductQuantity: ["扣庫量"],
         ecommercePlatform: ["電商平台"],
+        posOrder: ["POS單", "POS單號"],
         sourceOrder: ["來源單號"],
         pickupOrder: ["取貨單號"]
       },
@@ -476,7 +477,8 @@
         continue;
       }
       const sku = normalizeSku(valueAt(row, selected.mapping, "sku"));
-      const date = parseDateValue(valueAt(row, selected.mapping, "transactionDate"));
+      const transactionValue = valueAt(row, selected.mapping, "transactionDate");
+      const date = parseDateValue(transactionValue);
       const quantity = parseNumber(valueAt(row, selected.mapping, "salesQuantity"));
       if (!sku || !date || quantity == null) {
         excluded["缺品號或日期"] += 1;
@@ -487,6 +489,9 @@
         fileName: options.fileName || "",
         saleType,
         date,
+        transactionTimestamp: transactionValue instanceof Date
+          ? transactionValue.toISOString()
+          : String(transactionValue || "").trim(),
         sku,
         name: String(valueAt(row, selected.mapping, "name") || "").trim(),
         quantity,
@@ -497,6 +502,7 @@
         shipWarehouseName: String(valueAt(row, selected.mapping, "shipWarehouseName") || "").trim(),
         deductQuantity: parseNumber(valueAt(row, selected.mapping, "deductQuantity")) || 0,
         ecommercePlatform: String(valueAt(row, selected.mapping, "ecommercePlatform") || "").trim(),
+        posOrder: String(valueAt(row, selected.mapping, "posOrder") || "").trim(),
         sourceOrder: String(valueAt(row, selected.mapping, "sourceOrder") || "").trim(),
         pickupOrder: String(valueAt(row, selected.mapping, "pickupOrder") || "").trim()
       };
