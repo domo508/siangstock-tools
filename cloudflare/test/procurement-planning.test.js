@@ -509,6 +509,9 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("力榮寄庫表</h3><span class=\"source-badge required\">自動取得・必要");
     expect(toolHtml).toContain("https://sheets.googleapis.com");
     expect(headers).toMatch(/\/procurement-planning\/index\.html[\s\S]*connect-src[^\n]*https:\/\/sheets\.googleapis\.com/);
+    expect(headers).toMatch(/\/procurement-planning\/index\.html[\s\S]*connect-src[^\n]*https:\/\/gmail\.googleapis\.com/);
+    expect(headers).toMatch(/\/procurement-planning\/index\.html[\s\S]*worker-src 'self'/);
+    expect(headers).not.toMatch(/\/procurement-planning\/index\.html[\s\S]*worker-src 'none'/);
     expect(toolHtml).toContain("class=\"rules-entry-button\"");
     expect(toolHtml).toContain("新增、移除或調整公司共用黑名單");
     expect(toolHtml).toContain('id="model-badge"');
