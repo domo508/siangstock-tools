@@ -230,6 +230,10 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
 }
 
 function serializeMonthPlan(row: Record<string, unknown>) {
+  const revenueChannels = parseJsonText(String(row.revenue_channels || "[]")) || [];
+  const terminalForecastRevenue = Array.isArray(revenueChannels)
+    ? revenueChannels.reduce((sum, item) => sum + Number(item && typeof item === "object" ? (item as Record<string, unknown>).amount || 0 : 0), 0)
+    : 0;
   return {
     analysisMonth: String(row.analysis_month),
     scenario: String(row.scenario),
@@ -241,7 +245,8 @@ function serializeMonthPlan(row: Record<string, unknown>) {
     fullBudgetAmount: Number(row.full_budget_amount),
     releasedBudgetAmount: Number(row.budget_amount),
     budgetAmount: Number(row.budget_amount),
-    revenueChannels: parseJsonText(String(row.revenue_channels || "[]")) || [],
+    terminalForecastRevenue: Math.round(terminalForecastRevenue * 100) / 100,
+    revenueChannels,
     sourceNote: String(row.source_note),
     updatedAt: String(row.updated_at),
     updatedBy: String(row.updated_by)
@@ -271,7 +276,7 @@ async function saveMonthPlan(request: Request, env: ProcurementEnv): Promise<Res
     if (!["寬承", "寬沐"].includes(company)) throw new RequestValidationError("公司只能選寬承或寬沐。");
     return { company, channel: string(item.channel, "通路名稱", 80), amount: money(item.amount, "通路預估營收") };
   });
-  const forecastRevenue = Math.round(normalizedChannels.reduce((sum, row) => sum + row.amount, 0) * 100) / 100;
+  const forecastRevenue = money(input.forecastRevenue, "寬承預估認列營收");
   const forecastCostOutflow = money(input.forecastCostOutflow, "整月預估成本耗用");
   const targetEndingInventoryCost = money(input.targetEndingInventoryCost, "目標期末庫存成本");
   const openingInventoryCost = money(input.openingInventoryCost, "期初庫存成本");

@@ -131,16 +131,32 @@
     };
   }
 
-  async function loadAll(config, XLSX) {
+  async function loadAll(config, XLSX, onProgress = () => {}) {
     const source = config.fixedSources;
-    const [master, marketingFile, puyouma, lirong] = await Promise.all([
-      loadLatestMaster(source.productMasterFolderId),
-      downloadDriveFile(source.marketingDriveFileId, "整體行銷策略.xlsx"),
-      loadSpreadsheet(source.puyoumaSpreadsheetId, ["'庫存+下單'", "'庫存布'"], XLSX),
-      loadSpreadsheet(source.lirongSpreadsheetId, ["'工作表1'"], XLSX)
+    const tracked = async (id, task) => {
+      onProgress({ id, status: "loading", message: "正在唯讀取得…" });
+      try {
+        const result = await task();
+        onProgress({ id, status: "success", message: "已下載，正在格式檢核" });
+        return result;
+      } catch (error) {
+        onProgress({ id, status: "error", message: error?.message || "取得失敗" });
+        throw error;
+      }
+    };
+    const results = await Promise.allSettled([
+      tracked("master", () => loadLatestMaster(source.productMasterFolderId)),
+      tracked("marketing", async () => {
+        const file = await downloadDriveFile(source.marketingDriveFileId, "整體行銷策略.xlsx");
+        return { file, metadata: { fileId: source.marketingDriveFileId, sha256: await sha256(await file.arrayBuffer()), fetchedAt: new Date().toISOString() } };
+      }),
+      tracked("puyouma", () => loadSpreadsheet(source.puyoumaSpreadsheetId, ["'庫存+下單'", "'庫存布'"], XLSX)),
+      tracked("lirong", () => loadSpreadsheet(source.lirongSpreadsheetId, ["'工作表1'"], XLSX))
     ]);
-    const marketingMetadata = { fileId: source.marketingDriveFileId, sha256: await sha256(await marketingFile.arrayBuffer()), fetchedAt: new Date().toISOString() };
-    return { master, marketingFile, marketingMetadata, puyoumaWorkbook: puyouma.workbook, puyoumaMetadata: puyouma.metadata, lirongWorkbook: lirong.workbook, lirongMetadata: lirong.metadata };
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) throw failed.reason;
+    const [master, marketing, puyouma, lirong] = results.map((result) => result.value);
+    return { master, marketingFile: marketing.file, marketingMetadata: marketing.metadata, puyoumaWorkbook: puyouma.workbook, puyoumaMetadata: puyouma.metadata, lirongWorkbook: lirong.workbook, lirongMetadata: lirong.metadata };
   }
 
   function token() { return accessToken; }

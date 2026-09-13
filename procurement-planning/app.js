@@ -3,26 +3,28 @@
 
   const core = globalThis.ProcurementPlanningCore;
   const googleSources = globalThis.ProcurementGoogleSources;
+  const MODEL_CACHE = Object.freeze({ database: "siangstock-procurement-local", store: "files", key: "seasonal-model", refreshMonths: 6 });
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [],
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
     salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, firstReview: null,
-    secondReviewFile: null, review: null, ledger: null, monthPlan: null, procurementRules: null, revenueChannels: [], budgetDirty: false, sourceMetadata: null, batchId: "", approved: false, erpDownloaded: false
+    secondReviewFile: null, review: null, ledger: null, monthPlan: null, procurementRules: null, revenueChannels: [], budgetDirty: false, sourceMetadata: null, modelMetadata: null, batchId: "", approved: false, erpDownloaded: false
   };
 
   const get = (selector) => document.querySelector(selector);
   const elements = {
-    accountBadge: get("#account-badge"), googleConnect: get("#google-connect-button"), autoSource: get("#auto-source-button"), sourceStatus: get("#source-status"),
+    accountBadge: get("#account-badge"), googleConnect: get("#google-connect-button"), autoSource: get("#auto-source-button"), autoSourceLabel: get("#auto-source-label"),
+    autoSourceProgress: get("#auto-source-progress"), sourceStatus: get("#source-status"),
     month: get("#analysis-month"), checkpoint: get("#checkpoint"), orderDate: get("#order-date"), inventoryDate: get("#inventory-date"),
     pendingDate: get("#pending-date"), consignmentDate: get("#consignment-date"), salesDate: get("#sales-date"),
     masterFile: get("#master-file"), inventoryFile: get("#inventory-file"), pendingFiles: get("#pending-files"), consignmentFile: get("#consignment-file"),
     lirongConsignmentFile: get("#lirong-consignment-file"), salesFiles: get("#sales-files"), modelFile: get("#model-file"), marketingFile: get("#marketing-file"),
     masterFileName: get("#master-file-name"), inventoryFileName: get("#inventory-file-name"), pendingFilesName: get("#pending-files-name"),
     consignmentFileName: get("#consignment-file-name"), lirongConsignmentFileName: get("#lirong-consignment-file-name"), salesFilesName: get("#sales-files-name"),
-    modelFileName: get("#model-file-name"), marketingFileName: get("#marketing-file-name"), blacklist: get("#blacklist-input"),
+    modelFileName: get("#model-file-name"), modelBadge: get("#model-badge"), marketingFileName: get("#marketing-file-name"), blacklist: get("#blacklist-input"),
     blacklistStatus: get("#blacklist-status"), analyze: get("#analyze-button"), download: get("#download-button"), status: get("#main-status"),
     resultPanel: get("#result-panel"), dateCheck: get("#date-check-message"), summaryCards: get("#summary-cards"), resultAlert: get("#result-alert"), resultRows: get("#result-rows"),
-    forecastRevenue: get("#forecast-revenue"), forecastCost: get("#forecast-cost"), targetEndingCost: get("#target-ending-cost"), openingCost: get("#opening-cost"),
+    forecastRevenue: get("#forecast-revenue"), terminalForecastRevenue: get("#terminal-forecast-revenue"), forecastCost: get("#forecast-cost"), targetEndingCost: get("#target-ending-cost"), openingCost: get("#opening-cost"),
     supplierReturns: get("#supplier-returns"), releasedBudget: get("#released-budget"), purchasedToDate: get("#purchased-to-date"), budgetSourceNote: get("#budget-source-note"),
     saveBudget: get("#save-budget-button"), budgetPlanStatus: get("#budget-plan-status"), budgetSummary: get("#budget-summary"), ledgerStatus: get("#ledger-status"),
     channelRows: get("#channel-rows"), kuanchengTotal: get("#kuancheng-total"), kuanmuTotal: get("#kuanmu-total"), addChannel: get("#add-channel-button"),
@@ -44,10 +46,123 @@
   function sourceProof(id, metadata) { return `ID…${String(id || "").slice(-6)}・更新${metadata?.modifiedTime || "依工作表內容"}・抓取${String(metadata?.fetchedAt || "").replace("T", " ").slice(0, 19)}・SHA-256 ${String(metadata?.sha256 || "").slice(0, 12)}…`; }
   function setStatus(message, type = "") { elements.status.textContent = message; elements.status.className = `main-status ${type}`.trim(); }
   function setWorkflowStatus(message, type = "") { elements.workflowStatus.textContent = message; elements.workflowStatus.className = `main-status ${type}`.trim(); }
+  function updateSourceProgress(id, status, message) {
+    const item = elements.autoSourceProgress.querySelector(`[data-source-progress="${id}"]`);
+    if (!item) return;
+    const icons = { waiting: "○", loading: "…", success: "✓", error: "!" };
+    item.dataset.status = status;
+    item.querySelector(".source-progress-icon").textContent = icons[status] || "○";
+    item.querySelector("[data-source-message]").textContent = message;
+  }
+  function resetSourceProgress() {
+    elements.autoSourceProgress.hidden = false;
+    ["master", "marketing", "puyouma", "lirong"].forEach((id) => updateSourceProgress(id, "waiting", "等待取得"));
+  }
+  function setAutomaticSourceBusy(busy, label) {
+    elements.autoSource.disabled = busy;
+    elements.autoSource.classList.toggle("is-loading", busy);
+    elements.autoSource.setAttribute("aria-busy", String(busy));
+    elements.autoSourceLabel.textContent = label;
+  }
   function blacklistEntries() { return Array.isArray(state.procurementRules?.blacklist) ? state.procurementRules.blacklist : []; }
   async function readWorkbook(file) {
     const data = await file.arrayBuffer();
     return XLSX.read(data, { type: "array", cellDates: true, cellStyles: true, nodim: true });
+  }
+  function monthAfter(isoDate, months) {
+    const date = new Date(isoDate);
+    if (Number.isNaN(date.getTime())) return "";
+    date.setUTCDate(1);
+    date.setUTCMonth(date.getUTCMonth() + months);
+    return date.toISOString().slice(0, 7);
+  }
+  function modelRefreshMonth() { return state.modelMetadata ? monthAfter(state.modelMetadata.importedAt, MODEL_CACHE.refreshMonths) : ""; }
+  function modelRefreshRequired() {
+    const refreshMonth = modelRefreshMonth();
+    return !state.modelFile || !refreshMonth || !elements.month.value || elements.month.value >= refreshMonth;
+  }
+  function renderModelStatus() {
+    const refreshMonth = modelRefreshMonth();
+    const required = modelRefreshRequired();
+    elements.modelBadge.className = `source-badge ${required ? "required" : "recommended"}`;
+    elements.modelBadge.textContent = required ? "本月必要更新" : `沿用中・${refreshMonth}必要`;
+    if (!state.modelFile || !state.modelMetadata) {
+      elements.modelFileName.textContent = "本機沒有可沿用版本，請選擇季節模型";
+      return;
+    }
+    const importedDate = new Date(state.modelMetadata.importedAt);
+    const imported = Number.isNaN(importedDate.getTime())
+      ? "日期不明"
+      : importedDate.toLocaleString("zh-TW", { hour12: false });
+    elements.modelFileName.textContent = required
+      ? `沿用版本已到期：${state.modelMetadata.name}・上次提供${imported}；本月須重新選擇並通過檢核`
+      : `本次沿用：${state.modelMetadata.name}・提供${imported}・下次必要更新${refreshMonth}`;
+  }
+  function openModelCache() {
+    return new Promise((resolve, reject) => {
+      if (!globalThis.indexedDB) { reject(new Error("這個瀏覽器不支援本機版本保留")); return; }
+      const request = indexedDB.open(MODEL_CACHE.database, 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(MODEL_CACHE.store)) request.result.createObjectStore(MODEL_CACHE.store);
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("無法開啟本機版本儲存"));
+    });
+  }
+  async function readCachedModel() {
+    const database = await openModelCache();
+    try {
+      return await new Promise((resolve, reject) => {
+        const request = database.transaction(MODEL_CACHE.store, "readonly").objectStore(MODEL_CACHE.store).get(MODEL_CACHE.key);
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error || new Error("無法讀取本機季節模型"));
+      });
+    } finally { database.close(); }
+  }
+  async function writeCachedModel(record) {
+    const database = await openModelCache();
+    try {
+      await new Promise((resolve, reject) => {
+        const request = database.transaction(MODEL_CACHE.store, "readwrite").objectStore(MODEL_CACHE.store).put(record, MODEL_CACHE.key);
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error || new Error("無法保存本機季節模型"));
+      });
+    } finally { database.close(); }
+  }
+  async function hydrateCachedModel() {
+    try {
+      const cached = await readCachedModel();
+      if (cached?.file && cached?.metadata) {
+        core.parseForecastModelWorkbook(await readWorkbook(cached.file), XLSX, { fileName: cached.metadata.name });
+        state.modelFile = cached.file;
+        state.modelMetadata = cached.metadata;
+      }
+    } catch (error) {
+      console.warn("無法沿用本機季節模型", error);
+    }
+    renderModelStatus(); updateReadyState();
+  }
+  async function selectSeasonalModel() {
+    const selected = elements.modelFile.files[0] || null;
+    if (!selected) { renderModelStatus(); return; }
+    const previousFile = state.modelFile;
+    const previousMetadata = state.modelMetadata;
+    elements.modelFileName.textContent = `正在檢核${selected.name}…`;
+    try {
+      core.parseForecastModelWorkbook(await readWorkbook(selected), XLSX, { fileName: selected.name });
+      const metadata = { name: selected.name, importedAt: new Date().toISOString(), size: selected.size, lastModified: selected.lastModified };
+      state.modelFile = selected;
+      state.modelMetadata = metadata;
+      await writeCachedModel({ file: selected, metadata });
+      invalidateAnalysis(); renderModelStatus(); updateReadyState();
+    } catch (error) {
+      state.modelFile = previousFile;
+      state.modelMetadata = previousMetadata;
+      elements.modelFile.value = "";
+      renderModelStatus();
+      setStatus(`季節模型未採用：${error.message}`, "error");
+      updateReadyState();
+    }
   }
   function createSummaryCard(label, value, note, className = "") {
     const card = document.createElement("article"); card.className = "summary-card";
@@ -58,12 +173,15 @@
   function requirementsReady() {
     return Boolean(state.config && state.procurementRules && (state.masterFile || state.masterWorkbook) && state.inventoryFile && state.pendingFiles.length
       && (state.consignmentFile || state.consignmentWorkbook) && (state.lirongConsignmentFile || state.lirongConsignmentWorkbook)
-      && state.marketingFile && state.salesFiles.length && state.modelFile && elements.month.value && elements.orderDate.value
+      && state.marketingFile && state.salesFiles.length && state.modelFile && !modelRefreshRequired() && elements.month.value && elements.orderDate.value
       && elements.inventoryDate.value && elements.pendingDate.value && elements.consignmentDate.value && elements.salesDate.value);
   }
   function updateReadyState() {
+    renderModelStatus();
     elements.analyze.disabled = !requirementsReady();
-    if (!requirementsReady() && !state.analysis) setStatus("請完成公司登入、日期與必要資料；商品主檔可自動取得或手動更新。");
+    if (!requirementsReady() && !state.analysis) setStatus(modelRefreshRequired()
+      ? "請完成公司登入、日期與必要資料；本月季節模型需要提供或更新。"
+      : "請完成公司登入、日期與必要資料；商品主檔與寄庫表可自動取得或手動備援。");
   }
   function invalidateAnalysis() {
     state.analysis = null; state.reviewFile = null; state.firstReview = null; state.secondReviewFile = null; state.review = null; state.approved = false; state.erpDownloaded = false; state.batchId = "";
@@ -182,7 +300,7 @@
     const subtotal = (company) => state.revenueChannels.filter((row) => row.company === company).reduce((sum, row) => sum + Number(row.amount || 0), 0);
     const kuancheng = subtotal("寬承"); const kuanmu = subtotal("寬沐");
     elements.kuanchengTotal.textContent = formatCurrency(kuancheng); elements.kuanmuTotal.textContent = formatCurrency(kuanmu);
-    elements.forecastRevenue.value = String(kuancheng + kuanmu);
+    elements.terminalForecastRevenue.value = String(kuancheng + kuanmu);
   }
   function addRevenueChannel() {
     state.revenueChannels.push({ company: "寬承", channel: "新通路", amount: 0 }); renderChannels(); markBudgetDirty();
@@ -237,17 +355,34 @@
     }
   }
   async function loadAutomaticSources() {
-    elements.autoSource.disabled = true; elements.sourceStatus.textContent = "正在唯讀取得商品主檔、行銷策略、普優瑪與力榮寄庫表…";
+    resetSourceProgress();
+    setAutomaticSourceBusy(true, "正在取得 4 項最新資料…");
+    elements.sourceStatus.textContent = "已開始唯讀取得固定 Google 資料；下方會逐項顯示進度與結果。";
+    elements.sourceStatus.className = "result-alert";
+    let completed = false;
     try {
-      const sources = await googleSources.loadAll(state.config, XLSX);
-      const masterValidation = validateAutoMaster(await readWorkbook(sources.master.file));
+      const sources = await googleSources.loadAll(state.config, XLSX, ({ id, status, message }) => updateSourceProgress(id, status, message));
+      let masterValidation;
+      try {
+        masterValidation = validateAutoMaster(await readWorkbook(sources.master.file));
+        updateSourceProgress("master", "success", "已取得並通過格式檢核");
+      } catch (error) {
+        updateSourceProgress("master", "error", "格式檢核失敗");
+        throw error;
+      }
       state.masterFile = sources.master.file; state.masterWorkbook = null; state.marketingFile = sources.marketingFile;
       state.consignmentWorkbook = sources.puyoumaWorkbook; state.consignmentFile = null;
       state.lirongConsignmentWorkbook = sources.lirongWorkbook; state.lirongConsignmentFile = null;
       state.sourceMetadata = sources;
       const puyouma = core.parseConsignmentWorkbook(state.consignmentWorkbook, XLSX);
       const lirong = core.parseLirongConsignmentWorkbook(state.lirongConsignmentWorkbook, XLSX);
-      if (!puyouma.styleAudit.pinkDetected) throw new Error("普優瑪寄庫表未辨識到粉紅排程格式，已停止採用。");
+      if (!puyouma.styleAudit.pinkDetected) {
+        updateSourceProgress("puyouma", "error", "未辨識粉紅排程格式");
+        throw new Error("普優瑪寄庫表未辨識到粉紅排程格式，已停止採用。");
+      }
+      updateSourceProgress("marketing", "success", "已取得並完成內容驗證");
+      updateSourceProgress("puyouma", "success", `已取得並讀取${puyouma.records.length}列`);
+      updateSourceProgress("lirong", "success", `已取得並讀取${lirong.records.length}列`);
       elements.masterFileName.textContent = `自動：${sources.master.metadata.name}・${sourceProof(sources.master.metadata.id, sources.master.metadata)}`;
       elements.marketingFileName.textContent = `自動：整體行銷策略・${sourceProof(sources.marketingMetadata.fileId, sources.marketingMetadata)}`;
       elements.consignmentFileName.textContent = `自動：庫存+下單／庫存布，共${puyouma.records.length}列・${sourceProof(sources.puyoumaMetadata.spreadsheetId, sources.puyoumaMetadata)}`;
@@ -256,11 +391,18 @@
         ? `固定 Google 資料源已完成格式檢核；商品主檔有${masterValidation.invalidCount}列缺供應商或進貨價，受影響品號會阻擋核准，其餘品號可繼續。`
         : "固定 Google 資料源已完成格式檢核；本次採用自動來源。";
       elements.sourceStatus.className = `result-alert ${masterValidation.invalidCount ? "warn" : ""}`.trim();
-      invalidateAnalysis(); updateReadyState();
+      completed = true; invalidateAnalysis(); updateReadyState();
     } catch (error) {
       elements.sourceStatus.textContent = `自動來源停止：${error.message} 請修正來源或改用明確標示的手動備援。`;
       elements.sourceStatus.className = "result-alert error";
-    } finally { elements.autoSource.disabled = false; }
+    } finally {
+      setAutomaticSourceBusy(false, completed ? "重新取得最新資料" : "重試取得最新資料");
+      if (!googleSources.token()) {
+        elements.autoSource.disabled = true;
+        elements.googleConnect.disabled = false;
+        elements.googleConnect.textContent = "重新 Google 授權";
+      }
+    }
   }
   function renderSummary(analysis, consignmentSource) {
     elements.summaryCards.replaceChildren(
@@ -321,6 +463,7 @@
       });
       analysis.meta = {
         month: elements.month.value, checkpoint: elements.checkpoint.value, sourceMode: state.consignmentWorkbook ? "Google自動" : "手動備援",
+        seasonalModel: state.modelMetadata ? { ...state.modelMetadata, refreshMonth: modelRefreshMonth(), status: "本次沿用／已更新" } : null,
         sourceHashes: state.sourceMetadata ? {
           master: state.sourceMetadata.master.metadata.sha256,
           marketing: state.sourceMetadata.marketingMetadata.sha256,
@@ -346,10 +489,11 @@
     return { ...calculated, fullBudgetAmount, availableBudget: releasedBudgetAmount, releasedBudgetAmount, remainingBudget: releasedBudgetAmount - calculated.purchasedAmountToDate };
   }
   function renderBudget() {
-    const result = currentBudget(); const revenue = Number(elements.forecastRevenue.value || 0); const cost = Number(elements.forecastCost.value || 0);
+    const result = currentBudget(); const revenue = Number(elements.forecastRevenue.value || 0); const terminalRevenue = Number(elements.terminalForecastRevenue.value || 0); const cost = Number(elements.forecastCost.value || 0);
     const cards = [
-      createSummaryCard("中性情境整月預估營收", formatCurrency(revenue), elements.checkpoint.value === "mid-month" ? "實際至今＋行銷預估剩餘" : "同月份最新核准預估", "currency"),
-      createSummaryCard("整月預估成本耗用", formatCurrency(cost), revenue > 0 ? `占營收${formatNumber(cost / revenue * 100)}%` : "尚未輸入營收", "currency"),
+      createSummaryCard("寬承預估認列營收", formatCurrency(revenue), "採購成本率使用此口徑", "currency"),
+      createSummaryCard("寬承＋寬沐終端通路預估", formatCurrency(terminalRevenue), "整體通路營運參考，不作成本率分母", "currency"),
+      createSummaryCard("整月預估成本耗用", formatCurrency(cost), revenue > 0 ? `占寬承認列營收${formatNumber(cost / revenue * 100)}%` : "尚未輸入寬承認列營收", "currency"),
       createSummaryCard("中性情境－整月預估可採購額度", formatCurrency(result.fullBudgetAmount), "成本耗用＋目標期末－期初＋退貨", "currency"),
       createSummaryCard("目前已釋放可採購額度", formatCurrency(result.releasedBudgetAmount), state.monthPlan && !state.budgetDirty ? "已核准月份快照" : "最高權限設定", "currency"),
       createSummaryCard("截至目前已承諾", formatCurrency(result.purchasedAmountToDate), "正式核准互斥狀態加總", "currency"),
@@ -377,6 +521,7 @@
     try {
       const result = await postJson("/api/procurement/month-plan", {
         analysisMonth: elements.month.value,
+        forecastRevenue: Number(elements.forecastRevenue.value || 0),
         revenueChannels: state.revenueChannels,
         forecastCostOutflow: Number(elements.forecastCost.value || 0),
         targetEndingInventoryCost: Number(elements.targetEndingCost.value || 0),
@@ -510,7 +655,7 @@
   bindFileInput(elements.consignmentFile, "consignmentFile", elements.consignmentFileName, false, "consignmentWorkbook");
   bindFileInput(elements.lirongConsignmentFile, "lirongConsignmentFile", elements.lirongConsignmentFileName, false, "lirongConsignmentWorkbook");
   bindFileInput(elements.salesFiles, "salesFiles", elements.salesFilesName, true);
-  bindFileInput(elements.modelFile, "modelFile", elements.modelFileName);
+  elements.modelFile.addEventListener("change", selectSeasonalModel);
   bindFileInput(elements.marketingFile, "marketingFile", elements.marketingFileName);
   elements.reviewFile.addEventListener("change", () => {
     state.reviewFile = elements.reviewFile.files[0] || null; state.firstReview = null; state.secondReviewFile = null; state.review = null; state.approved = false;
@@ -525,8 +670,8 @@
     setWorkflowStatus(state.secondReviewFile ? `已選擇確認版${state.secondReviewFile.name}；請執行最終檢查。` : "請回匯已填寫二次確認量的覆核報表。");
   });
   [elements.orderDate, elements.inventoryDate, elements.pendingDate, elements.consignmentDate, elements.salesDate].forEach((element) => element.addEventListener("change", updateReadyState));
-  elements.month.addEventListener("change", () => { updateReadyState(); Promise.all([loadLedger(), loadMonthPlan()]); });
-  [elements.forecastCost, elements.targetEndingCost, elements.openingCost, elements.supplierReturns, elements.releasedBudget].forEach((element) => element.addEventListener("input", markBudgetDirty));
+  elements.month.addEventListener("change", () => { renderModelStatus(); updateReadyState(); Promise.all([loadLedger(), loadMonthPlan()]); });
+  [elements.forecastRevenue, elements.forecastCost, elements.targetEndingCost, elements.openingCost, elements.supplierReturns, elements.releasedBudget].forEach((element) => element.addEventListener("input", markBudgetDirty));
   elements.budgetSourceNote.addEventListener("input", () => { elements.budgetPlanStatus.textContent = "額度來源註記尚未儲存。"; });
   elements.purchasedToDate.addEventListener("input", renderBudget); elements.saveBudget.addEventListener("click", saveMonthPlan);
   elements.addChannel.addEventListener("click", addRevenueChannel); elements.refreshQueue.addEventListener("click", loadLedger);
@@ -537,5 +682,5 @@
   elements.retryNotification.addEventListener("click", retryNotification); elements.erp.addEventListener("click", downloadErp);
   elements.erpReference.addEventListener("input", () => { elements.erpCreated.disabled = !(state.erpDownloaded && elements.erpReference.value.trim()); });
   elements.erpCreated.addEventListener("click", confirmErpCreated);
-  setInitialDates(); renderChannels(); renderBudget(); updateReadyState(); loadConfig();
+  setInitialDates(); renderChannels(); renderBudget(); renderModelStatus(); updateReadyState(); hydrateCachedModel(); loadConfig();
 })();

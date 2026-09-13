@@ -450,12 +450,27 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("重送摘要郵件");
     expect(toolHtml).toContain("儲存本月額度");
     expect(toolHtml).toContain("整月額度與已釋放額度分開呈現");
+    expect(toolHtml).toContain("寬承預估認列營收");
+    expect(toolHtml).toContain("寬承＋寬沐終端通路預估營收");
+    expect(toolHtml).toContain('id="auto-source-progress"');
+    expect(toolHtml.match(/data-source-progress=/g)).toHaveLength(4);
+    expect(toolHtml).toContain("普優瑪寄倉表</h3><span class=\"source-badge required\">自動取得・必要");
+    expect(toolHtml).toContain("力榮寄庫表</h3><span class=\"source-badge required\">自動取得・必要");
+    expect(toolHtml).toContain('id="model-badge"');
+    expect(toolHtml).toContain("每6個月到期月份才改為必要更新");
     expect(toolHtml).toContain("規則管理");
     const toolApp = readFileSync("../procurement-planning/app.js", "utf8");
     expect(toolApp).toContain("/api/procurement/month-plan");
+    expect(toolApp).toContain('setAutomaticSourceBusy(true, "正在取得 4 項最新資料…")');
+    expect(toolApp).toContain('completed ? "重新取得最新資料" : "重試取得最新資料"');
+    expect(toolApp).toContain("forecastRevenue: Number(elements.forecastRevenue.value || 0)");
+    expect(toolApp).toContain('refreshMonths: 6');
+    expect(toolApp).toContain('indexedDB.open(MODEL_CACHE.database, 1)');
+    expect(toolApp).toContain('elements.month.value >= refreshMonth');
     const toolCss = readFileSync("../procurement-planning/style.css", "utf8");
     expect(toolCss).toContain("@media (max-width: 620px)");
     expect(toolCss).toMatch(/\.procurement-period,[\s\S]*\.budget-grid,[\s\S]*\.procurement-summary,[\s\S]*\.budget-summary \{ grid-template-columns: 1fr; \}/);
+    expect(toolCss).toMatch(/@media \(max-width: 620px\)[\s\S]*\.budget-grid \.budget-source-field \{ grid-column: auto; \}/);
   });
 
   it("9月歷史接續資料固定為可追溯月份快照且不補寄舊通知", () => {
@@ -469,5 +484,13 @@ describe("採購規劃前台與入口", () => {
     expect(migration).toContain("123380");
     expect(migration).toContain("歷史匯入不建立通知工作");
     expect(migration).not.toContain("INSERT INTO procurement_notifications");
+    const scopeCorrection = readFileSync("worker/migrations/0005_correct_revenue_scope.sql", "utf8");
+    expect(scopeCorrection).toContain("forecast_revenue = 5936068.44");
+    expect(scopeCorrection).toContain("終端通路預估7,100,102元只作營運參考");
+    const oneTimeExclusions = readFileSync("worker/migrations/0006_exclude_confirmed_one_time_oem.sql", "utf8");
+    expect(oneTimeExclusions).toContain("A068-PPB2-4875-00090");
+    expect(oneTimeExclusions).toContain("A068-PCC1-1016-00091");
+    expect(oneTimeExclusions).toContain("A068-PPF1-3030-00091");
+    expect(oneTimeExclusions).toContain("一次性代工");
   });
 });

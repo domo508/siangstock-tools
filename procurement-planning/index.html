@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20260914-rules-r1">
+  <link rel="stylesheet" href="style.css?v=20260914-source-model-r2">
 </head>
 <body>
   <main class="page-shell">
@@ -60,12 +60,32 @@
         <p>庫存、未到貨、寄倉與銷售四個截止日相差14天內才會通過同時點檢核；超過時仍可檢查品號，但不應直接採用實際淨需求。</p>
       </div>
 
+      <div class="fixed-source-control" aria-labelledby="fixed-source-control-title">
+        <div>
+          <p class="eyebrow">固定 Google 資料</p>
+          <h3 id="fixed-source-control-title">先授權，再一次取得四項最新資料</h3>
+          <p>公司 Google 授權只開放目前分頁唯讀存取；授權完成後，再按「自動取得最新資料」才會真正讀取商品主檔、整體行銷策略、普優瑪與力榮寄庫表。</p>
+        </div>
+        <div class="source-control-actions">
+          <button id="google-connect-button" class="secondary-button" type="button">公司 Google 授權</button>
+          <button id="auto-source-button" class="secondary-button source-action-button" type="button" disabled aria-describedby="auto-source-progress">
+            <span class="button-spinner" aria-hidden="true"></span>
+            <span id="auto-source-label">自動取得最新資料</span>
+          </button>
+        </div>
+      </div>
+
+      <ol id="auto-source-progress" class="source-progress" aria-label="自動資料取得進度" aria-live="polite" hidden>
+        <li data-source-progress="master" data-status="waiting"><span class="source-progress-icon" aria-hidden="true">○</span><span>商品主檔</span><strong data-source-message>等待取得</strong></li>
+        <li data-source-progress="marketing" data-status="waiting"><span class="source-progress-icon" aria-hidden="true">○</span><span>整體行銷策略</span><strong data-source-message>等待取得</strong></li>
+        <li data-source-progress="puyouma" data-status="waiting"><span class="source-progress-icon" aria-hidden="true">○</span><span>普優瑪寄庫表</span><strong data-source-message>等待取得</strong></li>
+        <li data-source-progress="lirong" data-status="waiting"><span class="source-progress-icon" aria-hidden="true">○</span><span>力榮寄庫表</span><strong data-source-message>等待取得</strong></li>
+      </ol>
+
       <div class="upload-grid four-sources procurement-sources">
         <article class="upload-card" data-source="master">
           <div class="upload-card-header"><h3>商品主檔</h3><span class="source-badge recommended">建議更新</span></div>
           <p class="upload-help">自動選取白名單資料夾內修改時間最新且唯一有效的.xlsx；無新品或異動可沿用最近有效版本。</p>
-          <button id="google-connect-button" class="secondary-button" type="button">公司 Google 授權</button>
-          <button id="auto-source-button" class="secondary-button" type="button" disabled>自動取得最新資料</button>
           <label class="file-button">選擇商品主檔<input id="master-file" type="file" accept=".xlsx"></label>
           <p id="master-file-name" class="file-name">尚未取得</p>
         </article>
@@ -85,15 +105,15 @@
         </article>
 
         <article class="upload-card" data-source="consignment">
-          <div class="upload-card-header"><h3>普優瑪寄倉表</h3><span class="source-badge required">必要</span></div>
-          <p class="upload-help">讀取最新庫存、粉紅底未完成量及黃色欄首原文。</p>
-          <label class="file-button">選擇寄倉表<input id="consignment-file" type="file" accept=".xlsx"></label>
+          <div class="upload-card-header"><h3>普優瑪寄倉表</h3><span class="source-badge required">自動取得・必要</span></div>
+          <p class="upload-help">固定線上表單自動讀取最新庫存、粉紅底未完成量及黃色欄首原文；下方選檔只供自動取得失敗時備援。</p>
+          <label class="file-button">手動備援<input id="consignment-file" type="file" accept=".xlsx"></label>
           <p id="consignment-file-name" class="file-name">尚未選擇</p>
         </article>
 
         <article class="upload-card" data-source="lirong-consignment">
-          <div class="upload-card-header"><h3>力榮寄庫表</h3><span class="source-badge recommended">自動／備援</span></div>
-          <p class="upload-help">現貨拉貨5天、製作14天、製作後最早19天；依欄名與日期辨識。</p>
+          <div class="upload-card-header"><h3>力榮寄庫表</h3><span class="source-badge required">自動取得・必要</span></div>
+          <p class="upload-help">固定線上表單自動讀取；現貨拉貨5天、製作14天、製作後最早19天。下方選檔只供自動取得失敗時備援。</p>
           <label class="file-button">手動備援<input id="lirong-consignment-file" type="file" accept=".xlsx"></label>
           <p id="lirong-consignment-file-name" class="file-name">尚未取得</p>
         </article>
@@ -113,10 +133,10 @@
         </article>
 
         <article class="upload-card" data-source="model">
-          <div class="upload-card-header"><h3>季節模型回測檔</h3><span class="source-badge required">必要</span></div>
-          <p class="upload-help">使用最新的「普優瑪分類稽核與季節模型回測」；讀取SKU與類別建議模型。</p>
+          <div class="upload-card-header"><h3>季節模型回測檔</h3><span id="model-badge" class="source-badge recommended">正在確認版本</span></div>
+          <p class="upload-help">通過檢核後保留在這台電腦的瀏覽器中，平常沿用最近版本；每6個月到期月份才改為必要更新，不會上傳伺服器。</p>
           <label class="file-button">選擇季節模型<input id="model-file" type="file" accept=".xlsx"></label>
-          <p id="model-file-name" class="file-name">尚未選擇</p>
+          <p id="model-file-name" class="file-name">正在檢查本機沿用版本…</p>
         </article>
       </div>
 
@@ -142,7 +162,7 @@
       <div class="action-bar">
         <button id="analyze-button" class="primary-button" type="button" disabled>產生採購建議</button>
         <button id="download-button" class="secondary-button" type="button" disabled>下載採購建議Excel</button>
-        <p id="main-status" class="main-status" role="status">請先完成日期與六類檔案。</p>
+        <p id="main-status" class="main-status" role="status">請先完成日期與本次必要資料。</p>
       </div>
       <div id="source-status" class="result-alert" role="status">固定來源尚未完成公司 Google 授權；可先使用各來源的手動備援。</div>
       <div class="result-alert warn" role="note"><strong>暫行權限例外：</strong>普優瑪與力榮寄庫表目前仍可能開放「知道連結的任何人可編輯」。因權限由供應商維護，本次先不阻擋部署；工具仍會逐次檢查來源格式、資料日期與內容雜湊，但此項尚未完成正式權限驗收。</div>
@@ -170,7 +190,8 @@
         <p>本次建議採購金額會一併與尚可採購額度比較。</p>
       </div>
       <div class="budget-grid">
-        <label><span>中性情境整月預估營收（寬承＋寬沐）</span><input id="forecast-revenue" type="number" min="0" step="1" value="0" readonly></label>
+        <label><span>寬承預估認列營收</span><input id="forecast-revenue" type="number" min="0" step="1" value="0"><small>寬承外部通路＋預計對寬沐開票收入；成本率使用此欄。</small></label>
+        <label><span>寬承＋寬沐終端通路預估營收</span><input id="terminal-forecast-revenue" type="number" min="0" step="1" value="0" readonly></label>
         <label><span>預估當月成本流出</span><input id="forecast-cost" type="number" min="0" step="1" value="0"></label>
         <label><span>目標期末庫存成本</span><input id="target-ending-cost" type="number" min="0" step="1" value="0"></label>
         <label><span>期初庫存成本</span><input id="opening-cost" type="number" min="0" step="1" value="0"></label>
@@ -180,7 +201,7 @@
         <label class="budget-source-field"><span>額度來源註記</span><input id="budget-source-note" type="text" maxlength="500" value="" placeholder="例如：9月月初核准快照"></label>
       </div>
       <div class="channel-forecast" aria-labelledby="channel-forecast-title">
-        <div class="section-heading compact"><div><h3 id="channel-forecast-title">通路別中性情境預估</h3><p>整月預估營收由下列寬承與寬沐通路直接加總。</p></div><button id="add-channel-button" class="secondary-button" type="button" disabled>新增通路</button></div>
+        <div class="section-heading compact"><div><h3 id="channel-forecast-title">通路別中性情境預估</h3><p>下列通路加總為終端營運參考；採購成本率改用上方「寬承預估認列營收」，避免把寬沐終端零售全額重複算成寬承收入。</p></div><button id="add-channel-button" class="secondary-button" type="button" disabled>新增通路</button></div>
         <div class="result-table-wrap"><table class="procurement-table compact-table"><thead><tr><th>公司</th><th>通路／門市</th><th>預估營收</th><th>管理</th></tr></thead><tbody id="channel-rows"></tbody><tfoot><tr><th colspan="2">寬承預估</th><td id="kuancheng-total">$0</td><td></td></tr><tr><th colspan="2">寬沐預估</th><td id="kuanmu-total">$0</td><td></td></tr></tfoot></table></div>
       </div>
       <div class="budget-actions"><button id="save-budget-button" class="secondary-button" type="button" disabled>儲存本月額度</button><span id="budget-plan-status">尚未同步月份額度。</span></div>
@@ -237,7 +258,7 @@
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="core.js?v=20260914-rules-r1"></script>
-  <script src="google-sources.js?v=20260911-deploy-r1"></script>
-  <script src="app.js?v=20260914-rules-r1"></script>
+  <script src="google-sources.js?v=20260914-source-status-r1"></script>
+  <script src="app.js?v=20260914-source-model-r2"></script>
 </body>
 </html>
