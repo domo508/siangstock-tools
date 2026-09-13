@@ -286,7 +286,8 @@
     const cards = [
       createSummaryCard("中性情境整月預估營收", formatCurrency(revenue), elements.checkpoint.value === "mid-month" ? "實際至今＋行銷預估剩餘" : "同月份最新核准預估", "currency"),
       createSummaryCard("整月預估成本耗用", formatCurrency(cost), revenue > 0 ? `占營收${formatNumber(cost / revenue * 100)}%` : "尚未輸入營收", "currency"),
-      createSummaryCard("中性情境－整月預估可採購額度", formatCurrency(result.availableBudget), "成本耗用＋目標期末－期初＋退貨", "currency"),
+      createSummaryCard("中性情境－整月預估可採購額度", formatCurrency(result.availableBudget),
+        state.monthPlan && !state.budgetDirty ? "已核准月份快照；來源見上方註記" : "成本耗用＋目標期末－期初＋退貨", "currency"),
       createSummaryCard("截至目前已承諾", formatCurrency(result.purchasedAmountToDate), "正式核准互斥狀態加總", "currency"),
       createSummaryCard("截至目前尚可承諾", formatCurrency(result.remainingBudget), result.remainingBudget < 0 ? "已超出額度" : "尚可核准", `currency ${result.remainingBudget < 0 ? "negative" : ""}`)
     ];
