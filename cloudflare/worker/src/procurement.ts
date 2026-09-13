@@ -23,6 +23,15 @@ const SUPPLIERS = Object.freeze([
   ["禾鑫匠月", "foreign", 14]
 ].map(([name, country, leadDays]) => ({ name, country, leadDays })));
 
+type ProcurementRole = "admin" | "approver" | "operator";
+
+type ProcurementSettings = {
+  notificationRecipient: string;
+  retentionMonths: number;
+  approverEmails: string[];
+  notificationEvents: string[];
+};
+
 function procurementAccess(env: ProcurementEnv): AccessConfig {
   return { ...env, ACCESS_AUD: (env.PROCUREMENT_ACCESS_AUD || env.ACCESS_AUD || "").trim() };
 }
@@ -73,16 +82,121 @@ function parseJsonText(value: string): unknown {
   try { return JSON.parse(value); } catch { return null; }
 }
 
+function normalizedCompanyEmails(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 50) throw new RequestValidationError("帳號清單格式錯誤。");
+  const emails = value.map((item) => String(item || "").trim().toLocaleLowerCase("en-US"));
+  if (emails.some((email) => !/^[^@\s]+@siangapato\.com\.tw$/.test(email))) throw new RequestValidationError("帳號必須是 siangapato.com.tw 公司信箱。");
+  return [...new Set(emails)];
+}
+
+async function readProcurementSettings(env: ProcurementEnv): Promise<ProcurementSettings> {
+  const row = await env.DB.prepare("SELECT notification_recipient, notification_retention_months, approver_emails, notification_events FROM procurement_settings WHERE id = 1").first<Record<string, unknown>>();
+  const approvers = parseJsonText(String(row?.approver_emails || "[]"));
+  const events = parseJsonText(String(row?.notification_events || "[]"));
+  return {
+    notificationRecipient: String(row?.notification_recipient || ADMIN_EMAIL).toLocaleLowerCase("en-US"),
+    retentionMonths: Math.max(1, Math.min(12, Number(row?.notification_retention_months || 12))),
+    approverEmails: Array.isArray(approvers) ? approvers.map(String).map((email) => email.toLocaleLowerCase("en-US")) : [],
+    notificationEvents: Array.isArray(events) ? events.map(String) : ["approved", "revoked", "corrected"]
+  };
+}
+
+function roleFor(email: string, settings: ProcurementSettings): ProcurementRole {
+  if (email === ADMIN_EMAIL) return "admin";
+  if (settings.approverEmails.includes(email)) return "approver";
+  return "operator";
+}
+
+async function verifyApprover(request: Request, env: ProcurementEnv): Promise<{ email: string; role: ProcurementRole; settings: ProcurementSettings }> {
+  const email = await verifyCompanyUser(request, procurementAccess(env));
+  const settings = await readProcurementSettings(env);
+  const role = roleFor(email, settings);
+  if (role === "operator") throw new RequestValidationError("此帳號沒有核准或規則管理權限。", 403);
+  return { email, role, settings };
+}
+
+function validateProcurementRules(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new RequestValidationError("採購規則必須是物件。");
+  const rules = value as Record<string, unknown>;
+  const allowed = ["suppliers", "consignment", "purchaseUnits", "storeInventory", "blacklist"];
+  const extras = Object.keys(rules).filter((key) => !allowed.includes(key));
+  if (extras.length) throw new RequestValidationError(`採購規則含未知欄位：${extras.join("、")}。`);
+  if (!Array.isArray(rules.suppliers) || rules.suppliers.length > 100) throw new RequestValidationError("供應商規則格式錯誤。");
+  if (!Array.isArray(rules.purchaseUnits) || rules.purchaseUnits.length > 300) throw new RequestValidationError("採購單位規則格式錯誤。");
+  if (!Array.isArray(rules.blacklist) || rules.blacklist.length > 1000) throw new RequestValidationError("黑名單格式錯誤。");
+  if (!rules.consignment || typeof rules.consignment !== "object" || Array.isArray(rules.consignment)) throw new RequestValidationError("寄庫規則格式錯誤。");
+  if (!rules.storeInventory || typeof rules.storeInventory !== "object" || Array.isArray(rules.storeInventory)) throw new RequestValidationError("門市庫存規則格式錯誤。");
+  for (const supplier of rules.suppliers as Record<string, unknown>[]) {
+    if (!supplier || typeof supplier !== "object" || !String(supplier.name || "").trim()) throw new RequestValidationError("供應商名稱不可空白。");
+    if (!["國內", "國外"].includes(String(supplier.country))) throw new RequestValidationError("供應商國別只能是國內或國外。");
+    if (!Number.isFinite(Number(supplier.leadDays)) || Number(supplier.leadDays) < 0 || Number(supplier.leadDays) > 365) throw new RequestValidationError("平均採購週期必須介於0至365天。");
+  }
+  for (const unit of rules.purchaseUnits as Record<string, unknown>[]) {
+    if (!String(unit.supplier || "").trim() || !String(unit.ruleName || "").trim()) throw new RequestValidationError("採購單位的供應商與規則名稱不可空白。");
+    if (unit.quantity !== null && unit.quantity !== "" && (!Number.isInteger(Number(unit.quantity)) || Number(unit.quantity) < 1 || Number(unit.quantity) > 10000)) throw new RequestValidationError("箱入／採購單位須留白或填1至10000的整數。");
+  }
+  const encoded = JSON.stringify(rules);
+  if (new TextEncoder().encode(encoded).byteLength > 60000) throw new RequestValidationError("採購規則超過60 KB上限。", 413);
+  return JSON.parse(encoded) as Record<string, unknown>;
+}
+
 async function config(request: Request, env: ProcurementEnv): Promise<Response> {
   const email = await verifyCompanyUser(request, procurementAccess(env));
+  const settings = await readProcurementSettings(env);
+  const role = roleFor(email, settings);
   return json({
     email,
-    role: email === ADMIN_EMAIL ? "admin" : "operator",
+    role,
     googleOAuthClientId: env.GOOGLE_OAUTH_CLIENT_ID || "",
     fixedSources: FIXED_SOURCES,
     suppliers: SUPPLIERS,
-    notification: { recipient: ADMIN_EMAIL, retentionMonths: 12, events: ["approved", "revoked", "corrected"] }
+    notification: role === "admin" ? { recipient: settings.notificationRecipient, retentionMonths: settings.retentionMonths, events: settings.notificationEvents } : { enabled: true },
+    permissions: { canApprove: role === "admin" || role === "approver", canManageRules: role === "admin" || role === "approver", canManageAccess: role === "admin", canManageBudget: role === "admin" }
   });
+}
+
+async function procurementRules(request: Request, env: ProcurementEnv): Promise<Response> {
+  await verifyCompanyUser(request, procurementAccess(env));
+  const row = await env.DB.prepare("SELECT version, payload, updated_at, updated_by FROM procurement_rules_current WHERE id = 1").first<Record<string, unknown>>();
+  if (!row) throw new RequestValidationError("採購規則尚未初始化。", 503);
+  return json({ version: Number(row.version), updatedAt: String(row.updated_at), updatedBy: String(row.updated_by), rules: validateProcurementRules(parseJsonText(String(row.payload))) });
+}
+
+async function saveProcurementRules(request: Request, env: ProcurementEnv): Promise<Response> {
+  requireSameOrigin(request, env);
+  const { email } = await verifyApprover(request, env);
+  const input = await body(request);
+  const expectedVersion = Number(input.expectedVersion);
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new RequestValidationError("規則版本格式錯誤。");
+  const changeReason = string(input.changeReason, "修改原因", 500);
+  const rules = validateProcurementRules(input.rules);
+  const payload = JSON.stringify(rules);
+  const now = new Date().toISOString();
+  const result = await env.DB.prepare("UPDATE procurement_rules_current SET version = version + 1, payload = ?, updated_at = ?, updated_by = ? WHERE id = 1 AND version = ? RETURNING version").bind(payload, now, email, expectedVersion).first<{ version: number }>();
+  if (!result) throw new RequestValidationError("規則已被其他同事更新，請重新載入最新版。", 409);
+  await env.DB.prepare("INSERT INTO procurement_rules_history (version, payload, change_reason, changed_at, changed_by) VALUES (?, ?, ?, ?, ?)").bind(result.version, payload, changeReason, now, email).run();
+  return json({ version: result.version, updatedAt: now, updatedBy: email, rules });
+}
+
+async function accessSettings(request: Request, env: ProcurementEnv): Promise<Response> {
+  const actor = await verifyAdmin(request, { ...procurementAccess(env), ADMIN_EMAILS: ADMIN_EMAIL });
+  const settings = await readProcurementSettings(env);
+  return json({ ...settings, adminEmail: ADMIN_EMAIL, updatedBy: actor });
+}
+
+async function saveAccessSettings(request: Request, env: ProcurementEnv): Promise<Response> {
+  requireSameOrigin(request, env);
+  const actor = await verifyAdmin(request, { ...procurementAccess(env), ADMIN_EMAILS: ADMIN_EMAIL });
+  const input = await body(request);
+  const approverEmails = normalizedCompanyEmails(input.approverEmails);
+  const recipient = normalizedCompanyEmails([input.notificationRecipient])[0];
+  const retentionMonths = Number(input.retentionMonths);
+  if (!Number.isInteger(retentionMonths) || retentionMonths < 1 || retentionMonths > 12) throw new RequestValidationError("通知紀錄保留月數須介於1至12個月。");
+  const events = Array.isArray(input.notificationEvents) ? input.notificationEvents.map(String) : [];
+  if (events.some((event) => !["approved", "revoked", "corrected"].includes(event))) throw new RequestValidationError("通知事件格式錯誤。");
+  const now = new Date().toISOString();
+  await env.DB.prepare("UPDATE procurement_settings SET notification_recipient = ?, notification_retention_months = ?, approver_emails = ?, notification_events = ?, updated_at = ?, updated_by = ? WHERE id = 1").bind(recipient, retentionMonths, JSON.stringify(approverEmails), JSON.stringify([...new Set(events)]), now, actor).run();
+  return json({ notificationRecipient: recipient, retentionMonths, approverEmails, notificationEvents: [...new Set(events)], adminEmail: ADMIN_EMAIL, updatedAt: now, updatedBy: actor });
 }
 
 async function ledger(request: Request, env: ProcurementEnv): Promise<Response> {
@@ -124,7 +238,10 @@ function serializeMonthPlan(row: Record<string, unknown>) {
     targetEndingInventoryCost: Number(row.target_ending_inventory_cost),
     openingInventoryCost: Number(row.opening_inventory_cost),
     expectedSupplierReturns: Number(row.expected_supplier_returns),
+    fullBudgetAmount: Number(row.full_budget_amount),
+    releasedBudgetAmount: Number(row.budget_amount),
     budgetAmount: Number(row.budget_amount),
+    revenueChannels: parseJsonText(String(row.revenue_channels || "[]")) || [],
     sourceNote: String(row.source_note),
     updatedAt: String(row.updated_at),
     updatedBy: String(row.updated_by)
@@ -135,7 +252,7 @@ async function monthPlan(request: Request, env: ProcurementEnv): Promise<Respons
   await verifyCompanyUser(request, procurementAccess(env));
   const requestedMonth = month(new URL(request.url).searchParams.get("month"));
   const row = await env.DB.prepare(
-    "SELECT analysis_month, scenario, forecast_revenue, forecast_cost_outflow, target_ending_inventory_cost, opening_inventory_cost, expected_supplier_returns, budget_amount, source_note, updated_at, updated_by FROM procurement_month_plans WHERE analysis_month = ?"
+    "SELECT analysis_month, scenario, forecast_revenue, forecast_cost_outflow, target_ending_inventory_cost, opening_inventory_cost, expected_supplier_returns, budget_amount, full_budget_amount, revenue_channels, source_note, updated_at, updated_by FROM procurement_month_plans WHERE analysis_month = ?"
   ).bind(requestedMonth).first<Record<string, unknown>>();
   return json({ month: requestedMonth, plan: row ? serializeMonthPlan(row) : null });
 }
@@ -145,19 +262,29 @@ async function saveMonthPlan(request: Request, env: ProcurementEnv): Promise<Res
   const actor = await verifyAdmin(request, { ...procurementAccess(env), ADMIN_EMAILS: ADMIN_EMAIL });
   const input = await body(request);
   const analysisMonth = month(input.analysisMonth);
-  const forecastRevenue = money(input.forecastRevenue, "整月預估營收");
+  const revenueChannels = Array.isArray(input.revenueChannels) ? input.revenueChannels : [];
+  if (revenueChannels.length > 100) throw new RequestValidationError("通路營收明細最多100列。");
+  const normalizedChannels = revenueChannels.map((row) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) throw new RequestValidationError("通路營收明細格式錯誤。");
+    const item = row as Record<string, unknown>;
+    const company = string(item.company, "公司", 20);
+    if (!["寬承", "寬沐"].includes(company)) throw new RequestValidationError("公司只能選寬承或寬沐。");
+    return { company, channel: string(item.channel, "通路名稱", 80), amount: money(item.amount, "通路預估營收") };
+  });
+  const forecastRevenue = Math.round(normalizedChannels.reduce((sum, row) => sum + row.amount, 0) * 100) / 100;
   const forecastCostOutflow = money(input.forecastCostOutflow, "整月預估成本耗用");
   const targetEndingInventoryCost = money(input.targetEndingInventoryCost, "目標期末庫存成本");
   const openingInventoryCost = money(input.openingInventoryCost, "期初庫存成本");
   const expectedSupplierReturns = money(input.expectedSupplierReturns, "預計供應商退貨", true);
-  const budgetAmount = money(input.budgetAmount, "整月預估可採購額度");
+  const fullBudgetAmount = money(input.fullBudgetAmount, "整月預估可採購額度");
+  const releasedBudgetAmount = money(input.releasedBudgetAmount, "目前已釋放可採購額度");
   const sourceNote = string(input.sourceNote, "額度來源註記", 500);
   const now = new Date().toISOString();
   await env.DB.prepare(
-    "INSERT INTO procurement_month_plans (analysis_month, scenario, forecast_revenue, forecast_cost_outflow, target_ending_inventory_cost, opening_inventory_cost, expected_supplier_returns, budget_amount, source_note, created_at, created_by, updated_at, updated_by) VALUES (?, 'neutral', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month) DO UPDATE SET forecast_revenue = excluded.forecast_revenue, forecast_cost_outflow = excluded.forecast_cost_outflow, target_ending_inventory_cost = excluded.target_ending_inventory_cost, opening_inventory_cost = excluded.opening_inventory_cost, expected_supplier_returns = excluded.expected_supplier_returns, budget_amount = excluded.budget_amount, source_note = excluded.source_note, updated_at = excluded.updated_at, updated_by = excluded.updated_by"
-  ).bind(analysisMonth, forecastRevenue, forecastCostOutflow, targetEndingInventoryCost, openingInventoryCost, expectedSupplierReturns, budgetAmount, sourceNote, now, actor, now, actor).run();
+    "INSERT INTO procurement_month_plans (analysis_month, scenario, forecast_revenue, forecast_cost_outflow, target_ending_inventory_cost, opening_inventory_cost, expected_supplier_returns, budget_amount, full_budget_amount, revenue_channels, source_note, created_at, created_by, updated_at, updated_by) VALUES (?, 'neutral', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month) DO UPDATE SET forecast_revenue = excluded.forecast_revenue, forecast_cost_outflow = excluded.forecast_cost_outflow, target_ending_inventory_cost = excluded.target_ending_inventory_cost, opening_inventory_cost = excluded.opening_inventory_cost, expected_supplier_returns = excluded.expected_supplier_returns, budget_amount = excluded.budget_amount, full_budget_amount = excluded.full_budget_amount, revenue_channels = excluded.revenue_channels, source_note = excluded.source_note, updated_at = excluded.updated_at, updated_by = excluded.updated_by"
+  ).bind(analysisMonth, forecastRevenue, forecastCostOutflow, targetEndingInventoryCost, openingInventoryCost, expectedSupplierReturns, releasedBudgetAmount, fullBudgetAmount, JSON.stringify(normalizedChannels), sourceNote, now, actor, now, actor).run();
   const row = await env.DB.prepare(
-    "SELECT analysis_month, scenario, forecast_revenue, forecast_cost_outflow, target_ending_inventory_cost, opening_inventory_cost, expected_supplier_returns, budget_amount, source_note, updated_at, updated_by FROM procurement_month_plans WHERE analysis_month = ?"
+    "SELECT analysis_month, scenario, forecast_revenue, forecast_cost_outflow, target_ending_inventory_cost, opening_inventory_cost, expected_supplier_returns, budget_amount, full_budget_amount, revenue_channels, source_note, updated_at, updated_by FROM procurement_month_plans WHERE analysis_month = ?"
   ).bind(analysisMonth).first<Record<string, unknown>>();
   if (!row) throw new RequestValidationError("本月額度資料儲存失敗。", 503);
   return json({ month: analysisMonth, plan: serializeMonthPlan(row) });
@@ -207,14 +334,15 @@ async function submit(request: Request, env: ProcurementEnv): Promise<Response> 
 
 async function approve(request: Request, env: ProcurementEnv, batchId: string): Promise<Response> {
   requireSameOrigin(request, env);
-  const actor = await verifyAdmin(request, { ...procurementAccess(env), ADMIN_EMAILS: ADMIN_EMAIL });
+  const access = await verifyApprover(request, env);
+  const actor = access.email;
   const input = await body(request);
   const key = string(input.idempotencyKey, "冪等鍵", 120);
   const now = new Date().toISOString();
   const result = await env.DB.batch([
     env.DB.prepare("UPDATE procurement_batches SET status = 'approved', approved_at = ?, approved_by = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND status = 'pending_approval'").bind(now, actor, now, batchId),
     env.DB.prepare("INSERT OR IGNORE INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) SELECT id, 'approved', 0, approved_amount, approved_amount, '正式核准', ?, ?, ? FROM procurement_batches WHERE id = ? AND status = 'approved' AND approved_at = ? AND approved_by = ?").bind(now, actor, key, batchId, now, actor),
-    env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'approved', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(batchId, ADMIN_EMAIL, now, key)
+    env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'approved', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(batchId, access.settings.notificationRecipient, now, key)
   ]);
   if (Number(result[0].meta.changes || 0) === 0) {
     const existing = await env.DB.prepare("SELECT id, status, approved_at, approved_by FROM procurement_batches WHERE id = ?").bind(batchId).first();
@@ -244,6 +372,7 @@ function correctionAmounts(input: Record<string, unknown>) {
 async function revoke(request: Request, env: ProcurementEnv, batchId: string): Promise<Response> {
   requireSameOrigin(request, env);
   const actor = await verifyAdmin(request, { ...procurementAccess(env), ADMIN_EMAILS: ADMIN_EMAIL });
+  const settings = await readProcurementSettings(env);
   const input = await body(request);
   const reason = string(input.reason, "撤銷原因", 500);
   const key = string(input.idempotencyKey, "冪等鍵", 120);
@@ -251,7 +380,7 @@ async function revoke(request: Request, env: ProcurementEnv, batchId: string): P
   const result = await env.DB.batch([
     env.DB.prepare("UPDATE procurement_batches SET status = 'revoked', updated_at = ?, revision = revision + 1 WHERE id = ? AND status IN ('approved', 'erp_created')").bind(now, batchId),
     env.DB.prepare("INSERT OR IGNORE INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) SELECT id, 'revoked', approved_amount, -approved_amount, 0, ?, ?, ?, ? FROM procurement_batches WHERE id = ? AND status = 'revoked' AND updated_at = ?").bind(reason, now, actor, key, batchId, now),
-    env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'revoked', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(batchId, ADMIN_EMAIL, now, key)
+    env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'revoked', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(batchId, settings.notificationRecipient, now, key)
   ]);
   if (Number(result[0].meta.changes || 0) === 0) {
     const duplicate = await env.DB.prepare("SELECT id FROM procurement_events WHERE idempotency_key = ? AND batch_id = ? AND event_type = 'revoked'").bind(key, batchId).first();
@@ -266,6 +395,7 @@ async function revoke(request: Request, env: ProcurementEnv, batchId: string): P
 async function correct(request: Request, env: ProcurementEnv, batchId: string): Promise<Response> {
   requireSameOrigin(request, env);
   const actor = await verifyAdmin(request, { ...procurementAccess(env), ADMIN_EMAILS: ADMIN_EMAIL });
+  const settings = await readProcurementSettings(env);
   const input = await body(request);
   const reason = string(input.reason, "更正原因", 500);
   const key = string(input.idempotencyKey, "冪等鍵", 120);
@@ -284,7 +414,7 @@ async function correct(request: Request, env: ProcurementEnv, batchId: string): 
   const result = await env.DB.batch([
     env.DB.prepare("UPDATE procurement_batches SET suggested_amount = ?, manual_amount = ?, blocked_amount = ?, approved_amount = ?, adjustment_amount = ?, payment_current_month = ?, payment_future_months = ?, payment_schedule = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND status IN ('approved', 'erp_created') AND revision = ?").bind(values.suggested, values.manual, values.blocked, values.approved, values.adjustment, values.currentPayment, values.futurePayments, values.paymentSchedule, now, batchId, expectedRevision),
     env.DB.prepare("INSERT OR IGNORE INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) SELECT id, 'corrected', ?, ?, ?, ?, ?, ?, ? FROM procurement_batches WHERE id = ? AND updated_at = ? AND revision = ?").bind(amountBefore, values.approved - amountBefore, values.approved, reason, now, actor, key, batchId, now, expectedRevision + 1),
-    env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'corrected', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(batchId, ADMIN_EMAIL, now, key)
+    env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'corrected', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(batchId, settings.notificationRecipient, now, key)
   ]);
   if (Number(result[0].meta.changes || 0) === 0) throw new RequestValidationError("批次已被其他操作更動，請重新載入後再更正。", 409);
   return json({ batch: { id: batchId, status: before.status, revision: expectedRevision + 1, approvedAmount: values.approved }, notification: "pending", duplicate: false });
@@ -292,7 +422,7 @@ async function correct(request: Request, env: ProcurementEnv, batchId: string): 
 
 async function markErpCreated(request: Request, env: ProcurementEnv, batchId: string): Promise<Response> {
   requireSameOrigin(request, env);
-  const actor = await verifyAdmin(request, { ...procurementAccess(env), ADMIN_EMAILS: ADMIN_EMAIL });
+  const { email: actor } = await verifyApprover(request, env);
   const input = await body(request);
   const erpReference = string(input.erpReference, "ERP採購單號／確認註記", 120);
   const key = string(input.idempotencyKey, "冪等鍵", 120);
@@ -320,12 +450,13 @@ function encodeBase64Url(value: string): string {
 
 async function notify(request: Request, env: ProcurementEnv, batchId: string): Promise<Response> {
   requireSameOrigin(request, env);
-  await verifyAdmin(request, { ...procurementAccess(env), ADMIN_EMAILS: ADMIN_EMAIL });
+  const access = await verifyApprover(request, env);
   const token = request.headers.get("X-Google-Access-Token") || "";
   if (!token || token.length > 4096) throw new RequestValidationError("需要重新完成公司 Google 授權。", 401);
   const identityResponse = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${token}` } });
   const identity = identityResponse.ok ? await identityResponse.json<{ email?: string }>() : {};
-  if ((identity.email || "").toLocaleLowerCase("en-US") !== ADMIN_EMAIL) throw new RequestValidationError("寄信授權帳號必須是 siang01。", 403);
+  const sender = (identity.email || "").toLocaleLowerCase("en-US");
+  if (sender !== access.email) throw new RequestValidationError("Google 授權帳號必須與目前公司登入帳號相同。", 403);
   const row = await env.DB.prepare("SELECT n.id notification_id, n.event_type, n.retry_count, e.amount_before event_amount_before, e.amount_delta event_amount_delta, e.amount_after event_amount_after, e.reason event_reason, e.created_at event_created_at, e.created_by event_created_by, b.* FROM procurement_notifications n JOIN procurement_events e ON e.id = n.event_id JOIN procurement_batches b ON b.id = n.batch_id WHERE n.batch_id = ? AND n.status != 'sent' ORDER BY n.id DESC LIMIT 1").bind(batchId).first<Record<string, unknown>>();
   if (!row) return json({ status: "sent_or_not_required" });
   const eventLabels: Record<string, string> = { approved: "正式核准", revoked: "核准撤銷", corrected: "核准更正" };
@@ -343,7 +474,7 @@ async function notify(request: Request, env: ProcurementEnv, batchId: string): P
   const usageRate = Number(row.budget_amount) > 0 ? committedAfter / Number(row.budget_amount) * 100 : 0;
   const subject = `[翔仔居家採購] ${eventLabel}｜${batchId}`;
   const message = [
-    `From: ${ADMIN_EMAIL}`, `To: ${ADMIN_EMAIL}`, `Subject: =?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`,
+    `From: ${sender}`, `To: ${String(row.recipient || access.settings.notificationRecipient)}`, `Subject: =?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`,
     "Content-Type: text/plain; charset=UTF-8", "", `翔仔居家採購${eventLabel}摘要`, `批次編號：${batchId}`,
     `供應商：${(parseJsonText(String(row.supplier_summary)) as string[] || []).join("、") || "未提供"}`,
     `核准人：${String(row.approved_by || "")}`, `核准時間：${String(row.approved_at || "")}`,
@@ -352,7 +483,7 @@ async function notify(request: Request, env: ProcurementEnv, batchId: string): P
     `本次額度增減：${eventDelta.toFixed(2)}`, `異動後承諾金額：${amountAfter.toFixed(2)}`,
     `異動原因：${String(row.event_reason || "未提供")}`, `異動人：${String(row.event_created_by || "")}`, `異動時間：${String(row.event_created_at || "")}`,
     `異動前尚可承諾：${remainingBefore.toFixed(2)}`, `異動後尚可承諾：${remainingAfter.toFixed(2)}`,
-    `中性情境－整月預估可採購額度：${Number(row.budget_amount).toFixed(2)}`,
+    `目前已釋放可採購額度：${Number(row.budget_amount).toFixed(2)}`,
     `本月累計已承諾採購金額：${committedAfter.toFixed(2)}`, `目前額度使用率：${usageRate.toFixed(2)}%`,
     `本月預計付款：${currentPayment.toFixed(2)}`, `下月以後已承諾付款：${futurePayments.toFixed(2)}`,
     `警示：${String(row.warning_summary || "無")}`
@@ -376,6 +507,10 @@ export async function procurementRoute(request: Request, env: ProcurementEnv): P
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/procurement")) return null;
   if (url.pathname === "/api/procurement/config" && request.method === "GET") return config(request, env);
+  if (url.pathname === "/api/procurement/rules" && request.method === "GET") return procurementRules(request, env);
+  if (url.pathname === "/api/procurement/rules" && request.method === "PUT") return saveProcurementRules(request, env);
+  if (url.pathname === "/api/procurement/access-settings" && request.method === "GET") return accessSettings(request, env);
+  if (url.pathname === "/api/procurement/access-settings" && request.method === "PUT") return saveAccessSettings(request, env);
   if (url.pathname === "/api/procurement/ledger" && request.method === "GET") return ledger(request, env);
   if (url.pathname === "/api/procurement/month-plan" && request.method === "GET") return monthPlan(request, env);
   if (url.pathname === "/api/procurement/month-plan" && request.method === "PUT") return saveMonthPlan(request, env);

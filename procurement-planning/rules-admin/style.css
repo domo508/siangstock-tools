@@ -1,0 +1,12 @@
+.compact-hero { min-height: auto; padding-bottom: 1rem; }
+.compact-hero h1 { font-size: clamp(2.2rem, 5vw, 4.5rem); }
+.rules-table { width: 100%; border-collapse: collapse; min-width: 1100px; }
+.rules-table th, .rules-table td { border-bottom: 1px solid var(--line, #ddd); padding: .65rem; text-align: left; vertical-align: top; }
+.rules-table input, .rules-table select, .rule-form-grid input, .rule-form-grid textarea, .wide-field input, .wide-field textarea { width: 100%; box-sizing: border-box; }
+.rules-table input[type="checkbox"] { width: auto; }
+.rule-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+.rule-form-grid fieldset { border: 1px solid var(--line, #ddd); border-radius: 16px; padding: 1rem; display: grid; gap: .75rem; }
+.rule-form-grid label, .wide-field { display: grid; gap: .35rem; }
+.table-action { border: 0; background: transparent; color: #9e342b; cursor: pointer; text-decoration: underline; }
+.save-panel { position: sticky; bottom: 1rem; z-index: 3; box-shadow: 0 10px 30px rgb(0 0 0 / 12%); }
+#access-status { margin-left: 1rem; }

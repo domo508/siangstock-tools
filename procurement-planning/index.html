@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20260828-procurement-r3">
+  <link rel="stylesheet" href="style.css?v=20260914-rules-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -22,7 +22,7 @@
 
     <nav class="breadcrumb" aria-label="頁面導覽">
       <ol><li><a href="/">公司工具首頁</a></li><li aria-current="page">庫存採購規劃</li></ol>
-      <div><a class="back-link" href="manual.html">操作手冊</a>　<a class="back-link" href="/">← 返回公司工具首頁</a></div>
+      <div><a class="back-link" href="rules-admin/">規則管理</a>　<a class="back-link" href="manual.html">操作手冊</a>　<a class="back-link" href="/">← 返回公司工具首頁</a></div>
     </nav>
 
     <section class="hero" aria-labelledby="page-title">
@@ -126,10 +126,10 @@
           <h3 id="blacklist-title">排除採購商品黑名單</h3>
           <p>每行填一個ERP品號、供應商貨號或完整品名。採完全一致才排除，不使用模糊判斷。</p>
         </div>
-        <textarea id="blacklist-input" rows="6" placeholder="例如：&#10;ERP品號&#10;一次性代工商品完整品名"></textarea>
+        <textarea id="blacklist-input" rows="6" readonly aria-readonly="true"></textarea>
         <div class="blacklist-actions">
-          <button id="save-blacklist-button" class="secondary-button" type="button">儲存於這個瀏覽器</button>
-          <span id="blacklist-status">目前0項・尚未共用至其他電腦</span>
+          <a class="secondary-button button-link" href="rules-admin/#blacklist">前往規則管理</a>
+          <span id="blacklist-status">正在同步公司共用黑名單…</span>
         </div>
       </div>
 
@@ -170,16 +170,21 @@
         <p>本次建議採購金額會一併與尚可採購額度比較。</p>
       </div>
       <div class="budget-grid">
-        <label><span>中性情境整月預估營收</span><input id="forecast-revenue" type="number" min="0" step="1" value="0"></label>
+        <label><span>中性情境整月預估營收（寬承＋寬沐）</span><input id="forecast-revenue" type="number" min="0" step="1" value="0" readonly></label>
         <label><span>預估當月成本流出</span><input id="forecast-cost" type="number" min="0" step="1" value="0"></label>
         <label><span>目標期末庫存成本</span><input id="target-ending-cost" type="number" min="0" step="1" value="0"></label>
         <label><span>期初庫存成本</span><input id="opening-cost" type="number" min="0" step="1" value="0"></label>
         <label><span>預計供應商退貨</span><input id="supplier-returns" type="number" step="1" value="0"></label>
+        <label><span>目前已釋放可採購額度</span><input id="released-budget" type="number" min="0" step="1" value="0"></label>
         <label><span>截至目前已承諾（台帳自動）</span><input id="purchased-to-date" type="number" min="0" step="1" value="0" readonly></label>
         <label class="budget-source-field"><span>額度來源註記</span><input id="budget-source-note" type="text" maxlength="500" value="" placeholder="例如：9月月初核准快照"></label>
       </div>
+      <div class="channel-forecast" aria-labelledby="channel-forecast-title">
+        <div class="section-heading compact"><div><h3 id="channel-forecast-title">通路別中性情境預估</h3><p>整月預估營收由下列寬承與寬沐通路直接加總。</p></div><button id="add-channel-button" class="secondary-button" type="button" disabled>新增通路</button></div>
+        <div class="result-table-wrap"><table class="procurement-table compact-table"><thead><tr><th>公司</th><th>通路／門市</th><th>預估營收</th><th>管理</th></tr></thead><tbody id="channel-rows"></tbody><tfoot><tr><th colspan="2">寬承預估</th><td id="kuancheng-total">$0</td><td></td></tr><tr><th colspan="2">寬沐預估</th><td id="kuanmu-total">$0</td><td></td></tr></tfoot></table></div>
+      </div>
       <div class="budget-actions"><button id="save-budget-button" class="secondary-button" type="button" disabled>儲存本月額度</button><span id="budget-plan-status">尚未同步月份額度。</span></div>
-      <div class="budget-equation">中性情境－整月預估可採購額度 − 截至目前已承諾採購金額 ＝ 截至目前尚可承諾額度；已核准月份快照優先沿用。</div>
+      <div class="budget-equation">目前已釋放可採購額度 − 截至目前已承諾採購金額 ＝ 截至目前尚可承諾額度；整月額度與已釋放額度分開呈現。</div>
       <div id="budget-summary" class="summary-grid budget-summary"></div>
       <p id="ledger-status" class="budget-note">正式核准、核准更正與撤銷會即時更新集中台帳；未到貨採購單不再用來反推整月已承諾金額。</p>
     </section>
@@ -200,10 +205,14 @@
       </div>
       <p id="workflow-status" class="main-status" role="status">尚未選擇人工回匯檔。</p>
       <div id="workflow-summary" class="summary-grid budget-summary"></div>
+      <div class="approval-queue" aria-labelledby="approval-queue-title">
+        <div class="section-heading compact"><div><h3 id="approval-queue-title">公司共用待核准清單</h3><p>採購核准者可在自己的電腦核准，不需使用最高權限帳號。</p></div><button id="refresh-queue-button" class="secondary-button" type="button">重新整理</button></div>
+        <div class="result-table-wrap"><table class="procurement-table compact-table"><thead><tr><th>批次</th><th>供應商</th><th>送出者</th><th>送出時間</th><th>核准金額</th><th>狀態／操作</th></tr></thead><tbody id="approval-queue-rows"></tbody></table></div>
+      </div>
     </section>
 
     <section class="panel rules-panel" aria-labelledby="rules-title">
-      <div class="section-heading compact"><div><p class="eyebrow">固定防呆</p><h2 id="rules-title">目前已鎖定哪些規則？</h2></div></div>
+      <div class="section-heading compact"><div><p class="eyebrow">規則總覽</p><h2 id="rules-title">內建防呆與可管理規則</h2></div><a class="secondary-button button-link" href="rules-admin/">開啟規則管理</a></div>
       <div class="rule-grid">
         <article><strong>寄倉不扣淨需求</strong><p>寄倉是外部供貨池，不是公司帳上已購入庫存。</p></article>
         <article><strong>未到貨每次重匯</strong><p>已到貨單據不再出現，不保留舊清單避免重複扣除。</p></article>
@@ -219,6 +228,7 @@
         <article><strong>上林獨立檢視</strong><p>固定28天檢視期；總部、門市與加總需求使用公式。</p></article>
         <article><strong>付款月份分流</strong><p>國內到貨100%；國外下單30%、預計出貨70%。</p></article>
       </div>
+      <p class="result-note">一般備貨公式屬程式內建，不列入管理頁。供應商、寄庫、採購單位、門市庫存與黑名單由採購核准者管理；權限與通知只有最高權限可查看及變更。</p>
     </section>
 
     <footer><p>翔仔居家・庫存採購規劃</p><p>原始Excel不上傳；後端只保存必要批次、金額、狀態、核准與通知稽核摘要。</p></footer>
@@ -226,8 +236,8 @@
 
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260828-procurement-r3"></script>
+  <script src="core.js?v=20260914-rules-r1"></script>
   <script src="google-sources.js?v=20260911-deploy-r1"></script>
-  <script src="app.js?v=20260912-history-r1"></script>
+  <script src="app.js?v=20260914-rules-r1"></script>
 </body>
 </html>

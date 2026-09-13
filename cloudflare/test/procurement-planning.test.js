@@ -198,6 +198,15 @@ describe("採購規劃核心鎖定公式", () => {
     expect(core.roundByPack(14, 10, 20, 14)).toMatchObject({ down: 10, up: 20, quantity: 10, direction: "向下" });
     expect(core.roundByPack(14, 10, 10, 14)).toMatchObject({ down: 10, up: 20, quantity: 20, direction: "向上" });
   });
+
+  it("集中採購單位可覆寫普優瑪箱入數，未確認的其它品項回到單件", () => {
+    const rules = [
+      { supplier: "普優瑪寢具有限公司", ruleName: "床包5尺", matchText: "床包|5尺", quantity: 20, enabled: true },
+      { supplier: "普優瑪寢具有限公司", ruleName: "其它品項", matchText: "特殊新品", quantity: null, enabled: true }
+    ];
+    expect(core.purchaseUnitFromRules("普優瑪", { name: "60天絲床包", size: "5尺" }, "", rules)).toBe(20);
+    expect(core.purchaseUnitFromRules("普優瑪", { name: "特殊新品" }, "", rules)).toBe(1);
+  });
 });
 
 describe("四來源匯入與品號串接", () => {
@@ -440,7 +449,8 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("回匯二次確認版");
     expect(toolHtml).toContain("重送摘要郵件");
     expect(toolHtml).toContain("儲存本月額度");
-    expect(toolHtml).toContain("已核准月份快照優先沿用");
+    expect(toolHtml).toContain("整月額度與已釋放額度分開呈現");
+    expect(toolHtml).toContain("規則管理");
     const toolApp = readFileSync("../procurement-planning/app.js", "utf8");
     expect(toolApp).toContain("/api/procurement/month-plan");
     const toolCss = readFileSync("../procurement-planning/style.css", "utf8");

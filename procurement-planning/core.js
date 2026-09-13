@@ -827,27 +827,34 @@
 
   function buildLirongConsignmentRecommendations(recommendations, lirongConsignment, options = {}) {
     const orderDate = parseDateValue(options.orderDate || recommendations.asOfDate) || recommendations.asOfDate;
+    const lirongRules = options.consignmentRules?.lirong || {};
+    const pullLeadDays = Math.max(0, Number(lirongRules.pullLeadDays ?? PROCUREMENT_POLICY.lirongPullLeadDays));
+    const productionDays = Math.max(0, Number(lirongRules.productionDays ?? PROCUREMENT_POLICY.lirongProductionDays));
+    const deliveryAfterProductionDays = Math.max(0, Number(lirongRules.deliveryAfterProductionDays ?? PROCUREMENT_POLICY.lirongDeliveryAfterProductionDays));
+    const earliestDeliveryDays = productionDays + deliveryAfterProductionDays;
+    const targetRules = lirongRules.targetDays || PROCUREMENT_POLICY.lirongFactoryTargetDays;
+    const packSize = purchaseUnitFromRules("力榮", null, "", options.purchaseUnitRules);
     return recommendations.rows.filter((row) => /力榮/.test(row.supplier)).map((row) => {
       const consignment = lirongConsignment.bySku.get(row.sku);
       const currentQty = consignment?.currentQty || 0;
       const scheduledQty = consignment?.scheduledQty || 0;
-      const targetDays = PROCUREMENT_POLICY.lirongFactoryTargetDays[row.tier];
+      const targetDays = Number(targetRules[row.tier] ?? PROCUREMENT_POLICY.lirongFactoryTargetDays[row.tier]);
       const approvedPullQty = Math.max(0, Number(options.approvedPullBySku?.[row.sku] || 0));
-      const rawQty = Math.max(approvedPullQty + row.forecastDailyQty * (PROCUREMENT_POLICY.lirongProductionDays + targetDays) - currentQty - scheduledQty, 0);
-      const down = Math.floor(rawQty / 10) * 10;
+      const rawQty = Math.max(approvedPullQty + row.forecastDailyQty * (productionDays + targetDays) - currentQty - scheduledQty, 0);
+      const down = Math.floor(rawQty / packSize) * packSize;
       const coverageWithDown = row.forecastDailyQty > 0 ? Math.max(currentQty + scheduledQty + down - approvedPullQty, 0) / row.forecastDailyQty : 9999;
-      const packed = roundByPack(rawQty, 10, coverageWithDown, targetDays + PROCUREMENT_POLICY.lirongProductionDays);
+      const packed = roundByPack(rawQty, packSize, coverageWithDown, targetDays + productionDays);
       const blocked = row.externalPurchaseBlocked;
       const suggestedQty = blocked ? 0 : packed.quantity;
       return {
         sku: row.sku, supplierSku: row.supplierSku, sourceName: consignment?.name || "", masterName: row.name, tier: row.tier,
-        forecastDailyQty: row.forecastDailyQty, pullLeadDays: 5, productionDays: 14, earliestDeliveryDays: 19, targetLowDays: 60,
-        targetHighDays: 90, targetDays, currentQty, scheduledQty, approvedPullQty,
-        productionCompleteDate: addDays(orderDate, 14), expectedArrivalDate: addDays(orderDate, currentQty >= approvedPullQty ? 5 : 19),
+        forecastDailyQty: row.forecastDailyQty, pullLeadDays, productionDays, earliestDeliveryDays, targetLowDays: Number(targetRules["低銷"] ?? 60),
+        targetHighDays: Number(targetRules["熱銷"] ?? 90), targetDays, currentQty, scheduledQty, approvedPullQty,
+        productionCompleteDate: addDays(orderDate, productionDays), expectedArrivalDate: addDays(orderDate, currentQty >= approvedPullQty ? pullLeadDays : earliestDeliveryDays),
         rawQty, downQty: packed.down, upQty: packed.up, suggestedQty, unitCost: row.unitCost,
         futureCost: suggestedQty * row.unitCost, availableDaysAfter: row.forecastDailyQty > 0 ? (currentQty + scheduledQty + suggestedQty - approvedPullQty) / row.forecastDailyQty : null,
-        beforePullRisk: currentQty < approvedPullQty, beforeProductionRisk: currentQty < approvedPullQty + row.forecastDailyQty * 14,
-        beforeDeliveryRisk: currentQty + scheduledQty < approvedPullQty + row.forecastDailyQty * 19,
+        beforePullRisk: currentQty < approvedPullQty, beforeProductionRisk: currentQty < approvedPullQty + row.forecastDailyQty * productionDays,
+        beforeDeliveryRisk: currentQty + scheduledQty < approvedPullQty + row.forecastDailyQty * earliestDeliveryDays,
         status: blocked ? (row.automaticExclusionReason || "(S)／下架禁止新增寄庫") : (consignment ? "已命中力榮寄庫表" : "寄庫表未命中，待人工確認"),
         scheduleNotes: consignment?.scheduleNotes || []
       };
@@ -988,6 +995,19 @@
     if (/(雙人.*薄被套|薄被套.*雙人)/.test(text)) return 20;
     if (/兩用被套/.test(text)) return 10;
     return 1;
+  }
+
+  function purchaseUnitFromRules(supplier, masterRecord, fallbackName, suppliedRules) {
+    if (!Array.isArray(suppliedRules)) return /力榮/.test(normalizeText(supplier)) ? 10 : (/普優[瑪碼]/.test(normalizeText(supplier)) ? puyoumaPackSize(masterRecord, fallbackName) : 1);
+    const supplierText = normalizeText(supplier);
+    const productText = normalizeText([masterRecord?.name, masterRecord?.size, masterRecord?.sizeGroup, fallbackName].filter(Boolean).join(" "));
+    const candidates = suppliedRules.filter((rule) => {
+      const ruleSupplier = normalizeText(rule?.supplier);
+      return rule?.enabled !== false && ruleSupplier && supplierText && (supplierText === ruleSupplier || supplierText.includes(ruleSupplier) || ruleSupplier.includes(supplierText));
+    });
+    const matched = candidates.find((rule) => String(rule.matchText || "").split("|").map(normalizeText).filter(Boolean).every((part) => productText.includes(part)))
+      || candidates.find((rule) => !String(rule.matchText || "").trim());
+    return matched && Number.isInteger(Number(matched.quantity)) && Number(matched.quantity) > 0 ? Number(matched.quantity) : 1;
   }
 
   function addDays(dateValue, days) {
@@ -1212,6 +1232,11 @@
   }
 
   function buildProcurementRecommendations(input) {
+    const puyoumaRules = input.consignmentRules?.puyouma || {};
+    const lirongRules = input.consignmentRules?.lirong || {};
+    const puyoumaProductionDays = Math.max(0, Number(puyoumaRules.productionDays ?? PROCUREMENT_POLICY.puyoumaFactoryLeadDays));
+    const puyoumaTargetDays = puyoumaRules.targetDays || PROCUREMENT_POLICY.puyoumaFactoryTargetDays;
+    const lirongProductionDays = Math.max(0, Number(lirongRules.productionDays ?? PROCUREMENT_POLICY.lirongProductionDays));
     const pending = aggregatePendingReports(input.pendingReports || []);
     const resolvedConsignment = resolveConsignment(input.consignment, input.master, input.blacklist || []);
     const blacklist = normalizeBlacklist(input.blacklist || []);
@@ -1431,20 +1456,20 @@
       const unitCost = Math.max(0, Number(row.masterRecord?.unitCost || 0));
       const consignment = resolvedConsignment.bySku.get(row.demand.sku);
       const normalizedSupplier = normalizeText(supplier);
-      const packSize = /力榮/.test(normalizedSupplier) ? 10 : (/普優[瑪碼]/.test(normalizedSupplier) ? puyoumaPackSize(row.masterRecord, row.demand.name) : 1);
+      const packSize = purchaseUnitFromRules(supplier, row.masterRecord, row.demand.name, input.purchaseUnitRules);
       const downQty = Math.floor(baseSuggestedPurchaseQty / packSize) * packSize;
       const coverageWithDown = adjustedDaily > 0 ? (inventoryQty + pendingQty + downQty) / adjustedDaily : 9999;
-      const minimumCoverageDays = /力榮/.test(normalizedSupplier) ? PROCUREMENT_POLICY.lirongProductionDays : reviewDays + supplierLeadDays;
+      const minimumCoverageDays = /力榮/.test(normalizedSupplier) ? lirongProductionDays : reviewDays + supplierLeadDays;
       const packed = roundByPack(baseSuggestedPurchaseQty, packSize, coverageWithDown, minimumCoverageDays);
       const suggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview ? 0 : packed.quantity;
       const factoryPullQty = pendingQty + suggestedPurchaseQty;
       const consignmentCurrentQty = consignment?.currentQty || 0;
       const consignmentScheduledQty = consignment?.scheduledQty || 0;
       const immediateConsignmentGap = consignment && !externalPurchaseBlocked ? Math.max(factoryPullQty - consignmentCurrentQty, 0) : 0;
-      const tierFactoryTargetDays = /普優[瑪碼]/.test(normalizedSupplier) ? PROCUREMENT_POLICY.puyoumaFactoryTargetDays[row.tier] : factoryTargetDays;
+      const tierFactoryTargetDays = /普優[瑪碼]/.test(normalizedSupplier) ? Number(puyoumaTargetDays[row.tier] ?? PROCUREMENT_POLICY.puyoumaFactoryTargetDays[row.tier]) : factoryTargetDays;
       const factoryTargetQty = consignment && !externalPurchaseBlocked ? adjustedDaily * tierFactoryTargetDays : 0;
       const rawConsignmentOrderQty = consignment
-        ? Math.max(factoryPullQty + adjustedDaily * PROCUREMENT_POLICY.puyoumaFactoryLeadDays + factoryTargetQty - consignmentCurrentQty - consignmentScheduledQty, immediateConsignmentGap, 0)
+        ? Math.max(factoryPullQty + adjustedDaily * puyoumaProductionDays + factoryTargetQty - consignmentCurrentQty - consignmentScheduledQty, immediateConsignmentGap, 0)
         : 0;
       const suggestedConsignmentQty = externalPurchaseBlocked ? 0 : roundSuggestedQuantity(rawConsignmentOrderQty, Math.max(score, 0.5));
       let supplyStatus = "非寄倉供應商／寄倉品號未命中";
@@ -1552,6 +1577,10 @@
       consignment: resolvedConsignment,
       productExclusions,
       factoryTargetDays,
+      appliedRules: {
+        puyouma: { productionDays: puyoumaProductionDays, targetDays: { ...puyoumaTargetDays } },
+        lirong: { productionDays: lirongProductionDays, targetDays: { ...(lirongRules.targetDays || PROCUREMENT_POLICY.lirongFactoryTargetDays) } }
+      },
       model: input.model,
       totals: {
         analyzedSkuCount: rows.length,
@@ -1975,8 +2004,8 @@
       ["ABC／XYZ", "12週成本貢獻做ABC；有銷售週數與變異係數做XYZ", "第一版"],
       ["淨採購需求", LOCKED_RULES.netDemandFormula, "核心鎖定"],
       ["公司備貨", "目標覆蓋＝供應商檢視期＋到貨交期＋商品分級安全緩衝；90～120天依熱銷90／穩定105／低銷120；0轉人工判斷", "第三版"],
-      ["普優瑪採購與寄庫", "寄倉現貨拉貨5天；成品製作45天；寄庫目標熱銷120／穩定105／低銷90天", "已確認"],
-      ["力榮採購與寄庫", "現貨拉貨5天；製作14天；製作後最早19天到貨；每品號0或10的倍數；寄庫熱銷90／其餘60天", "已確認"],
+      ["普優瑪採購與寄庫", `成品製作${recommendations.appliedRules?.puyouma?.productionDays ?? 45}天；寄庫目標熱銷${recommendations.appliedRules?.puyouma?.targetDays?.["熱銷"] ?? 120}／穩定${recommendations.appliedRules?.puyouma?.targetDays?.["穩定"] ?? 105}／低銷${recommendations.appliedRules?.puyouma?.targetDays?.["低銷"] ?? 90}天`, "集中規則"],
+      ["力榮採購與寄庫", `製作${recommendations.appliedRules?.lirong?.productionDays ?? 14}天；寄庫熱銷${recommendations.appliedRules?.lirong?.targetDays?.["熱銷"] ?? 90}／穩定${recommendations.appliedRules?.lirong?.targetDays?.["穩定"] ?? 60}／低銷${recommendations.appliedRules?.lirong?.targetDays?.["低銷"] ?? 60}天；初始為每品號0或10的倍數，可由集中規則變更`, "集中規則"],
       ["上林檢視期", "固定28天；另加到貨交期與分級安全緩衝；總部／門市／加總需求使用鎖定公式", "已確認"],
       ["付款認列", "國內預計到貨100%；國外下單30%、預計出貨70%；付款分配合計必須等於核准總額", "已確認"],
       ["一般自動採購排除", "凱信達一次性、歐必斯客訂型、所有總部贈品均不產生一般自動採購", "已確認"],
@@ -1984,7 +2013,7 @@
       ["售完即停(S)", LOCKED_RULES.sellThroughStopRule, "核心鎖定"],
       ["(S)門市調撥", LOCKED_RULES.sellThroughTransferRule, "核心鎖定"],
       ["寄庫建議", `工廠目標${recommendations.factoryTargetDays}天；寄倉現貨不足採購需求時必列缺貨警示`, "核心鎖定"],
-      ["普優瑪工廠製作交期", `${PROCUREMENT_POLICY.puyoumaFactoryLeadDays}天`, "已確認"],
+      ["普優瑪工廠製作交期", `${recommendations.appliedRules?.puyouma?.productionDays ?? PROCUREMENT_POLICY.puyoumaFactoryLeadDays}天`, "集中規則"],
       ["A42359-A", `只保留供應商貨號${CONFIRMED_OVERRIDES["A42359-A"]}`, "已確認"],
       ["A43359-A", CONFIRMED_EXCLUSIONS["A43359-A"], "已確認固定排除"]
     ]);
@@ -2245,6 +2274,7 @@
     roundSuggestedQuantity,
     roundByPack,
     puyoumaPackSize,
+    purchaseUnitFromRules,
     findSupplierRule,
     calculatePaymentSchedule,
     evaluateConsignmentSupply,

@@ -3,12 +3,11 @@
 
   const core = globalThis.ProcurementPlanningCore;
   const googleSources = globalThis.ProcurementGoogleSources;
-  const BLACKLIST_KEY = "siangstock.procurement.blacklist.v1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [],
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
     salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, firstReview: null,
-    secondReviewFile: null, review: null, ledger: null, monthPlan: null, budgetDirty: false, sourceMetadata: null, batchId: "", approved: false, erpDownloaded: false
+    secondReviewFile: null, review: null, ledger: null, monthPlan: null, procurementRules: null, revenueChannels: [], budgetDirty: false, sourceMetadata: null, batchId: "", approved: false, erpDownloaded: false
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -20,15 +19,17 @@
     lirongConsignmentFile: get("#lirong-consignment-file"), salesFiles: get("#sales-files"), modelFile: get("#model-file"), marketingFile: get("#marketing-file"),
     masterFileName: get("#master-file-name"), inventoryFileName: get("#inventory-file-name"), pendingFilesName: get("#pending-files-name"),
     consignmentFileName: get("#consignment-file-name"), lirongConsignmentFileName: get("#lirong-consignment-file-name"), salesFilesName: get("#sales-files-name"),
-    modelFileName: get("#model-file-name"), marketingFileName: get("#marketing-file-name"), blacklist: get("#blacklist-input"), saveBlacklist: get("#save-blacklist-button"),
+    modelFileName: get("#model-file-name"), marketingFileName: get("#marketing-file-name"), blacklist: get("#blacklist-input"),
     blacklistStatus: get("#blacklist-status"), analyze: get("#analyze-button"), download: get("#download-button"), status: get("#main-status"),
     resultPanel: get("#result-panel"), dateCheck: get("#date-check-message"), summaryCards: get("#summary-cards"), resultAlert: get("#result-alert"), resultRows: get("#result-rows"),
     forecastRevenue: get("#forecast-revenue"), forecastCost: get("#forecast-cost"), targetEndingCost: get("#target-ending-cost"), openingCost: get("#opening-cost"),
-    supplierReturns: get("#supplier-returns"), purchasedToDate: get("#purchased-to-date"), budgetSourceNote: get("#budget-source-note"),
+    supplierReturns: get("#supplier-returns"), releasedBudget: get("#released-budget"), purchasedToDate: get("#purchased-to-date"), budgetSourceNote: get("#budget-source-note"),
     saveBudget: get("#save-budget-button"), budgetPlanStatus: get("#budget-plan-status"), budgetSummary: get("#budget-summary"), ledgerStatus: get("#ledger-status"),
+    channelRows: get("#channel-rows"), kuanchengTotal: get("#kuancheng-total"), kuanmuTotal: get("#kuanmu-total"), addChannel: get("#add-channel-button"),
     reviewFile: get("#review-file"), reviewButton: get("#review-button"), secondReviewFile: get("#second-review-file"), confirmReview: get("#confirm-review-button"),
     submitApproval: get("#submit-approval-button"), approve: get("#approve-button"), retryNotification: get("#retry-notification-button"),
-    erp: get("#erp-button"), erpReference: get("#erp-reference"), erpCreated: get("#erp-created-button"), workflowStatus: get("#workflow-status"), workflowSummary: get("#workflow-summary")
+    erp: get("#erp-button"), erpReference: get("#erp-reference"), erpCreated: get("#erp-created-button"), workflowStatus: get("#workflow-status"), workflowSummary: get("#workflow-summary"),
+    approvalQueueRows: get("#approval-queue-rows"), refreshQueue: get("#refresh-queue-button")
   };
 
   function today() { return new Date().toISOString().slice(0, 10); }
@@ -43,17 +44,7 @@
   function sourceProof(id, metadata) { return `ID…${String(id || "").slice(-6)}・更新${metadata?.modifiedTime || "依工作表內容"}・抓取${String(metadata?.fetchedAt || "").replace("T", " ").slice(0, 19)}・SHA-256 ${String(metadata?.sha256 || "").slice(0, 12)}…`; }
   function setStatus(message, type = "") { elements.status.textContent = message; elements.status.className = `main-status ${type}`.trim(); }
   function setWorkflowStatus(message, type = "") { elements.workflowStatus.textContent = message; elements.workflowStatus.className = `main-status ${type}`.trim(); }
-  function blacklistEntries() { return core.normalizeBlacklist(elements.blacklist.value).map((entry) => entry.original); }
-  function updateBlacklistStatus(saved) { elements.blacklistStatus.textContent = `目前${blacklistEntries().length}項・${saved ? "已儲存於這個瀏覽器" : "尚未儲存"}`; }
-  function loadBlacklist() {
-    try { elements.blacklist.value = localStorage.getItem(BLACKLIST_KEY) || ""; updateBlacklistStatus(Boolean(elements.blacklist.value)); }
-    catch (_error) { updateBlacklistStatus(false); }
-  }
-  function saveBlacklist() {
-    const normalized = blacklistEntries().join("\n"); elements.blacklist.value = normalized;
-    try { localStorage.setItem(BLACKLIST_KEY, normalized); updateBlacklistStatus(true); }
-    catch (_error) { elements.blacklistStatus.textContent = "這個瀏覽器禁止本機儲存；本次仍可使用目前黑名單。"; }
-  }
+  function blacklistEntries() { return Array.isArray(state.procurementRules?.blacklist) ? state.procurementRules.blacklist : []; }
   async function readWorkbook(file) {
     const data = await file.arrayBuffer();
     return XLSX.read(data, { type: "array", cellDates: true, cellStyles: true, nodim: true });
@@ -65,7 +56,7 @@
     const span = document.createElement("span"); span.textContent = note; card.append(small, strong, span); return card;
   }
   function requirementsReady() {
-    return Boolean(state.config && (state.masterFile || state.masterWorkbook) && state.inventoryFile && state.pendingFiles.length
+    return Boolean(state.config && state.procurementRules && (state.masterFile || state.masterWorkbook) && state.inventoryFile && state.pendingFiles.length
       && (state.consignmentFile || state.consignmentWorkbook) && (state.lirongConsignmentFile || state.lirongConsignmentWorkbook)
       && state.marketingFile && state.salesFiles.length && state.modelFile && elements.month.value && elements.orderDate.value
       && elements.inventoryDate.value && elements.pendingDate.value && elements.consignmentDate.value && elements.salesDate.value);
@@ -108,25 +99,93 @@
       state.ledger = result; elements.purchasedToDate.value = String(Number(result.totals.committedAmount || 0));
       elements.ledgerStatus.textContent = `台帳已同步：正式承諾${formatCurrency(result.totals.committedAmount)}；待核准${formatCurrency(result.totals.pendingAmount)}；已核准未建ERP${formatCurrency(result.totals.approvedNotErpAmount)}；已建ERP未到貨${formatCurrency(result.totals.erpNotReceivedAmount)}；已到貨${formatCurrency(result.totals.receivedAmount)}；本月付款${formatCurrency(result.totals.currentMonthPayment)}；未來付款${formatCurrency(result.totals.futureMonthPayments)}。`;
       elements.ledgerStatus.classList.remove("error");
+      renderApprovalQueue();
       renderBudget();
     } catch (error) {
       state.ledger = null; elements.ledgerStatus.textContent = `台帳同步失敗：${error.message}；為避免錯算，正式核准前請重新整理。`;
       elements.ledgerStatus.classList.add("error");
     }
   }
+  function renderApprovalQueue() {
+    const pending = (state.ledger?.batches || []).filter((row) => row.status === "pending_approval");
+    if (!pending.length) {
+      const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 6; cell.textContent = "目前沒有待核准批次。"; row.appendChild(cell); elements.approvalQueueRows.replaceChildren(row); return;
+    }
+    const fragment = document.createDocumentFragment();
+    pending.forEach((item) => {
+      const row = document.createElement("tr");
+      appendCell(row, item.id); appendCell(row, (item.supplier_summary || []).join("、") || "未提供"); appendCell(row, item.created_by || "");
+      appendCell(row, String(item.created_at || "").replace("T", " ").slice(0, 19)); appendCell(row, formatCurrency(item.approved_amount));
+      const action = document.createElement("td");
+      if (state.config?.permissions?.canApprove) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "secondary-button queue-approve"; button.textContent = "核准並寄摘要";
+        button.addEventListener("click", () => approveQueuedBatch(item.id, button)); action.appendChild(button);
+      } else action.textContent = "待核准";
+      row.appendChild(action); fragment.appendChild(row);
+    });
+    elements.approvalQueueRows.replaceChildren(fragment);
+  }
+  async function approveQueuedBatch(batchId, button) {
+    const token = googleSources.token();
+    if (!token) { setWorkflowStatus("請先按上方「公司 Google 授權」，再核准共用待核准批次；核准後系統才能立即寄送摘要。", "error"); return; }
+    button.disabled = true; setWorkflowStatus(`正在核准批次${batchId}…`);
+    try {
+      await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/approve`, { idempotencyKey: `${batchId}:approve` });
+      await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/notify`, {}, { "X-Google-Access-Token": token });
+      setWorkflowStatus(`批次${batchId}已核准，摘要已寄送給siang01。`, "success");
+      await loadLedger();
+    } catch (error) { button.disabled = false; setWorkflowStatus(`核准失敗：${error.message}`, "error"); }
+  }
+
+  async function loadProcurementRules() {
+    const response = await fetch("/api/procurement/rules", { headers: { Accept: "application/json" }, cache: "no-store" });
+    const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    state.procurementRules = result.rules;
+    elements.blacklist.value = blacklistEntries().join("\n");
+    elements.blacklistStatus.textContent = `公司共用黑名單目前${blacklistEntries().length}項・規則版本v${result.version}`;
+  }
   function applyMonthPlan(plan) {
     state.monthPlan = plan;
     state.budgetDirty = false;
+    state.revenueChannels = Array.isArray(plan?.revenueChannels) ? plan.revenueChannels.map((row) => ({ ...row })) : [];
     elements.forecastRevenue.value = String(plan?.forecastRevenue ?? 0);
     elements.forecastCost.value = String(plan?.forecastCostOutflow ?? 0);
     elements.targetEndingCost.value = String(plan?.targetEndingInventoryCost ?? 0);
     elements.openingCost.value = String(plan?.openingInventoryCost ?? 0);
     elements.supplierReturns.value = String(plan?.expectedSupplierReturns ?? 0);
+    elements.releasedBudget.value = String(plan?.releasedBudgetAmount ?? plan?.budgetAmount ?? 0);
     elements.budgetSourceNote.value = plan?.sourceNote || "";
     elements.budgetPlanStatus.textContent = plan
-      ? `已同步${plan.analysisMonth}中性情境快照：額度${formatCurrency(plan.budgetAmount)}・更新${String(plan.updatedAt || "").replace("T", " ").slice(0, 19)}。`
+      ? `已同步${plan.analysisMonth}中性情境：整月額度${formatCurrency(plan.fullBudgetAmount)}・已釋放${formatCurrency(plan.releasedBudgetAmount)}・更新${String(plan.updatedAt || "").replace("T", " ").slice(0, 19)}。`
       : `${elements.month.value}尚無已核准月份快照；目前欄位只在本頁暫存。`;
-    renderBudget();
+    renderChannels(); renderBudget();
+  }
+  function renderChannels() {
+    const editable = state.config?.permissions?.canManageBudget === true;
+    const fragment = document.createDocumentFragment();
+    state.revenueChannels.forEach((item, index) => {
+      const row = document.createElement("tr");
+      const companyCell = document.createElement("td"); const company = document.createElement("select");
+      ["寬承", "寬沐"].forEach((name) => { const option = document.createElement("option"); option.value = name; option.textContent = name; company.appendChild(option); }); company.value = item.company; company.disabled = !editable;
+      const channelCell = document.createElement("td"); const channel = document.createElement("input"); channel.type = "text"; channel.value = item.channel || ""; channel.disabled = !editable;
+      const amountCell = document.createElement("td"); const amount = document.createElement("input"); amount.type = "number"; amount.min = "0"; amount.step = "1"; amount.value = String(item.amount || 0); amount.disabled = !editable;
+      const actionCell = document.createElement("td"); const remove = document.createElement("button"); remove.type = "button"; remove.className = "table-action"; remove.textContent = "刪除"; remove.disabled = !editable;
+      const changed = () => { state.revenueChannels[index] = { company: company.value, channel: channel.value.trim(), amount: Number(amount.value || 0) }; renderChannelTotals(); markBudgetDirty(); };
+      company.addEventListener("change", changed); channel.addEventListener("input", changed); amount.addEventListener("input", changed);
+      remove.addEventListener("click", () => { state.revenueChannels.splice(index, 1); renderChannels(); markBudgetDirty(); });
+      companyCell.appendChild(company); channelCell.appendChild(channel); amountCell.appendChild(amount); actionCell.appendChild(remove); row.append(companyCell, channelCell, amountCell, actionCell); fragment.appendChild(row);
+    });
+    elements.channelRows.replaceChildren(fragment); renderChannelTotals();
+  }
+  function renderChannelTotals() {
+    const subtotal = (company) => state.revenueChannels.filter((row) => row.company === company).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const kuancheng = subtotal("寬承"); const kuanmu = subtotal("寬沐");
+    elements.kuanchengTotal.textContent = formatCurrency(kuancheng); elements.kuanmuTotal.textContent = formatCurrency(kuanmu);
+    elements.forecastRevenue.value = String(kuancheng + kuanmu);
+  }
+  function addRevenueChannel() {
+    state.revenueChannels.push({ company: "寬承", channel: "新通路", amount: 0 }); renderChannels(); markBudgetDirty();
   }
   async function loadMonthPlan() {
     if (!state.config || !elements.month.value) return;
@@ -147,15 +206,17 @@
       const response = await fetch("/api/procurement/config", { headers: { Accept: "application/json" }, cache: "no-store" });
       if (!response.ok) throw new Error(response.status === 401 ? "請先完成公司帳號登入。" : `權限服務回應${response.status}`);
       state.config = await response.json();
-      elements.accountBadge.textContent = `${state.config.email}・${state.config.role === "admin" ? "核准管理者" : "採購操作"}`;
+      const roleLabel = { admin: "最高權限", approver: "採購核准者", operator: "採購操作" }[state.config.role] || "公司使用者";
+      elements.accountBadge.textContent = `${state.config.email}・${roleLabel}`;
       if (state.config.googleOAuthClientId) { elements.googleConnect.disabled = false; }
       else {
         elements.googleConnect.disabled = true;
         elements.sourceStatus.textContent = "Cloudflare 尚未設定 GOOGLE_OAUTH_CLIENT_ID；自動來源與郵件暫停。";
         elements.sourceStatus.classList.add("error");
       }
-      elements.saveBudget.disabled = state.config.role !== "admin";
-      await Promise.all([loadLedger(), loadMonthPlan()]);
+      elements.saveBudget.disabled = !state.config.permissions?.canManageBudget;
+      elements.addChannel.disabled = !state.config.permissions?.canManageBudget;
+      await Promise.all([loadProcurementRules(), loadLedger(), loadMonthPlan()]);
     } catch (error) {
       state.config = null; elements.accountBadge.textContent = "公司登入驗證失敗";
       elements.sourceStatus.textContent = error.message; elements.sourceStatus.classList.add("error");
@@ -250,9 +311,14 @@
         inventory: elements.inventoryDate.value, pending: elements.pendingDate.value, consignment: elements.consignmentDate.value, sales: elements.salesDate.value
       } });
       const analysis = core.buildProcurementRecommendations({ master, inventory, pendingReports, consignment, salesReports, model,
-        blacklist: blacklistEntries(), asOfDate: elements.salesDate.value, checkpoint: elements.checkpoint.value, supplierRules: core.SUPPLIER_RULES });
+        blacklist: blacklistEntries(), asOfDate: elements.salesDate.value, checkpoint: elements.checkpoint.value,
+        supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
+        purchaseUnitRules: state.procurementRules?.purchaseUnits,
+        consignmentRules: state.procurementRules?.consignment });
       analysis.validation = validation;
-      analysis.lirongConsignmentRows = core.buildLirongConsignmentRecommendations(analysis, lirongConsignment, { orderDate: elements.orderDate.value });
+      analysis.lirongConsignmentRows = core.buildLirongConsignmentRecommendations(analysis, lirongConsignment, {
+        orderDate: elements.orderDate.value, purchaseUnitRules: state.procurementRules?.purchaseUnits, consignmentRules: state.procurementRules?.consignment
+      });
       analysis.meta = {
         month: elements.month.value, checkpoint: elements.checkpoint.value, sourceMode: state.consignmentWorkbook ? "Google自動" : "手動備援",
         sourceHashes: state.sourceMetadata ? {
@@ -275,19 +341,17 @@
     const read = (element) => Number.isFinite(Number(element.value)) ? Number(element.value) : 0;
     const calculated = core.calculatePurchaseBudget({ forecastCostOutflow: read(elements.forecastCost), targetEndingInventoryCost: read(elements.targetEndingCost),
       openingInventoryCost: read(elements.openingCost), expectedSupplierReturns: read(elements.supplierReturns), purchasedAmountToDate: read(elements.purchasedToDate) });
-    if (!state.budgetDirty && Number.isFinite(Number(state.monthPlan?.budgetAmount))) {
-      const availableBudget = Number(state.monthPlan.budgetAmount);
-      return { ...calculated, availableBudget, remainingBudget: availableBudget - calculated.purchasedAmountToDate };
-    }
-    return calculated;
+    const fullBudgetAmount = calculated.availableBudget;
+    const releasedBudgetAmount = Number(elements.releasedBudget.value || 0);
+    return { ...calculated, fullBudgetAmount, availableBudget: releasedBudgetAmount, releasedBudgetAmount, remainingBudget: releasedBudgetAmount - calculated.purchasedAmountToDate };
   }
   function renderBudget() {
     const result = currentBudget(); const revenue = Number(elements.forecastRevenue.value || 0); const cost = Number(elements.forecastCost.value || 0);
     const cards = [
       createSummaryCard("中性情境整月預估營收", formatCurrency(revenue), elements.checkpoint.value === "mid-month" ? "實際至今＋行銷預估剩餘" : "同月份最新核准預估", "currency"),
       createSummaryCard("整月預估成本耗用", formatCurrency(cost), revenue > 0 ? `占營收${formatNumber(cost / revenue * 100)}%` : "尚未輸入營收", "currency"),
-      createSummaryCard("中性情境－整月預估可採購額度", formatCurrency(result.availableBudget),
-        state.monthPlan && !state.budgetDirty ? "已核准月份快照；來源見上方註記" : "成本耗用＋目標期末－期初＋退貨", "currency"),
+      createSummaryCard("中性情境－整月預估可採購額度", formatCurrency(result.fullBudgetAmount), "成本耗用＋目標期末－期初＋退貨", "currency"),
+      createSummaryCard("目前已釋放可採購額度", formatCurrency(result.releasedBudgetAmount), state.monthPlan && !state.budgetDirty ? "已核准月份快照" : "最高權限設定", "currency"),
       createSummaryCard("截至目前已承諾", formatCurrency(result.purchasedAmountToDate), "正式核准互斥狀態加總", "currency"),
       createSummaryCard("截至目前尚可承諾", formatCurrency(result.remainingBudget), result.remainingBudget < 0 ? "已超出額度" : "尚可核准", `currency ${result.remainingBudget < 0 ? "negative" : ""}`)
     ];
@@ -300,25 +364,26 @@
   }
   function markBudgetDirty() {
     state.budgetDirty = true;
-    elements.budgetPlanStatus.textContent = state.config?.role === "admin"
-      ? "月份額度有尚未儲存的變更；儲存後其他使用者才會讀到。"
+    elements.budgetPlanStatus.textContent = state.config?.permissions?.canManageBudget
+      ? "通路預估或月份額度有尚未儲存的變更；儲存後其他使用者才會讀到。"
       : "目前是本頁暫算；只有siang01可儲存為公司共用月份快照。";
     renderBudget();
   }
   async function saveMonthPlan() {
-    if (state.config?.role !== "admin") return;
+    if (!state.config?.permissions?.canManageBudget) return;
     elements.saveBudget.disabled = true;
     const budget = currentBudget();
     const sourceNote = elements.budgetSourceNote.value.trim() || `${elements.month.value}中性情境管理輸入`;
     try {
       const result = await postJson("/api/procurement/month-plan", {
         analysisMonth: elements.month.value,
-        forecastRevenue: Number(elements.forecastRevenue.value || 0),
+        revenueChannels: state.revenueChannels,
         forecastCostOutflow: Number(elements.forecastCost.value || 0),
         targetEndingInventoryCost: Number(elements.targetEndingCost.value || 0),
         openingInventoryCost: Number(elements.openingCost.value || 0),
         expectedSupplierReturns: Number(elements.supplierReturns.value || 0),
-        budgetAmount: budget.availableBudget,
+        fullBudgetAmount: budget.fullBudgetAmount,
+        releasedBudgetAmount: budget.releasedBudgetAmount,
         sourceNote
       }, {}, "PUT");
       applyMonthPlan(result.plan);
@@ -334,7 +399,7 @@
     if (!state.reviewFile || !state.analysis) return;
     elements.reviewButton.disabled = true; setWorkflowStatus("正在重新檢查人工數量、力榮10件規則、可售至、付款月份與額度…");
     try {
-      state.firstReview = core.reviewReturnedWorkbook(await readWorkbook(state.reviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: core.SUPPLIER_RULES, baselineBySku: new Map(state.analysis.rows.map((row) => [row.sku, row])) });
+      state.firstReview = core.reviewReturnedWorkbook(await readWorkbook(state.reviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, baselineBySku: new Map(state.analysis.rows.map((row) => [row.sku, row])) });
       XLSX.writeFile(core.buildSecondReviewWorkbook(state.firstReview, XLSX), `${elements.month.value}_回匯二次覆核報表.xlsx`, { compression: true, cellStyles: true });
       const t = state.firstReview.totals;
       elements.workflowSummary.replaceChildren(
@@ -354,7 +419,7 @@
     if (!state.secondReviewFile) return;
     elements.confirmReview.disabled = true; setWorkflowStatus("正在檢查二次確認量、原因、付款月份與核准金額…");
     try {
-      state.review = core.reviewSecondApprovalWorkbook(await readWorkbook(state.secondReviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: core.SUPPLIER_RULES, baselineBySku: new Map(state.firstReview.rows.map((row) => [row.sku, row])) });
+      state.review = core.reviewSecondApprovalWorkbook(await readWorkbook(state.secondReviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, baselineBySku: new Map(state.firstReview.rows.map((row) => [row.sku, row])) });
       const t = state.review.totals;
       elements.workflowSummary.replaceChildren(
         createSummaryCard("系統建議金額", formatCurrency(t.suggestedAmount), "原始工具建議", "currency"),
@@ -394,17 +459,17 @@
     if (!state.review || state.review.errors.length) return;
     state.batchId ||= newBatchId(); elements.submitApproval.disabled = true; setWorkflowStatus("正在寫入待核准台帳；此步驟不寄信…");
     try {
-      await postJson("/api/procurement/batches", batchPayload()); elements.approve.disabled = state.config.role !== "admin"; await loadLedger();
-      setWorkflowStatus(state.config.role === "admin" ? `批次${state.batchId}已送待核准；尚未寄信。` : `批次${state.batchId}已送待核准，請由siang01核准。`, "success");
+      await postJson("/api/procurement/batches", batchPayload()); elements.approve.disabled = !state.config.permissions?.canApprove; await loadLedger();
+      setWorkflowStatus(state.config.permissions?.canApprove ? `批次${state.batchId}已送待核准；尚未寄信。` : `批次${state.batchId}已送待核准，請由採購核准者處理。`, "success");
     } catch (error) { elements.submitApproval.disabled = false; setWorkflowStatus(`台帳寫入失敗：${error.message}`, "error"); }
   }
   async function approveBatch() {
-    if (!state.batchId || state.config.role !== "admin") return;
+    if (!state.batchId || !state.config.permissions?.canApprove) return;
     elements.approve.disabled = true; setWorkflowStatus("正在正式核准並建立通知工作…");
     try {
       await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/approve`, { idempotencyKey: `${state.batchId}:approve` });
       state.approved = true; elements.erp.disabled = false; elements.erpReference.disabled = false; await loadLedger(); const token = googleSources.token();
-      if (!token) { elements.retryNotification.disabled = false; setWorkflowStatus("已正式核准且額度台帳已寫入；郵件待重新完成siang01 Google授權後重送。", "error"); return; }
+      if (!token) { elements.retryNotification.disabled = false; setWorkflowStatus("已正式核准且額度台帳已寫入；郵件待目前核准帳號完成 Google 授權後重送。", "error"); return; }
       try {
         await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/notify`, {}, { "X-Google-Access-Token": token });
         elements.retryNotification.disabled = true; setWorkflowStatus("正式核准完成，額度摘要郵件已寄送；現在可下載ERP採購檔。", "success");
@@ -412,9 +477,9 @@
     } catch (error) { elements.approve.disabled = false; setWorkflowStatus(`核准失敗：${error.message}`, "error"); }
   }
   async function retryNotification() {
-    if (!state.batchId || state.config?.role !== "admin") return;
+    if (!state.batchId || !state.config?.permissions?.canApprove) return;
     const token = googleSources.token();
-    if (!token) { setWorkflowStatus("請先以siang01完成公司 Google 授權，再重送摘要。", "error"); return; }
+    if (!token) { setWorkflowStatus("請先以目前公司登入帳號完成 Google 授權，再重送摘要。", "error"); return; }
     elements.retryNotification.disabled = true; setWorkflowStatus("正在重送核准摘要郵件…");
     try {
       const result = await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/notify`, {}, { "X-Google-Access-Token": token });
@@ -431,7 +496,7 @@
   }
   async function confirmErpCreated() {
     const erpReference = elements.erpReference.value.trim();
-    if (!state.batchId || !state.erpDownloaded || !erpReference || state.config?.role !== "admin") return;
+    if (!state.batchId || !state.erpDownloaded || !erpReference || !state.config?.permissions?.canApprove) return;
     elements.erpCreated.disabled = true; setWorkflowStatus("正在將批次轉為已建立ERP、尚未到貨…");
     try {
       await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/erp-created`, { erpReference, idempotencyKey: `${state.batchId}:erp:${erpReference}` });
@@ -461,10 +526,10 @@
   });
   [elements.orderDate, elements.inventoryDate, elements.pendingDate, elements.consignmentDate, elements.salesDate].forEach((element) => element.addEventListener("change", updateReadyState));
   elements.month.addEventListener("change", () => { updateReadyState(); Promise.all([loadLedger(), loadMonthPlan()]); });
-  [elements.forecastRevenue, elements.forecastCost, elements.targetEndingCost, elements.openingCost, elements.supplierReturns].forEach((element) => element.addEventListener("input", markBudgetDirty));
+  [elements.forecastCost, elements.targetEndingCost, elements.openingCost, elements.supplierReturns, elements.releasedBudget].forEach((element) => element.addEventListener("input", markBudgetDirty));
   elements.budgetSourceNote.addEventListener("input", () => { elements.budgetPlanStatus.textContent = "額度來源註記尚未儲存。"; });
   elements.purchasedToDate.addEventListener("input", renderBudget); elements.saveBudget.addEventListener("click", saveMonthPlan);
-  elements.blacklist.addEventListener("input", () => updateBlacklistStatus(false)); elements.saveBlacklist.addEventListener("click", saveBlacklist);
+  elements.addChannel.addEventListener("click", addRevenueChannel); elements.refreshQueue.addEventListener("click", loadLedger);
   elements.googleConnect.addEventListener("click", connectGoogle); elements.autoSource.addEventListener("click", loadAutomaticSources);
   elements.analyze.addEventListener("click", analyze); elements.download.addEventListener("click", downloadRecommendation);
   elements.reviewButton.addEventListener("click", reviewReturn); elements.confirmReview.addEventListener("click", confirmSecondReview);
@@ -472,5 +537,5 @@
   elements.retryNotification.addEventListener("click", retryNotification); elements.erp.addEventListener("click", downloadErp);
   elements.erpReference.addEventListener("input", () => { elements.erpCreated.disabled = !(state.erpDownloaded && elements.erpReference.value.trim()); });
   elements.erpCreated.addEventListener("click", confirmErpCreated);
-  setInitialDates(); loadBlacklist(); renderBudget(); updateReadyState(); loadConfig();
+  setInitialDates(); renderChannels(); renderBudget(); updateReadyState(); loadConfig();
 })();
