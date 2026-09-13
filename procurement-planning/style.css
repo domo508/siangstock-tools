@@ -121,13 +121,53 @@
 
 .blacklist-actions {
   grid-column: 2;
-  display: flex;
+  display: grid;
   gap: 12px;
-  align-items: center;
-  justify-content: space-between;
+  align-items: stretch;
   color: var(--muted);
   font-size: 0.88rem;
 }
+
+.rules-entry-button {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 66px;
+  padding: 11px 14px;
+  border: 1px solid var(--navy);
+  border-radius: 15px;
+  color: white;
+  background: linear-gradient(135deg, var(--navy), var(--blue));
+  box-shadow: 0 10px 24px rgba(23, 63, 99, 0.16);
+  text-decoration: none;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.rules-entry-button:hover,
+.rules-entry-button:focus-visible {
+  transform: translateY(-2px);
+  border-color: #79b9c2;
+  box-shadow: 0 16px 30px rgba(23, 107, 135, 0.22);
+  outline: none;
+}
+
+.rules-entry-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.14);
+  font-size: 1.05rem;
+  font-weight: 900;
+}
+
+.rules-entry-copy { display: grid; gap: 3px; min-width: 0; }
+.rules-entry-copy strong { color: white; font-size: 0.98rem; }
+.rules-entry-copy small { color: rgba(255, 255, 255, 0.8); line-height: 1.35; }
+.rules-entry-arrow { font-size: 1.25rem; font-weight: 900; }
 
 .locked-formula {
   margin-top: 22px;

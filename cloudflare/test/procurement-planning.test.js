@@ -436,6 +436,7 @@ describe("採購規劃前台與入口", () => {
   it("首頁提供工具入口，工具頁保留麵包屑、返回與本機處理說明", () => {
     const homeHtml = readFileSync("../index.html", "utf8");
     const toolHtml = readFileSync("../procurement-planning/index.html", "utf8");
+    const headers = readFileSync("../_headers", "utf8");
     expect(homeHtml).toContain('href="/procurement-planning/"');
     expect(homeHtml).toContain("庫存採購規劃");
     expect(toolHtml).toContain("公司工具首頁");
@@ -456,6 +457,10 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml.match(/data-source-progress=/g)).toHaveLength(4);
     expect(toolHtml).toContain("普優瑪寄倉表</h3><span class=\"source-badge required\">自動取得・必要");
     expect(toolHtml).toContain("力榮寄庫表</h3><span class=\"source-badge required\">自動取得・必要");
+    expect(toolHtml).toContain("https://sheets.googleapis.com");
+    expect(headers).toMatch(/\/procurement-planning\/index\.html[\s\S]*connect-src[^\n]*https:\/\/sheets\.googleapis\.com/);
+    expect(toolHtml).toContain("class=\"rules-entry-button\"");
+    expect(toolHtml).toContain("新增、移除或調整公司共用黑名單");
     expect(toolHtml).toContain('id="model-badge"');
     expect(toolHtml).toContain("每6個月到期月份才改為必要更新");
     expect(toolHtml).toContain("規則管理");
