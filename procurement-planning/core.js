@@ -1863,9 +1863,32 @@
     const workbook = XLSX.utils.book_new();
     const budget = options.budget || null;
     const sourceDateCheck = recommendations.validation?.dateCheck || null;
+    const requestedSuppliers = Array.isArray(options.selectedSuppliers) ? options.selectedSuppliers.map((value) => String(value || "").trim()).filter(Boolean) : null;
+    const requestedSet = requestedSuppliers ? new Set(requestedSuppliers.map(normalizeText)) : null;
+    const allSupplierSet = new Set(recommendations.suggestedRows.map((row) => normalizeText(row.supplier)).filter(Boolean));
+    const isFullScope = !requestedSet || (requestedSet.size === allSupplierSet.size && [...allSupplierSet].every((supplier) => requestedSet.has(supplier)));
+    const supplierIncluded = (supplier) => !requestedSet || requestedSet.has(normalizeText(supplier));
+    const selectedSuggestedRows = recommendations.suggestedRows.filter((row) => supplierIncluded(row.supplier));
+    const selectedRows = recommendations.rows.filter((row) => supplierIncluded(row.supplier));
+    const selectedSkuSet = new Set(selectedRows.map((row) => row.sku));
+    const selectedTotals = {
+      analyzedSkuCount: selectedRows.length,
+      suggestedSkuCount: selectedSuggestedRows.length,
+      suggestedPurchaseQty: selectedSuggestedRows.reduce((sum, row) => sum + Number(row.suggestedPurchaseQty || 0), 0),
+      suggestedPurchaseAmount: selectedSuggestedRows.reduce((sum, row) => sum + Number(row.suggestedPurchaseAmount || 0), 0),
+      hotSkuCount: selectedRows.filter((row) => row.tier === "熱銷").length,
+      stableSkuCount: selectedRows.filter((row) => row.tier === "穩定").length,
+      lowSkuCount: selectedRows.filter((row) => row.tier === "低銷").length,
+      immediateShortageSkuCount: selectedRows.filter((row) => Number(row.immediateConsignmentGap || 0) > 0).length,
+      consignmentSuggestionSkuCount: selectedRows.filter((row) => Number(row.suggestedConsignmentQty || 0) > 0).length,
+      seasonalFallbackSkuCount: selectedRows.filter((row) => row.seasonalFallback).length,
+      sellThroughStopExcludedCount: selectedRows.filter((row) => row.sellThroughStop).length
+    };
+    const outputScope = isFullScope ? "全部供應商" : requestedSuppliers.join("、");
     const summaryRows = [
       ["庫存採購與寄庫建議"],
       ["資料安全", "本檔由瀏覽器本機產生；不修改或上傳原始Excel。"],
+      ["本次匯出範圍", outputScope],
       ["銷售截止日", recommendations.asOfDate],
       ["銷售檔最新結帳日", recommendations.sourceMaxSalesDate],
       ["銷售日期檢核", recommendations.salesDateStatus, recommendations.salesDateGapDays == null ? "未辨識" : `相差${recommendations.salesDateGapDays}天`],
@@ -1877,15 +1900,15 @@
       ...(sourceDateCheck?.status === "PASS" ? [] : [["使用限制", "資料時點未通過檢核；本檔只供串接驗收，不可直接下單。"]]),
       [],
       ["指標", "結果"],
-      ["分析SKU", recommendations.totals.analyzedSkuCount],
-      ["建議採購SKU", recommendations.totals.suggestedSkuCount],
-      ["建議採購數量", recommendations.totals.suggestedPurchaseQty],
-      ["建議採購金額", recommendations.totals.suggestedPurchaseAmount],
-      ["熱銷／穩定／低銷", `${recommendations.totals.hotSkuCount}／${recommendations.totals.stableSkuCount}／${recommendations.totals.lowSkuCount}`],
-      ["寄倉現貨不足SKU", recommendations.totals.immediateShortageSkuCount],
-      ["需新增寄庫SKU", recommendations.totals.consignmentSuggestionSkuCount],
-      ["去年同期資料不足SKU", recommendations.totals.seasonalFallbackSkuCount],
-      ["品名結尾(S)停止外採SKU", recommendations.totals.sellThroughStopExcludedCount],
+      ["分析SKU", selectedTotals.analyzedSkuCount],
+      ["建議採購SKU", selectedTotals.suggestedSkuCount],
+      ["建議採購數量", selectedTotals.suggestedPurchaseQty],
+      ["建議採購金額", selectedTotals.suggestedPurchaseAmount],
+      ["熱銷／穩定／低銷", `${selectedTotals.hotSkuCount}／${selectedTotals.stableSkuCount}／${selectedTotals.lowSkuCount}`],
+      ["寄倉現貨不足SKU", selectedTotals.immediateShortageSkuCount],
+      ["需新增寄庫SKU", selectedTotals.consignmentSuggestionSkuCount],
+      ["去年同期資料不足SKU", selectedTotals.seasonalFallbackSkuCount],
+      ["品名結尾(S)停止外採SKU", selectedTotals.sellThroughStopExcludedCount],
       [],
       ["人工確認採購量填寫規則"],
       ["① 空白", "依建議採購量"],
@@ -1900,30 +1923,31 @@
         ["當月預估可採購金額", budget.availableBudget],
         ["目前已採購金額", budget.purchasedAmountToDate],
         ["尚可採購金額", budget.remainingBudget],
-        ["本次建議採購金額", recommendations.totals.suggestedPurchaseAmount],
-        ["建議後剩餘額度", budget.remainingBudget - recommendations.totals.suggestedPurchaseAmount]
+        ["本次建議採購金額", selectedTotals.suggestedPurchaseAmount],
+        ["建議後剩餘額度", budget.remainingBudget - selectedTotals.suggestedPurchaseAmount]
       );
     }
     const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
     setColumnWidths(summarySheet, [32, 72]);
     XLSX.utils.book_append_sheet(workbook, summarySheet, "01_採購摘要");
 
-    const allSuggested = recommendationSheetRows(recommendations.suggestedRows);
+    const allSuggested = recommendationSheetRows(selectedSuggestedRows);
     const recommendationWidths = [20, 18, 16, 28, 48, 12, 8, 8, 16, 16, 16, 24, 24, 16, 16, 20, 16, 16, 16, 16, 22, 18, 16, 18, 18, 18, 20, 16, 18, 28, 14, 18, 12, 16, 36];
-    appendJsonSheet(workbook, XLSX, "02_全部採購建議", allSuggested, recommendationWidths);
+    appendJsonSheet(workbook, XLSX, isFullScope ? "02_全部採購建議" : "02_所選範圍採購建議", allSuggested, recommendationWidths);
 
-    const puyoumaRows = recommendations.suggestedRows.filter((row) => /普優[瑪碼]/.test(row.supplier));
-    const lirongRows = recommendations.suggestedRows.filter((row) => /力榮/.test(row.supplier));
-    const shanglinRows = recommendations.suggestedRows.filter((row) => /上林/.test(row.supplier));
+    const puyoumaRows = selectedSuggestedRows.filter((row) => /普優[瑪碼]/.test(row.supplier));
+    const lirongRows = selectedSuggestedRows.filter((row) => /力榮/.test(row.supplier));
+    const shanglinRows = selectedSuggestedRows.filter((row) => /上林/.test(row.supplier));
     const dedicated = (row) => /普優[瑪碼]|力榮|上林/.test(row.supplier);
-    appendJsonSheet(workbook, XLSX, "03A_力榮採購", recommendationSheetRows(lirongRows), recommendationWidths);
-    appendJsonSheet(workbook, XLSX, "03B1_普優瑪_天絲", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "天絲＋天絲棉")), recommendationWidths);
-    appendJsonSheet(workbook, XLSX, "03B2_普優瑪_長絨棉", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "長絨棉")), recommendationWidths);
-    appendJsonSheet(workbook, XLSX, "03B3_普優瑪_無尺寸", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "無尺寸品項")), recommendationWidths);
-    appendJsonSheet(workbook, XLSX, "03C_上林採購", recommendationSheetRows(shanglinRows), recommendationWidths);
-    appendJsonSheet(workbook, XLSX, "03D_其它供應商", recommendationSheetRows(recommendations.suggestedRows.filter((row) => !dedicated(row))), recommendationWidths);
+    const appendIfRows = (sheetName, rows, widths) => { if (!requestedSet || rows.length) appendJsonSheet(workbook, XLSX, sheetName, rows, widths); };
+    appendIfRows("03A_力榮採購", recommendationSheetRows(lirongRows), recommendationWidths);
+    appendIfRows("03B1_普優瑪_天絲", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "天絲＋天絲棉")), recommendationWidths);
+    appendIfRows("03B2_普優瑪_長絨棉", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "長絨棉")), recommendationWidths);
+    appendIfRows("03B3_普優瑪_無尺寸", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "無尺寸品項")), recommendationWidths);
+    appendIfRows("03C_上林採購", recommendationSheetRows(shanglinRows), recommendationWidths);
+    appendIfRows("03D_其它供應商", recommendationSheetRows(selectedSuggestedRows.filter((row) => !dedicated(row))), recommendationWidths);
 
-    const consignmentRows = recommendations.consignmentRows.map((row) => ({
+    const consignmentRows = recommendations.consignmentRows.filter((row) => selectedSkuSet.has(row.sku)).map((row) => ({
       "採購分頁": row.purchaseTab,
       "ERP品號": row.sku,
       "供應商貨號": row.supplierSku,
@@ -1941,9 +1965,9 @@
       "缺貨／供貨狀態": row.supplyStatus,
       "排程欄首原文": row.scheduleNotes.join("｜")
     }));
-    appendJsonSheet(workbook, XLSX, "04A_普優瑪寄庫建議", consignmentRows.filter((row) => /普優[瑪碼]/.test(recommendations.rows.find((item) => item.sku === row["ERP品號"])?.supplier || "")), [18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
-    appendJsonSheet(workbook, XLSX, "04B_力榮寄庫建議", consignmentRows.filter((row) => /力榮/.test(recommendations.rows.find((item) => item.sku === row["ERP品號"])?.supplier || "")), [18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
-    if (recommendations.lirongConsignmentRows?.length) {
+    appendIfRows("04A_普優瑪寄庫建議", consignmentRows.filter((row) => /普優[瑪碼]/.test(recommendations.rows.find((item) => item.sku === row["ERP品號"])?.supplier || "")), [18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
+    appendIfRows("04B_力榮寄庫建議", consignmentRows.filter((row) => /力榮/.test(recommendations.rows.find((item) => item.sku === row["ERP品號"])?.supplier || "")), [18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
+    if (recommendations.lirongConsignmentRows?.length && selectedRows.some((row) => /力榮/.test(row.supplier))) {
       const replacement = XLSX.utils.json_to_sheet(recommendations.lirongConsignmentRows.map((row) => ({
         "ERP品號": row.sku, "供應商貨號": row.supplierSku, "來源品名": row.sourceName, "最新主檔品名": row.masterName,
         "商品狀態": row.tier, "預估日需求": row.forecastDailyQty, "現貨拉貨交期": row.pullLeadDays, "製作期": row.productionDays,
@@ -1956,10 +1980,11 @@
         "排程欄首原文": row.scheduleNotes.join("｜")
       })));
       setColumnWidths(replacement, Array(30).fill(18));
-      workbook.Sheets["04B_力榮寄庫建議"] = replacement;
+      if (workbook.Sheets["04B_力榮寄庫建議"]) workbook.Sheets["04B_力榮寄庫建議"] = replacement;
+      else XLSX.utils.book_append_sheet(workbook, replacement, "04B_力榮寄庫建議");
     }
-    appendJsonSheet(workbook, XLSX, "05_新品採購建議", recommendationSheetRows(recommendations.rows.filter((row) => row.isNewProduct)), recommendationWidths);
-    appendJsonSheet(workbook, XLSX, "06_普優瑪新品寄庫", consignmentRows.filter((row) => recommendations.rows.find((item) => item.sku === row["ERP品號"])?.isNewProduct && /普優[瑪碼]/.test(recommendations.rows.find((item) => item.sku === row["ERP品號"])?.supplier || "")), [18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
+    appendIfRows("05_新品採購建議", recommendationSheetRows(selectedRows.filter((row) => row.isNewProduct)), recommendationWidths);
+    appendIfRows("06_普優瑪新品寄庫", consignmentRows.filter((row) => recommendations.rows.find((item) => item.sku === row["ERP品號"])?.isNewProduct && /普優[瑪碼]/.test(recommendations.rows.find((item) => item.sku === row["ERP品號"])?.supplier || "")), [18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
 
     const exceptionRows = [
       ...(recommendations.productExclusions || []).map((row) => ({
@@ -2024,8 +2049,9 @@
 
   function reviewReturnedWorkbook(workbook, XLSX, options = {}) {
     const preferredSheets = workbook.SheetNames.filter((name) => /^03(?:A|B\d|C|D)_/.test(name));
-    const sourceSheets = preferredSheets.length ? preferredSheets : workbook.SheetNames.filter((name) => name === "02_全部採購建議");
-    if (!sourceSheets.length) throw new Error("回匯檔缺少採購建議分頁。");
+    const sourceSheets = preferredSheets.length ? preferredSheets : workbook.SheetNames.filter((name) => ["02_全部採購建議", "02_所選範圍採購建議"].includes(name));
+    if (!sourceSheets.length && workbook.SheetNames.some((name) => /回匯.*覆核|二次覆核/.test(name))) throw new Error("這是舊版或已產生的二次覆核檔，不能作為第一次人工回匯；請使用本頁本次下載的採購建議Excel。");
+    if (!sourceSheets.length) throw new Error("回匯檔缺少本工具的採購建議分頁；請使用本頁本次下載的Excel。");
     const rows = [];
     const errors = [];
     const seen = new Set();
@@ -2141,7 +2167,8 @@
 
   function reviewSecondApprovalWorkbook(workbook, XLSX, options = {}) {
     const sheet = workbook.Sheets["02_二次覆核"];
-    if (!sheet) throw new Error("確認版缺少02_二次覆核分頁。");
+    if (!sheet && workbook.SheetNames.some((name) => /回匯.*覆核|二次覆核/.test(name))) throw new Error("這是舊版二次覆核格式；請使用本次第一次回匯後由工具新下載的確認版。");
+    if (!sheet) throw new Error("確認版缺少02_二次覆核分頁；請使用本次第一次回匯後由工具新下載的確認版。");
     const sourceRows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: true });
     const rows = [];
     const errors = [];

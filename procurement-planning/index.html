@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20260914-sheets-rules-entry-r1">
+  <link rel="stylesheet" href="style.css?v=20260914-workflow-layout-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -38,25 +38,58 @@
     </section>
 
     <section class="steps" aria-label="使用步驟">
-      <div><span>1</span><strong>取得資料並計算</strong><small>固定來源自動唯讀取得；Excel仍只在目前瀏覽器解析。</small></div>
-      <div><span>2</span><strong>回匯並二次覆核</strong><small>重算可售至、AI判斷、規則阻擋、付款月份與額度。</small></div>
-      <div><span>3</span><strong>正式核准</strong><small>核准後寫入台帳、寄送摘要，再產生ERP檔案。</small></div>
+      <div><span>1</span><strong>先看營收與額度</strong><small>確認本月預估營收、已承諾與尚可承諾金額。</small></div>
+      <div><span>2</span><strong>取得資料並計算</strong><small>匯入本次資料，再依供應商查看或匯出採購建議。</small></div>
+      <div><span>3</span><strong>回匯、核准與ERP</strong><small>二次覆核通過後才核准、寄送摘要並建立ERP。</small></div>
     </section>
 
-    <section class="panel" aria-labelledby="source-title">
+    <section class="panel budget-panel stage-panel stage-one" aria-labelledby="budget-title">
+      <div class="section-heading compact">
+        <div><p class="eyebrow"><span class="stage-number" aria-hidden="true">1</span> 中性情境</p><h2 id="budget-title">先確認整月營收與可採購額度</h2></div>
+        <p>關鍵數字固定顯示；通路與計算欄位可依需要展開。</p>
+      </div>
+      <div class="planning-context" aria-label="本次規劃期間">
+        <label><span>分析月份＊</span><input id="analysis-month" type="month" required></label>
+        <label><span>使用時點＊</span><select id="checkpoint"><option value="month-start">月初採購</option><option value="mid-month">月中採購</option><option value="month-end">月底驗證</option></select></label>
+        <label><span>預計下單日＊</span><input id="order-date" type="date" required></label>
+      </div>
+      <div id="budget-summary" class="summary-grid budget-summary budget-summary-featured" aria-live="polite"></div>
+      <details id="budget-details" class="budget-details" open>
+        <summary><span>展開／收合通路預估與額度計算明細</span><small>營收通路、成本耗用、期初期末庫存及已釋放額度</small></summary>
+        <div class="budget-detail-body">
+          <div class="budget-grid">
+            <label><span>寬承預估認列營收</span><input id="forecast-revenue" type="number" min="0" step="1" value="0"><small>寬承外部通路＋預計對寬沐開票收入；成本率使用此欄。</small></label>
+            <label><span>寬承＋寬沐終端通路預估營收</span><input id="terminal-forecast-revenue" type="number" min="0" step="1" value="0" readonly></label>
+            <label><span>預估當月成本流出</span><input id="forecast-cost" type="number" min="0" step="1" value="0"></label>
+            <label><span>目標期末庫存成本</span><input id="target-ending-cost" type="number" min="0" step="1" value="0"></label>
+            <label><span>期初庫存成本</span><input id="opening-cost" type="number" min="0" step="1" value="0"></label>
+            <label><span>預計供應商退貨</span><input id="supplier-returns" type="number" step="1" value="0"></label>
+            <label><span>目前已釋放可採購額度</span><input id="released-budget" type="number" min="0" step="1" value="0"></label>
+            <label><span>截至目前已承諾（台帳自動）</span><input id="purchased-to-date" type="number" min="0" step="1" value="0" readonly></label>
+            <label class="budget-source-field"><span>額度來源註記</span><input id="budget-source-note" type="text" maxlength="500" value="" placeholder="例如：9月月初核准快照"></label>
+          </div>
+          <div class="channel-forecast" aria-labelledby="channel-forecast-title">
+            <div class="section-heading compact"><div><h3 id="channel-forecast-title">通路別中性情境預估</h3><p>下列通路加總為終端營運參考；採購成本率改用上方「寬承預估認列營收」，避免把寬沐終端零售全額重複算成寬承收入。</p></div><button id="add-channel-button" class="secondary-button" type="button" disabled>新增通路</button></div>
+            <div class="result-table-wrap"><table class="procurement-table compact-table"><thead><tr><th>公司</th><th>通路／門市</th><th>預估營收</th><th>管理</th></tr></thead><tbody id="channel-rows"></tbody><tfoot><tr><th colspan="2">寬承預估</th><td id="kuancheng-total">$0</td><td></td></tr><tr><th colspan="2">寬沐預估</th><td id="kuanmu-total">$0</td><td></td></tr></tfoot></table></div>
+          </div>
+          <div class="budget-actions"><button id="save-budget-button" class="secondary-button" type="button" disabled>儲存本月額度</button><span id="budget-plan-status">尚未同步月份額度。</span></div>
+          <div class="budget-equation">目前已釋放可採購額度 − 截至目前已承諾採購金額 ＝ 截至目前尚可承諾額度；整月額度與已釋放額度分開呈現。</div>
+        </div>
+      </details>
+      <p id="ledger-status" class="budget-note">正式核准、核准更正與撤銷會即時更新集中台帳；未到貨採購單不再用來反推整月已承諾金額。</p>
+    </section>
+
+    <section class="panel stage-panel stage-two" aria-labelledby="source-title">
       <div class="section-heading">
-        <div><p class="eyebrow">正式流程・採購建議</p><h2 id="source-title">設定分析時點並取得資料</h2></div>
+        <div><p class="eyebrow"><span class="stage-number" aria-hidden="true">2</span> 本次資料・採購建議</p><h2 id="source-title">取得最新資料並產生採購建議</h2></div>
         <p>固定 Google 來源須先用公司帳號授權；銷售、庫存與未到貨仍由人員選檔。</p>
       </div>
 
-      <div class="period-grid procurement-period" aria-label="分析期間設定">
-        <label><span>分析月份＊</span><input id="analysis-month" type="month" required></label>
-        <label><span>使用時點＊</span><select id="checkpoint"><option value="month-start">月初採購</option><option value="mid-month">月中採購</option><option value="month-end">月底驗證</option></select></label>
+      <div class="period-grid procurement-period source-dates" aria-label="資料截止日設定">
         <label><span>庫存截止日＊</span><input id="inventory-date" type="date" required></label>
         <label><span>未到貨清單截止日＊</span><input id="pending-date" type="date" required></label>
         <label><span>寄倉表截止日＊</span><input id="consignment-date" type="date" required></label>
         <label><span>銷售資料截止日＊</span><input id="sales-date" type="date" required></label>
-        <label><span>預計下單日＊</span><input id="order-date" type="date" required></label>
         <p>庫存、未到貨、寄倉與銷售四個截止日相差14天內才會通過同時點檢核；超過時仍可檢查品號，但不應直接採用實際淨需求。</p>
       </div>
 
@@ -165,17 +198,25 @@
 
       <div class="action-bar">
         <button id="analyze-button" class="primary-button" type="button" disabled>產生採購建議</button>
-        <button id="download-button" class="secondary-button" type="button" disabled>下載採購建議Excel</button>
+        <button id="download-button" class="secondary-button" type="button" disabled>下載所選供應商Excel</button>
         <p id="main-status" class="main-status" role="status">請先完成日期與本次必要資料。</p>
       </div>
       <div id="source-status" class="result-alert" role="status">固定來源尚未完成公司 Google 授權；可先使用各來源的手動備援。</div>
       <div class="result-alert warn" role="note"><strong>暫行權限例外：</strong>普優瑪與力榮寄庫表目前仍可能開放「知道連結的任何人可編輯」。因權限由供應商維護，本次先不阻擋部署；工具仍會逐次檢查來源格式、資料日期與內容雜湊，但此項尚未完成正式權限驗收。</div>
     </section>
 
-    <section id="result-panel" class="panel results" aria-labelledby="result-title" hidden>
+    <section id="result-panel" class="panel results stage-panel stage-two-results" aria-labelledby="result-title" hidden>
       <div class="section-heading">
         <div><p class="eyebrow">計算結果</p><h2 id="result-title">總部採購與工廠寄庫建議</h2></div>
         <p id="date-check-message"></p>
+      </div>
+      <div class="supplier-filter" aria-labelledby="supplier-filter-title">
+        <div class="supplier-filter-heading">
+          <div><h3 id="supplier-filter-title">本次查看與匯出範圍</h3><p>可單獨選力榮、普優瑪或任何供應商；畫面與Excel金額會同步更新。</p></div>
+          <div class="supplier-filter-actions"><button id="select-all-suppliers" class="secondary-button" type="button">全選</button><button id="clear-suppliers" class="secondary-button" type="button">清除</button></div>
+        </div>
+        <div id="supplier-filter-list" class="supplier-filter-list"></div>
+        <p id="supplier-scope-status" class="supplier-scope-status" role="status">產生建議後可選擇供應商。</p>
       </div>
       <div id="summary-cards" class="summary-grid procurement-summary"></div>
       <div id="result-alert" class="result-alert" role="status"></div>
@@ -188,38 +229,18 @@
       <p class="result-note">淨採購需求只扣公司可用庫存與未到貨採購；工廠寄倉不會被扣除。寄倉現貨不足「未到貨＋本次建議採購」時，必列缺貨警示並加入寄庫建議。</p>
     </section>
 
-    <section class="panel budget-panel" aria-labelledby="budget-title">
-      <div class="section-heading compact">
-        <div><p class="eyebrow">中性情境</p><h2 id="budget-title">整月預估可採購額度</h2></div>
-        <p>本次建議採購金額會一併與尚可採購額度比較。</p>
-      </div>
-      <div class="budget-grid">
-        <label><span>寬承預估認列營收</span><input id="forecast-revenue" type="number" min="0" step="1" value="0"><small>寬承外部通路＋預計對寬沐開票收入；成本率使用此欄。</small></label>
-        <label><span>寬承＋寬沐終端通路預估營收</span><input id="terminal-forecast-revenue" type="number" min="0" step="1" value="0" readonly></label>
-        <label><span>預估當月成本流出</span><input id="forecast-cost" type="number" min="0" step="1" value="0"></label>
-        <label><span>目標期末庫存成本</span><input id="target-ending-cost" type="number" min="0" step="1" value="0"></label>
-        <label><span>期初庫存成本</span><input id="opening-cost" type="number" min="0" step="1" value="0"></label>
-        <label><span>預計供應商退貨</span><input id="supplier-returns" type="number" step="1" value="0"></label>
-        <label><span>目前已釋放可採購額度</span><input id="released-budget" type="number" min="0" step="1" value="0"></label>
-        <label><span>截至目前已承諾（台帳自動）</span><input id="purchased-to-date" type="number" min="0" step="1" value="0" readonly></label>
-        <label class="budget-source-field"><span>額度來源註記</span><input id="budget-source-note" type="text" maxlength="500" value="" placeholder="例如：9月月初核准快照"></label>
-      </div>
-      <div class="channel-forecast" aria-labelledby="channel-forecast-title">
-        <div class="section-heading compact"><div><h3 id="channel-forecast-title">通路別中性情境預估</h3><p>下列通路加總為終端營運參考；採購成本率改用上方「寬承預估認列營收」，避免把寬沐終端零售全額重複算成寬承收入。</p></div><button id="add-channel-button" class="secondary-button" type="button" disabled>新增通路</button></div>
-        <div class="result-table-wrap"><table class="procurement-table compact-table"><thead><tr><th>公司</th><th>通路／門市</th><th>預估營收</th><th>管理</th></tr></thead><tbody id="channel-rows"></tbody><tfoot><tr><th colspan="2">寬承預估</th><td id="kuancheng-total">$0</td><td></td></tr><tr><th colspan="2">寬沐預估</th><td id="kuanmu-total">$0</td><td></td></tr></tfoot></table></div>
-      </div>
-      <div class="budget-actions"><button id="save-budget-button" class="secondary-button" type="button" disabled>儲存本月額度</button><span id="budget-plan-status">尚未同步月份額度。</span></div>
-      <div class="budget-equation">目前已釋放可採購額度 − 截至目前已承諾採購金額 ＝ 截至目前尚可承諾額度；整月額度與已釋放額度分開呈現。</div>
-      <div id="budget-summary" class="summary-grid budget-summary"></div>
-      <p id="ledger-status" class="budget-note">正式核准、核准更正與撤銷會即時更新集中台帳；未到貨採購單不再用來反推整月已承諾金額。</p>
-    </section>
-
-    <section class="panel workflow-panel" aria-labelledby="workflow-title">
-      <div class="section-heading"><div><p class="eyebrow">回匯・核准・ERP</p><h2 id="workflow-title">第二次覆核與正式核准</h2></div><p>回匯本工具輸出的採購建議；待核准階段不寄信。</p></div>
+    <section class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
+      <div class="section-heading"><div><p class="eyebrow"><span class="stage-number" aria-hidden="true">3</span> 回匯・核准・ERP</p><h2 id="workflow-title">人工回匯、二次確認與正式核准</h2></div><p>只能回匯本頁本次下載的報表；待核准階段不寄信。</p></div>
+      <ol class="workflow-progress" aria-label="回匯核准進度">
+        <li id="workflow-step-download" data-status="waiting"><span>1</span><strong>下載本批建議</strong><small>先在上方勾選供應商並下載</small></li>
+        <li id="workflow-step-first" data-status="locked"><span>2</span><strong>第一次人工回匯</strong><small>工具重新計算並產生二次覆核</small></li>
+        <li id="workflow-step-second" data-status="locked"><span>3</span><strong>二次確認</strong><small>逐列填量後執行最終檢查</small></li>
+        <li id="workflow-step-approval" data-status="locked"><span>4</span><strong>核准與ERP</strong><small>正式核准才寄摘要並占用額度</small></li>
+      </ol>
       <div class="workflow-grid">
-        <label class="file-button">1. 選擇第一次人工回匯<input id="review-file" type="file" accept=".xlsx" disabled></label>
+        <label id="review-file-label" class="file-button is-disabled">選擇第一次人工回匯<input id="review-file" type="file" accept=".xlsx" disabled></label>
         <button id="review-button" class="secondary-button" type="button" disabled>產生二次覆核報表</button>
-        <label class="file-button">2. 回匯二次確認版<input id="second-review-file" type="file" accept=".xlsx" disabled></label>
+        <label id="second-review-file-label" class="file-button is-disabled">回匯二次確認版<input id="second-review-file" type="file" accept=".xlsx" disabled></label>
         <button id="confirm-review-button" class="secondary-button" type="button" disabled>檢查二次確認版</button>
         <button id="submit-approval-button" class="secondary-button" type="button" disabled>送出待核准台帳</button>
         <button id="approve-button" class="primary-button" type="button" disabled>正式核准並寄送摘要</button>
@@ -228,7 +249,7 @@
         <label class="workflow-field"><span>ERP採購單號／確認註記</span><input id="erp-reference" type="text" maxlength="120" disabled></label>
         <button id="erp-created-button" class="secondary-button" type="button" disabled>確認ERP已建立</button>
       </div>
-      <p id="workflow-status" class="main-status" role="status">尚未選擇人工回匯檔。</p>
+      <p id="workflow-status" class="main-status" role="status">請先在上方產生建議、選擇供應商並下載本批Excel；下載後才會開放第一次人工回匯。</p>
       <div id="workflow-summary" class="summary-grid budget-summary"></div>
       <div class="approval-queue" aria-labelledby="approval-queue-title">
         <div class="section-heading compact"><div><h3 id="approval-queue-title">公司共用待核准清單</h3><p>採購核准者可在自己的電腦核准，不需使用最高權限帳號。</p></div><button id="refresh-queue-button" class="secondary-button" type="button">重新整理</button></div>
@@ -261,8 +282,8 @@
 
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260914-lirong-header-r1"></script>
+  <script src="core.js?v=20260914-supplier-scope-r1"></script>
   <script src="google-sources.js?v=20260914-source-status-r1"></script>
-  <script src="app.js?v=20260914-source-model-r2"></script>
+  <script src="app.js?v=20260914-workflow-layout-r1"></script>
 </body>
 </html>

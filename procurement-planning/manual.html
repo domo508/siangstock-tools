@@ -7,7 +7,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
   <title>庫存採購規劃操作手冊｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260911-manual-r1">
-  <link rel="stylesheet" href="style.css?v=20260914-source-model-r2">
+  <link rel="stylesheet" href="style.css?v=20260914-workflow-layout-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -16,13 +16,13 @@
     <section class="hero"><div><p class="eyebrow">OPERATOR GUIDE</p><h1>先算、再回匯，<br>最後才核准。</h1><p class="hero-description">這份手冊說明公司帳號登入、固定資料源、採購建議、人工回匯、額度台帳、電子郵件摘要與ERP輸出的正確順序。</p></div></section>
     <section class="panel"><div class="section-heading compact"><div><p class="eyebrow">標準流程</p><h2>每次採購怎麼做</h2></div></div>
       <ol class="manual-steps">
-        <li><strong>確認公司帳號。</strong>所有 <code>@siangapato.com.tw</code> 帳號可計算與回匯；<code>mcpheeyin@siangapato.com.tw</code>、<code>elerin@siangapato.com.tw</code>與最高權限可核准。除「權限與通知」外，採購核准者也可管理採購規則。</li>
-        <li><strong>按「公司 Google 授權」。</strong>授權只讓本頁取得唯讀權限，不會立刻下載資料；再按「自動取得最新資料」，並確認商品主檔、行銷策略、普優瑪及力榮四項都顯示成功。授權 token 只留在目前分頁記憶體。</li>
+        <li><strong>先確認月份、預估營收與採購額度。</strong>第一區固定顯示寬承認列營收、終端通路營收、整月額度、已承諾及尚可承諾；需要調整通路或計算欄位時，再展開明細。</li>
+        <li><strong>確認公司帳號並取得固定資料。</strong>所有 <code>@siangapato.com.tw</code> 帳號可計算與回匯；<code>mcpheeyin@siangapato.com.tw</code>、<code>elerin@siangapato.com.tw</code>與最高權限可核准。按「公司 Google 授權」後，再按「自動取得最新資料」，確認商品主檔、行銷策略、普優瑪及力榮四項成功。授權 token 只留在目前分頁記憶體。</li>
         <li><strong>匯入本次資料。</strong>選擇最新公司庫存、完整未到貨採購單與銷售明細。普優瑪及力榮寄庫表都由固定線上表單自動取得，手動選檔只作備援。商品主檔沒有新品或異動時也由工具自動取得。</li>
         <li><strong>確認季節模型狀態。</strong>通過檢核的回測檔會保留在這台電腦的瀏覽器中，平常直接沿用；每6個月的到期月份會改標「本月必要更新」。換電腦、無痕模式或清除網站資料後，須重新選擇一次。</li>
-        <li><strong>產生並下載採購建議。</strong>上林獨立使用28天檢視期；力榮逐品號使用10件單位；普優瑪與力榮的採購、寄庫分開。</li>
+        <li><strong>產生採購建議並選擇供應商。</strong>計算完成後可全選、清除或逐家勾選力榮、普優瑪、上林及其它供應商；畫面會即時重算SKU、採購金額、本月／未來付款與採購後尚可承諾。下載Excel只包含所選範圍，摘要也會同步重算。</li>
         <li><strong>人工填量。</strong>空白代表採系統建議、0代表不採購、正整數代表覆寫；修改時必填原因。力榮只能填0或10的倍數。</li>
-        <li><strong>回匯第一次人工結果。</strong>工具重新顯示人工填寫可售至、AI判斷、規則阻擋、最終可核准金額與付款月份，並下載二次覆核報表；此階段不寄信。</li>
+        <li><strong>回匯第一次人工結果。</strong>必須先下載本批所選供應商Excel，第一次回匯入口才會開放。工具重新顯示人工填寫可售至、AI判斷、規則阻擋、最終可核准金額與付款月份，並下載二次覆核報表；此階段不寄信。</li>
         <li><strong>回匯二次確認版。</strong>在二次覆核報表逐列填入「二次確認採購量」，0也要明確填寫；若再次改量必填原因。工具通過最終檢查後才可送待核准。</li>
         <li><strong>送待核准並正式核准。</strong>待核准不寄信；正式核准才占用採購承諾、建立通知工作並寄送額度摘要。寄信失敗不會回滾核准，可重新授權後按「重送摘要郵件」。</li>
         <li><strong>下載並完成ERP開單。</strong>只有正式核准且所有阻擋均已排除，下載按鈕才會開放。完成ERP開單後填入採購單號或確認註記，批次只轉為「已建立ERP、尚未到貨」，不會再次占用額度。</li>
@@ -39,7 +39,7 @@
       </div>
     </section>
     <section class="panel"><div class="section-heading compact"><div><p class="eyebrow">停止條件</p><h2>遇到這些情況不要核准</h2></div></div>
-      <ul class="manual-steps"><li>Google固定來源欄位、日期或粉紅格式改變。</li><li>本機沒有可沿用的季節模型，或已進入每6個月一次的必要更新月份。</li><li>最新商品主檔出現重複品號時停止整批；缺價格或供應商時只阻擋受影響品號。</li><li>人工量不是正整數、力榮不是10的倍數、修改量卻沒填原因。</li><li>二次確認量留白、同一品號重複、付款月份加總不等於最終核准金額，或來源時點未通過檢核。</li><li>普優瑪或力榮寄庫表仍開放「知道連結的任何人可編輯」；2026-09-11已同意因供應商維護而暫不阻擋部署，但前台會持續標示尚未完成正式權限驗收，並維持來源格式、日期與內容雜湊檢查。</li></ul>
+      <ul class="manual-steps"><li>Google固定來源欄位、日期或粉紅格式改變。</li><li>本機沒有可沿用的季節模型，或已進入每6個月一次的必要更新月份。</li><li>最新商品主檔出現重複品號時停止整批；缺價格或供應商時只阻擋受影響品號。</li><li>回匯的不是本頁本次下載的報表；舊版「03B其它供應商回匯覆核」不能直接進入現行正式核准流程。</li><li>人工量不是正整數、力榮不是10的倍數、修改量卻沒填原因。</li><li>二次確認量留白、同一品號重複、付款月份加總不等於最終核准金額，或來源時點未通過檢核。</li><li>普優瑪或力榮寄庫表仍開放「知道連結的任何人可編輯」；2026-09-11已同意因供應商維護而暫不阻擋部署，但前台會持續標示尚未完成正式權限驗收，並維持來源格式、日期與內容雜湊檢查。</li></ul>
     </section>
     <footer><p>翔仔居家・庫存採購規劃操作手冊</p><p>通知紀錄預設保存12個月，只含批次、事件、收件人、時間、狀態、訊息ID、重試與必要錯誤摘要。</p></footer>
   </main>

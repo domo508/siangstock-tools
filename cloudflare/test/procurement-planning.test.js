@@ -402,6 +402,34 @@ describe("採購建議第二階段", () => {
     expect(summary.some((row) => row[0] === "使用限制" && String(row[1]).includes("不可直接下單"))).toBe(true);
   });
 
+  it("可只輸出勾選供應商，摘要金額與採購分頁同步縮小且保留稽核頁", () => {
+    const recommendations = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: ["一次性代工品"], asOfDate: "2026-08-28"
+    });
+    const puyoumaAmount = recommendations.suggestedRows.reduce((sum, row) => sum + row.suggestedPurchaseAmount, 0);
+    const lirongRow = { ...recommendations.suggestedRows[0], sku: "L1", supplier: "力榮", suggestedPurchaseQty: 10, suggestedPurchaseAmount: 3000, unitCost: 300, purchaseTab: "其它" };
+    recommendations.rows.push(lirongRow);
+    recommendations.suggestedRows.push(lirongRow);
+    const output = core.buildRecommendationWorkbook(recommendations, XLSX, { selectedSuppliers: ["普優瑪"] });
+    expect(output.SheetNames).toContain("02_所選範圍採購建議");
+    expect(output.SheetNames).toContain("03B1_普優瑪_天絲");
+    expect(output.SheetNames).not.toContain("03A_力榮採購");
+    expect(output.SheetNames).not.toContain("03C_上林採購");
+    expect(output.SheetNames).not.toContain("03D_其它供應商");
+    expect(output.SheetNames).toEqual(expect.arrayContaining(["07_排除與例外", "08_核心規則"]));
+    const summary = XLSX.utils.sheet_to_json(output.Sheets["01_採購摘要"], { header: 1, defval: "" });
+    expect(summary.find((row) => row[0] === "本次匯出範圍")?.[1]).toBe("普優瑪");
+    expect(summary.find((row) => row[0] === "建議採購金額")?.[1]).toBe(puyoumaAmount);
+    const selectedRows = XLSX.utils.sheet_to_json(output.Sheets["02_所選範圍採購建議"], { defval: "" });
+    expect(new Set(selectedRows.map((row) => row["供應商"]))).toEqual(new Set(["普優瑪"]));
+
+    recommendations.lirongConsignmentRows = [{ sku: "L1", supplierSku: "LR-L1", sourceName: "力榮測試品", masterName: "力榮測試品", tier: "穩定", forecastDailyQty: 1, pullLeadDays: 5, productionDays: 14, earliestDeliveryDays: 19, targetLowDays: 60, targetHighDays: 90, targetDays: 60, currentQty: 0, scheduledQty: 0, approvedPullQty: 0, productionCompleteDate: "", expectedArrivalDate: "", rawQty: 20, downQty: 20, upQty: 20, suggestedQty: 20, availableDaysAfter: 20, beforePullRisk: true, beforeProductionRisk: true, beforeDeliveryRisk: true, status: "需製作", futureCost: 6000, scheduleNotes: [] }];
+    const lirongOutput = core.buildRecommendationWorkbook(recommendations, XLSX, { selectedSuppliers: ["力榮"] });
+    expect(lirongOutput.SheetNames).toEqual(expect.arrayContaining(["03A_力榮採購", "04B_力榮寄庫建議"]));
+    expect(lirongOutput.SheetNames).not.toContain("03B1_普優瑪_天絲");
+  });
+
   it("人工回匯後產生可售至、AI判斷、付款月份與ERP核准門檻", () => {
     const recommendations = core.buildProcurementRecommendations({
       master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
@@ -445,6 +473,13 @@ describe("採購建議第二階段", () => {
     expect(finalReview.rows[0]).toMatchObject({ finalQty: 22, approvedAmount: 11000, aiJudgment: expect.any(String) });
     expect(finalReview.totals.approvedAmount).toBe(11000);
   });
+
+  it("舊版二次覆核檔會顯示明確指引，不誤當第一次或現行二次回匯", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["ERP品號"], ["A1"]]), "03B_其它供應商回匯覆核");
+    expect(() => core.reviewReturnedWorkbook(workbook, XLSX)).toThrow("舊版或已產生的二次覆核檔");
+    expect(() => core.reviewSecondApprovalWorkbook(workbook, XLSX)).toThrow("舊版二次覆核格式");
+  });
 });
 
 describe("採購規劃前台與入口", () => {
@@ -479,6 +514,13 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="model-badge"');
     expect(toolHtml).toContain("每6個月到期月份才改為必要更新");
     expect(toolHtml).toContain("規則管理");
+    expect(toolHtml.indexOf('id="budget-title"')).toBeLessThan(toolHtml.indexOf('id="source-title"'));
+    expect(toolHtml.indexOf('id="source-title"')).toBeLessThan(toolHtml.indexOf('id="workflow-title"'));
+    expect(toolHtml).toContain('id="budget-details"');
+    expect(toolHtml).toContain('id="supplier-filter-list"');
+    expect(toolHtml).toContain("下載所選供應商Excel");
+    expect(toolHtml).toContain('id="workflow-step-download"');
+    expect(toolHtml).toContain('id="review-file-label" class="file-button is-disabled"');
     const toolApp = readFileSync("../procurement-planning/app.js", "utf8");
     expect(toolApp).toContain("/api/procurement/month-plan");
     expect(toolApp).toContain('setAutomaticSourceBusy(true, "正在取得 4 項最新資料…")');
@@ -487,10 +529,15 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain('refreshMonths: 6');
     expect(toolApp).toContain('indexedDB.open(MODEL_CACHE.database, 1)');
     expect(toolApp).toContain('elements.month.value >= refreshMonth');
+    expect(toolApp).toContain("selectedSuppliers: new Set()");
+    expect(toolApp).toContain("selectedPaymentSummary");
+    expect(toolApp).toContain("下載後才會開放第一次人工回匯");
     const toolCss = readFileSync("../procurement-planning/style.css", "utf8");
     expect(toolCss).toContain("@media (max-width: 620px)");
     expect(toolCss).toMatch(/\.procurement-period,[\s\S]*\.budget-grid,[\s\S]*\.procurement-summary,[\s\S]*\.budget-summary \{ grid-template-columns: 1fr; \}/);
     expect(toolCss).toMatch(/@media \(max-width: 620px\)[\s\S]*\.budget-grid \.budget-source-field \{ grid-column: auto; \}/);
+    expect(toolCss).toContain(".workflow-grid .file-button.is-disabled");
+    expect(toolCss).toContain(".supplier-filter-list");
   });
 
   it("9月歷史接續資料固定為可追溯月份快照且不補寄舊通知", () => {

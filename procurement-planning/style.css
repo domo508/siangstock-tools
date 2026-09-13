@@ -1,7 +1,37 @@
-.procurement-period {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.stage-panel { position: relative; }
+.stage-one {
+  border-color: rgba(121, 185, 194, 0.95);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(239, 249, 248, 0.94));
+  box-shadow: 0 22px 54px rgba(23, 107, 135, 0.14);
+}
+.stage-number {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  margin-right: 6px;
+  place-items: center;
+  border-radius: 9px;
+  color: white;
+  background: linear-gradient(145deg, var(--navy), var(--blue));
+  letter-spacing: 0;
 }
 
+.planning-context,
+.procurement-period {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.planning-context {
+  margin: 4px 0 20px;
+  padding: 16px;
+  border: 1px solid #b9d2da;
+  border-radius: 17px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.planning-context label,
 .procurement-period label {
   display: grid;
   gap: 7px;
@@ -9,6 +39,8 @@
   font-weight: 800;
 }
 
+.planning-context input,
+.planning-context select,
 .procurement-period input,
 .procurement-period select,
 .budget-grid input {
@@ -23,6 +55,7 @@
 }
 
 .procurement-period p { grid-column: 1 / -1; }
+.source-dates { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .procurement-sources { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .source-badge.recommended { color: #755f19; background: #fff4cf; }
 .upload-card .secondary-button { width: 100%; margin: 5px 0; }
@@ -181,7 +214,7 @@
 .locked-formula p { margin: 8px 0 5px; color: var(--navy); font-weight: 800; line-height: 1.55; }
 .locked-formula small { color: #4e6d61; line-height: 1.55; }
 
-.procurement-summary { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.procurement-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .summary-card .value.currency { font-size: 1.35rem; }
 .result-alert {
   margin: 18px 0;
@@ -233,7 +266,85 @@
   text-align: center;
 }
 .budget-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.budget-summary-featured {
+  margin: 0 0 18px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.budget-summary-featured .summary-card {
+  border-color: rgba(121, 185, 194, 0.75);
+  background: rgba(255, 255, 255, 0.94);
+}
+.budget-summary-featured .summary-card:nth-last-child(-n + 2) {
+  border-color: #b9ddd1;
+  background: var(--soft-green);
+}
+.budget-details {
+  overflow: hidden;
+  border: 1px solid #b9d2da;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.76);
+}
+.budget-details > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 18px;
+  align-items: center;
+  min-height: 58px;
+  padding: 14px 18px;
+  color: var(--navy);
+  cursor: pointer;
+  font-weight: 900;
+  list-style: none;
+}
+.budget-details > summary::-webkit-details-marker { display: none; }
+.budget-details > summary::after { content: "＋"; color: var(--blue); font-size: 1.35rem; }
+.budget-details[open] > summary::after { content: "－"; }
+.budget-details > summary small { grid-column: 1; color: var(--muted); font-weight: 500; }
+.budget-details > summary:focus-visible { outline: 3px solid rgba(23, 107, 135, 0.24); outline-offset: -3px; }
+.budget-detail-body { padding: 4px 18px 18px; }
 .budget-note { margin: 14px 0 0; color: var(--muted); line-height: 1.6; font-size: 0.9rem; }
+
+.supplier-filter {
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid #b9d2da;
+  border-radius: 18px;
+  background: var(--soft-blue);
+}
+.supplier-filter-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+.supplier-filter-heading h3 { margin: 0 0 6px; color: var(--navy); }
+.supplier-filter-heading p { margin: 0; color: var(--muted); line-height: 1.5; }
+.supplier-filter-actions { display: flex; gap: 8px; }
+.supplier-filter-actions button { min-height: 38px; padding: 7px 12px; }
+.supplier-filter-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+.supplier-option {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 2px 9px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  color: var(--navy);
+  background: white;
+  cursor: pointer;
+}
+.supplier-option:has(input:checked) { border-color: #79b9c2; box-shadow: inset 0 0 0 1px #79b9c2; }
+.supplier-option input { grid-row: 1 / span 2; width: 18px; height: 18px; accent-color: var(--blue); }
+.supplier-option strong { overflow-wrap: anywhere; }
+.supplier-option small { color: var(--muted); line-height: 1.35; }
+.supplier-scope-status { margin: 12px 0 0; color: var(--muted); line-height: 1.55; }
+.supplier-scope-status.warn { color: #8a681d; }
 
 .workflow-grid {
   display: grid;
@@ -243,6 +354,50 @@
 }
 .workflow-grid .file-button,
 .workflow-grid button { min-height: 48px; display: flex; align-items: center; justify-content: center; }
+.workflow-grid .file-button.is-disabled {
+  border: 1px solid #c7d2d7;
+  color: #7d8c96;
+  background: #e8edef;
+  cursor: not-allowed;
+  opacity: 0.78;
+}
+.workflow-progress {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+}
+.workflow-progress li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 3px 8px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: #f8fbfc;
+}
+.workflow-progress li > span {
+  display: grid;
+  grid-row: 1 / span 2;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  color: white;
+  background: #9aabb3;
+  font-weight: 900;
+}
+.workflow-progress strong { color: var(--navy); }
+.workflow-progress small { color: var(--muted); line-height: 1.35; }
+.workflow-progress li[data-status="active"] { border-color: #79b9c2; background: var(--soft-blue); }
+.workflow-progress li[data-status="active"] > span { background: var(--blue); }
+.workflow-progress li[data-status="done"] { border-color: #b9ddd1; background: var(--soft-green); }
+.workflow-progress li[data-status="done"] > span { background: var(--green); }
+.workflow-progress li[data-status="blocked"] { border-color: #e2c47d; background: var(--soft-yellow); }
+.workflow-progress li[data-status="blocked"] > span { background: #9a741c; }
 .workflow-field { display: grid; gap: 6px; color: var(--muted); font-size: 0.86rem; }
 .workflow-field input { min-width: 0; min-height: 48px; border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; color: var(--navy); background: #fff; }
 .workflow-panel .main-status { margin-top: 16px; }
@@ -258,10 +413,13 @@
 .queue-approve { white-space: nowrap; }
 
 @media (max-width: 980px) {
+  .planning-context,
   .procurement-period { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .procurement-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .budget-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .workflow-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workflow-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .supplier-filter-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .source-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .budget-grid .budget-source-field { grid-column: span 2; }
 }
@@ -274,11 +432,18 @@
 }
 
 @media (max-width: 620px) {
+  .planning-context,
   .procurement-period,
   .budget-grid,
   .procurement-summary,
   .budget-summary { grid-template-columns: 1fr; }
   .workflow-grid { grid-template-columns: 1fr; }
+  .workflow-progress,
+  .supplier-filter-list { grid-template-columns: 1fr; }
+  .supplier-filter-heading { flex-direction: column; }
+  .supplier-filter-actions { width: 100%; }
+  .supplier-filter-actions button { flex: 1; }
+  .budget-details > summary { grid-template-columns: minmax(0, 1fr) auto; }
   .source-progress { grid-template-columns: 1fr; }
   .budget-grid .budget-source-field { grid-column: auto; }
   .procurement-period p { grid-column: auto; }

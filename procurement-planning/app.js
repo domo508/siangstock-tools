@@ -8,7 +8,8 @@
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [],
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
     salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, firstReview: null,
-    secondReviewFile: null, review: null, ledger: null, monthPlan: null, procurementRules: null, revenueChannels: [], budgetDirty: false, sourceMetadata: null, modelMetadata: null, batchId: "", approved: false, erpDownloaded: false
+    secondReviewFile: null, review: null, ledger: null, monthPlan: null, procurementRules: null, revenueChannels: [], budgetDirty: false, sourceMetadata: null, modelMetadata: null, batchId: "", approved: false, erpDownloaded: false,
+    selectedSuppliers: new Set(), returnScope: null, consignmentSource: null
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -24,6 +25,7 @@
     modelFileName: get("#model-file-name"), modelBadge: get("#model-badge"), marketingFileName: get("#marketing-file-name"), blacklist: get("#blacklist-input"),
     blacklistStatus: get("#blacklist-status"), analyze: get("#analyze-button"), download: get("#download-button"), status: get("#main-status"),
     resultPanel: get("#result-panel"), dateCheck: get("#date-check-message"), summaryCards: get("#summary-cards"), resultAlert: get("#result-alert"), resultRows: get("#result-rows"),
+    supplierFilterList: get("#supplier-filter-list"), supplierScopeStatus: get("#supplier-scope-status"), selectAllSuppliers: get("#select-all-suppliers"), clearSuppliers: get("#clear-suppliers"),
     forecastRevenue: get("#forecast-revenue"), terminalForecastRevenue: get("#terminal-forecast-revenue"), forecastCost: get("#forecast-cost"), targetEndingCost: get("#target-ending-cost"), openingCost: get("#opening-cost"),
     supplierReturns: get("#supplier-returns"), releasedBudget: get("#released-budget"), purchasedToDate: get("#purchased-to-date"), budgetSourceNote: get("#budget-source-note"),
     saveBudget: get("#save-budget-button"), budgetPlanStatus: get("#budget-plan-status"), budgetSummary: get("#budget-summary"), ledgerStatus: get("#ledger-status"),
@@ -31,7 +33,9 @@
     reviewFile: get("#review-file"), reviewButton: get("#review-button"), secondReviewFile: get("#second-review-file"), confirmReview: get("#confirm-review-button"),
     submitApproval: get("#submit-approval-button"), approve: get("#approve-button"), retryNotification: get("#retry-notification-button"),
     erp: get("#erp-button"), erpReference: get("#erp-reference"), erpCreated: get("#erp-created-button"), workflowStatus: get("#workflow-status"), workflowSummary: get("#workflow-summary"),
-    approvalQueueRows: get("#approval-queue-rows"), refreshQueue: get("#refresh-queue-button")
+    approvalQueueRows: get("#approval-queue-rows"), refreshQueue: get("#refresh-queue-button"),
+    reviewFileLabel: get("#review-file-label"), secondReviewFileLabel: get("#second-review-file-label"),
+    workflowStepDownload: get("#workflow-step-download"), workflowStepFirst: get("#workflow-step-first"), workflowStepSecond: get("#workflow-step-second"), workflowStepApproval: get("#workflow-step-approval")
   };
 
   function today() { return new Date().toISOString().slice(0, 10); }
@@ -183,12 +187,32 @@
       ? "請完成公司登入、日期與必要資料；本月季節模型需要提供或更新。"
       : "請完成公司登入、日期與必要資料；商品主檔與寄庫表可自動取得或手動備援。");
   }
+  function setFileInputEnabled(input, label, enabled) {
+    input.disabled = !enabled;
+    label.classList.toggle("is-disabled", !enabled);
+  }
+  function setWorkflowStep(element, status, note = "") {
+    element.dataset.status = status;
+    if (note) element.querySelector("small").textContent = note;
+  }
+  function resetReviewWorkflow(message = "請先在上方選擇供應商並下載本批Excel；下載後才會開放第一次人工回匯。") {
+    state.reviewFile = null; state.firstReview = null; state.secondReviewFile = null; state.review = null; state.approved = false; state.erpDownloaded = false; state.batchId = "";
+    elements.reviewFile.value = ""; elements.secondReviewFile.value = "";
+    setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, false);
+    setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, false);
+    elements.reviewButton.disabled = true; elements.confirmReview.disabled = true; elements.submitApproval.disabled = true; elements.approve.disabled = true;
+    elements.retryNotification.disabled = true; elements.erp.disabled = true; elements.erpReference.value = ""; elements.erpReference.disabled = true; elements.erpCreated.disabled = true;
+    elements.workflowSummary.replaceChildren();
+    setWorkflowStep(elements.workflowStepDownload, state.returnScope ? "done" : (state.analysis ? "active" : "waiting"), state.returnScope ? `已下載${state.returnScope.size}家供應商` : "先在上方勾選供應商並下載");
+    setWorkflowStep(elements.workflowStepFirst, state.returnScope ? "active" : "locked", state.returnScope ? "已開放第一次人工回匯" : "下載本批Excel後開放");
+    setWorkflowStep(elements.workflowStepSecond, "locked", "第一次覆核通過後開放");
+    setWorkflowStep(elements.workflowStepApproval, "locked", "二次確認通過後開放");
+    setWorkflowStatus(message);
+  }
   function invalidateAnalysis() {
-    state.analysis = null; state.reviewFile = null; state.firstReview = null; state.secondReviewFile = null; state.review = null; state.approved = false; state.erpDownloaded = false; state.batchId = "";
-    elements.download.disabled = true; elements.submitApproval.disabled = true; elements.approve.disabled = true; elements.retryNotification.disabled = true; elements.erp.disabled = true;
-    elements.reviewFile.value = ""; elements.secondReviewFile.value = ""; elements.reviewFile.disabled = true; elements.reviewButton.disabled = true;
-    elements.secondReviewFile.disabled = true; elements.confirmReview.disabled = true;
-    elements.erpReference.value = ""; elements.erpReference.disabled = true; elements.erpCreated.disabled = true;
+    state.analysis = null; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null;
+    elements.download.disabled = true; elements.resultPanel.hidden = true; elements.supplierFilterList.replaceChildren();
+    resetReviewWorkflow("請先在上方產生建議、選擇供應商並下載本批Excel；下載後才會開放第一次人工回匯。");
   }
   function bindFileInput(input, key, label, multiple = false, workbookKey = "") {
     input.addEventListener("change", () => {
@@ -404,20 +428,88 @@
       }
     }
   }
-  function renderSummary(analysis, consignmentSource) {
+  function supplierNames(analysis) {
+    const names = [...new Set(analysis.suggestedRows.map((row) => String(row.supplier || "").trim()).filter(Boolean))];
+    const rank = (name) => /力榮/.test(name) ? 0 : (/普優[瑪碼]/.test(name) ? 1 : (/上林/.test(name) ? 2 : 3));
+    return names.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, "zh-Hant"));
+  }
+  function selectedRows() {
+    if (!state.analysis) return [];
+    return state.analysis.suggestedRows.filter((row) => state.selectedSuppliers.has(String(row.supplier || "").trim()));
+  }
+  function selectedPaymentSummary(rows) {
+    const bySupplier = new Map();
+    rows.forEach((row) => {
+      const summary = bySupplier.get(row.supplier) || { supplier: row.supplier, amount: 0, confirmedQty: 0, consignmentAvailableQty: 0 };
+      summary.amount += Number(row.suggestedPurchaseAmount || 0);
+      summary.confirmedQty += Number(row.suggestedPurchaseQty || 0);
+      summary.consignmentAvailableQty += Number(row.consignmentCurrentQty || 0);
+      bySupplier.set(row.supplier, summary);
+    });
+    let current = 0; let future = 0; const reviewSuppliers = [];
+    bySupplier.forEach((summary) => {
+      const schedule = core.calculatePaymentSchedule({ ...summary, orderDate: elements.orderDate.value, supplyMode: /力榮|普優[瑪碼]/.test(summary.supplier) ? "consignment" : "direct", supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES });
+      if (schedule.status !== "PASS") { reviewSuppliers.push(summary.supplier); return; }
+      schedule.entries.forEach((entry) => { if (entry.month === elements.month.value) current += entry.amount; else future += entry.amount; });
+    });
+    return { current, future, reviewSuppliers };
+  }
+  function renderSelectedAnalysis() {
+    if (!state.analysis) return;
+    const rows = selectedRows();
+    const amount = rows.reduce((sum, row) => sum + Number(row.suggestedPurchaseAmount || 0), 0);
+    const quantity = rows.reduce((sum, row) => sum + Number(row.suggestedPurchaseQty || 0), 0);
+    const payments = selectedPaymentSummary(rows);
+    const remainingAfter = currentBudget().remainingBudget - amount;
     elements.summaryCards.replaceChildren(
-      createSummaryCard("分析SKU", formatNumber(analysis.totals.analyzedSkuCount), "近12週有需求或已有未到貨"),
-      createSummaryCard("建議採購SKU", formatNumber(analysis.totals.suggestedSkuCount), "排除規則後"),
-      createSummaryCard("建議採購數量", formatNumber(analysis.totals.suggestedPurchaseQty), "已套用箱規／10件單位"),
-      createSummaryCard("建議採購金額", formatCurrency(analysis.totals.suggestedPurchaseAmount), "依最新商品主檔", "currency"),
-      createSummaryCard("熱銷／穩定／低銷", `${analysis.totals.hotSkuCount}/${analysis.totals.stableSkuCount}/${analysis.totals.lowSkuCount}`, "ABC＋XYZ"),
-      createSummaryCard("寄倉現貨不足", formatNumber(analysis.totals.immediateShortageSkuCount), "採購與寄庫分開"),
-      createSummaryCard("規則排除", formatNumber(analysis.totals.sellThroughStopExcludedCount), "S／專屬週期／贈品")
+      createSummaryCard("已選供應商", formatNumber(state.selectedSuppliers.size), "可逐家查看與匯出"),
+      createSummaryCard("建議採購SKU", formatNumber(rows.length), "只計本次勾選範圍"),
+      createSummaryCard("建議採購數量", formatNumber(quantity), "已套用箱規／10件單位"),
+      createSummaryCard("建議採購金額", formatCurrency(amount), "依最新商品主檔", "currency"),
+      createSummaryCard("預計本月付款", formatCurrency(payments.current), "依下單日與付款規則", "currency"),
+      createSummaryCard("預計未來付款", formatCurrency(payments.future), "依平均採購週期", "currency"),
+      createSummaryCard("採購後尚可承諾", formatCurrency(remainingAfter), remainingAfter < 0 ? "超出目前已釋放額度" : "已釋放額度扣除已承諾與本批", `currency ${remainingAfter < 0 ? "negative" : ""}`)
     );
+    renderRows(rows);
+    const scopeNames = [...state.selectedSuppliers];
+    const missingPayment = payments.reviewSuppliers.length ? `；${payments.reviewSuppliers.join("、")}付款規則待確認` : "";
+    elements.supplierScopeStatus.textContent = scopeNames.length
+      ? `目前選擇：${scopeNames.join("、")}；畫面與下載Excel只包含這個範圍${missingPayment}。`
+      : "尚未選擇供應商；請至少勾選一家後再下載。";
+    elements.supplierScopeStatus.className = `supplier-scope-status ${scopeNames.length && !payments.reviewSuppliers.length ? "" : "warn"}`.trim();
+    elements.download.disabled = !scopeNames.length;
+  }
+  function resetScopeForNewExport() {
+    state.returnScope = null;
+    resetReviewWorkflow("供應商範圍已變更；請重新下載本批Excel，之後才會開放第一次人工回匯。");
+    renderSelectedAnalysis();
+  }
+  function renderSupplierFilters(analysis) {
+    const names = supplierNames(analysis);
+    state.selectedSuppliers = new Set(names);
+    const fragment = document.createDocumentFragment();
+    names.forEach((supplier) => {
+      const rows = analysis.suggestedRows.filter((row) => row.supplier === supplier);
+      const amount = rows.reduce((sum, row) => sum + Number(row.suggestedPurchaseAmount || 0), 0);
+      const label = document.createElement("label"); label.className = "supplier-option";
+      const input = document.createElement("input"); input.type = "checkbox"; input.checked = true; input.value = supplier;
+      const strong = document.createElement("strong"); strong.textContent = supplier;
+      const small = document.createElement("small"); small.textContent = `${rows.length}個SKU・${formatCurrency(amount)}`;
+      input.addEventListener("change", () => {
+        if (input.checked) state.selectedSuppliers.add(supplier); else state.selectedSuppliers.delete(supplier);
+        resetScopeForNewExport();
+      });
+      label.append(input, strong, small); fragment.appendChild(label);
+    });
+    elements.supplierFilterList.replaceChildren(fragment);
+    renderSelectedAnalysis();
+  }
+  function renderSummary(analysis, consignmentSource) {
     elements.dateCheck.textContent = `銷售截止日：${analysis.asOfDate}｜檔案最新：${analysis.sourceMaxSalesDate}`;
     const styleNote = consignmentSource.styleAudit.pinkDetected ? `已辨識${formatNumber(consignmentSource.styleAudit.pinkCells)}個粉紅排程格。` : "未辨識粉紅排程。";
     elements.resultAlert.textContent = `${analysis.validation.dateCheck.message} ${styleNote} 上林採28天檢視；普優瑪與力榮採購／寄庫分頁處理。`;
     elements.resultAlert.className = `result-alert ${analysis.validation.dateCheck.status === "PASS" && consignmentSource.styleAudit.pinkDetected ? "" : "warn"}`.trim();
+    renderSupplierFilters(analysis);
   }
   function appendCell(row, value, className = "") { const cell = document.createElement("td"); cell.textContent = value; if (className) cell.className = className; row.appendChild(cell); }
   function renderRows(rows) {
@@ -471,9 +563,9 @@
           lirong: state.sourceMetadata.lirongMetadata.sha256
         } : {}
       };
-      state.analysis = analysis; renderSummary(analysis, consignment); renderRows(analysis.suggestedRows);
-      elements.resultPanel.hidden = false; elements.download.disabled = false;
-      elements.reviewFile.disabled = false;
+      state.analysis = analysis; state.consignmentSource = consignment; state.returnScope = null; renderSummary(analysis, consignment);
+      elements.resultPanel.hidden = false;
+      resetReviewWorkflow("採購建議已完成；請先勾選本次供應商並下載Excel，下載後才會開放第一次人工回匯。");
       setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。`, "success");
       renderBudget(); elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
@@ -505,6 +597,7 @@
       cards.push(createSummaryCard("本批本月／未來付款", `${formatCurrency(currentPayment)}／${formatCurrency(state.review.totals.approvedAmount - currentPayment)}`, "依供應商付款觸發點", "currency"));
     }
     elements.budgetSummary.replaceChildren(...cards);
+    if (state.analysis) renderSelectedAnalysis();
   }
   function markBudgetDirty() {
     state.budgetDirty = true;
@@ -537,14 +630,22 @@
     } finally { elements.saveBudget.disabled = false; }
   }
   function downloadRecommendation() {
-    if (!state.analysis) return;
-    XLSX.writeFile(core.buildRecommendationWorkbook(state.analysis, XLSX, { budget: currentBudget() }), `${elements.month.value}_${elements.checkpoint.value === "mid-month" ? "月中" : "月初"}_採購建議_人工審核.xlsx`, { compression: true, cellStyles: true });
+    if (!state.analysis || !state.selectedSuppliers.size) return;
+    const selected = [...state.selectedSuppliers];
+    const scopeLabel = (selected.length === supplierNames(state.analysis).length ? "全部供應商" : selected.join("＋")).replace(/[\\/:*?"<>|]/g, "-").slice(0, 80);
+    XLSX.writeFile(core.buildRecommendationWorkbook(state.analysis, XLSX, { budget: currentBudget(), selectedSuppliers: selected }), `${elements.month.value}_${elements.checkpoint.value === "mid-month" ? "月中" : elements.checkpoint.value === "month-end" ? "月底" : "月初"}_${scopeLabel}_採購建議_人工審核.xlsx`, { compression: true, cellStyles: true });
+    state.returnScope = new Set(selected);
+    resetReviewWorkflow(`已下載${selected.join("、")}的本批採購建議；完成Excel人工填量後，請選擇這一份第一次回匯檔。`);
+    setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, true);
+    setWorkflowStep(elements.workflowStepDownload, "done", `已下載${selected.length}家供應商`);
+    setWorkflowStep(elements.workflowStepFirst, "active", "請回匯剛下載並完成填量的Excel");
   }
   async function reviewReturn() {
-    if (!state.reviewFile || !state.analysis) return;
+    if (!state.reviewFile || !state.analysis || !state.returnScope) return;
     elements.reviewButton.disabled = true; setWorkflowStatus("正在重新檢查人工數量、力榮10件規則、可售至、付款月份與額度…");
     try {
-      state.firstReview = core.reviewReturnedWorkbook(await readWorkbook(state.reviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, baselineBySku: new Map(state.analysis.rows.map((row) => [row.sku, row])) });
+      const baselineRows = state.analysis.rows.filter((row) => state.returnScope.has(String(row.supplier || "").trim()));
+      state.firstReview = core.reviewReturnedWorkbook(await readWorkbook(state.reviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, baselineBySku: new Map(baselineRows.map((row) => [row.sku, row])) });
       XLSX.writeFile(core.buildSecondReviewWorkbook(state.firstReview, XLSX), `${elements.month.value}_回匯二次覆核報表.xlsx`, { compression: true, cellStyles: true });
       const t = state.firstReview.totals;
       elements.workflowSummary.replaceChildren(
@@ -553,11 +654,18 @@
         createSummaryCard("規則阻擋金額", formatCurrency(t.blockedAmount), "S／專屬週期／贈品", "currency"),
         createSummaryCard("最終可核准金額", formatCurrency(t.approvedAmount), "人工回匯－規則阻擋", "currency")
       );
-      elements.secondReviewFile.disabled = state.firstReview.errors.length > 0;
+      setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, state.firstReview.errors.length === 0);
       elements.submitApproval.disabled = true;
+      setWorkflowStep(elements.workflowStepFirst, state.firstReview.errors.length ? "blocked" : "done", state.firstReview.errors.length ? `有${state.firstReview.errors.length}項阻擋` : "第一次覆核已通過");
+      setWorkflowStep(elements.workflowStepSecond, state.firstReview.errors.length ? "locked" : "active", state.firstReview.errors.length ? "修正第一次回匯後重跑" : "請逐列填寫二次確認採購量");
       setWorkflowStatus(state.firstReview.errors.length ? `覆核完成但有${state.firstReview.errors.length}項阻擋；請修正第一次回匯後重跑。` : "第一次覆核通過；請在下載報表逐列填二次確認採購量，再回匯確認版。", state.firstReview.errors.length ? "error" : "success");
       renderBudget();
-    } catch (error) { state.firstReview = null; state.review = null; setWorkflowStatus(`回匯失敗：${error.message}`, "error"); }
+    } catch (error) {
+      state.firstReview = null; state.review = null;
+      setWorkflowStep(elements.workflowStepFirst, "blocked", "檔案或內容未通過檢查");
+      setWorkflowStep(elements.workflowStepSecond, "locked", "第一次覆核通過後開放");
+      setWorkflowStatus(`回匯失敗：${error.message}`, "error");
+    }
     finally { elements.reviewButton.disabled = !state.reviewFile; }
   }
   async function confirmSecondReview() {
@@ -573,9 +681,16 @@
         createSummaryCard("二次確認核准金額", formatCurrency(t.approvedAmount), "將寫入集中台帳", "currency")
       );
       elements.submitApproval.disabled = state.review.errors.length > 0;
+      setWorkflowStep(elements.workflowStepSecond, state.review.errors.length ? "blocked" : "done", state.review.errors.length ? `仍有${state.review.errors.length}項阻擋` : "二次確認已通過");
+      setWorkflowStep(elements.workflowStepApproval, state.review.errors.length ? "locked" : "active", state.review.errors.length ? "修正二次確認版後重跑" : "可送出待核准台帳");
       setWorkflowStatus(state.review.errors.length ? `二次確認版仍有${state.review.errors.length}項阻擋，禁止送出。` : "二次確認版通過；可送出待核准台帳，此步驟不寄信。", state.review.errors.length ? "error" : "success");
       renderBudget();
-    } catch (error) { state.review = null; elements.submitApproval.disabled = true; setWorkflowStatus(`確認版失敗：${error.message}`, "error"); }
+    } catch (error) {
+      state.review = null; elements.submitApproval.disabled = true;
+      setWorkflowStep(elements.workflowStepSecond, "blocked", "檔案或內容未通過檢查");
+      setWorkflowStep(elements.workflowStepApproval, "locked", "二次確認通過後開放");
+      setWorkflowStatus(`確認版失敗：${error.message}`, "error");
+    }
     finally { elements.confirmReview.disabled = !state.secondReviewFile; }
   }
   function batchPayload() {
@@ -605,6 +720,7 @@
     state.batchId ||= newBatchId(); elements.submitApproval.disabled = true; setWorkflowStatus("正在寫入待核准台帳；此步驟不寄信…");
     try {
       await postJson("/api/procurement/batches", batchPayload()); elements.approve.disabled = !state.config.permissions?.canApprove; await loadLedger();
+      setWorkflowStep(elements.workflowStepApproval, "active", state.config.permissions?.canApprove ? "已送待核准，可正式核准" : "已送待核准，等候核准者處理");
       setWorkflowStatus(state.config.permissions?.canApprove ? `批次${state.batchId}已送待核准；尚未寄信。` : `批次${state.batchId}已送待核准，請由採購核准者處理。`, "success");
     } catch (error) { elements.submitApproval.disabled = false; setWorkflowStatus(`台帳寫入失敗：${error.message}`, "error"); }
   }
@@ -614,6 +730,7 @@
     try {
       await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/approve`, { idempotencyKey: `${state.batchId}:approve` });
       state.approved = true; elements.erp.disabled = false; elements.erpReference.disabled = false; await loadLedger(); const token = googleSources.token();
+      setWorkflowStep(elements.workflowStepApproval, "done", "正式核准完成，可下載ERP採購檔");
       if (!token) { elements.retryNotification.disabled = false; setWorkflowStatus("已正式核准且額度台帳已寫入；郵件待目前核准帳號完成 Google 授權後重送。", "error"); return; }
       try {
         await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/notify`, {}, { "X-Google-Access-Token": token });
@@ -659,18 +776,35 @@
   bindFileInput(elements.marketingFile, "marketingFile", elements.marketingFileName);
   elements.reviewFile.addEventListener("change", () => {
     state.reviewFile = elements.reviewFile.files[0] || null; state.firstReview = null; state.secondReviewFile = null; state.review = null; state.approved = false;
-    elements.reviewButton.disabled = !state.reviewFile; elements.secondReviewFile.disabled = true; elements.confirmReview.disabled = true;
+    elements.reviewButton.disabled = !state.reviewFile; setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, false); elements.confirmReview.disabled = true;
     elements.submitApproval.disabled = true; elements.approve.disabled = true; elements.retryNotification.disabled = true; elements.erp.disabled = true;
     elements.erpReference.value = ""; elements.erpReference.disabled = true; elements.erpCreated.disabled = true; state.erpDownloaded = false;
+    setWorkflowStep(elements.workflowStepFirst, "active", state.reviewFile ? `已選擇${state.reviewFile.name}` : "請選擇第一次人工回匯檔");
+    setWorkflowStep(elements.workflowStepSecond, "locked", "第一次覆核通過後開放");
+    setWorkflowStep(elements.workflowStepApproval, "locked", "二次確認通過後開放");
     setWorkflowStatus(state.reviewFile ? `已選擇${state.reviewFile.name}；請開始二次覆核。` : "尚未選擇人工回匯檔。");
   });
   elements.secondReviewFile.addEventListener("change", () => {
     state.secondReviewFile = elements.secondReviewFile.files[0] || null; state.review = null;
     elements.confirmReview.disabled = !state.secondReviewFile; elements.submitApproval.disabled = true;
+    setWorkflowStep(elements.workflowStepSecond, "active", state.secondReviewFile ? `已選擇${state.secondReviewFile.name}` : "請選擇二次確認版");
     setWorkflowStatus(state.secondReviewFile ? `已選擇確認版${state.secondReviewFile.name}；請執行最終檢查。` : "請回匯已填寫二次確認量的覆核報表。");
   });
-  [elements.orderDate, elements.inventoryDate, elements.pendingDate, elements.consignmentDate, elements.salesDate].forEach((element) => element.addEventListener("change", updateReadyState));
-  elements.month.addEventListener("change", () => { renderModelStatus(); updateReadyState(); Promise.all([loadLedger(), loadMonthPlan()]); });
+  elements.selectAllSuppliers.addEventListener("click", () => {
+    state.selectedSuppliers = new Set(supplierNames(state.analysis));
+    elements.supplierFilterList.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = true; });
+    resetScopeForNewExport();
+  });
+  elements.clearSuppliers.addEventListener("click", () => {
+    state.selectedSuppliers.clear();
+    elements.supplierFilterList.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; });
+    resetScopeForNewExport();
+  });
+  [elements.checkpoint, elements.orderDate, elements.inventoryDate, elements.pendingDate, elements.consignmentDate, elements.salesDate].forEach((element) => element.addEventListener("change", () => {
+    if (state.analysis) invalidateAnalysis();
+    updateReadyState();
+  }));
+  elements.month.addEventListener("change", () => { if (state.analysis) invalidateAnalysis(); renderModelStatus(); updateReadyState(); Promise.all([loadLedger(), loadMonthPlan()]); });
   [elements.forecastRevenue, elements.forecastCost, elements.targetEndingCost, elements.openingCost, elements.supplierReturns, elements.releasedBudget].forEach((element) => element.addEventListener("input", markBudgetDirty));
   elements.budgetSourceNote.addEventListener("input", () => { elements.budgetPlanStatus.textContent = "額度來源註記尚未儲存。"; });
   elements.purchasedToDate.addEventListener("input", renderBudget); elements.saveBudget.addEventListener("click", saveMonthPlan);
