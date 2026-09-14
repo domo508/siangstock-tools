@@ -556,6 +556,43 @@ describe("採購建議第二階段", () => {
     expect(summary.some((row) => row[0] === "使用限制" && String(row[1]).includes("不可直接下單"))).toBe(true);
   });
 
+  it("普優瑪寄庫報表維持單一頁籤並依大類、花色與小類排列及顯示小計", () => {
+    expect(core.puyoumaConsignmentGroup({ name: "5尺60天絲床包 [晨曦]", purchaseTab: "天絲＋天絲棉", mainCategory: "床包", size: "5尺床包" }))
+      .toEqual({ majorCategory: "天絲", mediumCategory: "晨曦", smallCategory: "床包", size: "5尺床包" });
+    expect(core.puyoumaConsignmentGroup({ name: "60天絲枕套 [晨曦]", purchaseTab: "天絲＋天絲棉", mainCategory: "枕套", size: "48×75公分" }))
+      .toEqual({ majorCategory: "天絲", mediumCategory: "晨曦", smallCategory: "枕套", size: "48×75公分" });
+    expect(core.puyoumaConsignmentGroup({ name: "走走多功能收納盒S", purchaseTab: "無尺寸品項", mainCategory: "收納" }))
+      .toEqual({ majorCategory: "無尺寸", mediumCategory: "走走多功能收納盒S", smallCategory: "其它品項", size: "無尺寸" });
+    expect(core.puyoumaConsignmentGroup({ name: "天絲刺繡抱枕-綠霧森林", purchaseTab: "天絲＋天絲棉", mainCategory: "抱枕" }))
+      .toEqual({ majorCategory: "無尺寸", mediumCategory: "天絲刺繡抱枕-綠霧森林", smallCategory: "其它品項", size: "無尺寸" });
+
+    const recommendations = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", factoryTargetDays: 90
+    });
+    const source = recommendations.rows.find((row) => row.sku === "A1");
+    Object.assign(source, { name: "5尺60天絲床包 [晨曦]", size: "5尺床包", mainCategory: "床包", purchaseTab: "天絲＋天絲棉" });
+    const baseConsignment = recommendations.consignmentRows.find((row) => row.sku === "A1");
+    Object.assign(baseConsignment, { name: source.name, suggestedConsignmentQty: 12, immediateConsignmentGap: 4 });
+    recommendations.rows.push({ ...source, sku: "A5", name: "60天絲枕套 [晨曦]", size: "48×75公分", mainCategory: "枕套" });
+    recommendations.consignmentRows.push({ ...baseConsignment, sku: "A5", name: "60天絲枕套 [晨曦]", suggestedConsignmentQty: 8, immediateConsignmentGap: 2 });
+
+    const output = core.buildRecommendationWorkbook(recommendations, XLSX);
+    expect(output.SheetNames.filter((name) => name === "04A_普優瑪寄庫建議")).toHaveLength(1);
+    const rows = XLSX.utils.sheet_to_json(output.Sheets["04A_普優瑪寄庫建議"], { header: 1, defval: "" });
+    expect(rows[0][0]).toBe("普優瑪寄庫建議（依大類、花色與品項分類）");
+    const headers = rows[3];
+    expect(headers.slice(0, 7)).toEqual(["大類", "花色／同品項", "小類", "尺寸", "ERP品號", "供應商貨號", "商品品名"]);
+    const majorSummary = rows.find((row) => row[0] === "大類小計：天絲");
+    const mediumSummary = rows.find((row) => row[1] === "花色小計：晨曦");
+    expect(majorSummary[headers.indexOf("建議新增寄庫量")]).toBe(20);
+    expect(mediumSummary[headers.indexOf("寄倉現貨缺口")]).toBe(6);
+    expect(mediumSummary[headers.indexOf("建議新增寄庫量")]).toBe(20);
+    const details = rows.filter((row) => row[0] === "天絲" && row[1] === "晨曦");
+    expect(details.map((row) => row[2])).toEqual(["床包", "枕套"]);
+    expect(details.map((row) => row[3])).toEqual(["5尺床包", "48×75公分"]);
+  });
+
   it("可只輸出勾選供應商，摘要金額與採購分頁同步縮小且保留稽核頁", () => {
     const recommendations = core.buildProcurementRecommendations({
       master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
