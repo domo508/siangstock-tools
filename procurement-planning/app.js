@@ -3,6 +3,7 @@
 
   const core = globalThis.ProcurementPlanningCore;
   const googleSources = globalThis.ProcurementGoogleSources;
+  const outputXlsx = globalThis.ProcurementXlsxWriter || globalThis.XLSX;
   const MODEL_CACHE = Object.freeze({ database: "siangstock-procurement-local", store: "files", key: "seasonal-model", refreshMonths: 6 });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
   const state = {
@@ -1118,7 +1119,7 @@
     const positiveNames = positiveSupplierNames(state.analysis);
     const scopeLabel = (selected.length === positiveNames.length && positiveNames.every((name) => state.selectedSuppliers.has(name)) ? "全部有建議供應商" : selected.join("＋")).replace(/[\\/:*?"<>|]/g, "-").slice(0, 80);
     const workflowLabel = state.analysis.meta?.workflowLabel || "採購建議";
-    XLSX.writeFile(core.buildRecommendationWorkbook(state.analysis, XLSX, { budget: currentBudget(), selectedSuppliers: selected }), `${elements.month.value}_${elements.checkpoint.value === "mid-month" ? "月中" : elements.checkpoint.value === "month-end" ? "月底" : "月初"}_${scopeLabel}_${workflowLabel}_人工審核.xlsx`, { compression: true, cellStyles: true });
+    outputXlsx.writeFile(core.buildRecommendationWorkbook(state.analysis, outputXlsx, { budget: currentBudget(), selectedSuppliers: selected }), `${elements.month.value}_${elements.checkpoint.value === "mid-month" ? "月中" : elements.checkpoint.value === "month-end" ? "月底" : "月初"}_${scopeLabel}_${workflowLabel}_人工審核.xlsx`, { compression: true, cellStyles: true });
     state.returnScope = new Set(selected);
     resetReviewWorkflow(`已下載${selected.join("、")}的本批採購建議；完成Excel人工填量後，請選擇這一份第一次回匯檔。`);
     setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, true);
@@ -1131,7 +1132,7 @@
     try {
       const baselineRows = state.analysis.rows.filter((row) => state.returnScope.has(String(row.supplier || "").trim()));
       state.firstReview = core.reviewReturnedWorkbook(await readWorkbook(state.reviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, baselineBySku: new Map(baselineRows.map((row) => [row.sku, row])) });
-      XLSX.writeFile(core.buildSecondReviewWorkbook(state.firstReview, XLSX), `${elements.month.value}_回匯二次覆核報表.xlsx`, { compression: true, cellStyles: true });
+      outputXlsx.writeFile(core.buildSecondReviewWorkbook(state.firstReview, outputXlsx), `${elements.month.value}_回匯二次覆核報表.xlsx`, { compression: true, cellStyles: true });
       const t = state.firstReview.totals;
       elements.workflowSummary.replaceChildren(
         createSummaryCard("系統建議金額", formatCurrency(t.suggestedAmount), "原始工具建議", "currency"),
@@ -1237,7 +1238,7 @@
   function downloadErp() {
     if (!state.review || !state.approved) return;
     try {
-      XLSX.writeFile(core.buildErpPurchaseWorkbook(state.review, XLSX, { approved: true, batchId: state.batchId }), `${state.batchId}_ERP正式採購單.xlsx`, { compression: true, cellStyles: true });
+      outputXlsx.writeFile(core.buildErpPurchaseWorkbook(state.review, outputXlsx, { approved: true, batchId: state.batchId }), `${state.batchId}_ERP正式採購單.xlsx`, { compression: true, cellStyles: true });
       state.erpDownloaded = true; elements.erpCreated.disabled = !elements.erpReference.value.trim(); setWorkflowStatus("ERP採購檔已下載；完成ERP開單後請填採購單號或確認註記，再更新台帳狀態。", "success");
     }
     catch (error) { setWorkflowStatus(error.message, "error"); }

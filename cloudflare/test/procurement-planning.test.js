@@ -741,7 +741,16 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("原始Excel不上傳");
     expect(toolHtml).toContain("工廠寄倉可拉貨量不在這個扣除公式中");
     expect(toolHtml).toContain("目標覆蓋＝供應商檢視期＋到貨交期＋分級安全緩衝");
-    expect(readFileSync("../procurement-planning/app.js", "utf8")).toContain("nodim: true");
+    const toolAppSource = readFileSync("../procurement-planning/app.js", "utf8");
+    expect(toolAppSource).toContain("nodim: true");
+    const styleScriptIndex = toolHtml.indexOf('src="assets/xlsx-js-style.bundle.js"');
+    const styleRuntimeIndex = toolHtml.indexOf('src="xlsx-style-runtime.js');
+    const readerScriptIndex = toolHtml.indexOf('src="../inventory/assets/xlsx.full.min.js"');
+    expect(styleScriptIndex).toBeGreaterThan(-1);
+    expect(styleRuntimeIndex).toBeGreaterThan(styleScriptIndex);
+    expect(readerScriptIndex).toBeGreaterThan(styleRuntimeIndex);
+    expect(toolAppSource).toContain("const outputXlsx = globalThis.ProcurementXlsxWriter || globalThis.XLSX");
+    expect(toolAppSource).toContain("outputXlsx.writeFile(core.buildRecommendationWorkbook(state.analysis, outputXlsx");
     expect(toolHtml).toContain("公司 Google 授權");
     expect(toolHtml).toContain("正式核准並寄送摘要");
     expect(toolHtml).toContain("回匯二次確認版");
