@@ -98,6 +98,35 @@ function makeForecastModel() {
 }
 
 describe("採購規劃核心鎖定公式", () => {
+  it("只以明確客製備註辨識客訂，並排除一般未到貨淨需求", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["單據編碼:", "ERP-CUSTOM-1", "採購日期:", "2026-09-14", "廠商名稱:", "普優瑪", "備註:", "台北/新竹 客製"],
+      [],
+      ["貨號", "品名", "採購價", "數量", "金額", "備註"],
+      ["A1", "客戶特殊尺寸", 500, 2, 1000, "台北"],
+      ["A3", "拍照樣但非客製", 600, 1, 600, "新竹"]
+    ]), "Sheet1");
+    const report = core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: "客製單.xlsx" });
+    expect(report.metadata).toMatchObject({ documentCode: "ERP-CUSTOM-1", supplier: "普優瑪", isCustomOrder: true });
+    expect(report.records.every((row) => row.isCustomOrder)).toBe(true);
+    expect(report.records[0].customChannel).toBe("台北");
+    const pending = core.aggregatePendingReports([report]);
+    expect(pending.bySku.size).toBe(0);
+    expect(pending.customRecords).toHaveLength(2);
+  });
+
+  it("新品首批名單需含上市日、通路與首月預估量", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "預計／實際上市日", "預計販售通路或門市", "首月預估量", "相似品號", "是否已納入行銷預估"],
+      ["A1", "2026-09-20", "官網、台北門市", 30, "A42359-A", "是"]
+    ]), "新品名單");
+    const parsed = core.parseNewProductWorkbook(workbook, XLSX, { fileName: "新品.xlsx" });
+    expect(parsed.errors).toHaveLength(0);
+    expect(parsed.records[0]).toMatchObject({ sku: "A1", listedDate: "2026-09-20", channels: "官網、台北門市", firstMonthQty: 30, similarSku: "A42359-A" });
+  });
+
   it("枕頭本體固定歸四季枕芯，枕套不誤判", () => {
     expect(core.inferMaterialCategory({ mainCategory: "枕頭", style2: "羽絨", name: "PRIMARIO羽絨軟枕" })).toBe("枕芯");
     expect(core.inferMaterialCategory({ mainCategory: "枕芯", name: "機能記憶枕" })).toBe("枕芯");
@@ -288,6 +317,23 @@ describe("四來源匯入與品號串接", () => {
 });
 
 describe("採購建議第二階段", () => {
+  it("人工匯入採購單保留草稿量並共用兩次回匯欄位", () => {
+    const base = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28"
+    });
+    const special = core.buildSpecialProcurementAnalysis({
+      baseAnalysis: base, workflowType: "manual_draft", rows: [{ sku: "A1", quantity: 27 }], fileName: "人工草稿.xlsx",
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], supplierRules: core.SUPPLIER_RULES
+    });
+    expect(special.meta).toMatchObject({ workflowType: "manual_draft", workflowLabel: "人工匯入採購單" });
+    expect(special.rows[0]).toMatchObject({ initialManualQty: 27, initialManualReason: "人工匯入採購草稿" });
+    const output = core.buildRecommendationWorkbook(special, XLSX);
+    const row = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { defval: "" })[0];
+    expect(row["人工確認採購量"]).toBe(27);
+    expect(row["人工調整原因"]).toBe("人工匯入採購草稿");
+  });
+
   it("品名結尾(S)保留需求資料，但不進對外採購或寄庫建議", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
@@ -527,6 +573,10 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("下載所選供應商Excel");
     expect(toolHtml).toContain('id="workflow-step-download"');
     expect(toolHtml).toContain('id="review-file-label" class="file-button is-disabled"');
+    expect(toolHtml).toContain("新品首批採購");
+    expect(toolHtml).toContain("人工匯入採購單");
+    expect(toolHtml).toContain("補登已採購單");
+    expect(toolHtml).toContain('id="active-ledger-rows"');
     const toolApp = readFileSync("../procurement-planning/app.js", "utf8");
     expect(toolApp).toContain("/api/procurement/month-plan");
     expect(toolApp).toContain('setAutomaticSourceBusy(true, "正在取得 4 項最新資料…")');
@@ -538,6 +588,12 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("selectedSuppliers: new Set()");
     expect(toolApp).toContain("selectedPaymentSummary");
     expect(toolApp).toContain("下載後才會開放第一次人工回匯");
+    expect(toolApp).toContain("大型檔案預檢未通過");
+    expect(toolApp).toContain("/api/procurement/manual-orders");
+    const specialMigration = readFileSync("worker/migrations/0007_special_procurement_workflows.sql", "utf8");
+    expect(specialMigration).toContain("workflow_type");
+    expect(specialMigration).toContain("erp_reference");
+    expect(specialMigration).toContain("UNIQUE INDEX");
     const toolCss = readFileSync("../procurement-planning/style.css", "utf8");
     expect(toolCss).toContain("@media (max-width: 620px)");
     expect(toolCss).toMatch(/\.procurement-period,[\s\S]*\.budget-grid,[\s\S]*\.procurement-summary,[\s\S]*\.budget-summary \{ grid-template-columns: 1fr; \}/);

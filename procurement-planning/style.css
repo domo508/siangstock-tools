@@ -214,6 +214,34 @@
 .locked-formula p { margin: 8px 0 5px; color: var(--navy); font-weight: 800; line-height: 1.55; }
 .locked-formula small { color: #4e6d61; line-height: 1.55; }
 
+.special-workflows {
+  margin-top: 24px;
+  padding: 20px;
+  border: 1px solid #b9d2da;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #f8fbfc, #eef7f8);
+}
+.special-workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.special-workflow-grid article {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: #fff;
+}
+.special-workflow-grid h4 { margin: 0; color: var(--navy); }
+.special-workflow-grid p { margin: 0; min-height: 5em; color: var(--muted); line-height: 1.55; }
+.special-workflow-grid .secondary-button { width: 100%; }
+.special-workflows > .main-status { margin-top: 14px; }
+.active-ledger { margin-top: 24px; }
+.active-ledger .procurement-table { min-width: 1180px; }
+
 .procurement-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .summary-card .value.currency { font-size: 1.35rem; }
 .result-alert {
@@ -449,6 +477,8 @@
   .supplier-filter-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .source-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .budget-grid .budget-source-field { grid-column: span 2; }
+  .special-workflow-grid { grid-template-columns: 1fr; }
+  .special-workflow-grid p { min-height: 0; }
 }
 
 @media (max-width: 760px) {

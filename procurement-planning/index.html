@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20260914-workflow-layout-r1">
+  <link rel="stylesheet" href="style.css?v=20260914-special-workflows-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -216,6 +216,34 @@
         <button id="download-button" class="secondary-button" type="button" disabled>下載所選供應商Excel</button>
         <p id="main-status" class="main-status" role="status">請先完成日期與本次必要資料。</p>
       </div>
+
+      <section class="special-workflows" aria-labelledby="special-workflows-title">
+        <div class="section-heading compact">
+          <div><p class="eyebrow">其它採購流程</p><h3 id="special-workflows-title">新品、人工草稿與已開ERP補登</h3></div>
+          <p>前兩項共用本頁兩次回匯與核准；補登只接受已在ERP建立的採購單，依單號去重後直接納入台帳。</p>
+        </div>
+        <div class="special-workflow-grid">
+          <article>
+            <h4>新品首批採購</h4>
+            <p>先完成上方最新資料計算，再匯入新品名單。必要欄位：ERP品號、上市日、通路／門市、首月預估量。</p>
+            <label class="file-button">選擇新品首批名單<input id="new-product-file" type="file" accept=".xlsx"></label>
+            <button id="new-product-button" class="secondary-button" type="button" disabled>建立新品首批建議</button>
+          </article>
+          <article>
+            <h4>人工匯入採購單</h4>
+            <p>匯入尚未在ERP正式建立的採購草稿；原草稿量會與最新淨需求並列，仍須兩次回匯與正式核准。</p>
+            <label class="file-button">選擇人工採購草稿<input id="manual-draft-files" type="file" accept=".xlsx,.xls" multiple></label>
+            <button id="manual-draft-button" class="secondary-button" type="button" disabled>建立人工採購草稿</button>
+          </article>
+          <article>
+            <h4>補登已採購單</h4>
+            <p>只用於已在ERP建立、但未經本工具核准的採購單。需有ERP單據編碼；重複單號不會再占額。</p>
+            <label class="file-button">選擇已建立ERP採購單<input id="posted-order-files" type="file" accept=".xlsx,.xls" multiple></label>
+            <button id="posted-order-button" class="secondary-button" type="button" disabled>檢查並補登台帳</button>
+          </article>
+        </div>
+        <p id="special-workflow-status" class="main-status" role="status">請先完成上方最新資料計算；系統不會把草稿直接算入正式額度。</p>
+      </section>
       <div id="source-status" class="result-alert" role="status">固定來源尚未完成公司 Google 授權；可先使用各來源的手動備援。</div>
       <div class="result-alert warn" role="note"><strong>暫行權限例外：</strong>普優瑪與力榮寄庫表目前仍可能開放「知道連結的任何人可編輯」。因權限由供應商維護，本次先不阻擋部署；工具仍會逐次檢查來源格式、資料日期與內容雜湊，但此項尚未完成正式權限驗收。</div>
     </section>
@@ -270,6 +298,10 @@
         <div class="section-heading compact"><div><h3 id="approval-queue-title">公司共用待核准清單</h3><p>採購核准者可在自己的電腦核准，不需使用最高權限帳號。</p></div><button id="refresh-queue-button" class="secondary-button" type="button">重新整理</button></div>
         <div class="result-table-wrap"><table class="procurement-table compact-table"><thead><tr><th>批次</th><th>供應商</th><th>送出者</th><th>送出時間</th><th>核准金額</th><th>狀態／操作</th></tr></thead><tbody id="approval-queue-rows"></tbody></table></div>
       </div>
+      <div class="approval-queue active-ledger" aria-labelledby="active-ledger-title">
+        <div class="section-heading compact"><div><h3 id="active-ledger-title">已承諾批次與額度異動</h3><p>最高權限可更正台帳金額或撤銷批次；這裡只改額度／付款摘要，不會改動已下載的Excel。</p></div></div>
+        <div class="result-table-wrap"><table class="procurement-table compact-table"><thead><tr><th>批次</th><th>流程</th><th>ERP單號</th><th>供應商</th><th>狀態</th><th>承諾金額</th><th>版本</th><th>管理</th></tr></thead><tbody id="active-ledger-rows"></tbody></table></div>
+      </div>
     </section>
 
     <section class="panel rules-panel" aria-labelledby="rules-title">
@@ -297,9 +329,9 @@
 
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260914-supplier-scope-r1"></script>
+  <script src="core.js?v=20260914-special-workflows-r1"></script>
   <script src="seasonal-model.js?v=20260914-seasonal-auto-r1"></script>
   <script src="google-sources.js?v=20260914-seasonal-auto-r1"></script>
-  <script src="app.js?v=20260914-seasonal-auto-r1"></script>
+  <script src="app.js?v=20260914-special-workflows-r1"></script>
 </body>
 </html>

@@ -4,13 +4,16 @@
   const core = globalThis.ProcurementPlanningCore;
   const googleSources = globalThis.ProcurementGoogleSources;
   const MODEL_CACHE = Object.freeze({ database: "siangstock-procurement-local", store: "files", key: "seasonal-model", refreshMonths: 6 });
+  const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [],
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
     salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, firstReview: null,
     secondReviewFile: null, review: null, ledger: null, monthPlan: null, procurementRules: null, revenueChannels: [], budgetDirty: false, sourceMetadata: null, modelMetadata: null, batchId: "", approved: false, erpDownloaded: false,
     selectedSuppliers: new Set(), returnScope: null, consignmentSource: null,
-    googleAuthorized: false, modelWorker: null, modelDraft: null
+    googleAuthorized: false, modelWorker: null, modelDraft: null,
+    baseAnalysis: null, parsedSources: null, workflowType: "system_recommendation",
+    newProductFile: null, manualDraftFiles: [], postedOrderFiles: []
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -40,6 +43,8 @@
     approvalQueueRows: get("#approval-queue-rows"), refreshQueue: get("#refresh-queue-button"),
     reviewFileLabel: get("#review-file-label"), secondReviewFileLabel: get("#second-review-file-label"),
     workflowStepDownload: get("#workflow-step-download"), workflowStepFirst: get("#workflow-step-first"), workflowStepSecond: get("#workflow-step-second"), workflowStepApproval: get("#workflow-step-approval")
+    ,newProductFile: get("#new-product-file"), newProductButton: get("#new-product-button"), manualDraftFiles: get("#manual-draft-files"), manualDraftButton: get("#manual-draft-button"),
+    postedOrderFiles: get("#posted-order-files"), postedOrderButton: get("#posted-order-button"), specialWorkflowStatus: get("#special-workflow-status"), activeLedgerRows: get("#active-ledger-rows")
   };
 
   function today() { return new Date().toISOString().slice(0, 10); }
@@ -259,9 +264,14 @@
       }
       const sourceFiles = await googleSources.listDriveExcelFiles(fixed.seasonalSalesFolderId);
       if (!sourceFiles.length) throw new Error("近三年歷史銷售資料夾沒有直屬.xlsx檔案。");
+      const oversized = sourceFiles.filter((file) => Number(file.size || 0) > MAX_SEASONAL_SOURCE_BYTES);
+      if (oversized.length) {
+        const details = oversized.map((file) => `${file.name}（${formatNumber(Number(file.size || 0) / 1024 / 1024)} MB）`).join("、");
+        throw new Error(`大型檔案預檢未通過：${details}超過單檔45 MB安全上限。請把該期間拆成較小Excel後再重跑；這不是欄位缺漏。`);
+      }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20260914-seasonal-auto-r1");
+      const worker = new Worker("seasonal-model-worker.js?v=20260914-large-file-precheck-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -271,7 +281,12 @@
         setModelProgress(`下載並分析 ${file.name}（${index + 1}/${sourceFiles.length}）…`);
         const downloaded = await googleSources.downloadDriveFile(file.id, file.name);
         const buffer = await downloaded.arrayBuffer();
-        const response = await workerRequest(worker, { type: "ingest", index, file, buffer }, [buffer]);
+        let response;
+        try {
+          response = await workerRequest(worker, { type: "ingest", index, file, buffer }, [buffer]);
+        } catch (error) {
+          throw new Error(`${file.name}處理失敗：${error.message}`);
+        }
         elements.modelProgressBar.value = Math.round(((index + 1) / (sourceFiles.length + 1)) * 100);
         setModelProgress(`${file.name}完成：納入${formatNumber(response.stats.acceptedRows)}列、跨檔去重${formatNumber(response.stats.duplicateRows)}列。`);
       }
@@ -343,6 +358,7 @@
   function updateReadyState() {
     renderModelStatus();
     elements.analyze.disabled = !requirementsReady();
+    updateSpecialWorkflowReady();
     if (!requirementsReady() && !state.analysis) setStatus(modelRefreshRequired()
       ? "請完成公司登入、日期與必要資料；本月季節模型需要提供或更新。"
       : "請完成公司登入、日期與必要資料；商品主檔與寄庫表可自動取得或手動備援。");
@@ -370,9 +386,15 @@
     setWorkflowStatus(message);
   }
   function invalidateAnalysis() {
-    state.analysis = null; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null;
+    state.analysis = null; state.baseAnalysis = null; state.parsedSources = null; state.workflowType = "system_recommendation"; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null;
     elements.download.disabled = true; elements.resultPanel.hidden = true; elements.supplierFilterList.replaceChildren();
     resetReviewWorkflow("請先在上方產生建議、選擇供應商並下載本批Excel；下載後才會開放第一次人工回匯。");
+  }
+  function updateSpecialWorkflowReady() {
+    const hasBase = Boolean(state.baseAnalysis && state.parsedSources);
+    elements.newProductButton.disabled = !(hasBase && state.newProductFile);
+    elements.manualDraftButton.disabled = !(hasBase && state.manualDraftFiles.length);
+    elements.postedOrderButton.disabled = !(hasBase && state.postedOrderFiles.length && state.config?.permissions?.canApprove);
   }
   function bindFileInput(input, key, label, multiple = false, workbookKey = "") {
     input.addEventListener("change", () => {
@@ -402,6 +424,7 @@
       elements.ledgerStatus.textContent = `台帳已同步：正式承諾${formatCurrency(result.totals.committedAmount)}；待核准${formatCurrency(result.totals.pendingAmount)}；已核准未建ERP${formatCurrency(result.totals.approvedNotErpAmount)}；已建ERP未到貨${formatCurrency(result.totals.erpNotReceivedAmount)}；已到貨${formatCurrency(result.totals.receivedAmount)}；本月付款${formatCurrency(result.totals.currentMonthPayment)}；未來付款${formatCurrency(result.totals.futureMonthPayments)}。`;
       elements.ledgerStatus.classList.remove("error");
       renderApprovalQueue();
+      renderActiveLedger();
       renderBudget();
     } catch (error) {
       state.ledger = null; elements.ledgerStatus.textContent = `台帳同步失敗：${error.message}；為避免錯算，正式核准前請重新整理。`;
@@ -426,6 +449,88 @@
       row.appendChild(action); fragment.appendChild(row);
     });
     elements.approvalQueueRows.replaceChildren(fragment);
+  }
+  function statusLabel(status) {
+    return ({ pending_approval: "待核准", approved: "已核准", erp_created: "ERP已建立／未到貨", received: "已到貨", revoked: "已撤銷" })[status] || status;
+  }
+  function workflowLabel(type) {
+    return ({ system_recommendation: "一般採購", new_product: "新品首批", manual_draft: "人工匯入", manual_posted: "補登已採購", customer_custom: "客製採購" })[type] || "一般採購";
+  }
+  function renderActiveLedger() {
+    const active = (state.ledger?.batches || []).filter((row) => ["approved", "erp_created", "received"].includes(row.status));
+    if (!active.length) {
+      const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 8; cell.textContent = "本月目前沒有已承諾批次。"; row.appendChild(cell); elements.activeLedgerRows.replaceChildren(row); return;
+    }
+    const fragment = document.createDocumentFragment();
+    active.forEach((item) => {
+      const row = document.createElement("tr");
+      appendCell(row, item.id); appendCell(row, workflowLabel(item.workflow_type)); appendCell(row, item.erp_reference || "—");
+      appendCell(row, (item.supplier_summary || []).join("、") || "未提供"); appendCell(row, statusLabel(item.status)); appendCell(row, formatCurrency(item.approved_amount)); appendCell(row, `v${item.revision}`);
+      const action = document.createElement("td");
+      if (state.config?.role === "admin" && item.status !== "received") {
+        const correctButton = document.createElement("button"); correctButton.type = "button"; correctButton.className = "table-action"; correctButton.textContent = "更正金額";
+        correctButton.addEventListener("click", () => correctLedgerBatch(item, correctButton));
+        const revokeButton = document.createElement("button"); revokeButton.type = "button"; revokeButton.className = "table-action"; revokeButton.textContent = "撤銷";
+        revokeButton.addEventListener("click", () => revokeLedgerBatch(item, revokeButton));
+        action.append(correctButton, document.createTextNode("　"), revokeButton);
+      } else action.textContent = item.status === "received" ? "已由收貨結案" : "僅最高權限可更正／撤銷";
+      row.appendChild(action); fragment.appendChild(row);
+    });
+    elements.activeLedgerRows.replaceChildren(fragment);
+  }
+  async function sendPendingNotification(batchId) {
+    const token = googleSources.token();
+    if (!token) return false;
+    await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/notify`, {}, { "X-Google-Access-Token": token });
+    return true;
+  }
+  async function revokeLedgerBatch(item, button) {
+    const reason = globalThis.prompt(`請輸入撤銷批次${item.id}的原因（撤銷後會沖回${formatCurrency(item.approved_amount)}）：`, "");
+    if (!reason?.trim()) return;
+    button.disabled = true;
+    try {
+      await postJson(`/api/procurement/batches/${encodeURIComponent(item.id)}/revoke`, { reason: reason.trim(), idempotencyKey: `${item.id}:revoke:${item.revision}` });
+      const sent = await sendPendingNotification(item.id).catch(() => false);
+      await loadLedger();
+      setWorkflowStatus(`批次${item.id}已撤銷並沖回額度；摘要${sent ? "已寄送" : "待Google授權後重送"}。`, sent ? "success" : "error");
+    } catch (error) { button.disabled = false; setWorkflowStatus(`撤銷失敗：${error.message}`, "error"); }
+  }
+  function scaledPaymentValues(item, approvedAmount) {
+    const original = Number(item.approved_amount || 0);
+    const schedule = Array.isArray(item.payment_schedule) ? item.payment_schedule.map((row) => ({ ...row })) : [];
+    if (schedule.length && original > 0) {
+      let allocated = 0;
+      schedule.forEach((entry, index) => {
+        const amount = index === schedule.length - 1 ? approvedAmount - allocated : Math.round(Number(entry.amount || 0) / original * approvedAmount * 100) / 100;
+        entry.amount = amount; allocated += amount;
+      });
+      const current = schedule.filter((row) => row.month === elements.month.value).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+      return { schedule, current, future: approvedAmount - current };
+    }
+    const currentRatio = original > 0 ? Number(item.payment_current_month || 0) / original : 1;
+    const current = Math.round(approvedAmount * currentRatio * 100) / 100;
+    return { schedule, current, future: approvedAmount - current };
+  }
+  async function correctLedgerBatch(item, button) {
+    const amountText = globalThis.prompt(`批次${item.id}目前承諾${formatCurrency(item.approved_amount)}。請輸入更正後承諾金額：`, String(item.approved_amount));
+    if (amountText == null) return;
+    const approvedAmount = Number(amountText.replace(/,/g, ""));
+    if (!Number.isFinite(approvedAmount) || approvedAmount < 0) { setWorkflowStatus("更正金額必須是0或正數。", "error"); return; }
+    const reason = globalThis.prompt("請輸入本次更正原因：", "");
+    if (!reason?.trim()) return;
+    const payment = scaledPaymentValues(item, approvedAmount);
+    button.disabled = true;
+    try {
+      await postJson(`/api/procurement/batches/${encodeURIComponent(item.id)}/correct`, {
+        expectedRevision: Number(item.revision), suggestedAmount: Number(item.suggested_amount || 0), manualAmount: approvedAmount + Number(item.blocked_amount || 0),
+        blockedAmount: Number(item.blocked_amount || 0), approvedAmount, adjustmentAmount: approvedAmount - Number(item.suggested_amount || 0),
+        paymentCurrentMonth: payment.current, paymentFutureMonths: payment.future, paymentSchedule: payment.schedule,
+        reason: reason.trim(), idempotencyKey: `${item.id}:correct:${item.revision}:${approvedAmount}`
+      });
+      const sent = await sendPendingNotification(item.id).catch(() => false);
+      await loadLedger();
+      setWorkflowStatus(`批次${item.id}已更正為${formatCurrency(approvedAmount)}；摘要${sent ? "已寄送" : "待Google授權後重送"}。`, sent ? "success" : "error");
+    } catch (error) { button.disabled = false; setWorkflowStatus(`更正失敗：${error.message}`, "error"); }
   }
   async function approveQueuedBatch(batchId, button) {
     const token = googleSources.token();
@@ -703,8 +808,8 @@
       const inventory = core.parseInventoryWorkbook(inventoryWorkbook, XLSX, { fileName: "本次庫存" });
       const consignment = core.parseConsignmentWorkbook(consignmentWorkbook, XLSX, { fileName: "普優瑪寄庫" });
       const lirongConsignment = core.parseLirongConsignmentWorkbook(lirongWorkbook, XLSX, { fileName: "力榮寄庫" });
-      const pendingReports = pendingWorkbooks.map((workbook) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: "未到貨採購單" }));
-      const salesReports = salesWorkbooks.map((workbook) => core.parseSalesWorkbook(workbook, XLSX, { fileName: "銷售明細" }));
+      const pendingReports = pendingWorkbooks.map((workbook, index) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: state.pendingFiles[index]?.name || "未到貨採購單" }));
+      const salesReports = salesWorkbooks.map((workbook, index) => core.parseSalesWorkbook(workbook, XLSX, { fileName: state.salesFiles[index]?.name || "銷售明細" }));
       const model = core.parseForecastModelWorkbook(modelWorkbook, XLSX, { fileName: "季節模型" });
       const validation = core.buildAnalysis({ master, inventory, pendingReports, consignment, blacklist: blacklistEntries(), dates: {
         inventory: elements.inventoryDate.value, pending: elements.pendingDate.value, consignment: elements.consignmentDate.value, sales: elements.salesDate.value
@@ -728,14 +833,155 @@
           lirong: state.sourceMetadata.lirongMetadata.sha256
         } : {}
       };
-      state.analysis = analysis; state.consignmentSource = consignment; state.returnScope = null; renderSummary(analysis, consignment);
+      state.analysis = analysis; state.baseAnalysis = analysis; state.workflowType = "system_recommendation";
+      state.parsedSources = { master, inventory, pendingReports, consignment, lirongConsignment, salesReports, model };
+      state.consignmentSource = consignment; state.returnScope = null; renderSummary(analysis, consignment);
       elements.resultPanel.hidden = false;
       resetReviewWorkflow("採購建議已完成；請先勾選本次供應商並下載Excel，下載後才會開放第一次人工回匯。");
       setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。`, "success");
-      renderBudget(); elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      await syncDetectedCustomOrders(pendingReports, master);
+      renderBudget(); updateSpecialWorkflowReady(); elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
       state.analysis = null; elements.resultPanel.hidden = true; setStatus(`無法完成：${error.message || "請確認檔案格式"}`, "error");
     } finally { elements.analyze.disabled = !requirementsReady(); }
+  }
+  function activateSpecialAnalysis(analysis, label) {
+    state.analysis = analysis;
+    state.workflowType = analysis.meta?.workflowType || "system_recommendation";
+    state.returnScope = null;
+    renderSummary(analysis, state.parsedSources.consignment);
+    elements.resultPanel.hidden = false;
+    resetReviewWorkflow(`${label}已建立；請先勾選供應商並下載Excel，再走第一次回匯、二次確認與正式核准。`);
+    setStatus(`${label}完成：${analysis.rows.length}個SKU，系統建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。`, "success");
+    elements.specialWorkflowStatus.textContent = `${label}已切換為目前工作批次；草稿尚未占用正式額度。`;
+    elements.specialWorkflowStatus.className = "main-status success";
+    renderBudget();
+    elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  async function buildNewProductFlow() {
+    if (!state.baseAnalysis || !state.newProductFile) return;
+    elements.newProductButton.disabled = true;
+    elements.specialWorkflowStatus.textContent = `正在檢查${state.newProductFile.name}與最新商品主檔…`;
+    try {
+      const parsed = core.parseNewProductWorkbook(await readWorkbook(state.newProductFile), XLSX, { fileName: state.newProductFile.name });
+      if (parsed.errors.length) throw new Error(parsed.errors.map((row) => `${row.sku || `第${row.sourceRow}列`}：${row.message}`).join("；"));
+      const analysis = core.buildSpecialProcurementAnalysis({
+        baseAnalysis: state.baseAnalysis, workflowType: "new_product", rows: parsed.records, fileName: state.newProductFile.name,
+        master: state.parsedSources.master, inventory: state.parsedSources.inventory, pendingReports: state.parsedSources.pendingReports,
+        supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, purchaseUnitRules: state.procurementRules?.purchaseUnits
+      });
+      activateSpecialAnalysis(analysis, "新品首批採購建議");
+    } catch (error) {
+      elements.specialWorkflowStatus.textContent = `新品首批停止：${error.message}`;
+      elements.specialWorkflowStatus.className = "main-status error";
+    } finally { updateSpecialWorkflowReady(); }
+  }
+  async function buildManualDraftFlow() {
+    if (!state.baseAnalysis || !state.manualDraftFiles.length) return;
+    elements.manualDraftButton.disabled = true;
+    elements.specialWorkflowStatus.textContent = "正在把人工採購草稿與最新淨需求比對…";
+    try {
+      const workbooks = await Promise.all(state.manualDraftFiles.map(readWorkbook));
+      const reports = workbooks.map((workbook, index) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: state.manualDraftFiles[index].name }));
+      const rows = reports.flatMap((report) => report.records.map((row) => ({ ...row, supplier: report.metadata.supplier })));
+      const duplicate = rows.find((row, index) => rows.findIndex((item) => item.sku === row.sku) !== index);
+      if (duplicate) throw new Error(`${duplicate.sku}在人工採購草稿中重複，請先合併為單一數量。`);
+      const analysis = core.buildSpecialProcurementAnalysis({
+        baseAnalysis: state.baseAnalysis, workflowType: "manual_draft", rows, fileName: state.manualDraftFiles.map((file) => file.name).join("、"),
+        master: state.parsedSources.master, inventory: state.parsedSources.inventory, pendingReports: state.parsedSources.pendingReports,
+        supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, purchaseUnitRules: state.procurementRules?.purchaseUnits
+      });
+      activateSpecialAnalysis(analysis, "人工匯入採購單");
+    } catch (error) {
+      elements.specialWorkflowStatus.textContent = `人工採購草稿停止：${error.message}`;
+      elements.specialWorkflowStatus.className = "main-status error";
+    } finally { updateSpecialWorkflowReady(); }
+  }
+  function postedOrderPayload(report, master, workflowType) {
+    const erpReference = String(report.metadata.documentCode || "").trim();
+    if (!erpReference) throw new Error(`${report.fileName}缺少ERP單據編碼，禁止補登。`);
+    const validRows = report.records.filter((row) => workflowType !== "customer_custom" || row.isCustomOrder);
+    if (!validRows.length) throw new Error(`${report.fileName}沒有可補登的採購明細。`);
+    const bySupplier = new Map();
+    validRows.forEach((row) => {
+      const masterRow = master.bySku.get(row.sku);
+      const supplier = String(report.metadata.supplier || masterRow?.supplier || "").trim();
+      if (!supplier) throw new Error(`${report.fileName}的${row.sku}無法辨識供應商。`);
+      const amount = Number(row.amount || 0) || Number(row.quantity || 0) * Number(masterRow?.unitCost || 0);
+      if (!(amount > 0)) throw new Error(`${report.fileName}的${row.sku}缺少可計算的採購金額。`);
+      const item = bySupplier.get(supplier) || { supplier, amount: 0, confirmedQty: 0, consignmentAvailableQty: 0 };
+      item.amount += amount; item.confirmedQty += Number(row.quantity || 0); bySupplier.set(supplier, item);
+    });
+    const paymentSchedule = [];
+    let paymentCurrentMonth = 0;
+    let paymentFutureMonths = 0;
+    bySupplier.forEach((supplier) => {
+      const schedule = core.calculatePaymentSchedule({ ...supplier, orderDate: report.metadata.purchaseDate || elements.orderDate.value, supplyMode: /力榮|普優[瑪碼]/.test(supplier.supplier) ? "consignment" : "direct", supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES });
+      if (schedule.status !== "PASS") throw new Error(`${supplier.supplier}付款月份無法判斷：${schedule.message}`);
+      schedule.entries.forEach((entry) => {
+        paymentSchedule.push({ supplier: supplier.supplier, country: schedule.supplierCountry, ...entry });
+        if (entry.month === elements.month.value) paymentCurrentMonth += entry.amount; else paymentFutureMonths += entry.amount;
+      });
+    });
+    const amount = [...bySupplier.values()].reduce((sum, row) => sum + row.amount, 0);
+    const safeReference = erpReference.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 45) || "ERP";
+    return {
+      batchId: `ERP-${safeReference}`, analysisMonth: elements.month.value, erpReference,
+      workflowType, supplierSummary: [...bySupplier.keys()], suggestedAmount: 0, manualAmount: amount, blockedAmount: 0,
+      approvedAmount: amount, adjustmentAmount: amount, budgetAmount: currentBudget().availableBudget,
+      paymentCurrentMonth, paymentFutureMonths, paymentSchedule,
+      warningSummary: workflowType === "customer_custom" ? "有客訂對應；不得扣一般淨需求" : "補登既有ERP採購單",
+      idempotencyKey: `erp-import:${erpReference}`
+    };
+  }
+  async function importPostedReport(report, master, workflowType) {
+    const payload = postedOrderPayload(report, master, workflowType);
+    const result = await postJson("/api/procurement/manual-orders", payload);
+    let notificationFailed = false;
+    if (!result.duplicate && result.notification === "pending" && googleSources.token()) {
+      try { await postJson(`/api/procurement/batches/${encodeURIComponent(payload.batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() }); }
+      catch { notificationFailed = true; }
+    }
+    return { ...result, payload, notificationFailed };
+  }
+  async function syncDetectedCustomOrders(reports, master) {
+    const customReports = reports.filter((report) => report.records.some((row) => row.isCustomOrder));
+    if (!customReports.length) return;
+    if (!state.config?.permissions?.canApprove) {
+      elements.specialWorkflowStatus.textContent = `偵測到${customReports.length}張客製未到貨採購單；請由採購核准者重新執行計算後自動納入台帳。`;
+      elements.specialWorkflowStatus.className = "main-status error";
+      return;
+    }
+    let added = 0; let duplicate = 0; const failures = [];
+    for (const report of customReports) {
+      try {
+        const result = await importPostedReport(report, master, "customer_custom");
+        if (result.duplicate) duplicate += 1; else added += 1;
+      } catch (error) { failures.push(`${report.fileName}：${error.message}`); }
+    }
+    await loadLedger();
+    elements.specialWorkflowStatus.textContent = `客製單自動辨識完成：新增${added}張、既有或重複${duplicate}張${failures.length ? `、${failures.length}張待處理（${failures.join("；")}）` : ""}；只納入承諾與付款，不扣一般淨需求。`;
+    elements.specialWorkflowStatus.className = `main-status ${failures.length ? "error" : "success"}`;
+  }
+  async function importPostedOrders() {
+    if (!state.postedOrderFiles.length || !state.config?.permissions?.canApprove) return;
+    elements.postedOrderButton.disabled = true;
+    elements.specialWorkflowStatus.textContent = "正在檢查ERP單號、金額、付款月份與重複台帳…";
+    try {
+      const workbooks = await Promise.all(state.postedOrderFiles.map(readWorkbook));
+      const reports = workbooks.map((workbook, index) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: state.postedOrderFiles[index].name }));
+      let added = 0; let duplicate = 0;
+      for (const report of reports) {
+        const result = await importPostedReport(report, state.parsedSources.master, "manual_posted");
+        if (result.duplicate) duplicate += 1; else added += 1;
+      }
+      await loadLedger();
+      elements.specialWorkflowStatus.textContent = `補登完成：新增${added}張、重複未計價${duplicate}張。已納入目前額度與付款月份。`;
+      elements.specialWorkflowStatus.className = "main-status success";
+    } catch (error) {
+      elements.specialWorkflowStatus.textContent = `補登停止：${error.message}`;
+      elements.specialWorkflowStatus.className = "main-status error";
+    } finally { updateSpecialWorkflowReady(); }
   }
   function currentBudget() {
     const read = (element) => Number.isFinite(Number(element.value)) ? Number(element.value) : 0;
@@ -798,7 +1044,8 @@
     if (!state.analysis || !state.selectedSuppliers.size) return;
     const selected = [...state.selectedSuppliers];
     const scopeLabel = (selected.length === supplierNames(state.analysis).length ? "全部供應商" : selected.join("＋")).replace(/[\\/:*?"<>|]/g, "-").slice(0, 80);
-    XLSX.writeFile(core.buildRecommendationWorkbook(state.analysis, XLSX, { budget: currentBudget(), selectedSuppliers: selected }), `${elements.month.value}_${elements.checkpoint.value === "mid-month" ? "月中" : elements.checkpoint.value === "month-end" ? "月底" : "月初"}_${scopeLabel}_採購建議_人工審核.xlsx`, { compression: true, cellStyles: true });
+    const workflowLabel = state.analysis.meta?.workflowLabel || "採購建議";
+    XLSX.writeFile(core.buildRecommendationWorkbook(state.analysis, XLSX, { budget: currentBudget(), selectedSuppliers: selected }), `${elements.month.value}_${elements.checkpoint.value === "mid-month" ? "月中" : elements.checkpoint.value === "month-end" ? "月底" : "月初"}_${scopeLabel}_${workflowLabel}_人工審核.xlsx`, { compression: true, cellStyles: true });
     state.returnScope = new Set(selected);
     resetReviewWorkflow(`已下載${selected.join("、")}的本批採購建議；完成Excel人工填量後，請選擇這一份第一次回匯檔。`);
     setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, true);
@@ -862,6 +1109,7 @@
     const currentMonthPayment = state.review.payments.flatMap((row) => row.entries).filter((row) => row.month === elements.month.value).reduce((sum, row) => sum + row.amount, 0);
     return {
       batchId: state.batchId, analysisMonth: elements.month.value, supplierSummary: [...new Set(state.review.rows.filter((row) => row.finalQty > 0).map((row) => row.supplier))],
+      workflowType: state.workflowType,
       suggestedAmount: state.review.totals.suggestedAmount, manualAmount: state.review.totals.manualAmount, blockedAmount: state.review.totals.blockedAmount,
       approvedAmount: state.review.totals.approvedAmount, adjustmentAmount: state.review.totals.adjustmentAmount, budgetAmount: currentBudget().availableBudget,
       paymentCurrentMonth: currentMonthPayment, paymentFutureMonths: state.review.totals.approvedAmount - currentMonthPayment,
@@ -931,6 +1179,12 @@
     } catch (error) { elements.erpCreated.disabled = false; setWorkflowStatus(`ERP狀態更新失敗：${error.message}`, "error"); }
   }
 
+  elements.newProductFile.addEventListener("change", () => { state.newProductFile = elements.newProductFile.files[0] || null; updateSpecialWorkflowReady(); });
+  elements.manualDraftFiles.addEventListener("change", () => { state.manualDraftFiles = [...elements.manualDraftFiles.files]; updateSpecialWorkflowReady(); });
+  elements.postedOrderFiles.addEventListener("change", () => { state.postedOrderFiles = [...elements.postedOrderFiles.files]; updateSpecialWorkflowReady(); });
+  elements.newProductButton.addEventListener("click", buildNewProductFlow);
+  elements.manualDraftButton.addEventListener("click", buildManualDraftFlow);
+  elements.postedOrderButton.addEventListener("click", importPostedOrders);
   bindFileInput(elements.masterFile, "masterFile", elements.masterFileName, false, "masterWorkbook");
   bindFileInput(elements.inventoryFile, "inventoryFile", elements.inventoryFileName);
   bindFileInput(elements.pendingFiles, "pendingFiles", elements.pendingFilesName, true);

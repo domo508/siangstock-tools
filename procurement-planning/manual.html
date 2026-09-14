@@ -7,7 +7,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
   <title>庫存採購規劃操作手冊｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260911-manual-r1">
-  <link rel="stylesheet" href="style.css?v=20260914-workflow-layout-r1">
+  <link rel="stylesheet" href="style.css?v=20260914-special-workflows-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -28,6 +28,16 @@
         <li><strong>下載並完成ERP開單。</strong>只有正式核准且所有阻擋均已排除，下載按鈕才會開放。完成ERP開單後填入採購單號或確認註記，批次只轉為「已建立ERP、尚未到貨」，不會再次占用額度。</li>
       </ol>
     </section>
+    <section class="panel"><div class="section-heading compact"><div><p class="eyebrow">其它採購流程</p><h2>三個人工入口的差別</h2></div></div>
+      <div class="rule-grid">
+        <article><strong>新品首批採購</strong><p>先完成最新資料計算，再匯入新品名單；至少要有ERP品號、上市日、通路／門市及首月預估量。工具產生首批建議後，仍走兩次回匯與正式核准。</p></article>
+        <article><strong>人工匯入採購單</strong><p>用於尚未在ERP正式建立的人工／例外採購草稿。原草稿量會預填在人工確認欄，與最新淨需求並列比較；草稿本身不先占用額度。</p></article>
+        <article><strong>補登已採購單</strong><p>用於已在ERP建立、卻沒有經過本工具核准的採購單。只有核准者可補登；系統以ERP單號去重，成功後直接納入承諾與付款。</p></article>
+        <article><strong>客製採購自動辨識</strong><p>每次讀取未到貨採購單時，只在表頭或明細備註明確寫有「客製」才辨識。客製金額自動補入台帳，但不扣一般淨需求、不影響銷售分級與寄庫建議。</p></article>
+        <article><strong>更正與撤銷</strong><p>最高權限可在「已承諾批次與額度異動」更正金額或撤銷；系統以同一批次記錄差額並寄摘要，不另建一筆採購。</p></article>
+        <article><strong>收貨驗收</strong><p>完全到貨、部分待到、短收結案及超收將在下一階段的獨立倉儲子工具處理，本頁目前不提供收貨按鈕。</p></article>
+      </div>
+    </section>
     <section class="panel"><div class="section-heading compact"><div><p class="eyebrow">額度與付款</p><h2>畫面會看到哪些金額</h2></div></div>
       <div class="rule-grid">
         <article><strong>寬承預估認列營收</strong><p>2026年9月為5,936,068.44元；整月成本率與採購額度判讀使用此口徑。</p></article>
@@ -39,7 +49,7 @@
       </div>
     </section>
     <section class="panel"><div class="section-heading compact"><div><p class="eyebrow">停止條件</p><h2>遇到這些情況不要核准</h2></div></div>
-      <ul class="manual-steps"><li>Google固定來源欄位、日期或粉紅格式改變。</li><li>公司正式季節模型不存在、已進入每6個月一次的必要更新月份，或歷史銷售涵蓋不足兩年。</li><li>歷史銷售重疊檔出現相同交易識別、但數量或金額不同；系統會停止模型發布，不能略過。</li><li>最新商品主檔出現重複品號時停止整批；缺價格或供應商時只阻擋受影響品號。</li><li>回匯的不是本頁本次下載的報表；舊版「03B其它供應商回匯覆核」不能直接進入現行正式核准流程。</li><li>人工量不是正整數、力榮不是10的倍數、修改量卻沒填原因。</li><li>二次確認量留白、同一品號重複、付款月份加總不等於最終核准金額，或來源時點未通過檢核。</li><li>普優瑪或力榮寄庫表仍開放「知道連結的任何人可編輯」；2026-09-11已同意因供應商維護而暫不阻擋部署，但前台會持續標示尚未完成正式權限驗收，並維持來源格式、日期與內容雜湊檢查。</li></ul>
+      <ul class="manual-steps"><li>Google固定來源欄位、日期或粉紅格式改變。</li><li>公司正式季節模型不存在、已進入每6個月一次的必要更新月份，或歷史銷售涵蓋不足兩年。</li><li>歷史銷售單一Excel壓縮後超過45 MB；大型檔預檢會直接顯示實際檔名與大小，請先拆分，不會再誤報成缺少銷售欄位。</li><li>歷史銷售重疊檔出現相同交易識別、但數量或金額不同；系統會停止模型發布，不能略過。</li><li>最新商品主檔出現重複品號時停止整批；缺價格或供應商時只阻擋受影響品號。</li><li>回匯的不是本頁本次下載的報表；舊版「03B其它供應商回匯覆核」不能直接進入現行正式核准流程。</li><li>人工量不是正整數、力榮不是10的倍數、修改量卻沒填原因。</li><li>補登採購單沒有ERP單據編碼、同一ERP單號已存在，或無法從採購單／商品主檔確認供應商與金額。</li><li>二次確認量留白、同一品號重複、付款月份加總不等於最終核准金額，或來源時點未通過檢核。</li><li>普優瑪或力榮寄庫表仍開放「知道連結的任何人可編輯」；2026-09-11已同意因供應商維護而暫不阻擋部署，但前台會持續標示尚未完成正式權限驗收，並維持來源格式、日期與內容雜湊檢查。</li></ul>
     </section>
     <footer><p>翔仔居家・庫存採購規劃操作手冊</p><p>通知紀錄預設保存12個月，只含批次、事件、收件人、時間、狀態、訊息ID、重試與必要錯誤摘要。</p></footer>
   </main>

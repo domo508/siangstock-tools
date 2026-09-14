@@ -208,7 +208,7 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
   await verifyCompanyUser(request, procurementAccess(env));
   const requestedMonth = month(new URL(request.url).searchParams.get("month"));
   const rows = await env.DB.prepare(
-    "SELECT id, analysis_month, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, approved_at, approved_by, updated_at, revision FROM procurement_batches WHERE analysis_month = ? ORDER BY updated_at DESC LIMIT 200"
+    "SELECT id, analysis_month, workflow_type, erp_reference, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, approved_at, approved_by, updated_at, revision FROM procurement_batches WHERE analysis_month = ? ORDER BY updated_at DESC LIMIT 200"
   ).bind(requestedMonth).all<Record<string, unknown>>();
   const batches: Record<string, unknown>[] = rows.results.map((row): Record<string, unknown> => ({
     ...row,
@@ -315,11 +315,13 @@ function validatedBatch(input: Record<string, unknown>, actor: string) {
   const paymentSchedule = JSON.stringify(input.paymentSchedule || []);
   if (supplierSummary.length > 4096 || paymentSchedule.length > 8192) throw new RequestValidationError("供應商或付款摘要過長。");
   const now = new Date().toISOString();
+  const workflowType = typeof input.workflowType === "string" ? input.workflowType.trim() : "system_recommendation";
+  if (!["system_recommendation", "new_product", "manual_draft", "manual_posted", "customer_custom"].includes(workflowType)) throw new RequestValidationError("採購流程類型錯誤。");
   return {
     id: string(input.batchId, "批次編號", 80), analysisMonth: month(input.analysisMonth), supplierSummary,
     suggested, manual, blocked, approved, adjustment, budget: money(input.budgetAmount, "整月預估額度"),
     currentPayment, futurePayments, paymentSchedule, warning: typeof input.warningSummary === "string" ? input.warningSummary.trim().slice(0, 1024) : "",
-    idempotencyKey: string(input.idempotencyKey, "冪等鍵", 120), now, actor
+    idempotencyKey: string(input.idempotencyKey, "冪等鍵", 120), workflowType, now, actor
   };
 }
 
@@ -329,8 +331,8 @@ async function submit(request: Request, env: ProcurementEnv): Promise<Response> 
   const item = validatedBatch(await body(request), actor);
   try {
     await env.DB.batch([
-      env.DB.prepare("INSERT INTO procurement_batches (id, analysis_month, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, updated_at, idempotency_key) VALUES (?, ?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(item.id, item.analysisMonth, item.supplierSummary, item.suggested, item.manual, item.blocked, item.approved, item.adjustment, item.budget, item.currentPayment, item.futurePayments, item.paymentSchedule, item.warning, item.now, actor, item.now, item.idempotencyKey),
+      env.DB.prepare("INSERT INTO procurement_batches (id, analysis_month, workflow_type, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, updated_at, idempotency_key) VALUES (?, ?, ?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(item.id, item.analysisMonth, item.workflowType, item.supplierSummary, item.suggested, item.manual, item.blocked, item.approved, item.adjustment, item.budget, item.currentPayment, item.futurePayments, item.paymentSchedule, item.warning, item.now, actor, item.now, item.idempotencyKey),
       env.DB.prepare("INSERT INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) VALUES (?, 'submitted', 0, ?, ?, '第二次回匯完成，待正式核准', ?, ?, ?)")
         .bind(item.id, item.approved, item.approved, item.now, actor, `${item.idempotencyKey}:event`)
     ]);
@@ -340,6 +342,34 @@ async function submit(request: Request, env: ProcurementEnv): Promise<Response> 
     throw error;
   }
   return json({ batch: { id: item.id, status: "pending_approval" }, duplicate: false }, 201);
+}
+
+async function importManualOrder(request: Request, env: ProcurementEnv): Promise<Response> {
+  requireSameOrigin(request, env);
+  const access = await verifyApprover(request, env);
+  const input = await body(request);
+  const item = validatedBatch(input, access.email);
+  if (!["manual_posted", "customer_custom"].includes(item.workflowType)) throw new RequestValidationError("補登流程類型錯誤。");
+  const erpReference = string(input.erpReference, "ERP採購單號", 120);
+  const existing = await env.DB.prepare("SELECT id, status, workflow_type, erp_reference FROM procurement_batches WHERE erp_reference = ? OR idempotency_key = ?").bind(erpReference, item.idempotencyKey).first<Record<string, unknown>>();
+  if (existing) return json({ batch: existing, duplicate: true, notification: "sent_or_not_required" });
+  try {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO procurement_batches (id, analysis_month, workflow_type, erp_reference, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, approved_at, approved_by, updated_at, revision, idempotency_key) VALUES (?, ?, ?, ?, ?, 'erp_created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, ?)")
+        .bind(item.id, item.analysisMonth, item.workflowType, erpReference, item.supplierSummary, item.suggested, item.manual, item.blocked, item.approved, item.adjustment, item.budget, item.currentPayment, item.futurePayments, item.paymentSchedule, item.warning, item.now, access.email, item.now, access.email, item.now, item.idempotencyKey),
+      env.DB.prepare("INSERT INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) VALUES (?, 'approved', 0, ?, ?, ?, ?, ?, ?)")
+        .bind(item.id, item.approved, item.approved, item.workflowType === "customer_custom" ? "未到貨清單自動辨識客製採購並補登" : "補登已建立ERP採購單", item.now, access.email, `${item.idempotencyKey}:approved`),
+      env.DB.prepare("INSERT INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) VALUES (?, 'erp_created', ?, 0, ?, ?, ?, ?, ?)")
+        .bind(item.id, item.approved, item.approved, `ERP確認：${erpReference}`, item.now, access.email, `${item.idempotencyKey}:erp`),
+      env.DB.prepare("INSERT INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'approved', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?")
+        .bind(item.id, access.settings.notificationRecipient, item.now, `${item.idempotencyKey}:approved`)
+    ]);
+  } catch (error) {
+    const duplicate = await env.DB.prepare("SELECT id, status, workflow_type, erp_reference FROM procurement_batches WHERE erp_reference = ? OR idempotency_key = ?").bind(erpReference, item.idempotencyKey).first<Record<string, unknown>>();
+    if (duplicate) return json({ batch: duplicate, duplicate: true, notification: "sent_or_not_required" });
+    throw error;
+  }
+  return json({ batch: { id: item.id, status: "erp_created", workflow_type: item.workflowType, erp_reference: erpReference }, duplicate: false, notification: "pending" }, 201);
 }
 
 async function approve(request: Request, env: ProcurementEnv, batchId: string): Promise<Response> {
@@ -435,10 +465,12 @@ async function markErpCreated(request: Request, env: ProcurementEnv, batchId: st
   const { email: actor } = await verifyApprover(request, env);
   const input = await body(request);
   const erpReference = string(input.erpReference, "ERP採購單號／確認註記", 120);
+  const duplicateReference = await env.DB.prepare("SELECT id, status FROM procurement_batches WHERE erp_reference = ? AND id != ?").bind(erpReference, batchId).first<Record<string, unknown>>();
+  if (duplicateReference) throw new RequestValidationError(`ERP採購單號已由批次${String(duplicateReference.id)}登錄，禁止重複占額。`, 409);
   const key = string(input.idempotencyKey, "冪等鍵", 120);
   const now = new Date().toISOString();
   const result = await env.DB.batch([
-    env.DB.prepare("UPDATE procurement_batches SET status = 'erp_created', updated_at = ?, revision = revision + 1 WHERE id = ? AND status = 'approved'").bind(now, batchId),
+    env.DB.prepare("UPDATE procurement_batches SET status = 'erp_created', erp_reference = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND status = 'approved'").bind(erpReference, now, batchId),
     env.DB.prepare("INSERT OR IGNORE INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) SELECT id, 'erp_created', approved_amount, 0, approved_amount, ?, ?, ?, ? FROM procurement_batches WHERE id = ? AND status = 'erp_created' AND updated_at = ?").bind(`ERP確認：${erpReference}`, now, actor, key, batchId, now)
   ]);
   if (Number(result[0].meta.changes || 0) === 0) {
@@ -525,6 +557,7 @@ export async function procurementRoute(request: Request, env: ProcurementEnv): P
   if (url.pathname === "/api/procurement/month-plan" && request.method === "GET") return monthPlan(request, env);
   if (url.pathname === "/api/procurement/month-plan" && request.method === "PUT") return saveMonthPlan(request, env);
   if (url.pathname === "/api/procurement/batches" && request.method === "POST") return submit(request, env);
+  if (url.pathname === "/api/procurement/manual-orders" && request.method === "POST") return importManualOrder(request, env);
   const approveMatch = url.pathname.match(/^\/api\/procurement\/batches\/([^/]+)\/approve$/);
   if (approveMatch && request.method === "POST") return approve(request, env, decodeURIComponent(approveMatch[1]));
   const revokeMatch = url.pathname.match(/^\/api\/procurement\/batches\/([^/]+)\/revoke$/);
