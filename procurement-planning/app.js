@@ -473,7 +473,14 @@
         const revokeButton = document.createElement("button"); revokeButton.type = "button"; revokeButton.className = "table-action"; revokeButton.textContent = "撤銷";
         revokeButton.addEventListener("click", () => revokeLedgerBatch(item, revokeButton));
         action.append(correctButton, document.createTextNode("　"), revokeButton);
-      } else action.textContent = item.status === "received" ? "已由收貨結案" : "僅最高權限可更正／撤銷";
+      }
+      if (state.config?.permissions?.canApprove) {
+        const notifyButton = document.createElement("button"); notifyButton.type = "button"; notifyButton.className = "table-action"; notifyButton.textContent = "重送摘要";
+        notifyButton.addEventListener("click", () => retryLedgerNotification(item.id, notifyButton));
+        if (action.childNodes.length) action.append(document.createTextNode("　"));
+        action.appendChild(notifyButton);
+      }
+      if (!action.childNodes.length) action.textContent = item.status === "received" ? "已由收貨結案" : "僅最高權限可更正／撤銷";
       row.appendChild(action); fragment.appendChild(row);
     });
     elements.activeLedgerRows.replaceChildren(fragment);
@@ -483,6 +490,14 @@
     if (!token) return false;
     await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/notify`, {}, { "X-Google-Access-Token": token });
     return true;
+  }
+  async function retryLedgerNotification(batchId, button) {
+    if (!googleSources.token()) { setWorkflowStatus("請先完成公司 Google 授權，再重送這筆額度摘要。", "error"); return; }
+    button.disabled = true;
+    try {
+      const result = await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() });
+      setWorkflowStatus(result.status === "sent" ? `批次${batchId}摘要已寄送。` : `批次${batchId}目前沒有待寄摘要。`, "success");
+    } catch (error) { button.disabled = false; setWorkflowStatus(`摘要重送失敗：${error.message}`, "error"); }
   }
   async function revokeLedgerBatch(item, button) {
     const reason = globalThis.prompt(`請輸入撤銷批次${item.id}的原因（撤銷後會沖回${formatCurrency(item.approved_amount)}）：`, "");
