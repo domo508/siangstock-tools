@@ -43,6 +43,7 @@
     reviewFile: get("#review-file"), reviewButton: get("#review-button"), secondReviewFile: get("#second-review-file"), confirmReview: get("#confirm-review-button"),
     submitApproval: get("#submit-approval-button"), approve: get("#approve-button"), retryNotification: get("#retry-notification-button"),
     erp: get("#erp-button"), erpReference: get("#erp-reference"), erpCreated: get("#erp-created-button"), workflowStatus: get("#workflow-status"), workflowSummary: get("#workflow-summary"),
+    workflowErrors: get("#workflow-errors"), workflowErrorTitle: get("#workflow-error-title"), workflowErrorList: get("#workflow-error-list"),
     approvalQueueRows: get("#approval-queue-rows"), refreshQueue: get("#refresh-queue-button"),
     reviewFileLabel: get("#review-file-label"), secondReviewFileLabel: get("#second-review-file-label"),
     workflowStepDownload: get("#workflow-step-download"), workflowStepFirst: get("#workflow-step-first"), workflowStepSecond: get("#workflow-step-second"), workflowStepApproval: get("#workflow-step-approval")
@@ -62,6 +63,26 @@
   function sourceProof(id, metadata) { return `ID…${String(id || "").slice(-6)}・更新${metadata?.modifiedTime || "依工作表內容"}・抓取${String(metadata?.fetchedAt || "").replace("T", " ").slice(0, 19)}・SHA-256 ${String(metadata?.sha256 || "").slice(0, 12)}…`; }
   function setStatus(message, type = "") { elements.status.textContent = message; elements.status.className = `main-status ${type}`.trim(); }
   function setWorkflowStatus(message, type = "") { elements.workflowStatus.textContent = message; elements.workflowStatus.className = `main-status ${type}`.trim(); }
+  function clearWorkflowErrors() {
+    elements.workflowErrorList.replaceChildren();
+    elements.workflowErrors.hidden = true;
+  }
+  function renderWorkflowErrors(errors, title = "尚有阻擋") {
+    clearWorkflowErrors();
+    elements.workflowErrorTitle.textContent = title;
+    errors.slice(0, 20).forEach((error) => {
+      const item = document.createElement("li");
+      const location = [error.sheetName, error.sourceRow ? `第${error.sourceRow}列` : "", error.sku].filter(Boolean).join("・");
+      item.textContent = `${location ? `${location}：` : ""}${error.message}`;
+      elements.workflowErrorList.append(item);
+    });
+    if (errors.length > 20) {
+      const item = document.createElement("li");
+      item.textContent = `另有${errors.length - 20}項；請先修正上述同類問題後重新檢查。`;
+      elements.workflowErrorList.append(item);
+    }
+    elements.workflowErrors.hidden = false;
+  }
   function updateSourceProgress(id, status, message) {
     const item = elements.autoSourceProgress.querySelector(`[data-source-progress="${id}"]`);
     if (!item) return;
@@ -382,6 +403,7 @@
     elements.reviewButton.disabled = true; elements.confirmReview.disabled = true; elements.submitApproval.disabled = true; elements.approve.disabled = true;
     elements.retryNotification.disabled = true; elements.erp.disabled = true; elements.erpReference.value = ""; elements.erpReference.disabled = true; elements.erpCreated.disabled = true;
     elements.workflowSummary.replaceChildren();
+    clearWorkflowErrors();
     setWorkflowStep(elements.workflowStepDownload, state.returnScope ? "done" : (state.analysis ? "active" : "waiting"), state.returnScope ? `已下載${state.returnScope.size}家供應商` : "先在上方勾選供應商並下載");
     setWorkflowStep(elements.workflowStepFirst, state.returnScope ? "active" : "locked", state.returnScope ? "已開放第一次人工回匯" : "下載本批Excel後開放");
     setWorkflowStep(elements.workflowStepSecond, "locked", "第一次覆核通過後開放");
@@ -1132,7 +1154,6 @@
     try {
       const baselineRows = state.analysis.rows.filter((row) => state.returnScope.has(String(row.supplier || "").trim()));
       state.firstReview = core.reviewReturnedWorkbook(await readWorkbook(state.reviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, baselineBySku: new Map(baselineRows.map((row) => [row.sku, row])) });
-      outputXlsx.writeFile(core.buildSecondReviewWorkbook(state.firstReview, outputXlsx), `${elements.month.value}_回匯二次覆核報表.xlsx`, { compression: true, cellStyles: true });
       const t = state.firstReview.totals;
       elements.workflowSummary.replaceChildren(
         createSummaryCard("系統建議金額", formatCurrency(t.suggestedAmount), "原始工具建議", "currency"),
@@ -1142,12 +1163,18 @@
       );
       setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, state.firstReview.errors.length === 0);
       elements.submitApproval.disabled = true;
+      if (state.firstReview.errors.length) renderWorkflowErrors(state.firstReview.errors, "第一次回匯尚有阻擋，未產生二次覆核報表");
+      else {
+        clearWorkflowErrors();
+        outputXlsx.writeFile(core.buildSecondReviewWorkbook(state.firstReview, outputXlsx), `${elements.month.value}_回匯二次覆核報表.xlsx`, { compression: true, cellStyles: true });
+      }
       setWorkflowStep(elements.workflowStepFirst, state.firstReview.errors.length ? "blocked" : "done", state.firstReview.errors.length ? `有${state.firstReview.errors.length}項阻擋` : "第一次覆核已通過");
       setWorkflowStep(elements.workflowStepSecond, state.firstReview.errors.length ? "locked" : "active", state.firstReview.errors.length ? "修正第一次回匯後重跑" : "請逐列填寫二次確認採購量");
       setWorkflowStatus(state.firstReview.errors.length ? `覆核完成但有${state.firstReview.errors.length}項阻擋；請修正第一次回匯後重跑。` : "第一次覆核通過；請在下載報表逐列填二次確認採購量，再回匯確認版。", state.firstReview.errors.length ? "error" : "success");
       renderBudget();
     } catch (error) {
       state.firstReview = null; state.review = null;
+      renderWorkflowErrors([{ message: error.message }], "第一次回匯失敗，未產生二次覆核報表");
       setWorkflowStep(elements.workflowStepFirst, "blocked", "檔案或內容未通過檢查");
       setWorkflowStep(elements.workflowStepSecond, "locked", "第一次覆核通過後開放");
       setWorkflowStatus(`回匯失敗：${error.message}`, "error");
@@ -1158,6 +1185,7 @@
     if (!state.secondReviewFile) return;
     elements.confirmReview.disabled = true; setWorkflowStatus("正在檢查二次確認量、原因、付款月份與核准金額…");
     try {
+      clearWorkflowErrors();
       state.review = core.reviewSecondApprovalWorkbook(await readWorkbook(state.secondReviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, baselineBySku: new Map(state.firstReview.rows.map((row) => [row.sku, row])) });
       const t = state.review.totals;
       elements.workflowSummary.replaceChildren(
@@ -1167,12 +1195,14 @@
         createSummaryCard("二次確認核准金額", formatCurrency(t.approvedAmount), "將寫入集中台帳", "currency")
       );
       elements.submitApproval.disabled = state.review.errors.length > 0;
+      if (state.review.errors.length) renderWorkflowErrors(state.review.errors, "二次確認版尚有阻擋，禁止送出");
       setWorkflowStep(elements.workflowStepSecond, state.review.errors.length ? "blocked" : "done", state.review.errors.length ? `仍有${state.review.errors.length}項阻擋` : "二次確認已通過");
       setWorkflowStep(elements.workflowStepApproval, state.review.errors.length ? "locked" : "active", state.review.errors.length ? "修正二次確認版後重跑" : "可送出待核准台帳");
       setWorkflowStatus(state.review.errors.length ? `二次確認版仍有${state.review.errors.length}項阻擋，禁止送出。` : "二次確認版通過；可送出待核准台帳，此步驟不寄信。", state.review.errors.length ? "error" : "success");
       renderBudget();
     } catch (error) {
       state.review = null; elements.submitApproval.disabled = true;
+      renderWorkflowErrors([{ message: error.message }], "二次確認版檢查失敗，禁止送出");
       setWorkflowStep(elements.workflowStepSecond, "blocked", "檔案或內容未通過檢查");
       setWorkflowStep(elements.workflowStepApproval, "locked", "二次確認通過後開放");
       setWorkflowStatus(`確認版失敗：${error.message}`, "error");
@@ -1238,7 +1268,7 @@
   function downloadErp() {
     if (!state.review || !state.approved) return;
     try {
-      outputXlsx.writeFile(core.buildErpPurchaseWorkbook(state.review, outputXlsx, { approved: true, batchId: state.batchId }), `${state.batchId}_ERP正式採購單.xlsx`, { compression: true, cellStyles: true });
+      XLSX.writeFile(core.buildErpPurchaseWorkbook(state.review, XLSX, { approved: true, batchId: state.batchId }), `${state.batchId}_ERP正式採購單.xlsx`, { compression: true });
       state.erpDownloaded = true; elements.erpCreated.disabled = !elements.erpReference.value.trim(); setWorkflowStatus("ERP採購檔已下載；完成ERP開單後請填採購單號或確認註記，再更新台帳狀態。", "success");
     }
     catch (error) { setWorkflowStatus(error.message, "error"); }
@@ -1275,10 +1305,11 @@
     elements.reviewButton.disabled = !state.reviewFile; setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, false); elements.confirmReview.disabled = true;
     elements.submitApproval.disabled = true; elements.approve.disabled = true; elements.retryNotification.disabled = true; elements.erp.disabled = true;
     elements.erpReference.value = ""; elements.erpReference.disabled = true; elements.erpCreated.disabled = true; state.erpDownloaded = false;
+    clearWorkflowErrors();
     setWorkflowStep(elements.workflowStepFirst, "active", state.reviewFile ? `已選擇${state.reviewFile.name}` : "請選擇第一次人工回匯檔");
     setWorkflowStep(elements.workflowStepSecond, "locked", "第一次覆核通過後開放");
     setWorkflowStep(elements.workflowStepApproval, "locked", "二次確認通過後開放");
-    setWorkflowStatus(state.reviewFile ? `已選擇${state.reviewFile.name}；請開始二次覆核。` : "尚未選擇人工回匯檔。");
+    setWorkflowStatus(state.reviewFile ? `已選擇${state.reviewFile.name}；請開始第一次回匯檢查。` : "尚未選擇人工回匯檔。");
   });
   elements.secondReviewFile.addEventListener("change", () => {
     state.secondReviewFile = elements.secondReviewFile.files[0] || null; state.review = null;

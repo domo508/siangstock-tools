@@ -554,6 +554,10 @@
 .workflow-field { display: grid; gap: 6px; color: var(--muted); font-size: 0.86rem; }
 .workflow-field input { min-width: 0; min-height: 48px; border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; color: var(--navy); background: #fff; }
 .workflow-panel .main-status { margin-top: 16px; }
+.workflow-errors { margin-top: 12px; padding: 14px 16px; border: 1px solid #e2c47d; border-radius: 12px; background: var(--soft-yellow); color: var(--navy); }
+.workflow-errors strong { display: block; margin-bottom: 8px; }
+.workflow-errors ul { margin: 0; padding-left: 1.25rem; color: #70550f; line-height: 1.55; }
+.workflow-errors li + li { margin-top: 4px; }
 .manual-steps { margin: 0; padding-left: 1.4rem; color: var(--muted); line-height: 1.75; }
 .manual-steps li + li { margin-top: 10px; }
 .manual-steps strong { color: var(--navy); }

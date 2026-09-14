@@ -2748,9 +2748,7 @@
     applySummaryCis(summarySheet, XLSX);
     XLSX.utils.book_append_sheet(workbook, summarySheet, "01_採購摘要");
 
-    const allSuggested = recommendationSheetRows(selectedSuggestedRows, recommendations.asOfDate);
     const recommendationWidths = [20, 18, 16, 28, 48, 12, 8, 8, 16, 16, 16, 24, 24, 16, 16, 20, 16, 16, 16, 16, 22, 18, 16, 18, 18, 18, 20, 16, 18, 28, 14, 18, 12, 16, 36];
-    appendJsonSheet(workbook, XLSX, isFullScope ? "02_全部採購建議" : "02_所選範圍採購建議", allSuggested, recommendationWidths);
 
     const puyoumaRows = selectedSuggestedRows.filter((row) => /普優[瑪碼]/.test(row.supplier));
     const lirongRows = selectedSuggestedRows.filter((row) => /力榮/.test(row.supplier));
@@ -3099,24 +3097,17 @@
     if (!options.approved) throw new Error("尚未完成正式核准，禁止產生ERP檔案。");
     if (review.errors.length) throw new Error("回匯仍有阻擋項目，禁止產生ERP檔案。");
     const workbook = XLSX.utils.book_new();
-    const bySupplier = new Map();
-    review.rows.filter((row) => row.finalQty > 0).forEach((row) => {
-      if (!bySupplier.has(row.supplier)) bySupplier.set(row.supplier, []);
-      bySupplier.get(row.supplier).push(row);
-    });
-    let index = 0;
-    for (const [supplier, rows] of bySupplier) {
-      index += 1;
-      const aoa = [
-        ["批次編號:", options.batchId || "", "供應商:", supplier, "採購日期:", review.orderDate], [],
-        ["貨號", "品名", "採購價", "數量", "金額", "備註"],
-        ...rows.map((row) => [row.sku, row.name, row.unitCost, row.finalQty, row.approvedAmount, row.reason || "工具正式核准"])
-      ];
-      const sheet = XLSX.utils.aoa_to_sheet(aoa);
-      setColumnWidths(sheet, [18, 52, 14, 12, 16, 36]);
-      applyTableCis(sheet, XLSX, { headerRow: 2, inputHeaders: [], decisionHeaders: [] });
-      XLSX.utils.book_append_sheet(workbook, sheet, `${String(index).padStart(2, "0")}_${supplier}`.slice(0, 31));
-    }
+    const rows = review.rows.filter((row) => Number(row.finalQty || 0) > 0);
+    if (!rows.length) throw new Error("本批次沒有核准數量大於0的品項，無法產生ERP檔案。");
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "顏色", "尺碼", "數量", "價格", "備註", "倉庫"],
+      ...rows.map((row) => [
+        String(row.sku || ""), String(row.name || ""), "", "",
+        Math.trunc(Number(row.finalQty || 0)), Number(row.unitCost || 0), "", "寬承總倉"
+      ])
+    ]);
+    setColumnWidths(sheet, [18, 52, 12, 12, 12, 14, 24, 16]);
+    XLSX.utils.book_append_sheet(workbook, sheet, "通用貨品數量");
     return workbook;
   }
 

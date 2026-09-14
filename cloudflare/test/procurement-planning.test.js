@@ -567,7 +567,7 @@ describe("採購建議第二階段", () => {
     });
     const output = core.buildRecommendationWorkbook(recommendations, XLSX);
     expect(output.SheetNames).toEqual([
-      "01_採購摘要", "02_全部採購建議", "03A_力榮採購", "03B1_普優瑪_天絲",
+      "01_採購摘要", "03A_力榮採購", "03B1_普優瑪_天絲",
       "03B2_普優瑪_長絨棉", "03B3_普優瑪_無尺寸", "03C_上林採購", "03D_其它供應商",
       "04A_普優瑪寄庫建議", "04B_力榮寄庫建議", "05_新品採購建議", "06_普優瑪新品寄庫",
       "07_排除與例外", "08_核心規則"
@@ -652,7 +652,7 @@ describe("採購建議第二階段", () => {
     recommendations.rows.push(lirongRow);
     recommendations.suggestedRows.push(lirongRow);
     const output = core.buildRecommendationWorkbook(recommendations, XLSX, { selectedSuppliers: ["普優瑪"] });
-    expect(output.SheetNames).toContain("02_所選範圍採購建議");
+    expect(output.SheetNames).not.toContain("02_所選範圍採購建議");
     expect(output.SheetNames).toContain("03B1_普優瑪_天絲");
     expect(output.SheetNames).not.toContain("03A_力榮採購");
     expect(output.SheetNames).not.toContain("03C_上林採購");
@@ -661,7 +661,8 @@ describe("採購建議第二階段", () => {
     const summary = XLSX.utils.sheet_to_json(output.Sheets["01_採購摘要"], { header: 1, defval: "" });
     expect(summary.find((row) => row[0] === "本次匯出範圍")?.[1]).toBe("普優瑪");
     expect(summary.find((row) => row[0] === "建議採購金額")?.[1]).toBe(puyoumaAmount);
-    const selectedRows = XLSX.utils.sheet_to_json(output.Sheets["02_所選範圍採購建議"], { defval: "" });
+    const selectedRows = ["03B1_普優瑪_天絲", "03B2_普優瑪_長絨棉", "03B3_普優瑪_無尺寸"]
+      .flatMap((sheetName) => XLSX.utils.sheet_to_json(output.Sheets[sheetName], { defval: "" }));
     expect(new Set(selectedRows.map((row) => row["供應商"]))).toEqual(new Set(["普優瑪"]));
 
     recommendations.lirongConsignmentRows = [{ sku: "L1", supplierSku: "LR-L1", sourceName: "力榮測試品", masterName: "力榮測試品", tier: "穩定", forecastDailyQty: 1, pullLeadDays: 5, productionDays: 14, earliestDeliveryDays: 19, targetLowDays: 60, targetHighDays: 90, targetDays: 60, currentQty: 0, scheduledQty: 0, approvedPullQty: 0, productionCompleteDate: "", expectedArrivalDate: "", rawQty: 20, downQty: 20, upQty: 20, suggestedQty: 20, availableDaysAfter: 20, beforePullRisk: true, beforeProductionRisk: true, beforeDeliveryRisk: true, status: "需製作", futureCost: 6000, scheduleNotes: [] }];
@@ -688,7 +689,13 @@ describe("採購建議第二階段", () => {
     expect(["合理", "偏高", "偏低"]).toContain(review.rows[0].aiJudgment);
     expect(review.payments[0]).toMatchObject({ supplierCountry: "國內" });
     expect(() => core.buildErpPurchaseWorkbook(review, XLSX)).toThrow("尚未完成正式核准");
-    expect(core.buildErpPurchaseWorkbook(review, XLSX, { approved: true, batchId: "PP-TEST" }).SheetNames.length).toBeGreaterThan(0);
+    const erp = core.buildErpPurchaseWorkbook(review, XLSX, { approved: true, batchId: "PP-TEST" });
+    expect(erp.SheetNames).toEqual(["通用貨品數量"]);
+    const erpRows = XLSX.utils.sheet_to_json(erp.Sheets["通用貨品數量"], { header: 1, defval: "" });
+    expect(erpRows[0]).toEqual(["貨號", "品名", "顏色", "尺碼", "數量", "價格", "備註", "倉庫"]);
+    expect(erpRows[1]).toEqual(["A1", "60天絲測試床包", "", "", 20, 500, "", "寬承總倉"]);
+    expect(erpRows).toHaveLength(2);
+    expect(erp.Sheets["通用貨品數量"]["A1"].s).toBeUndefined();
   });
 
   it("二次覆核必須逐列明確確認，且會重算最終核准金額", () => {
@@ -751,6 +758,9 @@ describe("採購規劃前台與入口", () => {
     expect(readerScriptIndex).toBeGreaterThan(styleRuntimeIndex);
     expect(toolAppSource).toContain("const outputXlsx = globalThis.ProcurementXlsxWriter || globalThis.XLSX");
     expect(toolAppSource).toContain("outputXlsx.writeFile(core.buildRecommendationWorkbook(state.analysis, outputXlsx");
+    expect(toolAppSource).toContain("XLSX.writeFile(core.buildErpPurchaseWorkbook(state.review, XLSX");
+    expect(toolAppSource).toContain("if (state.firstReview.errors.length) renderWorkflowErrors");
+    expect(toolHtml).toContain('id="workflow-errors"');
     expect(toolHtml).toContain("公司 Google 授權");
     expect(toolHtml).toContain("正式核准並寄送摘要");
     expect(toolHtml).toContain("回匯二次確認版");
