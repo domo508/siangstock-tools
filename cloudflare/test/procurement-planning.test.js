@@ -621,5 +621,8 @@ describe("採購規劃前台與入口", () => {
     expect(oneTimeExclusions).toContain("A068-PCC1-1016-00091");
     expect(oneTimeExclusions).toContain("A068-PPF1-3030-00091");
     expect(oneTimeExclusions).toContain("一次性代工");
+    const serviceExclusions = readFileSync("worker/migrations/0008_exclude_shipping_service_skus.sql", "utf8");
+    ["C41723", "Z00999", "ZS1000", "ZS1005", "ZZ900"].forEach((sku) => expect(serviceExclusions).toContain(sku));
+    expect(serviceExclusions).toContain("運費／配送服務");
   });
 });

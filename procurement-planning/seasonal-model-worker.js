@@ -1,6 +1,6 @@
 "use strict";
 
-importScripts("../inventory/assets/xlsx.full.min.js", "core.js", "seasonal-model.js");
+importScripts("../inventory/assets/xlsx.full.min.js", "core.js", "seasonal-model.js?v=20260914-seasonal-wape-r2");
 
 let builder = null;
 let latestResult = null;

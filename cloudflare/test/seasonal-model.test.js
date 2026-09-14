@@ -39,6 +39,28 @@ function historicalRows() {
   return records;
 }
 
+function pooledCategoryData() {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    ["貨號", "品名", "供應商簡稱", "主類別", "2級款式", "尺碼", "存貨種類"],
+    ["A1", "60天絲5尺床包A", "普優瑪", "床包", "天絲", "5尺", "商品"],
+    ["A2", "60天絲5尺床包B", "普優瑪", "床包", "天絲", "5尺", "商品"]
+  ]), "商品主檔");
+  const records = [];
+  const start = Date.UTC(2024, 0, 1);
+  for (let index = 0; index < 70; index += 1) {
+    const date = new Date(start + index * 14 * 86400000).toISOString().slice(0, 10);
+    for (const [sku, quantity] of [["A1", index % 2 ? 20 : 0], ["A2", index % 2 ? 0 : 20]]) {
+      records.push({
+        saleType: "銷貨", date, transactionTimestamp: `${date} 12:00:00`, sku, name: `60天絲5尺床包${sku}`,
+        quantity, actualAmount: quantity * 100, warehouseCode: "R00", shipWarehouseCode: "T00",
+        deductQuantity: quantity, ecommercePlatform: "", posOrder: `P${index}-${sku}`, sourceOrder: "", pickupOrder: ""
+      });
+    }
+  }
+  return { master: core.parseProductMasterWorkbook(workbook, XLSX), records };
+}
+
 describe("季節模型自動回測", () => {
   it("多檔重疊交易只計一次並能產生三個正式模型頁籤", () => {
     const builder = seasonal.createBuilder(masterData(), { blacklist: [] });
@@ -53,6 +75,8 @@ describe("季節模型自動回測", () => {
     expect(result.summary.activeSkuCount).toBe(1);
     const workbook = seasonal.buildWorkbook(result, XLSX, { approvedBy: "buyer@siangapato.com.tw", approvedAt: "2026-09-14T01:00:00.000Z" });
     expect(workbook.SheetNames).toEqual(expect.arrayContaining(["SKU模型建議", "類別模型總覽", "類別期間回測", "來源紀錄"]));
+    const skuSheet = XLSX.utils.sheet_to_json(workbook.Sheets["SKU模型建議"], { header: 1, defval: null });
+    expect(skuSheet[3]).toEqual(expect.arrayContaining(["輔助類別回測樣本數", "輔助類別回測實際量"]));
     const parsed = core.parseForecastModelWorkbook(workbook, XLSX);
     expect(parsed.bySku.get("A1")).toMatchObject({ supplier: "普優瑪", materialCategory: "天絲" });
     expect(parsed.categoryModelAvailable).toBe(true);
@@ -65,5 +89,33 @@ describe("季節模型自動回測", () => {
     builder.ingest({ records, excluded: {}, minDate: records[0].date, maxDate: records.at(-1).date }, { name: "完整.xlsx" });
     builder.ingest({ records: [{ ...records[60], quantity: 99 }], excluded: {}, minDate: records[60].date, maxDate: records[60].date }, { name: "衝突.xlsx" });
     expect(() => builder.finalize()).toThrow("相同交易識別");
+  });
+
+  it("類別總覽的SKU層級WAPE由各SKU誤差加總，不誤用類別需求池WAPE", () => {
+    const source = pooledCategoryData();
+    const builder = seasonal.createBuilder(source.master, { blacklist: [] });
+    builder.ingest({ records: source.records, excluded: {}, minDate: source.records[0].date, maxDate: source.records.at(-1).date }, { name: "雙SKU.xlsx" });
+    const result = builder.finalize();
+    const allTencel = result.categoryRows.find((row) => row[0] === "全部" && row[1] === "天絲");
+    const puyoumaTencel = result.categoryRows.find((row) => row[0] === "普優瑪" && row[1] === "天絲");
+    expect(allTencel[4]).toBeGreaterThan(allTencel[6]);
+    expect(puyoumaTencel[4]).toBeGreaterThan(puyoumaTencel[6]);
+    expect(allTencel[4]).toBe(puyoumaTencel[4]);
+  });
+
+  it("集中黑名單的運費品號不進入活躍SKU模型", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "供應商簡稱", "主類別", "2級款式", "尺碼", "存貨種類"],
+      ["A1", "60天絲5尺床包", "普優瑪", "床包", "天絲", "5尺", "商品"],
+      ["ZZ900", "運費", "翔仔居家", "其他", "其他", "", "商品"]
+    ]), "商品主檔");
+    const records = historicalRows();
+    records.push(...historicalRows().map((row) => ({ ...row, sku: "ZZ900", name: "運費", posOrder: `${row.posOrder}-freight` })));
+    const builder = seasonal.createBuilder(core.parseProductMasterWorkbook(workbook, XLSX), { blacklist: ["ZZ900"] });
+    builder.ingest({ records, excluded: {}, minDate: records[0].date, maxDate: records.at(-1).date }, { name: "含運費.xlsx" });
+    const result = builder.finalize();
+    expect(result.summary.activeSkuCount).toBe(1);
+    expect(result.skuRows.map((row) => row[0])).toEqual(["A1"]);
   });
 });

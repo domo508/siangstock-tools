@@ -97,6 +97,19 @@
       .sort((a, b) => a.wape - b.wape || allowed.indexOf(a.model) - allowed.indexOf(b.model))[0] || null;
   }
 
+  function addMetricAggregate(aggregates, key, metric) {
+    if (!aggregates.has(key)) aggregates.set(key, new Map());
+    const byModel = aggregates.get(key);
+    const aggregate = byModel.get(metric.model) || { model: metric.model, actual: 0, predicted: 0, absoluteError: 0, samples: 0 };
+    aggregate.actual += Number(metric.actual || 0);
+    aggregate.predicted += Number(metric.predicted || 0);
+    aggregate.absoluteError += Number(metric.absoluteError || 0);
+    aggregate.samples += Number(metric.samples || 0);
+    aggregate.wape = aggregate.actual > 0 ? aggregate.absoluteError / aggregate.actual : null;
+    aggregate.bias = aggregate.actual > 0 ? (aggregate.predicted - aggregate.actual) / aggregate.actual : null;
+    byModel.set(metric.model, aggregate);
+  }
+
   function reliability(skuCount, samples, actual) {
     if (skuCount >= 5 && samples >= 26 && actual >= 500) return "高";
     if (skuCount >= 3 && samples >= 18 && actual >= 100) return "中";
@@ -216,25 +229,26 @@
         const confidence = reliability(skuCount, best?.samples || 0, best?.actual || 0);
         const record = { key, scope, level, name, material: name.split("｜")[0], skuCount, metrics, best, reliability: confidence };
         categoryMetrics.set(key, record);
-        if (level === "材質") {
-          const skuSix = bestMetric(metrics, ["近期6週", "近期12週"]);
-          categoryRows.push([scope, record.material, skuCount, skuSix?.model || "近期6週", round(skuSix?.wape), best?.model || "近期6週", round(best?.wape), round((Number(skuSix?.wape || 0) - Number(best?.wape || 0)) * 100, 2), round(best?.bias), confidence]);
-        }
       }
 
       const skuRows = [];
+      const skuMaterialMetrics = new Map();
       let activeSkuCount = 0;
       let skuWapeWeighted = 0;
       let skuActualWeighted = 0;
       for (const [sku, series] of skuSeries) {
-        if (sumRange(series, Math.max(cutoffPeriod, lastPeriod - 25), lastPeriod) <= 0) continue;
         const masterRecord = master.bySku.get(sku);
         if (!masterRecord) continue;
-        activeSkuCount += 1;
         const metrics = evaluateSeries(series, firstEvaluation, lastPeriod, ["近期6週", "近期12週"]);
         const bestSku = bestMetric(metrics, ["近期6週", "近期12週"]);
-        const scope = /普優[瑪碼]/.test(clean(masterRecord.supplier)) ? "普優瑪" : "全部";
+        const isPuyouma = /普優[瑪碼]/.test(clean(masterRecord.supplier));
+        const scope = isPuyouma ? "普優瑪" : "全部";
         const categories = categoryKeys(masterRecord, masterRecord.name);
+        for (const metricScope of ["全部", ...(isPuyouma ? ["普優瑪"] : [])]) {
+          for (const metric of metrics.values()) addMetricAggregate(skuMaterialMetrics, `${metricScope}¦${categories[0].name}`, metric);
+        }
+        if (sumRange(series, Math.max(cutoffPeriod, lastPeriod - 25), lastPeriod) <= 0) continue;
+        activeSkuCount += 1;
         const candidates = categories.map((category) => categoryMetrics.get(`${scope}¦${category.level}¦${category.name}`)).filter(Boolean);
         const selectedCategory = [...candidates].reverse().find((item) => item.reliability !== "低") || candidates[0];
         const lastYearActual = Math.max(0, Number(series.get(lastPeriod - 26) || 0));
@@ -250,6 +264,16 @@
         if (bestSku?.actual) { skuWapeWeighted += bestSku.absoluteError; skuActualWeighted += bestSku.actual; }
       }
       skuRows.sort((a, b) => String(a[2]).localeCompare(String(b[2]), "zh-Hant") || String(a[0]).localeCompare(String(b[0])));
+
+      for (const record of categoryMetrics.values()) {
+        if (record.level !== "材質") continue;
+        const skuSix = bestMetric(skuMaterialMetrics.get(`${record.scope}¦${record.material}`) || new Map(), ["近期6週", "近期12週"]);
+        categoryRows.push([
+          record.scope, record.material, record.skuCount, skuSix?.model || "近期6週", round(skuSix?.wape),
+          record.best?.model || "近期6週", round(record.best?.wape),
+          round((Number(skuSix?.wape || 0) - Number(record.best?.wape || 0)) * 100, 2), round(record.best?.bias), record.reliability
+        ]);
+      }
 
       const periodRows = [];
       for (const record of categoryMetrics.values()) {
@@ -303,7 +327,7 @@
     ], "類別模型總覽", [12, 22, 10, 25, 16, 24, 14, 14, 14, 10]);
     appendSheet(workbook, XLSX, [
       ["目前活躍SKU模型建議"], [], [],
-      ["ERP品號", "品名", "供應商", "範圍", "材質類別", "商品型態", "尺寸", "SKU建議模型", "SKU最佳WAPE", "SKU偏差率", "近期6週平均量", "近期12週平均量", "去年同期量", "輔助類別層級", "輔助類別名稱", "類別建議模型", "類別WAPE", "類別偏差率", "類別可信度", "回測樣本數", "回測實際量", "季節", "存貨種類", "已下架"],
+      ["ERP品號", "品名", "供應商", "範圍", "材質類別", "商品型態", "尺寸", "SKU建議模型", "SKU最佳WAPE", "SKU偏差率", "近期6週平均量", "近期12週平均量", "去年同期量", "輔助類別層級", "輔助類別名稱", "類別建議模型", "類別WAPE", "類別偏差率", "類別可信度", "輔助類別回測樣本數", "輔助類別回測實際量", "季節", "存貨種類", "已下架"],
       ...result.skuRows
     ], "SKU模型建議", [18, 50, 22, 12, 18, 18, 16, 20, 14, 14, 16, 18, 16, 22, 42, 24, 14, 14, 14, 14, 16, 14, 14, 10]);
     appendSheet(workbook, XLSX, [
