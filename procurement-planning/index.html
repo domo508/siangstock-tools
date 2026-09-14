@@ -311,11 +311,11 @@
       </details>
       <div class="result-table-wrap">
         <table class="procurement-table">
-          <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>狀態</th><th>供應交期類型</th><th>到貨天數</th><th>目標覆蓋天數</th><th>近6週</th><th>近12週</th><th>日需求</th><th>可用庫存</th><th>未到貨</th><th>建議採購量</th><th>建議金額</th><th>寄倉現貨</th><th>建議寄庫</th><th>供貨狀態</th></tr></thead>
+          <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>狀態</th><th>供應交期類型</th><th>到貨天數</th><th>目標覆蓋天數</th><th>近6週</th><th>近12週</th><th>日需求</th><th>可用庫存</th><th>未到貨</th><th>建議採購量</th><th>建議金額</th><th>春節加量</th><th>春節增加金額</th><th>寄倉現貨</th><th>建議寄庫</th><th>供貨狀態</th></tr></thead>
           <tbody id="result-rows"></tbody>
         </table>
       </div>
-      <p class="result-note">淨採購需求＝總部需求＋逐店扣除各店現有庫存後的門市需求－總部可用庫存－未到貨採購；工廠寄倉不會被扣除。月初依熱銷70%、穩定50%、低銷0%分批釋放，月中與月底依最新缺口重算。</p>
+      <p class="result-note">淨採購需求＝總部需求＋逐店扣除各店現有庫存後的門市需求－總部可用庫存－未到貨採購；工廠寄倉不會被扣除。月初依熱銷70%、穩定50%、低銷0%分批釋放，月中與月底依最新缺口重算。國外供應商跨入年度春節停工期時，額外備貨不再套用月初折減，並於「春節加量／增加金額」分開揭露。</p>
     </section>
 
     <section class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
@@ -366,18 +366,19 @@
         <article><strong>力榮採購與寄庫分開</strong><p>現貨5天、製作14天、製作後最早19天；每個品號只能0或10的倍數。</p></article>
         <article><strong>上林獨立檢視</strong><p>固定28天檢視期；總部、門市與加總需求使用公式。</p></article>
         <article><strong>付款月份分流</strong><p>國內到貨100%；國外下單30%、預計出貨70%。</p></article>
+        <article><strong>國外春節停工備貨</strong><p>補貨範圍跨入年度停工期才加量；預設53天，可於45～60天內調整並分開顯示額度影響。</p></article>
       </div>
-      <p class="result-note">一般備貨公式屬程式內建，不列入管理頁。供應商、寄庫、採購單位、門市庫存與黑名單由採購核准者管理；權限與通知只有最高權限可查看及變更。</p>
+      <p class="result-note">一般備貨公式屬程式內建，不列入管理頁。供應商、國外春節停工備貨、寄庫、採購單位、門市庫存與黑名單由採購核准者管理；權限與通知只有最高權限可查看及變更。</p>
     </section>
 
     <footer><p>翔仔居家・庫存採購規劃</p><p>原始Excel不上傳；後端只保存必要批次、金額、狀態、核准與通知稽核摘要。</p></footer>
   </main>
 
-  <script src="../inventory/assets/xlsx.full.min.js"></script>
+  <script src="assets/xlsx-js-style.bundle.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260914-product-status-review-r1"></script>
+  <script src="core.js?v=20260914-spring-festival-r1"></script>
   <script src="seasonal-model.js?v=20260914-seasonal-wape-r2"></script>
   <script src="google-sources.js?v=20260914-seasonal-auto-r1"></script>
-  <script src="app.js?v=20260914-product-status-review-r1"></script>
+  <script src="app.js?v=20260914-spring-festival-r1"></script>
 </body>
 </html>

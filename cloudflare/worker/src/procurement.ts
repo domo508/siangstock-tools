@@ -121,7 +121,8 @@ async function verifyApprover(request: Request, env: ProcurementEnv): Promise<{ 
 function validateProcurementRules(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new RequestValidationError("採購規則必須是物件。");
   const rules = value as Record<string, unknown>;
-  const allowed = ["suppliers", "featuredSuppliers", "consignment", "purchaseUnits", "storeInventory", "blacklist"];
+  if (rules.springFestival == null) rules.springFestival = { enabled: true, closureStart: "2027-01-16", recoveryDate: "2027-02-28", extraDays: 53 };
+  const allowed = ["suppliers", "featuredSuppliers", "consignment", "purchaseUnits", "storeInventory", "blacklist", "springFestival"];
   const extras = Object.keys(rules).filter((key) => !allowed.includes(key));
   if (extras.length) throw new RequestValidationError(`採購規則含未知欄位：${extras.join("、")}。`);
   if (!Array.isArray(rules.suppliers) || rules.suppliers.length > 100) throw new RequestValidationError("供應商規則格式錯誤。");
@@ -130,6 +131,17 @@ function validateProcurementRules(value: unknown): Record<string, unknown> {
   if (!Array.isArray(rules.blacklist) || rules.blacklist.length > 1000) throw new RequestValidationError("黑名單格式錯誤。");
   if (!rules.consignment || typeof rules.consignment !== "object" || Array.isArray(rules.consignment)) throw new RequestValidationError("寄庫規則格式錯誤。");
   if (!rules.storeInventory || typeof rules.storeInventory !== "object" || Array.isArray(rules.storeInventory)) throw new RequestValidationError("門市庫存規則格式錯誤。");
+  if (!rules.springFestival || typeof rules.springFestival !== "object" || Array.isArray(rules.springFestival)) throw new RequestValidationError("國外供應商春節備貨規則格式錯誤。");
+  const springFestival = rules.springFestival as Record<string, unknown>;
+  if (typeof springFestival.enabled !== "boolean") throw new RequestValidationError("春節備貨啟用狀態格式錯誤。");
+  const validDate = (date: unknown) => {
+    const text = String(date || "");
+    const timestamp = /^\d{4}-\d{2}-\d{2}$/.test(text) ? Date.parse(`${text}T00:00:00Z`) : Number.NaN;
+    return !Number.isNaN(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === text;
+  };
+  if (!validDate(springFestival.closureStart) || !validDate(springFestival.recoveryDate)) throw new RequestValidationError("春節停工與恢復出貨日須為有效日期。");
+  if (String(springFestival.closureStart) > String(springFestival.recoveryDate)) throw new RequestValidationError("春節停工開始日不可晚於恢復出貨日。");
+  if (!Number.isInteger(Number(springFestival.extraDays)) || Number(springFestival.extraDays) < 45 || Number(springFestival.extraDays) > 60) throw new RequestValidationError("春節額外備貨天數須為45至60天的整數。");
   for (const supplier of rules.suppliers as Record<string, unknown>[]) {
     if (!supplier || typeof supplier !== "object" || !String(supplier.name || "").trim()) throw new RequestValidationError("供應商名稱不可空白。");
     if (!["國內", "國外"].includes(String(supplier.country))) throw new RequestValidationError("供應商國別只能是國內或國外。");

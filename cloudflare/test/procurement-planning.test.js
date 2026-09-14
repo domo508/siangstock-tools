@@ -10,7 +10,7 @@ function loadBrowserScript(path, context = {}) {
   return sandbox;
 }
 
-const xlsxContext = loadBrowserScript("../inventory/assets/xlsx.full.min.js");
+const xlsxContext = loadBrowserScript("../procurement-planning/assets/xlsx-js-style.bundle.js");
 const XLSX = xlsxContext.XLSX;
 const core = loadBrowserScript("../procurement-planning/core.js", { XLSX }).ProcurementPlanningCore;
 
@@ -190,6 +190,14 @@ describe("採購規劃核心鎖定公式", () => {
     expect(core.resolveSupplyProfile("潤泰羽絨", rules, "穩定")).toMatchObject({ reviewDays: 105, leadDays: 70, manualReview: false });
     expect(core.resolveSupplyProfile("潤泰羽絨", rules, "低銷")).toMatchObject({ reviewDays: 120, leadDays: 70, manualReview: false });
     expect(core.resolveSupplyProfile("歐必斯", rules, "熱銷")).toMatchObject({ reviewDays: 0, leadDays: 10, manualReview: true });
+  });
+
+  it("春節停工備貨只在國外供應商的補貨範圍跨入停工期時啟動", () => {
+    const rule = { enabled: true, closureStart: "2027-01-16", recoveryDate: "2027-02-28", extraDays: 53 };
+    expect(core.resolveSpringFestivalAdjustment({ asOfDate: "2026-09-14", supplierCountry: "國外", horizonDays: 175, rule })).toMatchObject({ active: true, extraDays: 53 });
+    expect(core.resolveSpringFestivalAdjustment({ asOfDate: "2026-09-14", supplierCountry: "國內", horizonDays: 175, rule }).active).toBe(false);
+    expect(core.resolveSpringFestivalAdjustment({ asOfDate: "2026-09-14", supplierCountry: "國外", horizonDays: 30, rule }).active).toBe(false);
+    expect(core.resolveSpringFestivalAdjustment({ asOfDate: "2027-03-01", supplierCountry: "國外", horizonDays: 175, rule }).active).toBe(false);
   });
 
   it("預設供應商規則保留0903檢視期與後續確認的上林28天", () => {
@@ -456,6 +464,33 @@ describe("採購建議第二階段", () => {
     expect(midMonth.suggestedPurchaseQty).toBeGreaterThanOrEqual(monthStart.suggestedPurchaseQty);
   });
 
+  it("國外供應商跨春節停工期時完整加入53天需求，並在報表分開揭露額度影響", () => {
+    const master = makeMaster();
+    master.records.find((row) => row.sku === "A1").supplier = "潤泰羽絨";
+    const source = {
+      master, inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-09-14", checkpoint: "month-start",
+      supplierRules: core.SUPPLIER_RULES
+    };
+    const disabled = core.buildProcurementRecommendations({ ...source, springFestivalRule: { enabled: false, closureStart: "2027-01-16", recoveryDate: "2027-02-28", extraDays: 53 } });
+    const adjusted = core.buildProcurementRecommendations({ ...source, springFestivalRule: { enabled: true, closureStart: "2027-01-16", recoveryDate: "2027-02-28", extraDays: 53 } });
+    const baseRow = disabled.rows.find((row) => row.sku === "A1");
+    const row = adjusted.rows.find((item) => item.sku === "A1");
+    expect(row.springFestivalApplied).toBe(true);
+    expect(row.springFestivalExtraDays).toBe(53);
+    expect(row.standardSuggestedPurchaseQty).toBe(baseRow.suggestedPurchaseQty);
+    expect(row.springFestivalExtraSuggestedQty).toBe(row.suggestedPurchaseQty - row.standardSuggestedPurchaseQty);
+    expect(row.springFestivalExtraSuggestedQty).toBeGreaterThan(0);
+    expect(row.springFestivalExtraAmount).toBe(row.springFestivalExtraSuggestedQty * row.unitCost);
+    expect(adjusted.totals).toMatchObject({ springFestivalSkuCount: 1, springFestivalExtraQty: row.springFestivalExtraSuggestedQty, springFestivalExtraAmount: row.springFestivalExtraAmount });
+
+    const output = core.buildRecommendationWorkbook(adjusted, XLSX);
+    const summary = XLSX.utils.sheet_to_json(output.Sheets["01_採購摘要"], { header: 1, defval: "" });
+    expect(summary).toContainEqual(["春節額外採購金額", row.springFestivalExtraAmount, "已包含在建議採購金額與額度影響內"]);
+    const report = XLSX.utils.sheet_to_json(output.Sheets["03D_其它供應商"], { defval: "" })[0];
+    expect(report).toMatchObject({ "春節備貨規則": "是", "春節額外備貨天數": 53, "春節額外建議量": row.springFestivalExtraSuggestedQty, "調整前建議採購量": row.standardSuggestedPurchaseQty });
+  });
+
   it("貨品狀態空白仍顯示試算建議，但第一次回匯必須明確填量與原因", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
@@ -539,14 +574,28 @@ describe("採購建議第二階段", () => {
     ]);
     const rows = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { defval: "" });
     expect(rows[0]["建議採購量"]).toBeGreaterThan(0);
+    expect(rows[0]["系統建議採購後可售至"]).toMatch(/^2026-/);
     expect(rows[0]["人工確認採購量"]).toBe("");
+    expect(rows[0]["人工確認後可售至"]).toBe("");
+    expect(rows[0]).not.toHaveProperty("總部需求（人工）");
+    expect(rows[0]).not.toHaveProperty("門市需求（人工）");
     expect(rows[0]).toMatchObject({ "供應交期類型": "寄倉快速補貨", "到貨交期天數": 5, "目標覆蓋天數": 23 });
-    expect(output.Sheets["03B1_普優瑪_天絲"]["!protect"]).toBeTruthy();
-    const protectedHeaders = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { header: 1, defval: "" })[0];
-    const manualCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: protectedHeaders.indexOf("人工確認採購量") })];
-    const totalCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: protectedHeaders.indexOf("加總需求（鎖定公式）") })];
-    expect(manualCell.s.protection.locked).toBe(false);
-    expect(totalCell.s.protection.locked).toBe(true);
+    expect(output.SheetNames.every((sheetName) => !output.Sheets[sheetName]["!protect"])).toBe(true);
+    const editableHeaders = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { header: 1, defval: "" })[0];
+    const totalCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("加總需求（公式）") })];
+    const hqCell = XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("總部需求（系統）") });
+    const storeCell = XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("門市需求（系統）") });
+    expect(totalCell.f).toBe(`${hqCell}+${storeCell}`);
+    expect(totalCell.s?.protection).toBeUndefined();
+    const manualCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("人工確認採購量") })];
+    const decisionCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("系統建議採購後可售至") })];
+    expect(manualCell.s?.fill?.fgColor?.rgb).toBe("FFFFF2CC");
+    expect(decisionCell.s?.fill?.fgColor?.rgb).toBe("FFE8F2F5");
+    expect(output.Sheets["03B1_普優瑪_天絲"]["!margins"]).toMatchObject({ left: 0.35, right: 0.35, top: 0.5, bottom: 0.5 });
+    const styledRoundTrip = XLSX.read(XLSX.write(output, { type: "array", bookType: "xlsx", cellStyles: true }), { type: "array", cellStyles: true });
+    const styledSheet = styledRoundTrip.Sheets["03B1_普優瑪_天絲"];
+    expect(styledSheet[XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("人工確認採購量") })].s?.fgColor?.rgb).toBe("FFF2CC");
+    expect(styledSheet["!margins"]).toMatchObject({ left: 0.35, right: 0.35, top: 0.5, bottom: 0.5 });
     const rules = XLSX.utils.sheet_to_json(output.Sheets["08_核心規則"], { header: 1, defval: "" });
     expect(rules.some((row) => row[0] === "普優瑪採購與寄庫" && String(row[1]).includes("120／穩定105／低銷90天"))).toBe(true);
     expect(rules.some((row) => row[0] === "力榮採購與寄庫" && String(row[1]).includes("每品號0或10的倍數"))).toBe(true);
@@ -654,6 +703,13 @@ describe("採購建議第二階段", () => {
     firstSheet[XLSX.utils.encode_cell({ r: 1, c: firstHeaders.indexOf("人工調整原因") })] = { t: "s", v: "第一次人工判斷" };
     const firstReview = core.reviewReturnedWorkbook(recommendation, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20" });
     const secondWorkbook = core.buildSecondReviewWorkbook(firstReview, XLSX);
+    expect(secondWorkbook.SheetNames.every((sheetName) => !secondWorkbook.Sheets[sheetName]["!protect"])).toBe(true);
+    const secondRows = XLSX.utils.sheet_to_json(secondWorkbook.Sheets["02_二次覆核"], { defval: "" });
+    expect(secondRows[0]["人工確認後可售至"]).toMatch(/^2026-/);
+    expect(secondRows[0]).not.toHaveProperty("人工填寫可售至");
+    const secondStyleHeaders = XLSX.utils.sheet_to_json(secondWorkbook.Sheets["02_二次覆核"], { header: 1, defval: "" })[0];
+    const secondManualCell = secondWorkbook.Sheets["02_二次覆核"][XLSX.utils.encode_cell({ r: 1, c: secondStyleHeaders.indexOf("二次確認採購量") })];
+    expect(secondManualCell.s?.fill?.fgColor?.rgb).toBe("FFFFF2CC");
     expect(core.reviewSecondApprovalWorkbook(secondWorkbook, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20" }).errors[0].message).toContain("必須填寫二次確認");
     const secondSheet = secondWorkbook.Sheets["02_二次覆核"];
     const secondHeaders = XLSX.utils.sheet_to_json(secondSheet, { header: 1, defval: "" })[0];
@@ -741,6 +797,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('href="rules-admin/#supplier-display"');
     expect(toolHtml).toContain("管理顯示供應商");
     expect(toolHtml).toContain("下載所選供應商Excel");
+    expect(toolHtml).toContain("春節加量");
     expect(toolHtml).toContain('id="workflow-step-download"');
     expect(toolHtml).toContain('id="review-file-label" class="file-button is-disabled"');
     expect(toolHtml).toContain("新品首批採購");
@@ -774,10 +831,15 @@ describe("採購規劃前台與入口", () => {
     const rulesAdminApp = readFileSync("../procurement-planning/rules-admin/admin.js", "utf8");
     expect(rulesAdminHtml).toContain('id="featured-supplier-list"');
     expect(rulesAdminHtml).toContain("未列入、新增後尚未列入或由資料臨時辨識到的供應商");
+    expect(rulesAdminHtml).toContain('id="spring-festival-extra-days"');
+    expect(rulesAdminHtml).toContain("預設53天，可在45～60天內調整");
     expect(rulesAdminApp).toContain("featuredSuppliers");
+    expect(rulesAdminApp).toContain("springFestival");
     const supplierMigration = readFileSync("worker/migrations/0009_restore_supplier_review_periods.sql", "utf8");
     expect(supplierMigration).toContain("featuredSuppliers");
     expect(supplierMigration).toContain('["普優瑪寢具有限公司","力榮","上林","潤泰羽絨","泰能脊康"]');
+    const springFestivalMigration = readFileSync("worker/migrations/0010_foreign_supplier_spring_festival.sql", "utf8");
+    expect(springFestivalMigration).toContain('"extraDays":53');
   });
 
   it("9月歷史接續資料固定為可追溯月份快照且不補寄舊通知", () => {

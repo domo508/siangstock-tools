@@ -73,6 +73,12 @@
     { name: "南通（小霞）包裝", aliases: ["南通(小霞)包裝", "南通小霞包裝", "南通泰而逸纺织品有限公司"], country: "國外", leadDays: 30, reviewDays: 0 },
     { name: "禾鑫匠月", aliases: ["禾鑫匠月織麥"], country: "國外", leadDays: 14, reviewDays: 0 }
   ]);
+  const DEFAULT_SPRING_FESTIVAL_RULE = Object.freeze({
+    enabled: true,
+    closureStart: "2027-01-16",
+    recoveryDate: "2027-02-28",
+    extraDays: 53
+  });
   const PRIMARY_SUPPLIERS = Object.freeze(["普優瑪寢具有限公司", "力榮", "上林", "潤泰羽絨", "泰能脊康"]);
 
   const SCHEMAS = {
@@ -1387,6 +1393,26 @@
     };
   }
 
+  function resolveSpringFestivalAdjustment({ asOfDate, supplierCountry, horizonDays, rule } = {}) {
+    const configured = rule && typeof rule === "object" ? rule : DEFAULT_SPRING_FESTIVAL_RULE;
+    const enabled = configured.enabled !== false;
+    const closureStart = parseDateValue(configured.closureStart || DEFAULT_SPRING_FESTIVAL_RULE.closureStart);
+    const recoveryDate = parseDateValue(configured.recoveryDate || DEFAULT_SPRING_FESTIVAL_RULE.recoveryDate);
+    const extraDays = Math.max(45, Math.min(60, Math.round(Number(configured.extraDays) || DEFAULT_SPRING_FESTIVAL_RULE.extraDays)));
+    const startDate = parseDateValue(asOfDate);
+    const windowEnd = startDate ? addDays(startDate, Math.max(0, Number(horizonDays) || 0)) : "";
+    const validRange = Boolean(closureStart && recoveryDate && dateToUtcMs(closureStart) <= dateToUtcMs(recoveryDate));
+    const active = Boolean(
+      enabled
+      && supplierCountry === "國外"
+      && startDate
+      && validRange
+      && dateToUtcMs(startDate) <= dateToUtcMs(recoveryDate)
+      && dateToUtcMs(windowEnd) >= dateToUtcMs(closureStart)
+    );
+    return { enabled, active, closureStart, recoveryDate, extraDays, windowEnd };
+  }
+
   function dateToUtcMs(value) {
     const key = parseDateValue(value);
     return key ? new Date(`${key}T00:00:00Z`).getTime() : null;
@@ -1726,12 +1752,19 @@
       const storeDailyQty = Object.values(storeDailyByCode).reduce((sum, quantity) => sum + Number(quantity || 0), 0);
       const channelAdjustedDaily = hqDailyQty + storeDailyQty;
       const supplier = row.masterRecord?.supplier || "未辨識供應商";
+      const supplierRule = findSupplierRule(supplier, input.supplierRules || []);
       const supplyProfile = resolveSupplyProfile(supplier, input.supplierRules || [], row.tier);
       const supplierLeadDays = supplyProfile.leadDays;
       const reviewDays = supplyProfile.reviewDays;
       const safetyBufferDays = supplyProfile.safetyBufferDays[row.tier];
       const targetCoverageDays = reviewDays + supplierLeadDays + safetyBufferDays;
       const horizonDays = reviewDays + supplierLeadDays;
+      const springFestival = resolveSpringFestivalAdjustment({
+        asOfDate,
+        supplierCountry: supplierRule?.country || "待確認",
+        horizonDays,
+        rule: input.springFestivalRule
+      });
       const forecastFutureQty = channelAdjustedDaily * horizonDays;
       const hqSafetyStockQty = hqDailyQty * safetyBufferDays;
       let storeDemandQty = 0;
@@ -1761,9 +1794,18 @@
         pendingPurchaseQty: pendingQty,
         factoryConsignmentQty: resolvedConsignment.bySku.get(row.demand.sku)?.currentQty || 0
       });
+      const springFestivalAdjustedRawPurchaseQty = springFestival.active
+        ? calculateNetProcurementDemand({
+          forecastDemandQty: hqDemandQty + storeDemandQty + channelAdjustedDaily * springFestival.extraDays,
+          safetyStockQty: 0,
+          availableInventoryQty: inventoryQty,
+          pendingPurchaseQty: pendingQty,
+          factoryConsignmentQty: resolvedConsignment.bySku.get(row.demand.sku)?.currentQty || 0
+        })
+        : rawPurchaseQty;
+      const springFestivalExtraRawQty = Math.max(springFestivalAdjustedRawPurchaseQty - rawPurchaseQty, 0);
       const score = recommendationScore(row.tier, row.xyzClass, row.activeWeeks6);
       const sellThroughStop = Boolean(row.masterRecord?.sellThroughStop || isSellThroughStopName(row.masterRecord?.name || row.demand.name));
-      const supplierRule = findSupplierRule(supplier, input.supplierRules || []);
       const isGift = /贈品/.test(`${row.masterRecord?.name || row.demand.name} ${row.masterRecord?.stockType || ""}`);
       const supplierAutomaticBlocked = supplierRule?.automaticPurchase === false;
       const masterDataIncomplete = !row.masterRecord?.supplier || !(Number(row.masterRecord?.unitCost) > 0) || !(Number(row.masterRecord?.moq) > 0);
@@ -1786,17 +1828,24 @@
       }
       const manualSupplierReview = Boolean(supplyProfile.manualReview);
       const releaseRate = purchaseReleaseRate(row.tier, checkpoint);
-      const releasedPurchaseQty = rawPurchaseQty * releaseRate;
+      const standardReleasedPurchaseQty = rawPurchaseQty * releaseRate;
+      const releasedPurchaseQty = standardReleasedPurchaseQty + springFestivalExtraRawQty;
       const baseSuggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview ? 0 : roundSuggestedQuantity(releasedPurchaseQty, score);
+      const standardBaseSuggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview ? 0 : roundSuggestedQuantity(standardReleasedPurchaseQty, score);
       const unitCost = Math.max(0, Number(row.masterRecord?.unitCost || 0));
       const consignment = resolvedConsignment.bySku.get(row.demand.sku);
       const normalizedSupplier = normalizeText(supplier);
       const packSize = purchaseUnitFromRules(supplier, row.masterRecord, row.demand.name, input.purchaseUnitRules);
+      const standardDownQty = Math.floor(standardBaseSuggestedPurchaseQty / packSize) * packSize;
+      const standardCoverageWithDown = channelAdjustedDaily > 0 ? (inventoryQty + pendingQty + standardDownQty) / channelAdjustedDaily : 9999;
       const downQty = Math.floor(baseSuggestedPurchaseQty / packSize) * packSize;
       const coverageWithDown = channelAdjustedDaily > 0 ? (inventoryQty + pendingQty + downQty) / channelAdjustedDaily : 9999;
       const minimumCoverageDays = /力榮/.test(normalizedSupplier) ? lirongProductionDays : reviewDays + supplierLeadDays;
+      const standardPacked = roundByPack(standardBaseSuggestedPurchaseQty, packSize, standardCoverageWithDown, minimumCoverageDays);
       const packed = roundByPack(baseSuggestedPurchaseQty, packSize, coverageWithDown, minimumCoverageDays);
+      const standardSuggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview ? 0 : standardPacked.quantity;
       const suggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview ? 0 : packed.quantity;
+      const springFestivalExtraSuggestedQty = Math.max(suggestedPurchaseQty - standardSuggestedPurchaseQty, 0);
       const factoryPullQty = pendingQty + suggestedPurchaseQty;
       const consignmentCurrentQty = consignment?.currentQty || 0;
       const consignmentScheduledQty = consignment?.scheduledQty || 0;
@@ -1826,6 +1875,9 @@
         supplyStatus = immediateConsignmentGap > 0
           ? "缺貨警示：寄倉現貨不足，需新增寄庫單"
           : (suggestedConsignmentQty > 0 ? "現有採購可供應；仍需補足工廠目標" : "寄倉供貨充足");
+      }
+      if (springFestival.active && springFestivalExtraSuggestedQty > 0) {
+        supplyStatus = `${supplyStatus}；春節停工備貨加量${springFestivalExtraSuggestedQty}件`;
       }
       return {
         sku: row.demand.sku,
@@ -1884,14 +1936,23 @@
         pendingQty,
         rawPurchaseQty,
         releaseRate,
+        standardReleasedPurchaseQty,
         releasedPurchaseQty,
         packSize,
         packDownQty: packed.down,
         packUpQty: packed.up,
         packDirection: packed.direction,
         recommendationScore: score,
+        standardSuggestedPurchaseQty,
         suggestedPurchaseQty,
         suggestedPurchaseAmount: suggestedPurchaseQty * unitCost,
+        springFestivalApplied: springFestival.active && springFestivalExtraSuggestedQty > 0,
+        springFestivalClosureStart: springFestival.closureStart,
+        springFestivalRecoveryDate: springFestival.recoveryDate,
+        springFestivalExtraDays: springFestival.active ? springFestival.extraDays : 0,
+        springFestivalExtraRawQty,
+        springFestivalExtraSuggestedQty,
+        springFestivalExtraAmount: springFestivalExtraSuggestedQty * unitCost,
         consignmentCurrentQty,
         consignmentScheduledQty,
         immediateConsignmentGap,
@@ -1953,6 +2014,7 @@
         lirong: { productionDays: lirongProductionDays, targetDays: { ...(lirongRules.targetDays || PROCUREMENT_POLICY.lirongFactoryTargetDays) } },
         demandLocations: { hqInventoryCodes: ["T00", "R19", "R09"], activeStoreCodes: [...activeStoreCodes], channelRevenueApplied: plannedRevenueByChannel.size > 0 },
         releaseRates: checkpoint === "month-start" ? { "熱銷": 0.7, "穩定": 0.5, "低銷": 0 } : { "熱銷": 1, "穩定": 1, "低銷": 1 },
+        springFestival: { ...(input.springFestivalRule || DEFAULT_SPRING_FESTIVAL_RULE) },
         kuanMuManagementTarget: "寬沐通路預估營收×45%，只顯示管理差額，不自動加進基本採購建議"
       },
       model: input.model,
@@ -1961,6 +2023,9 @@
         suggestedSkuCount: suggestedRows.length,
         suggestedPurchaseQty: suggestedRows.reduce((sum, row) => sum + row.suggestedPurchaseQty, 0),
         suggestedPurchaseAmount: suggestedRows.reduce((sum, row) => sum + row.suggestedPurchaseAmount, 0),
+        springFestivalSkuCount: rows.filter((row) => row.springFestivalApplied).length,
+        springFestivalExtraQty: rows.reduce((sum, row) => sum + Number(row.springFestivalExtraSuggestedQty || 0), 0),
+        springFestivalExtraAmount: rows.reduce((sum, row) => sum + Number(row.springFestivalExtraAmount || 0), 0),
         hotSkuCount: rows.filter((row) => row.tier === "熱銷").length,
         stableSkuCount: rows.filter((row) => row.tier === "穩定").length,
         lowSkuCount: rows.filter((row) => row.tier === "低銷").length,
@@ -2183,6 +2248,123 @@
     if (sheet["!ref"]) sheet["!autofilter"] = { ref: sheet["!ref"] };
   }
 
+  const EXCEL_CIS = Object.freeze({
+    ink: "FF17324D",
+    navy: "FF153F63",
+    blue: "FF176B87",
+    line: "FFD8E4E8",
+    softBlue: "FFE8F2F5",
+    input: "FFFFF2CC",
+    warning: "FFFFE4B5",
+    success: "FFE8F4ED",
+    danger: "FFFCE8E6",
+    excluded: "FFE7EAEC",
+    white: "FFFFFFFF"
+  });
+
+  function excelFill(rgb) {
+    return { patternType: "solid", fgColor: { rgb } };
+  }
+
+  function excelBottomBorder(rgb = EXCEL_CIS.line) {
+    return { bottom: { style: "thin", color: { rgb } } };
+  }
+
+  function applySheetSpacing(sheet) {
+    sheet["!margins"] = { left: 0.35, right: 0.35, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 };
+  }
+
+  function applyTableCis(sheet, XLSX, options = {}) {
+    if (!sheet["!ref"]) return;
+    const range = XLSX.utils.decode_range(sheet["!ref"]);
+    const headerRow = Number(options.headerRow || 0);
+    const headerValues = XLSX.utils.sheet_to_json(sheet, { header: 1, range: headerRow, defval: "" })[0] || [];
+    const inputHeaders = new Set(options.inputHeaders || ["人工確認採購量", "人工調整原因", "二次確認採購量", "二次確認原因"]);
+    const decisionHeaders = new Set(options.decisionHeaders || [
+      "人工確認要求", "加總需求（公式）", "建議採購量", "系統建議採購後可售至", "目前實際可採購量",
+      "人工確認後可售至", "AI判斷", "最終可核准量", "最終可核准金額", "檢核結果", "回匯檢核狀態",
+      "春節備貨規則", "春節額外備貨天數", "春節額外建議量", "調整前建議採購量"
+    ]);
+    const longTextHeaders = new Set(["商品品名", "人工確認要求", "人工調整原因", "AI判斷理由", "規則阻擋原因", "阻擋原因", "供貨狀態", "缺貨／供貨狀態", "二次確認原因", "銷售來源"]);
+    const amountHeaders = new Set(["進貨價", "建議採購金額", "春節額外採購金額", "人工回匯金額", "規則阻擋金額", "最終可核准金額", "預計付款金額"]);
+    const headerStyle = {
+      fill: excelFill(EXCEL_CIS.navy),
+      font: { name: "Arial", sz: 10, bold: true, color: { rgb: EXCEL_CIS.white } },
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: { left: { style: "thin", color: { rgb: EXCEL_CIS.white } }, right: { style: "thin", color: { rgb: EXCEL_CIS.white } } }
+    };
+    for (let column = range.s.c; column <= range.e.c; column += 1) {
+      const address = XLSX.utils.encode_cell({ r: headerRow, c: column });
+      if (!sheet[address]) sheet[address] = { t: "s", v: "" };
+      sheet[address].s = headerStyle;
+    }
+    for (let row = headerRow + 1; row <= range.e.r; row += 1) {
+      for (let column = range.s.c; column <= range.e.c; column += 1) {
+        const address = XLSX.utils.encode_cell({ r: row, c: column });
+        if (!sheet[address]) sheet[address] = { t: "s", v: "" };
+        const header = String(headerValues[column - range.s.c] || "");
+        const value = String(sheet[address].v ?? "");
+        let fill = null;
+        if (inputHeaders.has(header)) fill = EXCEL_CIS.input;
+        else if (decisionHeaders.has(header)) fill = EXCEL_CIS.softBlue;
+        if ((header === "AI判斷" || header === "回匯檢核狀態" || header === "檢核結果") && /合理|通過|可送正式核准/.test(value)) fill = EXCEL_CIS.success;
+        if ((header === "AI判斷" || header === "回匯檢核狀態" || header === "人工確認要求") && /偏高|偏低|待補|必須|待人工/.test(value)) fill = EXCEL_CIS.warning;
+        if ((header === "AI判斷" || header === "回匯檢核狀態" || header === "規則阻擋原因") && /阻擋|排除|轉頁/.test(value)) fill = EXCEL_CIS.excluded;
+        if (header === "阻擋原因" && value) fill = EXCEL_CIS.danger;
+        sheet[address].s = {
+          fill: excelFill(fill || EXCEL_CIS.white),
+          font: { name: "Arial", sz: 10, color: { rgb: EXCEL_CIS.ink }, bold: /AI判斷|回匯檢核狀態|最終可核准量|最終可核准金額/.test(header) },
+          alignment: { vertical: "center", wrapText: longTextHeaders.has(header) },
+          border: excelBottomBorder()
+        };
+        if (amountHeaders.has(header)) sheet[address].z = "#,##0";
+        else if (/率$/.test(header)) sheet[address].z = "0.0%";
+        else if (header === "預估日需求") sheet[address].z = "#,##0.000";
+      }
+    }
+    const columnWidths = sheet["!cols"] || [];
+    for (let column = range.s.c; column <= range.e.c; column += 1) {
+      if (columnWidths[column]) continue;
+      const header = String(headerValues[column - range.s.c] || "");
+      let wch = 16;
+      if (/商品品名/.test(header)) wch = 42;
+      else if (/理由|原因|狀態|來源|人工確認要求/.test(header)) wch = 34;
+      else if (/可售至|日期|月份/.test(header)) wch = 18;
+      else if (/品號|供應商貨號/.test(header)) wch = 20;
+      else if (/金額/.test(header)) wch = 18;
+      columnWidths[column] = { wch };
+    }
+    sheet["!cols"] = columnWidths;
+    const rowCount = range.e.r + 1;
+    sheet["!rows"] = Array.from({ length: rowCount }, (_unused, index) => ({ hpt: index === headerRow ? 34 : (index > headerRow ? 30 : 18) }));
+    applySheetSpacing(sheet);
+  }
+
+  function applySummaryCis(sheet, XLSX) {
+    if (!sheet["!ref"]) return;
+    const range = XLSX.utils.decode_range(sheet["!ref"]);
+    const titleStyle = { fill: excelFill(EXCEL_CIS.white), font: { name: "Arial", sz: 16, bold: true, color: { rgb: EXCEL_CIS.ink } }, alignment: { vertical: "center" } };
+    for (let column = range.s.c; column <= range.e.c; column += 1) {
+      const address = XLSX.utils.encode_cell({ r: range.s.r, c: column });
+      if (!sheet[address]) sheet[address] = { t: "s", v: "" };
+      sheet[address].s = titleStyle;
+    }
+    for (let row = range.s.r + 1; row <= range.e.r; row += 1) {
+      const first = String(sheet[XLSX.utils.encode_cell({ r: row, c: range.s.c })]?.v ?? "");
+      const second = String(sheet[XLSX.utils.encode_cell({ r: row, c: range.s.c + 1 })]?.v ?? "");
+      const isSection = ["指標", "採購預算"].includes(first) || (first && !second && /摘要|規則|預算/.test(first));
+      for (let column = range.s.c; column <= range.e.c; column += 1) {
+        const address = XLSX.utils.encode_cell({ r: row, c: column });
+        if (!sheet[address]) sheet[address] = { t: "s", v: "" };
+        sheet[address].s = isSection
+          ? { fill: excelFill(EXCEL_CIS.blue), font: { name: "Arial", sz: 10, bold: true, color: { rgb: EXCEL_CIS.white } }, alignment: { vertical: "center" } }
+          : { fill: excelFill(column === range.s.c && first ? EXCEL_CIS.softBlue : EXCEL_CIS.white), font: { name: "Arial", sz: 10, bold: column === range.s.c, color: { rgb: EXCEL_CIS.ink } }, alignment: { vertical: "center", wrapText: column > range.s.c }, border: first || second ? excelBottomBorder() : undefined };
+      }
+    }
+    sheet["!rows"] = Array.from({ length: range.e.r + 1 }, (_unused, index) => ({ hpt: index === range.s.r ? 28 : 22 }));
+    applySheetSpacing(sheet);
+  }
+
   function buildOutputWorkbook(analysis, XLSX) {
     const workbook = XLSX.utils.book_new();
     const summaryRows = [
@@ -2205,6 +2387,7 @@
     ];
     const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
     setColumnWidths(summarySheet, [28, 20, 70]);
+    applySummaryCis(summarySheet, XLSX);
     XLSX.utils.book_append_sheet(workbook, summarySheet, "01_資料摘要");
 
     const detailRows = analysis.rows.map((row) => ({
@@ -2226,6 +2409,7 @@
     const detailSheet = XLSX.utils.json_to_sheet(detailRows);
     setColumnWidths(detailSheet, [15, 46, 16, 18, 16, 18, 18, 14, 14, 30, 12, 12, 60, 28]);
     addAutoFilter(detailSheet);
+    applyTableCis(detailSheet, XLSX);
     XLSX.utils.book_append_sheet(workbook, detailSheet, "02_品號串接");
 
     const exceptionRows = [
@@ -2257,6 +2441,7 @@
     const exceptionSheet = XLSX.utils.json_to_sheet(exceptionRows.length ? exceptionRows : [{ "例外類型": "無", "處理方式": "本次未發現例外" }]);
     setColumnWidths(exceptionSheet, [20, 12, 16, 28, 50, 50]);
     addAutoFilter(exceptionSheet);
+    applyTableCis(exceptionSheet, XLSX);
     XLSX.utils.book_append_sheet(workbook, exceptionSheet, "03_例外清單");
 
     const ruleSheet = XLSX.utils.aoa_to_sheet([
@@ -2273,12 +2458,22 @@
       ["A43359-A", CONFIRMED_EXCLUSIONS["A43359-A"], "已確認固定排除"]
     ]);
     setColumnWidths(ruleSheet, [22, 80, 18]);
+    applyTableCis(ruleSheet, XLSX);
     XLSX.utils.book_append_sheet(workbook, ruleSheet, "04_核心規則");
     return workbook;
   }
 
-  function recommendationSheetRows(rows) {
-    return rows.map((row) => ({
+  function recommendationSheetRows(rows, asOfDate) {
+    return rows.map((row) => {
+      const storeInventoryQty = Object.values(row.storeInventoryByCode || {})
+        .reduce((sum, quantity) => sum + Math.max(0, Number(quantity || 0)), 0);
+      const systemAvailableDays = row.forecastDailyQty > 0
+        ? (Number(row.inventoryQty || 0) + storeInventoryQty + Number(row.pendingQty || 0) + Number(row.suggestedPurchaseQty || 0)) / row.forecastDailyQty
+        : null;
+      const systemAvailableTo = systemAvailableDays == null
+        ? "需求為0"
+        : addDays(asOfDate || new Date().toISOString().slice(0, 10), Math.floor(systemAvailableDays));
+      return {
       "供應商": row.supplier,
       "採購分頁": row.purchaseTab,
       "ERP品號": row.sku,
@@ -2304,28 +2499,35 @@
       "檢視週期＋到貨交期需求": row.forecastFutureQty,
       "安全庫存量": row.safetyStockQty,
       "總部需求（系統）": row.hqDemandQty,
-      "總部需求（人工）": "",
       "門市需求（系統）": row.storeDemandQty,
-      "門市需求（人工）": "",
-      "加總需求（鎖定公式）": "",
+      "加總需求（公式）": "",
       "可用公司庫存": row.inventoryQty,
+      "門市可售庫存": storeInventoryQty,
       "非採購可用庫存": row.excludedInventoryQty,
       "已採購未到貨": row.pendingQty,
       "未進位淨採購需求": row.rawPurchaseQty,
       "本次釋放率": row.releaseRate,
       "釋放後未取整需求": row.releasedPurchaseQty,
+      "春節備貨規則": row.springFestivalApplied ? "是" : "否",
+      "春節停工開始日": row.springFestivalClosureStart || "",
+      "春節恢復出貨日": row.springFestivalRecoveryDate || "",
+      "春節額外備貨天數": row.springFestivalExtraDays || 0,
+      "春節額外建議量": row.springFestivalExtraSuggestedQty || 0,
+      "春節額外採購金額": row.springFestivalExtraAmount || 0,
       "箱入／採購單位": row.packSize,
       "單位向下量": row.packDownQty,
       "單位向上量": row.packUpQty,
       "系統取整方向": row.packDirection,
+      "調整前建議採購量": row.standardSuggestedPurchaseQty,
       "建議採購量": row.suggestedPurchaseQty,
+      "系統建議採購後可售至": systemAvailableTo,
       "寄倉現貨": row.consignmentCurrentQty,
       "粉紅排程": row.consignmentScheduledQty,
       "寄倉缺口": Math.max(row.suggestedPurchaseQty - row.consignmentCurrentQty - row.consignmentScheduledQty, 0),
       "目前實際可採購量": /普優[瑪碼]/.test(row.supplier) ? Math.min(row.suggestedPurchaseQty, row.consignmentCurrentQty) : row.suggestedPurchaseQty,
       "人工確認採購量": row.initialManualQty ?? "",
       "人工調整原因": row.initialManualReason || "",
-      "人工填寫可售至": "",
+      "人工確認後可售至": "",
       "AI判斷": "待回匯後重算",
       "新品上市日": row.listedDate || "",
       "新品預計通路／門市": row.plannedChannels || "",
@@ -2336,7 +2538,8 @@
       "已下架": row.discontinued ? "是" : "否",
       "季節資料完整": row.seasonalDataReady ? "是" : "否",
       "銷售來源": row.sourceFiles.join("｜")
-    }));
+      };
+    });
   }
 
   function appendJsonSheet(workbook, XLSX, sheetName, rows, widths) {
@@ -2345,34 +2548,21 @@
     if (rows.length) {
       const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, range: 0, defval: "" })[0] || [];
       const hqSystem = headers.indexOf("總部需求（系統）");
-      const hqManual = headers.indexOf("總部需求（人工）");
       const storeSystem = headers.indexOf("門市需求（系統）");
-      const storeManual = headers.indexOf("門市需求（人工）");
-      const total = headers.indexOf("加總需求（鎖定公式）");
-      if ([hqSystem, hqManual, storeSystem, storeManual, total].every((index) => index >= 0)) {
+      const total = headers.indexOf("加總需求（公式）");
+      if ([hqSystem, storeSystem, total].every((index) => index >= 0)) {
         rows.forEach((_row, index) => {
           const excelRow = index + 2;
           const hqSystemCell = XLSX.utils.encode_cell({ r: excelRow - 1, c: hqSystem });
-          const hqManualCell = XLSX.utils.encode_cell({ r: excelRow - 1, c: hqManual });
           const storeSystemCell = XLSX.utils.encode_cell({ r: excelRow - 1, c: storeSystem });
-          const storeManualCell = XLSX.utils.encode_cell({ r: excelRow - 1, c: storeManual });
           const totalCell = XLSX.utils.encode_cell({ r: excelRow - 1, c: total });
-          sheet[totalCell] = { t: "n", f: `IF(${hqManualCell}="",${hqSystemCell},${hqManualCell})+IF(${storeManualCell}="",${storeSystemCell},${storeManualCell})`, s: { protection: { locked: true } } };
+          sheet[totalCell] = { t: "n", f: `${hqSystemCell}+${storeSystemCell}` };
         });
-      }
-      const editableHeaders = new Set(["總部需求（人工）", "門市需求（人工）", "人工確認採購量", "人工調整原因", "二次確認採購量", "二次確認原因"]);
-      const editableColumns = headers.map((header, index) => editableHeaders.has(String(header)) ? index : -1).filter((index) => index >= 0);
-      if (editableColumns.length) {
-        rows.forEach((_row, rowIndex) => editableColumns.forEach((columnIndex) => {
-          const address = XLSX.utils.encode_cell({ r: rowIndex + 1, c: columnIndex });
-          if (!sheet[address]) sheet[address] = { t: "s", v: "" };
-          sheet[address].s = { ...(sheet[address].s || {}), protection: { locked: false } };
-        }));
-        sheet["!protect"] = { selectLockedCells: false, selectUnlockedCells: true, formatCells: false, formatColumns: false, formatRows: false, insertColumns: false, insertRows: false, deleteColumns: false, deleteRows: false, sort: false, autoFilter: true };
       }
     }
     setColumnWidths(sheet, widths);
     addAutoFilter(sheet);
+    applyTableCis(sheet, XLSX);
     XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
   }
 
@@ -2437,11 +2627,13 @@
     }
     const sheet = XLSX.utils.aoa_to_sheet(data);
     const styles = {
-      title: { font: { bold: true, sz: 14, color: { rgb: "FF153F63" } }, alignment: { vertical: "center" } },
-      note: { font: { italic: true, color: { rgb: "FF64778A" } }, alignment: { vertical: "center", wrapText: true } },
+      title: { fill: excelFill(EXCEL_CIS.white), font: { bold: true, sz: 14, color: { rgb: "FF153F63" } }, alignment: { vertical: "center" } },
+      note: { fill: excelFill(EXCEL_CIS.white), font: { italic: true, color: { rgb: "FF64778A" } }, alignment: { vertical: "center", wrapText: true } },
       header: { fill: { patternType: "solid", fgColor: { rgb: "FF176B87" } }, font: { bold: true, color: { rgb: "FFFFFFFF" } }, alignment: { horizontal: "center", vertical: "center", wrapText: true } },
       major: { fill: { patternType: "solid", fgColor: { rgb: "FF153F63" } }, font: { bold: true, color: { rgb: "FFFFFFFF" } }, alignment: { vertical: "center" } },
-      medium: { fill: { patternType: "solid", fgColor: { rgb: "FFDCECF0" } }, font: { bold: true, color: { rgb: "FF17324D" } }, alignment: { vertical: "center" } }
+      medium: { fill: { patternType: "solid", fgColor: { rgb: "FFDCECF0" } }, font: { bold: true, color: { rgb: "FF17324D" } }, alignment: { vertical: "center" } },
+      detail: { fill: excelFill(EXCEL_CIS.white), font: { name: "Arial", sz: 10, color: { rgb: EXCEL_CIS.ink } }, alignment: { vertical: "center" }, border: excelBottomBorder() },
+      empty: { fill: excelFill(EXCEL_CIS.white), font: { name: "Arial", sz: 10, color: { rgb: EXCEL_CIS.ink } } }
     };
     for (const [rowIndex, kind] of rowKinds) {
       const style = styles[kind];
@@ -2463,6 +2655,7 @@
     });
     setColumnWidths(sheet, [12, 24, 12, 16, 16, 28, 48, 12, 14, 16, 18, 14, 20, 16, 16, 16, 20, 42, 58]);
     sheet["!rows"] = data.map((_row, index) => ({ hpt: rowKinds.get(index) === "title" ? 24 : (rowKinds.get(index) === "header" ? 34 : 21) }));
+    applySheetSpacing(sheet);
     XLSX.utils.book_append_sheet(workbook, sheet, "04A_普優瑪寄庫建議");
   }
 
@@ -2489,7 +2682,10 @@
       immediateShortageSkuCount: selectedRows.filter((row) => Number(row.immediateConsignmentGap || 0) > 0).length,
       consignmentSuggestionSkuCount: selectedRows.filter((row) => Number(row.suggestedConsignmentQty || 0) > 0).length,
       seasonalFallbackSkuCount: selectedRows.filter((row) => row.seasonalFallback).length,
-      sellThroughStopExcludedCount: selectedRows.filter((row) => row.sellThroughStop).length
+      sellThroughStopExcludedCount: selectedRows.filter((row) => row.sellThroughStop).length,
+      springFestivalSkuCount: selectedRows.filter((row) => row.springFestivalApplied).length,
+      springFestivalExtraQty: selectedRows.reduce((sum, row) => sum + Number(row.springFestivalExtraSuggestedQty || 0), 0),
+      springFestivalExtraAmount: selectedRows.reduce((sum, row) => sum + Number(row.springFestivalExtraAmount || 0), 0)
     };
     selectedTotals.productStatusPendingCount = selectedSuggestedRows.filter((row) => row.productStatusPendingReview).length;
     selectedTotals.productStatusPendingAmount = selectedSuggestedRows.filter((row) => row.productStatusPendingReview).reduce((sum, row) => sum + Number(row.suggestedPurchaseAmount || 0), 0);
@@ -2515,6 +2711,9 @@
       ["建議採購SKU", selectedTotals.suggestedSkuCount],
       ["建議採購數量", selectedTotals.suggestedPurchaseQty],
       ["建議採購金額", selectedTotals.suggestedPurchaseAmount],
+      ["春節停工備貨影響SKU", selectedTotals.springFestivalSkuCount],
+      ["春節額外建議量", selectedTotals.springFestivalExtraQty],
+      ["春節額外採購金額", selectedTotals.springFestivalExtraAmount, "已包含在建議採購金額與額度影響內"],
       ["熱銷／穩定／低銷", `${selectedTotals.hotSkuCount}／${selectedTotals.stableSkuCount}／${selectedTotals.lowSkuCount}`],
       ["寄倉現貨不足SKU", selectedTotals.immediateShortageSkuCount],
       ["需新增寄庫SKU", selectedTotals.consignmentSuggestionSkuCount],
@@ -2546,9 +2745,10 @@
     }
     const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
     setColumnWidths(summarySheet, [32, 72]);
+    applySummaryCis(summarySheet, XLSX);
     XLSX.utils.book_append_sheet(workbook, summarySheet, "01_採購摘要");
 
-    const allSuggested = recommendationSheetRows(selectedSuggestedRows);
+    const allSuggested = recommendationSheetRows(selectedSuggestedRows, recommendations.asOfDate);
     const recommendationWidths = [20, 18, 16, 28, 48, 12, 8, 8, 16, 16, 16, 24, 24, 16, 16, 20, 16, 16, 16, 16, 22, 18, 16, 18, 18, 18, 20, 16, 18, 28, 14, 18, 12, 16, 36];
     appendJsonSheet(workbook, XLSX, isFullScope ? "02_全部採購建議" : "02_所選範圍採購建議", allSuggested, recommendationWidths);
 
@@ -2557,12 +2757,12 @@
     const shanglinRows = selectedSuggestedRows.filter((row) => /上林/.test(row.supplier));
     const dedicated = (row) => /普優[瑪碼]|力榮|上林/.test(row.supplier);
     const appendIfRows = (sheetName, rows, widths) => { if (!requestedSet || rows.length) appendJsonSheet(workbook, XLSX, sheetName, rows, widths); };
-    appendIfRows("03A_力榮採購", recommendationSheetRows(lirongRows), recommendationWidths);
-    appendIfRows("03B1_普優瑪_天絲", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "天絲＋天絲棉")), recommendationWidths);
-    appendIfRows("03B2_普優瑪_長絨棉", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "長絨棉")), recommendationWidths);
-    appendIfRows("03B3_普優瑪_無尺寸", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "無尺寸品項")), recommendationWidths);
-    appendIfRows("03C_上林採購", recommendationSheetRows(shanglinRows), recommendationWidths);
-    appendIfRows("03D_其它供應商", recommendationSheetRows(selectedSuggestedRows.filter((row) => !dedicated(row))), recommendationWidths);
+    appendIfRows("03A_力榮採購", recommendationSheetRows(lirongRows, recommendations.asOfDate), recommendationWidths);
+    appendIfRows("03B1_普優瑪_天絲", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "天絲＋天絲棉"), recommendations.asOfDate), recommendationWidths);
+    appendIfRows("03B2_普優瑪_長絨棉", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "長絨棉"), recommendations.asOfDate), recommendationWidths);
+    appendIfRows("03B3_普優瑪_無尺寸", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "無尺寸品項"), recommendations.asOfDate), recommendationWidths);
+    appendIfRows("03C_上林採購", recommendationSheetRows(shanglinRows, recommendations.asOfDate), recommendationWidths);
+    appendIfRows("03D_其它供應商", recommendationSheetRows(selectedSuggestedRows.filter((row) => !dedicated(row)), recommendations.asOfDate), recommendationWidths);
 
     const sourceBySku = new Map(recommendations.rows.map((row) => [row.sku, row]));
     const consignmentRows = recommendations.consignmentRows.filter((row) => selectedSkuSet.has(row.sku)).map((row) => ({
@@ -2617,7 +2817,7 @@
       if (workbook.Sheets["04B_力榮寄庫建議"]) workbook.Sheets["04B_力榮寄庫建議"] = replacement;
       else XLSX.utils.book_append_sheet(workbook, replacement, "04B_力榮寄庫建議");
     }
-    appendIfRows("05_新品採購建議", recommendationSheetRows(selectedRows.filter((row) => row.isNewProduct)), recommendationWidths);
+    appendIfRows("05_新品採購建議", recommendationSheetRows(selectedRows.filter((row) => row.isNewProduct), recommendations.asOfDate), recommendationWidths);
     appendIfRows("06_普優瑪新品寄庫", consignmentRows.filter((row) => recommendations.rows.find((item) => item.sku === row["ERP品號"])?.isNewProduct && /普優[瑪碼]/.test(recommendations.rows.find((item) => item.sku === row["ERP品號"])?.supplier || "")), [18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
 
     const exceptionRows = [
@@ -2669,7 +2869,8 @@
       ["公司備貨", "目標覆蓋＝供應商檢視期＋到貨交期＋商品分級安全緩衝；90～120天依熱銷90／穩定105／低銷120；0轉人工判斷", "第三版"],
       ["普優瑪採購與寄庫", `成品製作${recommendations.appliedRules?.puyouma?.productionDays ?? 45}天；寄庫目標熱銷${recommendations.appliedRules?.puyouma?.targetDays?.["熱銷"] ?? 120}／穩定${recommendations.appliedRules?.puyouma?.targetDays?.["穩定"] ?? 105}／低銷${recommendations.appliedRules?.puyouma?.targetDays?.["低銷"] ?? 90}天`, "集中規則"],
       ["力榮採購與寄庫", `製作${recommendations.appliedRules?.lirong?.productionDays ?? 14}天；寄庫熱銷${recommendations.appliedRules?.lirong?.targetDays?.["熱銷"] ?? 90}／穩定${recommendations.appliedRules?.lirong?.targetDays?.["穩定"] ?? 60}／低銷${recommendations.appliedRules?.lirong?.targetDays?.["低銷"] ?? 60}天；初始為每品號0或10的倍數，可由集中規則變更`, "集中規則"],
-      ["上林檢視期", "固定28天；另加到貨交期與分級安全緩衝；總部／門市／加總需求使用鎖定公式", "已確認"],
+      ["上林檢視期", "固定28天；另加到貨交期與分級安全緩衝；總部／門市／加總需求保留公式", "已確認"],
+      ["Excel編輯", "匯出檔不啟用工作表密碼保護；流程上只填人工欄位，系統欄位如被改動會在回匯時拒絕", "已確認"],
       ["付款認列", "國內預計到貨100%；國外下單30%、預計出貨70%；付款分配合計必須等於核准總額", "已確認"],
       ["一般自動採購排除", "凱信達一次性、歐必斯客訂型、所有總部贈品均不產生一般自動採購", "已確認"],
       ["寄倉處理", LOCKED_RULES.consignmentRule, "核心鎖定"],
@@ -2682,6 +2883,7 @@
       ["A43359-A", CONFIRMED_EXCLUSIONS["A43359-A"], "已確認固定排除"]
     ]);
     setColumnWidths(ruleSheet, [24, 90, 18]);
+    applyTableCis(ruleSheet, XLSX);
     XLSX.utils.book_append_sheet(workbook, ruleSheet, "08_核心規則");
     return workbook;
   }
@@ -2734,8 +2936,9 @@
         const finalQty = blockedReason ? 0 : Math.max(0, Number(confirmedQty || 0));
         const forecastDaily = Math.max(0, Number(source["預估日需求"] || 0));
         const inventoryQty = Math.max(0, Number(source["可用公司庫存"] || 0));
+        const storeInventoryQty = Math.max(0, Number(source["門市可售庫存"] || 0));
         const pendingQty = Math.max(0, Number(source["已採購未到貨"] || 0));
-        const availableDays = forecastDaily > 0 ? (inventoryQty + pendingQty + finalQty) / forecastDaily : null;
+        const availableDays = forecastDaily > 0 ? (inventoryQty + storeInventoryQty + pendingQty + finalQty) / forecastDaily : null;
         const availableTo = availableDays == null ? "需求為0" : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
         const comparison = Number(suggestedQty || 0) > 0 ? finalQty / Number(suggestedQty) : (finalQty > 0 ? Infinity : 1);
         const aiJudgment = blockedReason ? "規則阻擋" : (comparison > 1.2 ? "偏高" : comparison < 0.8 ? "偏低" : "合理");
@@ -2746,7 +2949,7 @@
           blockedReason, suggestedAmount: Math.max(0, Number(suggestedQty || 0)) * Math.max(0, Number(unitCost || 0)),
           manualAmount: Math.max(0, Number(confirmedQty || 0)) * Math.max(0, Number(unitCost || 0)),
           blockedAmount: blockedReason ? Math.max(0, Number(confirmedQty || 0)) * Math.max(0, Number(unitCost || 0)) : 0,
-          approvedAmount: finalQty * Math.max(0, Number(unitCost || 0)), forecastDaily, inventoryQty, pendingQty,
+          approvedAmount: finalQty * Math.max(0, Number(unitCost || 0)), forecastDaily, inventoryQty, storeInventoryQty, pendingQty,
           availableTo, aiJudgment, productStatusPendingReview, currentAvailableQty: Math.max(0, Number(source["目前實際可採購量"] || finalQty)),
           packSize: Math.max(1, Number(source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)))
         });
@@ -2786,13 +2989,14 @@
       ["通知規則", "本步驟不寄信；正式核准／撤銷／更正才寄送摘要。"]
     ]);
     setColumnWidths(summary, [30, 70]);
+    applySummaryCis(summary, XLSX);
     XLSX.utils.book_append_sheet(workbook, summary, "01_回匯摘要");
     appendJsonSheet(workbook, XLSX, "02_二次覆核", review.rows.map((row) => ({
       "供應商": row.supplier, "供應商分類": row.supplierCountry, "ERP品號": row.sku, "供應商貨號": row.supplierSku,
       "商品品名": row.name, "系統建議量": row.suggestedQty, "人工回匯量": row.confirmedQty, "人工確認要求": row.productStatusPendingReview ? "貨品狀態空白，已明確人工確認" : "一般回匯", "規則阻擋原因": row.blockedReason,
       "最終可核准量": row.finalQty, "進貨價": row.unitCost, "人工回匯金額": row.manualAmount, "規則阻擋金額": row.blockedAmount,
-      "最終可核准金額": row.approvedAmount, "人工調整原因": row.reason, "人工填寫可售至": row.availableTo, "AI判斷": row.aiJudgment,
-      "預估日需求": row.forecastDaily, "可用公司庫存": row.inventoryQty, "已採購未到貨": row.pendingQty,
+      "最終可核准金額": row.approvedAmount, "人工調整原因": row.reason, "人工確認後可售至": row.availableTo, "AI判斷": row.aiJudgment,
+      "預估日需求": row.forecastDaily, "可用公司庫存": row.inventoryQty, "門市可售庫存": row.storeInventoryQty, "已採購未到貨": row.pendingQty,
       "目前實際可採購量": row.currentAvailableQty, "箱入／採購單位": row.packSize,
       "二次確認採購量": "", "二次確認原因": ""
     })), [18, 14, 16, 28, 52, 16, 16, 30, 18, 14, 18, 18, 20, 32, 18, 14, 16, 16, 16, 18, 16, 18, 30]);
@@ -2853,9 +3057,10 @@
       if (unitCost == null || unitCost < 0) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "缺少有效進貨價，禁止核准金額。" });
       const forecastDaily = Math.max(0, Number(source["預估日需求"] || 0));
       const inventoryQty = Math.max(0, Number(source["可用公司庫存"] || 0));
+      const storeInventoryQty = Math.max(0, Number(source["門市可售庫存"] || 0));
       const pendingQty = Math.max(0, Number(source["已採購未到貨"] || 0));
-      const availableDays = forecastDaily > 0 ? (inventoryQty + pendingQty + Math.max(0, Number(finalQty || 0))) / forecastDaily : null;
-      const availableTo = availableDays == null ? String(source["人工填寫可售至"] || "需求為0") : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
+      const availableDays = forecastDaily > 0 ? (inventoryQty + storeInventoryQty + pendingQty + Math.max(0, Number(finalQty || 0))) / forecastDaily : null;
+      const availableTo = availableDays == null ? String(source["人工確認後可售至"] || source["人工填寫可售至"] || "需求為0") : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
       const comparison = suggestedQty > 0 ? Number(finalQty || 0) / suggestedQty : (Number(finalQty || 0) > 0 ? Infinity : 1);
       const aiJudgment = blockedReason ? "規則阻擋" : (comparison > 1.2 ? "偏高" : comparison < 0.8 ? "偏低" : "合理");
       rows.push({
@@ -2864,7 +3069,7 @@
         suggestedQty, confirmedQty: firstConfirmedQty, finalQty: Math.max(0, Number(finalQty || 0)), unitCost: Math.max(0, Number(unitCost || 0)), reason,
         blockedReason, productStatusPendingReview: Boolean(baseline?.productStatusPendingReview), suggestedAmount: suggestedQty * Math.max(0, Number(unitCost || 0)), manualAmount: firstConfirmedQty * Math.max(0, Number(unitCost || 0)),
         blockedAmount: blockedReason ? firstConfirmedQty * Math.max(0, Number(unitCost || 0)) : 0,
-        approvedAmount: Math.max(0, Number(finalQty || 0)) * Math.max(0, Number(unitCost || 0)), forecastDaily, inventoryQty, pendingQty,
+        approvedAmount: Math.max(0, Number(finalQty || 0)) * Math.max(0, Number(unitCost || 0)), forecastDaily, inventoryQty, storeInventoryQty, pendingQty,
         availableTo, aiJudgment, currentAvailableQty: Math.max(0, Number(source["目前實際可採購量"] || finalQty || 0)),
         packSize: Math.max(1, Number(source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)))
       });
@@ -2909,6 +3114,7 @@
       ];
       const sheet = XLSX.utils.aoa_to_sheet(aoa);
       setColumnWidths(sheet, [18, 52, 14, 12, 16, 36]);
+      applyTableCis(sheet, XLSX, { headerRow: 2, inputHeaders: [], decisionHeaders: [] });
       XLSX.utils.book_append_sheet(workbook, sheet, `${String(index).padStart(2, "0")}_${supplier}`.slice(0, 31));
     }
     return workbook;
@@ -2921,6 +3127,7 @@
     DEMAND_SALE_TYPES,
     PROCUREMENT_POLICY,
     SUPPLIER_RULES,
+    DEFAULT_SPRING_FESTIVAL_RULE,
     PRIMARY_SUPPLIERS,
     normalizeText,
     normalizeHeader,
@@ -2958,6 +3165,7 @@
     applyDemandModel,
     classifyXyz,
     resolveSupplyProfile,
+    resolveSpringFestivalAdjustment,
     buildProcurementRecommendations,
     buildSpecialProcurementAnalysis,
     validateSourceDates,

@@ -27,6 +27,13 @@
 .featured-supplier-remove { border: 0; border-radius: 999px; padding: .3rem .55rem; color: #7e352e; background: #fff0ec; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 750; }
 .featured-supplier-remove:hover, .featured-supplier-remove:focus-visible { color: white; background: #9e342b; outline: 2px solid #cfe5e7; outline-offset: 2px; }
 .featured-supplier-empty { width: 100%; padding: .7rem .85rem; border-radius: 12px; background: white; }
+.spring-festival-rule { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: .75rem 1rem; margin: 0 0 1.25rem; padding: 1rem; border: 1px solid #c9dde3; border-radius: 18px; background: #f7fbfb; }
+.spring-festival-rule legend { padding: 0 .4rem; color: var(--navy, #153f63); font-weight: 800; }
+.spring-festival-rule label { display: grid; gap: .35rem; color: var(--navy, #153f63); font-weight: 700; }
+.spring-festival-rule input { width: 100%; min-height: 42px; box-sizing: border-box; }
+.spring-festival-rule .checkbox-field { display: flex; align-items: center; gap: .55rem; }
+.spring-festival-rule .checkbox-field input { width: auto; min-height: auto; }
+.spring-festival-rule p { grid-column: 1 / -1; margin: 0; color: var(--muted, #64778a); line-height: 1.6; }
 .table-action { border: 0; background: transparent; color: #9e342b; cursor: pointer; text-decoration: underline; }
 .save-panel { position: sticky; bottom: 1rem; z-index: 3; box-shadow: 0 10px 30px rgb(0 0 0 / 12%); }
 #access-status { margin-left: 1rem; }
@@ -36,4 +43,6 @@
   .featured-supplier-controls { grid-template-columns: 1fr; }
   .featured-supplier-controls label, .featured-supplier-list { grid-column: auto; }
   .featured-supplier-controls .secondary-button { width: 100%; }
+  .spring-festival-rule { grid-template-columns: 1fr; }
+  .spring-festival-rule p { grid-column: auto; }
 }

@@ -779,11 +779,15 @@
     const remainingAfter = currentBudget().remainingBudget - amount;
     const statusReviewRows = rows.filter((row) => row.productStatusPendingReview);
     const statusReviewAmount = statusReviewRows.reduce((sum, row) => sum + Number(row.suggestedPurchaseAmount || 0), 0);
+    const springFestivalRows = rows.filter((row) => row.springFestivalApplied);
+    const springFestivalExtraQty = springFestivalRows.reduce((sum, row) => sum + Number(row.springFestivalExtraSuggestedQty || 0), 0);
+    const springFestivalExtraAmount = springFestivalRows.reduce((sum, row) => sum + Number(row.springFestivalExtraAmount || 0), 0);
       elements.summaryCards.replaceChildren(
       createSummaryCard("已選供應商", formatNumber(state.selectedSuppliers.size), "可逐家查看與匯出"),
       createSummaryCard("建議採購SKU", formatNumber(rows.length), "只計本次勾選範圍"),
       createSummaryCard("建議採購數量", formatNumber(quantity), "已套用箱規／10件單位"),
       createSummaryCard("建議採購金額", formatCurrency(amount), "依最新商品主檔", "currency"),
+      createSummaryCard("春節停工備貨", formatCurrency(springFestivalExtraAmount), `${formatNumber(springFestivalRows.length)}個SKU・額外${formatNumber(springFestivalExtraQty)}件；已含在建議金額`, "currency"),
       createSummaryCard("預計本月付款", formatCurrency(payments.current), "依下單日與付款規則", "currency"),
       createSummaryCard("預計未來付款", formatCurrency(payments.future), "依平均採購週期", "currency"),
       createSummaryCard("採購後尚可承諾", formatCurrency(remainingAfter), remainingAfter < 0 ? "超出目前已釋放額度" : "已釋放額度扣除已承諾與本批", `currency ${remainingAfter < 0 ? "negative" : ""}`),
@@ -850,7 +854,8 @@
       [item.supplier, item.sku, item.name, `${item.tier}・${item.abcClass}${item.xyzClass}`, item.supplyProfileLabel,
         item.supplierLeadDays, item.targetCoverageDays, item.recent6Qty, item.recent12Qty, item.forecastDailyQty,
         item.inventoryQty, item.pendingQty, item.suggestedPurchaseQty, formatCurrency(item.suggestedPurchaseAmount),
-        item.consignmentCurrentQty, item.suggestedConsignmentQty, item.supplyStatus].forEach((value, index) => appendCell(row, typeof value === "number" ? formatNumber(value) : value, index === 15 && item.immediateConsignmentGap > 0 ? "negative" : ""));
+        item.springFestivalExtraSuggestedQty, formatCurrency(item.springFestivalExtraAmount),
+        item.consignmentCurrentQty, item.suggestedConsignmentQty, item.supplyStatus].forEach((value, index) => appendCell(row, typeof value === "number" ? formatNumber(value) : value, index === 17 && item.immediateConsignmentGap > 0 ? "negative" : ""));
       fragment.appendChild(row);
     });
     elements.resultRows.replaceChildren(fragment);
@@ -878,6 +883,7 @@
       const analysis = core.buildProcurementRecommendations({ master, inventory, pendingReports, consignment, salesReports, model,
         blacklist: blacklistEntries(), asOfDate: elements.salesDate.value, checkpoint: elements.checkpoint.value,
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
+        springFestivalRule: state.procurementRules?.springFestival,
         purchaseUnitRules: state.procurementRules?.purchaseUnits,
         consignmentRules: state.procurementRules?.consignment,
         storeInventoryRules: state.procurementRules?.storeInventory,
@@ -901,7 +907,10 @@
       state.consignmentSource = consignment; state.returnScope = null; renderSummary(analysis, consignment);
       elements.resultPanel.hidden = false;
       resetReviewWorkflow("採購建議已完成；請先勾選本次供應商並下載Excel，下載後才會開放第一次人工回匯。");
-      setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。`, "success");
+      const springFestivalNote = analysis.totals.springFestivalSkuCount > 0
+        ? `其中春節停工備貨${analysis.totals.springFestivalSkuCount}個SKU、加量${formatNumber(analysis.totals.springFestivalExtraQty)}件、增加${formatCurrency(analysis.totals.springFestivalExtraAmount)}。`
+        : "本次無春節停工備貨加量。";
+      setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。${springFestivalNote}`, "success");
       await syncDetectedCustomOrders(pendingReports, master);
       renderBudget(); updateSpecialWorkflowReady(); elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {

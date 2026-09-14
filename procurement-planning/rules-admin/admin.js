@@ -9,6 +9,7 @@
     addUnit: get("#add-unit"), addStore: get("#add-store-rule"), blacklist: get("#blacklist-input"),
     accessPanel: get("#access-panel"), approvers: get("#approver-emails"), recipient: get("#notification-recipient"), retention: get("#retention-months"),
     saveAccess: get("#save-access"), accessStatus: get("#access-status"), reason: get("#change-reason"), save: get("#save-rules"), saveStatus: get("#save-status"),
+    springFestivalEnabled: get("#spring-festival-enabled"), springFestivalStart: get("#spring-festival-start"), springFestivalRecovery: get("#spring-festival-recovery"), springFestivalExtraDays: get("#spring-festival-extra-days"),
     puyoumaPull: get("#puyouma-pull"), puyoumaProduction: get("#puyouma-production"), puyoumaHot: get("#puyouma-hot"), puyoumaStable: get("#puyouma-stable"), puyoumaLow: get("#puyouma-low"),
     lirongPull: get("#lirong-pull"), lirongProduction: get("#lirong-production"), lirongDelivery: get("#lirong-delivery"), lirongHot: get("#lirong-hot"), lirongStable: get("#lirong-stable"), lirongLow: get("#lirong-low")
   };
@@ -38,6 +39,12 @@
       state.rules.featuredSuppliers = defaults.filter((name) => supplierNames.has(name));
     }
     return state.rules.featuredSuppliers;
+  }
+  function ensureSpringFestivalRule() {
+    if (!state.rules.springFestival || typeof state.rules.springFestival !== "object") {
+      state.rules.springFestival = { enabled: true, closureStart: "2027-01-16", recoveryDate: "2027-02-28", extraDays: 53 };
+    }
+    return state.rules.springFestival;
   }
   function renameSupplier(item, value) {
     const previousName = String(item.name || "").trim();
@@ -112,7 +119,14 @@
       [elements.lirongPull, l, "pullLeadDays"], [elements.lirongProduction, l, "productionDays"], [elements.lirongDelivery, l, "deliveryAfterProductionDays"], [elements.lirongHot, l.targetDays, "熱銷"], [elements.lirongStable, l.targetDays, "穩定"], [elements.lirongLow, l.targetDays, "低銷"]];
     values.forEach(([control, object, key]) => { control.value = String(object[key]); control.oninput = () => { object[key] = Number(control.value || 0); markDirty(); }; });
   }
-  function render() { renderSuppliers(); renderFeaturedSuppliers(); renderUnits(); renderStores(); setConsignmentFields(); elements.blacklist.value = (state.rules.blacklist || []).join("\n"); }
+  function setSpringFestivalFields() {
+    const rule = ensureSpringFestivalRule();
+    elements.springFestivalEnabled.checked = rule.enabled !== false;
+    elements.springFestivalStart.value = rule.closureStart || "";
+    elements.springFestivalRecovery.value = rule.recoveryDate || "";
+    elements.springFestivalExtraDays.value = String(rule.extraDays ?? 53);
+  }
+  function render() { renderSuppliers(); renderFeaturedSuppliers(); renderUnits(); renderStores(); setConsignmentFields(); setSpringFestivalFields(); elements.blacklist.value = (state.rules.blacklist || []).join("\n"); }
 
   async function loadAccessSettings() {
     const settings = await request("/api/procurement/access-settings");
@@ -149,5 +163,9 @@
   elements.addFeaturedSupplier.addEventListener("click", () => { const name = elements.featuredSupplierSelect.value; if (!name) return; ensureFeaturedSuppliers().push(name); markDirty(); renderFeaturedSuppliers(); });
   elements.addUnit.addEventListener("click", () => { state.rules.purchaseUnits.push({ supplier: "普優瑪寢具有限公司", ruleName: "其它品項", matchText: "", quantity: null, enabled: true }); markDirty(); render(); });
   elements.addStore.addEventListener("click", () => { state.rules.storeInventory.rules.push({ name: "新門市規則", enabled: true, scope: "R00、R06", matchText: "", inventoryRole: "可售最低庫存", quantity: 1, priority: 50 }); markDirty(); render(); });
+  elements.springFestivalEnabled.addEventListener("change", () => { ensureSpringFestivalRule().enabled = elements.springFestivalEnabled.checked; markDirty(); });
+  elements.springFestivalStart.addEventListener("input", () => { ensureSpringFestivalRule().closureStart = elements.springFestivalStart.value; markDirty(); });
+  elements.springFestivalRecovery.addEventListener("input", () => { ensureSpringFestivalRule().recoveryDate = elements.springFestivalRecovery.value; markDirty(); });
+  elements.springFestivalExtraDays.addEventListener("input", () => { ensureSpringFestivalRule().extraDays = Number(elements.springFestivalExtraDays.value || 0); markDirty(); });
   elements.blacklist.addEventListener("input", markDirty); elements.save.addEventListener("click", saveRules); elements.saveAccess.addEventListener("click", saveAccessSettings); init();
 })();

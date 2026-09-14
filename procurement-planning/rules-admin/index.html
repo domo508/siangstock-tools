@@ -8,7 +8,7 @@
   <title>採購規則管理｜翔仔居家</title>
   <link rel="stylesheet" href="../../cost-analysis/style.css">
   <link rel="stylesheet" href="../style.css?v=20260914-rules-r2">
-  <link rel="stylesheet" href="style.css?v=20260914-rules-r2">
+  <link rel="stylesheet" href="style.css?v=20260914-spring-festival-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -32,6 +32,14 @@
         </div>
         <div id="featured-supplier-list" class="featured-supplier-list" aria-live="polite"></div>
       </div>
+      <fieldset class="spring-festival-rule">
+        <legend>國外供應商春節停工備貨</legend>
+        <label class="checkbox-field"><input id="spring-festival-enabled" type="checkbox"> 啟用跨停工期自動加量</label>
+        <label>停工開始日<input id="spring-festival-start" type="date"></label>
+        <label>恢復出貨日<input id="spring-festival-recovery" type="date"></label>
+        <label>額外備貨天數<input id="spring-festival-extra-days" type="number" min="45" max="60" step="1"></label>
+        <p>只套用國別為「國外」，且本次到貨／下次補貨範圍跨入停工區間的品項。預設53天，可在45～60天內調整；額外數量與金額會在前台及Excel分開顯示。</p>
+      </fieldset>
       <div class="result-table-wrap"><table class="rules-table"><thead><tr><th>供應商</th><th>別名（逗號分隔）</th><th>國別</th><th>平均採購週期</th><th>檢視期</th><th>一般自動採購</th><th>排除原因</th><th></th></tr></thead><tbody id="supplier-rows"></tbody></table></div>
     </section>
 
@@ -68,6 +76,6 @@
     <section class="panel save-panel"><label class="wide-field">本次修改原因＊<input id="change-reason" type="text" maxlength="500" placeholder="例如：修正兩類商品的可售最低庫存"></label><button id="save-rules" class="primary-button" type="button" disabled>儲存全部採購規則</button><p id="save-status" class="main-status">尚未修改。</p></section>
     <footer><p>每次儲存都會建立新版本，保留修改人、時間與原因。</p></footer>
   </main>
-  <script src="admin.js?v=20260914-rules-r2"></script>
+  <script src="admin.js?v=20260914-spring-festival-r1"></script>
 </body>
 </html>
