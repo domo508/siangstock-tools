@@ -5,7 +5,8 @@
   const get = (selector) => document.querySelector(selector);
   const elements = {
     account: get("#account-badge"), pageStatus: get("#page-status"), suppliers: get("#supplier-rows"), units: get("#unit-rows"), stores: get("#store-rows"),
-    addSupplier: get("#add-supplier"), addUnit: get("#add-unit"), addStore: get("#add-store-rule"), blacklist: get("#blacklist-input"),
+    addSupplier: get("#add-supplier"), featuredSupplierSelect: get("#featured-supplier-select"), addFeaturedSupplier: get("#add-featured-supplier"), featuredSupplierList: get("#featured-supplier-list"),
+    addUnit: get("#add-unit"), addStore: get("#add-store-rule"), blacklist: get("#blacklist-input"),
     accessPanel: get("#access-panel"), approvers: get("#approver-emails"), recipient: get("#notification-recipient"), retention: get("#retention-months"),
     saveAccess: get("#save-access"), accessStatus: get("#access-status"), reason: get("#change-reason"), save: get("#save-rules"), saveStatus: get("#save-status"),
     puyoumaPull: get("#puyouma-pull"), puyoumaProduction: get("#puyouma-production"), puyoumaHot: get("#puyouma-hot"), puyoumaStable: get("#puyouma-stable"), puyoumaLow: get("#puyouma-low"),
@@ -30,15 +31,57 @@
     control.addEventListener("change", () => { onChange(control.value); markDirty(); }); return control;
   }
   function removeButton(callback) { const button = document.createElement("button"); button.type = "button"; button.className = "table-action"; button.textContent = "刪除"; button.addEventListener("click", () => { callback(); markDirty(); render(); }); return button; }
+  function ensureFeaturedSuppliers() {
+    if (!Array.isArray(state.rules.featuredSuppliers)) {
+      const defaults = ["普優瑪寢具有限公司", "力榮", "上林", "潤泰羽絨", "泰能脊康"];
+      const supplierNames = new Set(state.rules.suppliers.map((item) => String(item.name || "").trim()));
+      state.rules.featuredSuppliers = defaults.filter((name) => supplierNames.has(name));
+    }
+    return state.rules.featuredSuppliers;
+  }
+  function renameSupplier(item, value) {
+    const previousName = String(item.name || "").trim();
+    item.name = value;
+    const featured = ensureFeaturedSuppliers();
+    const featuredIndex = featured.indexOf(previousName);
+    if (featuredIndex >= 0) featured[featuredIndex] = value;
+  }
+  function removeSupplier(index) {
+    const removedName = String(state.rules.suppliers[index]?.name || "").trim();
+    state.rules.suppliers.splice(index, 1);
+    state.rules.featuredSuppliers = ensureFeaturedSuppliers().filter((name) => name !== removedName);
+  }
+  function renderFeaturedSuppliers() {
+    const supplierNames = state.rules.suppliers.map((item) => String(item.name || "").trim()).filter(Boolean);
+    const validNames = new Set(supplierNames);
+    const featured = [...new Set(ensureFeaturedSuppliers().map((name) => String(name || "").trim()).filter((name) => validNames.has(name)))];
+    state.rules.featuredSuppliers = featured;
+    const available = supplierNames.filter((name) => !featured.includes(name));
+    const options = document.createDocumentFragment();
+    available.forEach((name) => { const option = document.createElement("option"); option.value = name; option.textContent = name; options.appendChild(option); });
+    elements.featuredSupplierSelect.replaceChildren(options);
+    elements.featuredSupplierSelect.disabled = !available.length;
+    elements.addFeaturedSupplier.disabled = !available.length;
+    const list = document.createDocumentFragment();
+    featured.forEach((name) => {
+      const item = document.createElement("span"); item.className = "featured-supplier-item";
+      const label = document.createElement("strong"); label.textContent = name;
+      const button = document.createElement("button"); button.type = "button"; button.className = "featured-supplier-remove"; button.textContent = "移至其它"; button.setAttribute("aria-label", `將${name}移至其它供應商`);
+      button.addEventListener("click", () => { state.rules.featuredSuppliers = featured.filter((supplier) => supplier !== name); markDirty(); renderFeaturedSuppliers(); });
+      item.append(label, button); list.appendChild(item);
+    });
+    if (!featured.length) { const empty = document.createElement("p"); empty.className = "featured-supplier-empty"; empty.textContent = "目前沒有主要供應商，所有廠商都會歸入其它。"; list.appendChild(empty); }
+    elements.featuredSupplierList.replaceChildren(list);
+  }
 
   function renderSuppliers() {
     const fragment = document.createDocumentFragment();
     state.rules.suppliers.forEach((item, index) => {
       const row = document.createElement("tr");
-      row.append(cell(input("text", item.name, (value) => item.name = value)), cell(input("text", (item.aliases || []).join("、"), (value) => item.aliases = value.split(/[、,，]/).map((part) => part.trim()).filter(Boolean))),
+      row.append(cell(input("text", item.name, (value) => renameSupplier(item, value))), cell(input("text", (item.aliases || []).join("、"), (value) => item.aliases = value.split(/[、,，]/).map((part) => part.trim()).filter(Boolean))),
         cell(select(item.country, ["國內", "國外"], (value) => item.country = value)), cell(input("number", item.leadDays, (value) => item.leadDays = Number(value), { min: 0, max: 365 })),
         cell(input("text", item.reviewDays ?? "", (value) => item.reviewDays = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : value, { placeholder: "0、28或90-120" })),
-        cell(input("checkbox", item.automaticPurchase !== false, (value) => item.automaticPurchase = value)), cell(input("text", item.exclusionReason || "", (value) => item.exclusionReason = value)), cell(removeButton(() => state.rules.suppliers.splice(index, 1))));
+        cell(input("checkbox", item.automaticPurchase !== false, (value) => item.automaticPurchase = value)), cell(input("text", item.exclusionReason || "", (value) => item.exclusionReason = value)), cell(removeButton(() => removeSupplier(index))));
       fragment.appendChild(row);
     }); elements.suppliers.replaceChildren(fragment);
   }
@@ -69,7 +112,7 @@
       [elements.lirongPull, l, "pullLeadDays"], [elements.lirongProduction, l, "productionDays"], [elements.lirongDelivery, l, "deliveryAfterProductionDays"], [elements.lirongHot, l.targetDays, "熱銷"], [elements.lirongStable, l.targetDays, "穩定"], [elements.lirongLow, l.targetDays, "低銷"]];
     values.forEach(([control, object, key]) => { control.value = String(object[key]); control.oninput = () => { object[key] = Number(control.value || 0); markDirty(); }; });
   }
-  function render() { renderSuppliers(); renderUnits(); renderStores(); setConsignmentFields(); elements.blacklist.value = (state.rules.blacklist || []).join("\n"); }
+  function render() { renderSuppliers(); renderFeaturedSuppliers(); renderUnits(); renderStores(); setConsignmentFields(); elements.blacklist.value = (state.rules.blacklist || []).join("\n"); }
 
   async function loadAccessSettings() {
     const settings = await request("/api/procurement/access-settings");
@@ -103,6 +146,7 @@
   }
 
   elements.addSupplier.addEventListener("click", () => { state.rules.suppliers.push({ name: "新供應商", aliases: [], country: "國內", leadDays: 14, reviewDays: 14, automaticPurchase: true, exclusionReason: "" }); markDirty(); render(); });
+  elements.addFeaturedSupplier.addEventListener("click", () => { const name = elements.featuredSupplierSelect.value; if (!name) return; ensureFeaturedSuppliers().push(name); markDirty(); renderFeaturedSuppliers(); });
   elements.addUnit.addEventListener("click", () => { state.rules.purchaseUnits.push({ supplier: "普優瑪寢具有限公司", ruleName: "其它品項", matchText: "", quantity: null, enabled: true }); markDirty(); render(); });
   elements.addStore.addEventListener("click", () => { state.rules.storeInventory.rules.push({ name: "新門市規則", enabled: true, scope: "R00、R06", matchText: "", inventoryRole: "可售最低庫存", quantity: 1, priority: 50 }); markDirty(); render(); });
   elements.blacklist.addEventListener("input", markDirty); elements.save.addEventListener("click", saveRules); elements.saveAccess.addEventListener("click", saveAccessSettings); init();

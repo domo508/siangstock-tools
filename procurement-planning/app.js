@@ -32,7 +32,9 @@
     modelProgressText: get("#model-progress-text"), modelRunSummary: get("#model-run-summary"),
     blacklistStatus: get("#blacklist-status"), analyze: get("#analyze-button"), download: get("#download-button"), status: get("#main-status"),
     resultPanel: get("#result-panel"), dateCheck: get("#date-check-message"), summaryCards: get("#summary-cards"), resultAlert: get("#result-alert"), resultRows: get("#result-rows"),
-    supplierFilterList: get("#supplier-filter-list"), supplierScopeStatus: get("#supplier-scope-status"), selectAllSuppliers: get("#select-all-suppliers"), clearSuppliers: get("#clear-suppliers"),
+    supplierFilterList: get("#supplier-filter-list"), otherSupplierFilterList: get("#other-supplier-filter-list"), otherSupplierGroup: get("#other-supplier-group"), otherSupplierSummary: get("#other-supplier-summary"),
+    supplierScopeStatus: get("#supplier-scope-status"), selectAllSuppliers: get("#select-all-suppliers"), clearSuppliers: get("#clear-suppliers"),
+    excludedResultPanel: get("#excluded-result-panel"), excludedResultCount: get("#excluded-result-count"), excludedResultRows: get("#excluded-result-rows"),
     forecastRevenue: get("#forecast-revenue"), terminalForecastRevenue: get("#terminal-forecast-revenue"), forecastCost: get("#forecast-cost"), targetEndingCost: get("#target-ending-cost"), openingCost: get("#opening-cost"),
     supplierReturns: get("#supplier-returns"), releasedBudget: get("#released-budget"), purchasedToDate: get("#purchased-to-date"), budgetSourceNote: get("#budget-source-note"),
     saveBudget: get("#save-budget-button"), budgetPlanStatus: get("#budget-plan-status"), budgetSummary: get("#budget-summary"), ledgerStatus: get("#ledger-status"),
@@ -411,8 +413,9 @@
     if (missingColumns.length) throw new Error(`最新商品主檔缺少必要欄位：${missingColumns.join("、")}`);
     const parsed = core.parseProductMasterWorkbook(workbook, XLSX);
     if (parsed.records.length !== parsed.bySku.size) throw new Error("最新商品主檔有重複ERP品號，已停止採用。");
-    const invalid = parsed.records.filter((row) => !row.supplier || !(row.unitCost > 0) || !(row.moq > 0) || !row.productStatus);
-    return { parsed, invalidCount: invalid.length };
+    const hardInvalidCount = parsed.records.filter((row) => !row.supplier || !(row.unitCost > 0) || !(row.moq > 0)).length;
+    const statusReviewCount = parsed.records.filter((row) => !row.productStatus).length;
+    return { parsed, invalidCount: hardInvalidCount + statusReviewCount, hardInvalidCount, statusReviewCount };
   }
   async function loadLedger() {
     if (!state.config || !elements.month.value) return;
@@ -697,7 +700,7 @@
       elements.consignmentFileName.textContent = `自動：庫存+下單／庫存布，共${puyouma.records.length}列・${sourceProof(sources.puyoumaMetadata.spreadsheetId, sources.puyoumaMetadata)}`;
       elements.lirongConsignmentFileName.textContent = `自動：工作表1，共${lirong.records.length}列・${sourceProof(sources.lirongMetadata.spreadsheetId, sources.lirongMetadata)}`;
       elements.sourceStatus.textContent = masterValidation.invalidCount
-        ? `固定 Google 資料源已完成格式檢核；商品主檔有${masterValidation.invalidCount}列缺供應商或進貨價，受影響品號會阻擋核准，其餘品號可繼續。`
+        ? `固定 Google 資料源已完成格式檢核；${masterValidation.hardInvalidCount}列缺供應商、正數進貨價或MOQ並停止自動採購，${masterValidation.statusReviewCount}列貨品狀態空白仍顯示試算建議，但第一次回匯必須明確填量與原因。`
         : "固定 Google 資料源已完成格式檢核；本次採用自動來源。";
       elements.sourceStatus.className = `result-alert ${masterValidation.invalidCount ? "warn" : ""}`.trim();
       completed = true; invalidateAnalysis(); updateReadyState();
@@ -713,14 +716,42 @@
       }
     }
   }
+  function supplierCatalog(analysis = state.analysis) {
+    return core.supplierSelectionCatalog(
+      analysis,
+      state.procurementRules?.suppliers || core.SUPPLIER_RULES,
+      state.procurementRules?.featuredSuppliers || core.PRIMARY_SUPPLIERS
+    );
+  }
+  function canonicalSupplierName(value) {
+    const name = String(value || "").trim();
+    return core.findSupplierRule(name, state.procurementRules?.suppliers || core.SUPPLIER_RULES)?.name || name;
+  }
   function supplierNames(analysis) {
-    const names = [...new Set(analysis.suggestedRows.map((row) => String(row.supplier || "").trim()).filter(Boolean))];
-    const rank = (name) => /力榮/.test(name) ? 0 : (/普優[瑪碼]/.test(name) ? 1 : (/上林/.test(name) ? 2 : 3));
-    return names.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, "zh-Hant"));
+    return supplierCatalog(analysis).all.map((item) => item.name);
+  }
+  function positiveSupplierNames(analysis = state.analysis) {
+    return supplierCatalog(analysis).all.filter((item) => item.suggestedCount > 0).map((item) => item.name);
   }
   function selectedRows() {
     if (!state.analysis) return [];
-    return state.analysis.suggestedRows.filter((row) => state.selectedSuppliers.has(String(row.supplier || "").trim()));
+    return state.analysis.suggestedRows.filter((row) => state.selectedSuppliers.has(canonicalSupplierName(row.supplier)));
+  }
+  function selectedExcludedRows() {
+    if (!state.analysis) return [];
+    return state.analysis.rows.filter((row) => state.selectedSuppliers.has(canonicalSupplierName(row.supplier)) && (row.externalPurchaseBlocked || row.manualSupplierReview || row.productStatusPendingReview));
+  }
+  function renderExcludedRows() {
+    const rows = selectedExcludedRows();
+    elements.excludedResultPanel.hidden = !rows.length;
+    elements.excludedResultCount.textContent = `${formatNumber(rows.length)}項`;
+    const fragment = document.createDocumentFragment();
+    rows.sort((left, right) => Number(right.rawPurchaseQty || 0) - Number(left.rawPurchaseQty || 0) || String(left.sku).localeCompare(String(right.sku))).forEach((item) => {
+      const row = document.createElement("tr");
+      [item.supplier, item.sku, item.name, formatNumber(item.rawPurchaseQty), formatNumber(item.suggestedPurchaseQty), item.supplyStatus].forEach((value) => appendCell(row, value));
+      fragment.appendChild(row);
+    });
+    elements.excludedResultRows.replaceChildren(fragment);
   }
   function selectedPaymentSummary(rows) {
     const bySupplier = new Map();
@@ -746,23 +777,28 @@
     const quantity = rows.reduce((sum, row) => sum + Number(row.suggestedPurchaseQty || 0), 0);
     const payments = selectedPaymentSummary(rows);
     const remainingAfter = currentBudget().remainingBudget - amount;
-    elements.summaryCards.replaceChildren(
+    const statusReviewRows = rows.filter((row) => row.productStatusPendingReview);
+    const statusReviewAmount = statusReviewRows.reduce((sum, row) => sum + Number(row.suggestedPurchaseAmount || 0), 0);
+      elements.summaryCards.replaceChildren(
       createSummaryCard("已選供應商", formatNumber(state.selectedSuppliers.size), "可逐家查看與匯出"),
       createSummaryCard("建議採購SKU", formatNumber(rows.length), "只計本次勾選範圍"),
       createSummaryCard("建議採購數量", formatNumber(quantity), "已套用箱規／10件單位"),
       createSummaryCard("建議採購金額", formatCurrency(amount), "依最新商品主檔", "currency"),
       createSummaryCard("預計本月付款", formatCurrency(payments.current), "依下單日與付款規則", "currency"),
       createSummaryCard("預計未來付款", formatCurrency(payments.future), "依平均採購週期", "currency"),
-      createSummaryCard("採購後尚可承諾", formatCurrency(remainingAfter), remainingAfter < 0 ? "超出目前已釋放額度" : "已釋放額度扣除已承諾與本批", `currency ${remainingAfter < 0 ? "negative" : ""}`)
+      createSummaryCard("採購後尚可承諾", formatCurrency(remainingAfter), remainingAfter < 0 ? "超出目前已釋放額度" : "已釋放額度扣除已承諾與本批", `currency ${remainingAfter < 0 ? "negative" : ""}`),
+      createSummaryCard("待人工確認試算", formatCurrency(statusReviewAmount), `${formatNumber(statusReviewRows.length)}個貨品狀態空白SKU；尚未核准`, "currency"),
+      createSummaryCard("寬沐45%管理參考", formatCurrency(state.analysis.totals.kuanMuManagementTargetAmount || 0), `營運需求${formatCurrency(state.analysis.totals.kuanMuOperationalDemandAmount || 0)}・差額${formatCurrency(state.analysis.totals.kuanMuManagementGapAmount || 0)}；未加進建議`, "currency")
     );
     renderRows(rows);
     const scopeNames = [...state.selectedSuppliers];
     const missingPayment = payments.reviewSuppliers.length ? `；${payments.reviewSuppliers.join("、")}付款規則待確認` : "";
     elements.supplierScopeStatus.textContent = scopeNames.length
-      ? `目前選擇：${scopeNames.join("、")}；畫面與下載Excel只包含這個範圍${missingPayment}。`
+      ? `目前選擇：${scopeNames.join("、")}；畫面與下載Excel只包含這個範圍${statusReviewRows.length ? `；其中${statusReviewRows.length}項貨品狀態空白須明確人工確認` : ""}${missingPayment}。`
       : "尚未選擇供應商；請至少勾選一家後再下載。";
     elements.supplierScopeStatus.className = `supplier-scope-status ${scopeNames.length && !payments.reviewSuppliers.length ? "" : "warn"}`.trim();
     elements.download.disabled = !scopeNames.length;
+    renderExcludedRows();
   }
   function resetScopeForNewExport() {
     state.returnScope = null;
@@ -770,23 +806,33 @@
     renderSelectedAnalysis();
   }
   function renderSupplierFilters(analysis) {
-    const names = supplierNames(analysis);
-    state.selectedSuppliers = new Set(names);
-    const fragment = document.createDocumentFragment();
-    names.forEach((supplier) => {
-      const rows = analysis.suggestedRows.filter((row) => row.supplier === supplier);
-      const amount = rows.reduce((sum, row) => sum + Number(row.suggestedPurchaseAmount || 0), 0);
+    const catalog = supplierCatalog(analysis);
+    state.selectedSuppliers = new Set(catalog.all.filter((item) => item.suggestedCount > 0).map((item) => item.name));
+    const option = (item) => {
+      const supplier = item.name;
       const label = document.createElement("label"); label.className = "supplier-option";
-      const input = document.createElement("input"); input.type = "checkbox"; input.checked = true; input.value = supplier;
+      if (item.reviewCount) label.classList.add("has-review");
+      const input = document.createElement("input"); input.type = "checkbox"; input.checked = state.selectedSuppliers.has(supplier); input.value = supplier;
       const strong = document.createElement("strong"); strong.textContent = supplier;
-      const small = document.createElement("small"); small.textContent = `${rows.length}個SKU・${formatCurrency(amount)}`;
+      const small = document.createElement("small");
+      const review = item.reviewCount ? `・${item.reviewCount}項待確認／排除` : "";
+      small.textContent = `${item.suggestedCount}個建議SKU・${formatCurrency(item.suggestedAmount)}${review}`;
       input.addEventListener("change", () => {
         if (input.checked) state.selectedSuppliers.add(supplier); else state.selectedSuppliers.delete(supplier);
         resetScopeForNewExport();
       });
-      label.append(input, strong, small); fragment.appendChild(label);
-    });
-    elements.supplierFilterList.replaceChildren(fragment);
+      label.append(input, strong, small);
+      return label;
+    };
+    const primaryFragment = document.createDocumentFragment();
+    catalog.primary.forEach((item) => primaryFragment.appendChild(option(item)));
+    const otherFragment = document.createDocumentFragment();
+    catalog.other.forEach((item) => otherFragment.appendChild(option(item)));
+    elements.supplierFilterList.replaceChildren(primaryFragment);
+    elements.otherSupplierFilterList.replaceChildren(otherFragment);
+    const otherPositive = catalog.other.filter((item) => item.suggestedCount > 0).length;
+    const otherReview = catalog.other.reduce((sum, item) => sum + item.reviewCount, 0);
+    elements.otherSupplierSummary.textContent = `${catalog.other.length}家・${otherPositive}家有建議・${otherReview}項待確認／排除`;
     renderSelectedAnalysis();
   }
   function renderSummary(analysis, consignmentSource) {
@@ -833,7 +879,9 @@
         blacklist: blacklistEntries(), asOfDate: elements.salesDate.value, checkpoint: elements.checkpoint.value,
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
         purchaseUnitRules: state.procurementRules?.purchaseUnits,
-        consignmentRules: state.procurementRules?.consignment });
+        consignmentRules: state.procurementRules?.consignment,
+        storeInventoryRules: state.procurementRules?.storeInventory,
+        revenueChannels: state.revenueChannels });
       analysis.validation = validation;
       analysis.lirongConsignmentRows = core.buildLirongConsignmentRecommendations(analysis, lirongConsignment, {
         orderDate: elements.orderDate.value, purchaseUnitRules: state.procurementRules?.purchaseUnits, consignmentRules: state.procurementRules?.consignment
@@ -1058,7 +1106,8 @@
   function downloadRecommendation() {
     if (!state.analysis || !state.selectedSuppliers.size) return;
     const selected = [...state.selectedSuppliers];
-    const scopeLabel = (selected.length === supplierNames(state.analysis).length ? "全部供應商" : selected.join("＋")).replace(/[\\/:*?"<>|]/g, "-").slice(0, 80);
+    const positiveNames = positiveSupplierNames(state.analysis);
+    const scopeLabel = (selected.length === positiveNames.length && positiveNames.every((name) => state.selectedSuppliers.has(name)) ? "全部有建議供應商" : selected.join("＋")).replace(/[\\/:*?"<>|]/g, "-").slice(0, 80);
     const workflowLabel = state.analysis.meta?.workflowLabel || "採購建議";
     XLSX.writeFile(core.buildRecommendationWorkbook(state.analysis, XLSX, { budget: currentBudget(), selectedSuppliers: selected }), `${elements.month.value}_${elements.checkpoint.value === "mid-month" ? "月中" : elements.checkpoint.value === "month-end" ? "月底" : "月初"}_${scopeLabel}_${workflowLabel}_人工審核.xlsx`, { compression: true, cellStyles: true });
     state.returnScope = new Set(selected);
@@ -1228,13 +1277,13 @@
     setWorkflowStatus(state.secondReviewFile ? `已選擇確認版${state.secondReviewFile.name}；請執行最終檢查。` : "請回匯已填寫二次確認量的覆核報表。");
   });
   elements.selectAllSuppliers.addEventListener("click", () => {
-    state.selectedSuppliers = new Set(supplierNames(state.analysis));
-    elements.supplierFilterList.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = true; });
+    state.selectedSuppliers = new Set(positiveSupplierNames(state.analysis));
+    [elements.supplierFilterList, elements.otherSupplierFilterList].forEach((list) => list.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = state.selectedSuppliers.has(input.value); }));
     resetScopeForNewExport();
   });
   elements.clearSuppliers.addEventListener("click", () => {
     state.selectedSuppliers.clear();
-    elements.supplierFilterList.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; });
+    [elements.supplierFilterList, elements.otherSupplierFilterList].forEach((list) => list.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; }));
     resetScopeForNewExport();
   });
   [elements.checkpoint, elements.orderDate, elements.inventoryDate, elements.pendingDate, elements.consignmentDate, elements.salesDate].forEach((element) => element.addEventListener("change", () => {

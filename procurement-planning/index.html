@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20260914-source-links-r2">
+  <link rel="stylesheet" href="style.css?v=20260914-supplier-scope-r2">
 </head>
 <body>
   <main class="page-shell">
@@ -284,21 +284,38 @@
       </div>
       <div class="supplier-filter" aria-labelledby="supplier-filter-title">
         <div class="supplier-filter-heading">
-          <div><h3 id="supplier-filter-title">本次查看與匯出範圍</h3><p>可單獨選力榮、普優瑪或任何供應商；畫面與Excel金額會同步更新。</p></div>
-          <div class="supplier-filter-actions"><button id="select-all-suppliers" class="secondary-button" type="button">全選</button><button id="clear-suppliers" class="secondary-button" type="button">清除</button></div>
+          <div><h3 id="supplier-filter-title">本次查看與匯出範圍</h3><p>主要供應商直接顯示；其餘廠商可在「其它供應商」展開選取。畫面與Excel金額會同步更新。</p></div>
+          <div class="supplier-filter-actions"><a class="secondary-button supplier-manage-button" href="rules-admin/#supplier-display">管理顯示供應商</a><button id="select-all-suppliers" class="secondary-button" type="button">勾選有建議</button><button id="clear-suppliers" class="secondary-button" type="button">清除</button></div>
         </div>
-        <div id="supplier-filter-list" class="supplier-filter-list"></div>
+        <div class="supplier-group-block" aria-labelledby="primary-suppliers-title">
+          <h4 id="primary-suppliers-title">主要供應商</h4>
+          <div id="supplier-filter-list" class="supplier-filter-list"></div>
+        </div>
+        <details id="other-supplier-group" class="supplier-other-group">
+          <summary><span>其它供應商</span><small id="other-supplier-summary">產生建議後列出其餘廠商</small></summary>
+          <div id="other-supplier-filter-list" class="supplier-filter-list supplier-filter-list-other"></div>
+        </details>
         <p id="supplier-scope-status" class="supplier-scope-status" role="status">產生建議後可選擇供應商。</p>
       </div>
       <div id="summary-cards" class="summary-grid procurement-summary"></div>
       <div id="result-alert" class="result-alert" role="status"></div>
+      <details id="excluded-result-panel" class="excluded-result-panel" hidden>
+        <summary><span>未列入自動建議／需人工確認</span><strong id="excluded-result-count">0項</strong></summary>
+        <p>這些品項仍保留在稽核中；貨品狀態空白者會顯示試算建議量，但第一次回匯必須明確填量與原因，完成二次確認後才可核准。</p>
+        <div class="result-table-wrap">
+          <table class="procurement-table compact-table">
+            <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>未進位缺口</th><th>試算建議量</th><th>處理狀態</th></tr></thead>
+            <tbody id="excluded-result-rows"></tbody>
+          </table>
+        </div>
+      </details>
       <div class="result-table-wrap">
         <table class="procurement-table">
           <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>狀態</th><th>供應交期類型</th><th>到貨天數</th><th>目標覆蓋天數</th><th>近6週</th><th>近12週</th><th>日需求</th><th>可用庫存</th><th>未到貨</th><th>建議採購量</th><th>建議金額</th><th>寄倉現貨</th><th>建議寄庫</th><th>供貨狀態</th></tr></thead>
           <tbody id="result-rows"></tbody>
         </table>
       </div>
-      <p class="result-note">淨採購需求只扣公司可用庫存與未到貨採購；工廠寄倉不會被扣除。寄倉現貨不足「未到貨＋本次建議採購」時，必列缺貨警示並加入寄庫建議。</p>
+      <p class="result-note">淨採購需求＝總部需求＋逐店扣除各店現有庫存後的門市需求－總部可用庫存－未到貨採購；工廠寄倉不會被扣除。月初依熱銷70%、穩定50%、低銷0%分批釋放，月中與月底依最新缺口重算。</p>
     </section>
 
     <section class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
@@ -358,9 +375,9 @@
 
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260914-special-workflows-r1"></script>
+  <script src="core.js?v=20260914-product-status-review-r1"></script>
   <script src="seasonal-model.js?v=20260914-seasonal-wape-r2"></script>
   <script src="google-sources.js?v=20260914-seasonal-auto-r1"></script>
-  <script src="app.js?v=20260914-seasonal-wape-r3"></script>
+  <script src="app.js?v=20260914-product-status-review-r1"></script>
 </body>
 </html>

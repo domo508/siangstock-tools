@@ -121,10 +121,11 @@ async function verifyApprover(request: Request, env: ProcurementEnv): Promise<{ 
 function validateProcurementRules(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new RequestValidationError("採購規則必須是物件。");
   const rules = value as Record<string, unknown>;
-  const allowed = ["suppliers", "consignment", "purchaseUnits", "storeInventory", "blacklist"];
+  const allowed = ["suppliers", "featuredSuppliers", "consignment", "purchaseUnits", "storeInventory", "blacklist"];
   const extras = Object.keys(rules).filter((key) => !allowed.includes(key));
   if (extras.length) throw new RequestValidationError(`採購規則含未知欄位：${extras.join("、")}。`);
   if (!Array.isArray(rules.suppliers) || rules.suppliers.length > 100) throw new RequestValidationError("供應商規則格式錯誤。");
+  if (!Array.isArray(rules.featuredSuppliers) || rules.featuredSuppliers.length > 20) throw new RequestValidationError("主要供應商顯示名單格式錯誤。");
   if (!Array.isArray(rules.purchaseUnits) || rules.purchaseUnits.length > 300) throw new RequestValidationError("採購單位規則格式錯誤。");
   if (!Array.isArray(rules.blacklist) || rules.blacklist.length > 1000) throw new RequestValidationError("黑名單格式錯誤。");
   if (!rules.consignment || typeof rules.consignment !== "object" || Array.isArray(rules.consignment)) throw new RequestValidationError("寄庫規則格式錯誤。");
@@ -133,7 +134,18 @@ function validateProcurementRules(value: unknown): Record<string, unknown> {
     if (!supplier || typeof supplier !== "object" || !String(supplier.name || "").trim()) throw new RequestValidationError("供應商名稱不可空白。");
     if (!["國內", "國外"].includes(String(supplier.country))) throw new RequestValidationError("供應商國別只能是國內或國外。");
     if (!Number.isFinite(Number(supplier.leadDays)) || Number(supplier.leadDays) < 0 || Number(supplier.leadDays) > 365) throw new RequestValidationError("平均採購週期必須介於0至365天。");
+    const reviewText = String(supplier.reviewDays ?? "").trim();
+    const reviewRange = reviewText.match(/^(\d+(?:\.\d+)?)\s*[-～~]\s*(\d+(?:\.\d+)?)$/);
+    const reviewValid = reviewRange
+      ? Number(reviewRange[1]) >= 0 && Number(reviewRange[2]) >= Number(reviewRange[1]) && Number(reviewRange[2]) <= 365
+      : Number.isFinite(Number(reviewText)) && Number(reviewText) >= 0 && Number(reviewText) <= 365;
+    if (!reviewValid) throw new RequestValidationError("檢視期須為0至365天，或有效區間（例如90-120）。");
   }
+  const supplierNames = new Set((rules.suppliers as Record<string, unknown>[]).map((supplier) => String(supplier.name || "").trim()));
+  const featuredSuppliers = (rules.featuredSuppliers as unknown[]).map((supplier) => String(supplier || "").trim());
+  if (featuredSuppliers.some((supplier) => !supplier || !supplierNames.has(supplier))) throw new RequestValidationError("主要供應商顯示名單只能選擇已建立的供應商。");
+  if (new Set(featuredSuppliers).size !== featuredSuppliers.length) throw new RequestValidationError("主要供應商顯示名單不可重複。");
+  rules.featuredSuppliers = featuredSuppliers;
   for (const unit of rules.purchaseUnits as Record<string, unknown>[]) {
     if (!String(unit.supplier || "").trim() || !String(unit.ruleName || "").trim()) throw new RequestValidationError("採購單位的供應商與規則名稱不可空白。");
     if (unit.quantity !== null && unit.quantity !== "" && (!Number.isInteger(Number(unit.quantity)) || Number(unit.quantity) < 1 || Number(unit.quantity) > 10000)) throw new RequestValidationError("箱入／採購單位須留白或填1至10000的整數。");

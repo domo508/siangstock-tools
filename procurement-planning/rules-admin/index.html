@@ -7,8 +7,8 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>採購規則管理｜翔仔居家</title>
   <link rel="stylesheet" href="../../cost-analysis/style.css">
-  <link rel="stylesheet" href="../style.css?v=20260914-rules-r1">
-  <link rel="stylesheet" href="style.css?v=20260914-rules-r1">
+  <link rel="stylesheet" href="../style.css?v=20260914-rules-r2">
+  <link rel="stylesheet" href="style.css?v=20260914-rules-r2">
 </head>
 <body>
   <main class="page-shell">
@@ -20,6 +20,18 @@
 
     <section class="panel" aria-labelledby="supplier-title">
       <div class="section-heading compact"><div><p class="eyebrow">含付款規則</p><h2 id="supplier-title">供應商規則</h2><p>國內依預計到貨日認列100%；國外下單30%、預計出貨70%。</p></div><button id="add-supplier" class="secondary-button" type="button">新增供應商</button></div>
+      <div id="supplier-display" class="featured-supplier-manager" aria-labelledby="supplier-display-title">
+        <div>
+          <h3 id="supplier-display-title">採購頁主要供應商</h3>
+          <p>加入此名單的供應商會直接顯示；未列入、新增後尚未列入或由資料臨時辨識到的供應商，都會自動歸入「其它」。</p>
+        </div>
+        <div class="featured-supplier-controls">
+          <label for="featured-supplier-select">選擇要直接顯示的供應商</label>
+          <select id="featured-supplier-select"></select>
+          <button id="add-featured-supplier" class="secondary-button" type="button">加入主要供應商</button>
+        </div>
+        <div id="featured-supplier-list" class="featured-supplier-list" aria-live="polite"></div>
+      </div>
       <div class="result-table-wrap"><table class="rules-table"><thead><tr><th>供應商</th><th>別名（逗號分隔）</th><th>國別</th><th>平均採購週期</th><th>檢視期</th><th>一般自動採購</th><th>排除原因</th><th></th></tr></thead><tbody id="supplier-rows"></tbody></table></div>
     </section>
 
@@ -56,6 +68,6 @@
     <section class="panel save-panel"><label class="wide-field">本次修改原因＊<input id="change-reason" type="text" maxlength="500" placeholder="例如：修正兩類商品的可售最低庫存"></label><button id="save-rules" class="primary-button" type="button" disabled>儲存全部採購規則</button><p id="save-status" class="main-status">尚未修改。</p></section>
     <footer><p>每次儲存都會建立新版本，保留修改人、時間與原因。</p></footer>
   </main>
-  <script src="admin.js?v=20260914-rules-r1"></script>
+  <script src="admin.js?v=20260914-rules-r2"></script>
 </body>
 </html>

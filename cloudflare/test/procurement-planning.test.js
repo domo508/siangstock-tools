@@ -192,6 +192,35 @@ describe("採購規劃核心鎖定公式", () => {
     expect(core.resolveSupplyProfile("歐必斯", rules, "熱銷")).toMatchObject({ reviewDays: 0, leadDays: 10, manualReview: true });
   });
 
+  it("預設供應商規則保留0903檢視期與後續確認的上林28天", () => {
+    expect(core.resolveSupplyProfile("潤泰羽絨", [], "熱銷")).toMatchObject({ reviewDays: 90, leadDays: 70 });
+    expect(core.resolveSupplyProfile("潤泰羽絨", [], "穩定")).toMatchObject({ reviewDays: 105, leadDays: 70 });
+    expect(core.resolveSupplyProfile("尚美", [], "穩定")).toMatchObject({ reviewDays: 60, leadDays: 7 });
+    expect(core.resolveSupplyProfile("昭元棉業", [], "熱銷")).toMatchObject({ reviewDays: 90, leadDays: 50 });
+    expect(core.resolveSupplyProfile("上林", [], "穩定")).toMatchObject({ reviewDays: 28, leadDays: 5 });
+    expect(core.resolveSupplyProfile("南通泰而逸纺织品有限公司", [], "熱銷")).toMatchObject({ reviewDays: 0, leadDays: 30, manualReview: true });
+  });
+
+  it("供應商選單保留五家主要供應商並把零建議與阻擋廠商列入其它", () => {
+    const analysis = {
+      suggestedRows: [{ supplier: "潤泰羽絨", suggestedPurchaseAmount: 6122 }],
+      rows: [
+        { supplier: "潤泰羽絨", externalPurchaseBlocked: false, manualSupplierReview: false },
+        { supplier: "泰能脊康", externalPurchaseBlocked: true, manualSupplierReview: false },
+        { supplier: "新供應商", externalPurchaseBlocked: false, manualSupplierReview: false }
+      ],
+      productExclusions: []
+    };
+    const catalog = core.supplierSelectionCatalog(analysis, core.SUPPLIER_RULES);
+    expect(catalog.primary.map((item) => item.name)).toEqual(["普優瑪寢具有限公司", "力榮", "上林", "潤泰羽絨", "泰能脊康"]);
+    expect(catalog.primary.find((item) => item.name === "泰能脊康")).toMatchObject({ suggestedCount: 0, reviewCount: 1 });
+    expect(catalog.other.some((item) => item.name === "家禾")).toBe(true);
+    expect(catalog.other.some((item) => item.name === "新供應商")).toBe(true);
+    const managed = core.supplierSelectionCatalog(analysis, core.SUPPLIER_RULES, ["家禾"]);
+    expect(managed.primary.map((item) => item.name)).toEqual(["家禾"]);
+    expect(managed.other.some((item) => item.name === "潤泰羽絨")).toBe(true);
+  });
+
   it("寄倉不足只產生寄庫缺口，不改向其他供應商", () => {
     expect(core.evaluateConsignmentSupply({ confirmedPurchaseQty: 10, currentConsignmentQty: 12, scheduledBeforeDueQty: 0 })).toEqual({
       currentGap: 0, gapAfterSchedule: 0, status: "現有寄倉可直接覆蓋"
@@ -372,6 +401,7 @@ describe("採購建議第二階段", () => {
   it("銷售需求排除取貨，保留銷貨、訂貨與退貨", () => {
     const sales = makeSales();
     expect(sales.records).toHaveLength(4);
+    expect(sales.takeRecords).toHaveLength(1);
     expect(sales.excluded["排除銷別：取貨"]).toBe(1);
     expect(sales.records.filter((row) => row.date.startsWith("2026")).reduce((sum, row) => sum + row.quantity, 0)).toBe(51);
   });
@@ -396,18 +426,96 @@ describe("採購建議第二階段", () => {
       abcClass: "A",
       purchaseTab: "天絲＋天絲棉",
       pendingQty: 5,
-      inventoryQty: 8,
+      inventoryQty: 6,
       supplyProfileKey: "puyouma",
       supplierLeadDays: 5,
       safetyBufferDays: 4,
       targetCoverageDays: 23,
       factoryTargetDays: 105
     });
+    expect(row.storeInventoryByCode.R00).toBe(2);
+    expect(row.tier).toBe("穩定");
+    expect(row.releaseRate).toBe(0.5);
+    expect(recommendations.appliedRules.releaseRates).toEqual({ "熱銷": 0.7, "穩定": 0.5, "低銷": 0 });
     expect(recommendations.checkpoint).toBe("month-start");
     expect(row.suggestedPurchaseQty).toBeGreaterThan(0);
     expect(row.suggestedConsignmentQty).toBeGreaterThan(0);
     expect(row.supplyStatus).toContain("缺貨警示");
     expect(recommendations.totals.suggestedPurchaseAmount).toBe(row.suggestedPurchaseQty * 500);
+  });
+
+  it("月初依70／50／0分批釋放，月中則依最新缺口完整重算", () => {
+    const source = {
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28"
+    };
+    const monthStart = core.buildProcurementRecommendations({ ...source, checkpoint: "month-start" }).rows.find((row) => row.sku === "A1");
+    const midMonth = core.buildProcurementRecommendations({ ...source, checkpoint: "mid-month" }).rows.find((row) => row.sku === "A1");
+    expect(monthStart.releaseRate).toBe(0.5);
+    expect(midMonth.releaseRate).toBe(1);
+    expect(midMonth.suggestedPurchaseQty).toBeGreaterThanOrEqual(monthStart.suggestedPurchaseQty);
+  });
+
+  it("貨品狀態空白仍顯示試算建議，但第一次回匯必須明確填量與原因", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "供應商貨號", "供應商簡稱", "進貨價", "最小配貨數", "貨品狀態", "已下架"],
+      ["A1", "60天絲測試床包", "V-A1", "普優瑪", 500, 1, "", "否"]
+    ]), "工作表1");
+    const master = core.parseProductMasterWorkbook(workbook, XLSX, { fileName: "商品主檔.xlsx" });
+    const recommendations = core.buildProcurementRecommendations({
+      master, inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", checkpoint: "month-start"
+    });
+    const row = recommendations.rows.find((item) => item.sku === "A1");
+    expect(row).toMatchObject({ productStatus: "", productStatusPendingReview: true, externalPurchaseBlocked: false });
+    expect(row.suggestedPurchaseQty).toBeGreaterThan(0);
+    expect(row.supplyStatus).toContain("已保留試算建議量");
+    expect(recommendations.suggestedRows.some((item) => item.sku === "A1")).toBe(true);
+    expect(recommendations.productExclusions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sku: "A1", type: "貨品狀態空白待人工確認" })
+    ]));
+
+    const output = core.buildRecommendationWorkbook(recommendations, XLSX);
+    const sheet = output.Sheets["03B1_普優瑪_天絲"];
+    const firstRow = XLSX.utils.sheet_to_json(sheet, { defval: "" })[0];
+    expect(firstRow).toMatchObject({ "貨品狀態": "空白（待人工確認）", "人工確認要求": "必須明確填寫採購量與原因" });
+    const baselineBySku = new Map(recommendations.rows.map((item) => [item.sku, item]));
+    const blockedReview = core.reviewReturnedWorkbook(output, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20", baselineBySku });
+    expect(blockedReview.errors.map((error) => error.message)).toEqual(expect.arrayContaining([
+      expect.stringContaining("必須明確填寫人工確認採購量"),
+      expect.stringContaining("人工調整原因必填")
+    ]));
+
+    const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })[0];
+    sheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("人工確認採購量") })] = { t: "n", v: row.suggestedPurchaseQty };
+    sheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("人工調整原因") })] = { t: "s", v: "貨品狀態空白，採購人工確認仍可追加" };
+    const confirmedReview = core.reviewReturnedWorkbook(output, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20", baselineBySku });
+    expect(confirmedReview.errors).toHaveLength(0);
+    expect(confirmedReview.rows[0]).toMatchObject({ productStatusPendingReview: true, finalQty: row.suggestedPurchaseQty });
+
+    const special = core.buildSpecialProcurementAnalysis({
+      baseAnalysis: recommendations, workflowType: "new_product", rows: [{ sku: "A1", firstMonthQty: 30, channels: "官網" }],
+      fileName: "新品.xlsx", master, inventory: makeInventory(), pendingReports: [makePending()], supplierRules: core.SUPPLIER_RULES
+    });
+    expect(special.rows[0]).toMatchObject({ productStatusPendingReview: true });
+    expect(special.rows[0].suggestedPurchaseQty).toBeGreaterThan(0);
+  });
+
+  it("通路營收倍率參與逐店需求，寬沐45%只另列管理參考", () => {
+    const recommendations = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", checkpoint: "month-start",
+      revenueChannels: [
+        { company: "寬沐", channel: "台北中山門市", amount: 100000 },
+        { company: "寬承", channel: "台中北屯門市", amount: 0 }
+      ]
+    });
+    const row = recommendations.rows.find((item) => item.sku === "A1");
+    expect(row.storeDemandByCode.R00).toBeGreaterThan(0);
+    expect(row.storeDailyByCode.R01).toBe(0);
+    expect(recommendations.totals.kuanMuManagementTargetAmount).toBe(45000);
+    expect(recommendations.appliedRules.kuanMuManagementTarget).toContain("不自動加進");
   });
 
   it("建議Excel依普優瑪三類分頁並保留人工確認空白欄", () => {
@@ -593,6 +701,8 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml.indexOf('id="source-title"')).toBeLessThan(toolHtml.indexOf('id="workflow-title"'));
     expect(toolHtml).toContain('id="budget-details"');
     expect(toolHtml).toContain('id="supplier-filter-list"');
+    expect(toolHtml).toContain('href="rules-admin/#supplier-display"');
+    expect(toolHtml).toContain("管理顯示供應商");
     expect(toolHtml).toContain("下載所選供應商Excel");
     expect(toolHtml).toContain('id="workflow-step-download"');
     expect(toolHtml).toContain('id="review-file-label" class="file-button is-disabled"');
@@ -623,6 +733,14 @@ describe("採購規劃前台與入口", () => {
     expect(toolCss).toMatch(/@media \(max-width: 620px\)[\s\S]*\.budget-grid \.budget-source-field \{ grid-column: auto; \}/);
     expect(toolCss).toContain(".workflow-grid .file-button.is-disabled");
     expect(toolCss).toContain(".supplier-filter-list");
+    const rulesAdminHtml = readFileSync("../procurement-planning/rules-admin/index.html", "utf8");
+    const rulesAdminApp = readFileSync("../procurement-planning/rules-admin/admin.js", "utf8");
+    expect(rulesAdminHtml).toContain('id="featured-supplier-list"');
+    expect(rulesAdminHtml).toContain("未列入、新增後尚未列入或由資料臨時辨識到的供應商");
+    expect(rulesAdminApp).toContain("featuredSuppliers");
+    const supplierMigration = readFileSync("worker/migrations/0009_restore_supplier_review_periods.sql", "utf8");
+    expect(supplierMigration).toContain("featuredSuppliers");
+    expect(supplierMigration).toContain('["普優瑪寢具有限公司","力榮","上林","潤泰羽絨","泰能脊康"]');
   });
 
   it("9月歷史接續資料固定為可追溯月份快照且不補寄舊通知", () => {
