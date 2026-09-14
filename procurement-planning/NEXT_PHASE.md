@@ -27,6 +27,7 @@
 - 2026-09-14季節模型自動化已部署至Cloudflare Worker版本`f66a04d2-1706-4110-ba68-eb322f1dc3c0`：Google授權後自動載入公司共用正式模型；管理前台可逐份處理歷史銷售、建立草稿、覆核發布與寄送摘要。部署前驗證為8個測試檔、113項測試全數通過，TypeScript與Wrangler正式打包均通過；近三年原始銷售檔仍保持唯讀且不移動、不改名、不修改。
 - 2026-09-14首次正式回測發現靜態站HTTP CSP仍設定`worker-src 'none'`，導致背景Worker在處理第一份歷史銷售前被瀏覽器阻擋，草稿資料夾未產生檔案。已只針對採購工具頁改為`worker-src 'self'`，並在`connect-src`補上Gmail摘要API；其它公司工具仍維持禁止背景Worker。另加入安全標頭回歸測試，避免前台meta設定與正式HTTP標頭再次分叉。
 - 2026-09-14本輪供應商與待人工確認規則已正式套用D1 migration `0009_restore_supplier_review_periods.sql`，Cloudflare Worker版本為`f05cb8b5-fb6a-486c-9575-7667483c3771`。貨品狀態空白會保留試算建議量，第一次回匯須填人工數量及原因；明確停產、下架、贈品、排除供應商與`(S)`仍維持硬性阻擋。部署前驗證為8個測試檔、123項測試、JavaScript語法、TypeScript、D1本機遷移及Wrangler正式打包全數通過。
+- 2026-09-15已以commit `39430a5`部署報表CIS與免密碼編輯、總部／門市系統需求與兩種可售至欄位、主要／其它供應商選擇管理，以及國外春節停工備貨規則；D1 migration `0010_foreign_supplier_spring_festival.sql`已正式套用，Cloudflare Worker版本為`f38a5a22-810d-4578-be6a-5332e494ab03`。部署前驗證為8個測試檔、126項測試、TypeScript、10支D1本機遷移及Wrangler正式打包全數通過；正式D1部署前備份已建立於本機暫存區。
 
 ## 一、審核、回匯與 ERP 正式單閉環
 
