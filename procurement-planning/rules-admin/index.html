@@ -57,7 +57,7 @@
     </section>
 
     <section id="store-inventory" class="panel" aria-labelledby="store-title">
-      <div class="section-heading compact"><div><p class="eyebrow">門市調撥階段套用</p><h2 id="store-title">門市庫存管理</h2><p>本頁先版本化保存；目前總部採購流程尚未直接使用門市展示／最低庫存量。</p></div><button id="add-store-rule" class="secondary-button" type="button">新增門市規則</button></div>
+      <div class="section-heading compact"><div><p class="eyebrow">門市調撥階段套用</p><h2 id="store-title">門市庫存管理</h2><p>門市週調撥會直接讀取此處最新版；每次變更均保留版本、修改人、時間與原因。</p></div><button id="add-store-rule" class="secondary-button" type="button">新增門市規則</button></div>
       <div class="result-alert"><strong>目前確認：</strong>獨立5尺商品與6×7尺雙人兩用被套皆為「不可售展示1」；展示試行門市為R00、R06。獨立3.5／6／7尺與天絲／華爾紗雙人薄被套則為可售最低庫存1。</div>
       <div class="result-table-wrap"><table class="rules-table"><thead><tr><th>啟用</th><th>規則名稱</th><th>適用門市</th><th>比對條件摘要</th><th>庫存角色</th><th>數量</th><th>優先序</th><th></th></tr></thead><tbody id="store-rows"></tbody></table></div>
       <label class="wide-field"><span>公司不作業日（每行一個 YYYY-MM-DD）</span><textarea id="workday-holidays" rows="6" placeholder="2026-09-25"></textarea><small>星期五遇表列日期會提前到前一工作日；星期一遇表列日期會順延到下一工作日。預設依行政院人事行政總處辦公日曆，可依公司實際營業日調整。</small></label>
