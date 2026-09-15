@@ -58,7 +58,7 @@
       <div id="calculation-results" class="calculation-results" hidden>
         <div class="section-heading compact"><div><h3>本週建議預覽</h3><p id="calculation-summary"></p></div><button id="publish-button" class="primary-button" type="button">建立門市確認批次</button></div>
         <section class="result-section"><h4>一般週補貨</h4><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>近42天現場銷售</th><th>B3銷售</th><th>目前庫存</th><th>目標／展示</th><th>系統建議</th><th>說明</th></tr></thead><tbody id="calculation-rows"></tbody></table></div></section>
-        <section id="activity-results" class="result-section activity-result-section" hidden><h4>活動／贈品調撥</h4><p>依行銷策略的活動期間、贈品貨號及近21天實際耗用估算；不會放大一般補貨量。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>贈品貨號</th><th>品名</th><th>活動期間</th><th>近21天耗用</th><th>目前庫存</th><th>系統建議</th><th>說明</th></tr></thead><tbody id="activity-rows"></tbody></table></div><p id="marketing-warnings" class="status-line"></p></section>
+        <section id="activity-results" class="result-section activity-result-section" hidden><h4>活動／贈品調撥</h4><p>依行銷策略的活動門檻、各店POS平均客單與實際達標率，再和近21天贈品耗用交叉判斷；不會放大一般補貨量。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>贈品貨號</th><th>品名</th><th>活動門檻／期間</th><th>平均客單</th><th>達標率</th><th>預估達標訂單</th><th>近21天耗用</th><th>目前庫存</th><th>系統建議</th><th>說明</th></tr></thead><tbody id="activity-rows"></tbody></table></div><p id="marketing-warnings" class="status-line"></p></section>
       </div>
     </section>
 
@@ -81,7 +81,7 @@
   <script src="../procurement-planning/core.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="../procurement-planning/google-sources.js?v=20260915-google-sources-r1"></script>
-  <script src="core.js?v=20260915-google-sources-r1"></script>
-  <script src="app.js?v=20260915-google-sources-r1"></script>
+  <script src="core.js?v=20260915-activity-threshold-r2"></script>
+  <script src="app.js?v=20260915-activity-threshold-r2"></script>
 </body>
 </html>

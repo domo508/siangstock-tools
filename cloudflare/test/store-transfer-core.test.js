@@ -63,6 +63,17 @@ describe("整體行銷策略與活動贈品", () => {
     expect(result.giftActivities[0].endDate).toBe("2026-09-30");
   });
 
+  it("會解析滿額門檻與不累贈規則", () => {
+    const workbook = {
+      SheetNames: ["門市銷售波段"],
+      Sheets: { "門市銷售波段": { rows: [["09/01-09/30 消費滿3,000元贈隨身鏡乙個（不累贈） 贈品貨號：N00144"]] } }
+    };
+    const activity = core.parseMarketingWorkbook(workbook, fakeXlsx, "2026-09-14").giftActivities[0];
+    expect(activity.thresholdType).toBe("amount");
+    expect(activity.thresholdValue).toBe(3000);
+    expect(activity.cumulative).toBe(false);
+  });
+
   it("活動贈品獨立估算，不會併入一般補貨", () => {
     const gift = { sku: "N00144", name: "聯名隨身鏡", size: "", style1: "贈品" };
     const result = core.buildSuggestions({
@@ -82,5 +93,25 @@ describe("整體行銷策略與活動贈品", () => {
     expect(result.activityRows).toHaveLength(1);
     expect(result.activityRows[0].itemType).toBe("activity_gift");
     expect(result.activityRows[0].suggestedQuantity).toBe(3);
+  });
+
+  it("以門市POS平均客單與實際達標率預估贈品", () => {
+    const sales = [4000, 3500, 2000, 1000].map((amount, index) => ({
+      warehouseCode: "R00", shipWarehouseCode: "R00", sku: `P${index}`, date: `2026-09-${String(10 + index).padStart(2, "0")}`,
+      transactionTimestamp: `2026-09-${String(10 + index).padStart(2, "0")}T10:00:00`, quantity: 1, deductQuantity: 1,
+      actualAmount: amount, posOrder: `POS${index}`, saleType: "銷貨"
+    }));
+    const result = core.buildSuggestions({
+      storeCodes: ["R00"],
+      master: { bySku: new Map([["N00144", { sku: "N00144", name: "聯名隨身鏡", style1: "贈品" }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "N00144", quantity: 10 }] },
+      transfer: { records: [] },
+      sales: [{ maxDate: "2026-09-14", records: sales, takeRecords: [] }],
+      marketing: { giftActivities: [{ startDate: "2026-09-01", endDate: "2026-09-30", giftSkus: ["N00144"], thresholdType: "amount", thresholdValue: 3000, giftQuantity: 1, cumulative: false, thresholdText: "滿3,000元" }], warnings: [] }
+    });
+    expect(result.activityRows[0].averageTicket).toBe(2625);
+    expect(result.activityRows[0].eligibleRate).toBe(.5);
+    expect(result.activityRows[0].forecastOrders).toBe(4);
+    expect(result.activityRows[0].suggestedQuantity).toBe(2);
   });
 });

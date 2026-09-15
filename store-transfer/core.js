@@ -131,7 +131,17 @@
             const giftSkus = [...segment.matchAll(/贈品(?:貨號|品號)\s*[：:]\s*([A-Z0-9-]+)/gi)].map((item) => item[1].toUpperCase());
             const isGift = /贈|滿額禮|滿件禮|加價購/.test(segment) || giftSkus.length > 0;
             if (!isGift) return;
-            activities.push({ sheetName, section, startDate: start, endDate: end, description: segment.slice(0, 420), giftSkus: [...new Set(giftSkus)] });
+            const amountMatch = segment.match(/(?:消費)?滿\s*(?:NT\$|\$)?\s*([\d,]+)\s*元?/i);
+            const pieceMatch = amountMatch ? null : segment.match(/(?:滿|任選|購買)[^\d]{0,16}(\d+)\s*(?:件|組)/);
+            const giftQuantityMatch = segment.match(/贈(?:送)?[^，。；]{0,24}?(\d+)\s*(?:件|個|組)/);
+            const thresholdType = amountMatch ? "amount" : (pieceMatch ? "quantity" : "manual");
+            const thresholdValue = Number(String(amountMatch?.[1] || pieceMatch?.[1] || "0").replace(/,/g, ""));
+            const cumulative = !/不累贈|每(?:筆|單)[^，。；]{0,16}(?:限|最多)[^，。；]{0,8}(?:1|一|乙)(?:件|個|組)/.test(segment);
+            activities.push({
+              sheetName, section, startDate: start, endDate: end, description: segment.slice(0, 420), giftSkus: [...new Set(giftSkus)],
+              thresholdType, thresholdValue, giftQuantity: Math.max(1, Number(giftQuantityMatch?.[1] || 1)), cumulative,
+              thresholdText: amountMatch ? `滿${thresholdValue.toLocaleString("zh-TW")}元` : (pieceMatch ? `滿${thresholdValue}件` : "門檻需人工確認")
+            });
           });
         }
       });
@@ -145,8 +155,61 @@
     return {
       activities: unique,
       giftActivities: unique.filter((activity) => activity.giftSkus.length),
-      warnings: unique.filter((activity) => !activity.giftSkus.length).map((activity) => `${activity.startDate}～${activity.endDate}活動未標示贈品貨號，需人工確認。`)
+      warnings: unique.flatMap((activity) => [
+        ...(!activity.giftSkus.length ? [`${activity.startDate}～${activity.endDate}活動未標示贈品貨號，需人工確認。`] : []),
+        ...(activity.giftSkus.length && activity.thresholdType === "manual" ? [`${activity.startDate}～${activity.endDate}贈品活動未辨識到滿額或滿件門檻，先依實際耗用估算並保留人工確認。`] : [])
+      ])
     };
+  }
+
+  function buildStoreOrderStats(sales, stores, latest) {
+    const orders = new Map();
+    const seenLines = new Set();
+    for (const row of sales) {
+      if (!stores.includes(row.warehouseCode) || row.shipWarehouseCode !== row.warehouseCode) continue;
+      const age = daysBetween(row.date, latest);
+      if (age < 0 || age >= 42) continue;
+      const orderId = String(row.posOrder || row.sourceOrder || "").trim();
+      if (!orderId) continue;
+      const lineKey = [row.warehouseCode, orderId, row.transactionTimestamp || row.date, row.sku, row.quantity, row.actualAmount].join("|");
+      if (seenLines.has(lineKey)) continue;
+      seenLines.add(lineKey);
+      const key = `${row.warehouseCode}|${orderId}`;
+      const order = orders.get(key) || { storeCode: row.warehouseCode, orderId, date: row.date, amount: 0, quantity: 0 };
+      order.amount += Number(row.actualAmount || 0);
+      order.quantity += Number(row.quantity || 0);
+      if (row.date > order.date) order.date = row.date;
+      orders.set(key, order);
+    }
+    const result = new Map();
+    for (const storeCode of stores) {
+      const storeOrders = [...orders.values()].filter((order) => order.storeCode === storeCode && order.amount > 0);
+      const recent21 = storeOrders.filter((order) => daysBetween(order.date, latest) < 21);
+      result.set(storeCode, {
+        orders42: storeOrders,
+        orderCount42: storeOrders.length,
+        orderCount21: recent21.length,
+        averageTicket: storeOrders.length ? storeOrders.reduce((sum, order) => sum + order.amount, 0) / storeOrders.length : null,
+        dailyOrders: recent21.length / 21
+      });
+    }
+    return result;
+  }
+
+  function forecastQualifiedGifts(activity, stats, coverageDays) {
+    if (!stats || !stats.orderCount42 || !activity.thresholdValue || !["amount", "quantity"].includes(activity.thresholdType)) {
+      return { status: "manual", eligibleRate: null, forecastOrders: null, forecastGifts: null };
+    }
+    const units = stats.orders42.map((order) => {
+      const base = activity.thresholdType === "amount" ? order.amount : Math.max(0, order.quantity);
+      if (base < activity.thresholdValue) return 0;
+      return (activity.cumulative ? Math.floor(base / activity.thresholdValue) : 1) * activity.giftQuantity;
+    });
+    const eligibleOrders = units.filter((value) => value > 0).length;
+    const eligibleRate = eligibleOrders / stats.orderCount42;
+    const giftsPerOrder = units.reduce((sum, value) => sum + value, 0) / stats.orderCount42;
+    const forecastOrders = Math.ceil(stats.dailyOrders * coverageDays);
+    return { status: "calculated", eligibleRate, forecastOrders, forecastGifts: Math.ceil(forecastOrders * giftsPerOrder) };
   }
 
   function buildSuggestions(input) {
@@ -215,6 +278,7 @@
     }
     const regularBySku = new Map();
     result.forEach((row) => regularBySku.set(row.sku, (regularBySku.get(row.sku) || 0) + row.suggestedQuantity));
+    const storeOrderStats = buildStoreOrderStats(sales, stores, latest);
     const activityRows = [];
     const activityKeys = new Set();
     for (const activity of input.marketing?.giftActivities || []) {
@@ -231,29 +295,40 @@
             return age >= 0 && age < 21 ? sum + Math.max(0, Number(row.deductQuantity || row.quantity || 0)) : sum;
           }, 0);
           const current = Math.max(0, (inventory.get(key) || 0) + (pendingInbound.get(key) || 0));
-          const target = recentUsage > 0 ? Math.ceil(recentUsage / 21 * coverageDays) : 0;
-          return { storeCode, current, recentUsage, rawNeed: Math.max(0, target - current), target };
+          const usageForecast = recentUsage > 0 ? Math.ceil(recentUsage / 21 * coverageDays) : 0;
+          const stats = storeOrderStats.get(storeCode);
+          const qualification = forecastQualifiedGifts(activity, stats, coverageDays);
+          const thresholdForecast = qualification.forecastGifts || 0;
+          const target = qualification.status === "calculated" ? Math.max(usageForecast, thresholdForecast) : usageForecast;
+          return { storeCode, current, recentUsage, rawNeed: Math.max(0, target - current), target, usageForecast, qualification, stats };
         });
         const totalNeed = candidates.reduce((sum, row) => sum + row.rawNeed, 0);
-        const weights = Object.fromEntries(candidates.map((row) => [row.storeCode, row.recentUsage || 1]));
+        const openCandidates = candidates.filter((row) => row.rawNeed > 0);
+        const weights = Object.fromEntries(openCandidates.map((row) => [row.storeCode, row.target || row.recentUsage || 1]));
         const allocated = hqAvailable >= totalNeed
           ? Object.fromEntries(candidates.map((row) => [row.storeCode, row.rawNeed]))
-          : allocateQuantity(hqAvailable, weights, stores);
+          : allocateQuantity(hqAvailable, weights, openCandidates.map((row) => row.storeCode));
         for (const candidate of candidates) {
           const key = `${candidate.storeCode}|${sku}`;
           if (activityKeys.has(key)) continue;
           activityKeys.add(key);
           const suggested = Math.min(candidate.rawNeed, allocated[candidate.storeCode] || 0);
-          const note = candidate.recentUsage > 0
-            ? `近21天實際贈品耗用${candidate.recentUsage}件，依活動剩餘${coverageDays}天估算`
-            : "近21天無可辨識贈品耗用，請人工確認活動門檻與預估量";
+          const qualificationText = candidate.qualification.status === "calculated"
+            ? `${activity.thresholdText}${activity.cumulative ? "、可累贈" : "、不累贈"}；平均客單${Math.round(candidate.stats.averageTicket).toLocaleString("zh-TW")}元；近42天達標率${(candidate.qualification.eligibleRate * 100).toFixed(1)}%；預估${candidate.qualification.forecastOrders}筆訂單／${candidate.qualification.forecastGifts}件贈品`
+            : `${activity.thresholdText}；訂單門檻資料不足`;
+          const usageText = candidate.recentUsage > 0
+            ? `近21天實際耗用${candidate.recentUsage}件／同期間推估${candidate.usageForecast}件`
+            : "近21天無可辨識贈品耗用";
           activityRows.push({
             storeCode: candidate.storeCode, sku, productName: master?.name || `活動贈品 ${sku}`,
             localSales42: candidate.recentUsage, b3Sales42: 0, currentInventory: candidate.current,
             tier: "活動／贈品", targetQuantity: candidate.target, displayQuantity: 0, rawNeed: candidate.rawNeed,
             suggestedQuantity: suggested, hqAvailable, itemType: "activity_gift",
             activityPeriod: `${activity.startDate}～${activity.endDate}`,
-            ruleSummary: `活動／贈品；${activity.startDate}～${activity.endDate}；${note}${hqAvailable < totalNeed ? "；總倉不足依耗用比例分配" : ""}`
+            averageTicket: candidate.stats.averageTicket, eligibleRate: candidate.qualification.eligibleRate,
+            forecastOrders: candidate.qualification.forecastOrders, forecastGiftQuantity: candidate.qualification.forecastGifts,
+            thresholdText: activity.thresholdText, cumulative: activity.cumulative,
+            ruleSummary: `活動／贈品；${activity.startDate}～${activity.endDate}；${qualificationText}；${usageText}；取兩種估算較高值${candidate.target}件${candidate.qualification.status === "manual" ? "，需人工確認" : ""}${hqAvailable < totalNeed ? "；總倉不足依需求比例分配" : ""}`
           });
         }
       }
