@@ -1,0 +1,36 @@
+:root { --transfer-blue: #174b72; --transfer-gold: #a47b16; --transfer-soft: #f5f8fa; }
+.compact-hero { padding-bottom: 2.5rem; }
+.compact-hero h1 { max-width: 13em; font-size: clamp(2.15rem, 4vw, 3.7rem); }
+.panel { margin-top: 1.5rem; }
+.period-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+.period-grid label { display: grid; gap: .5rem; font-weight: 700; color: #233d52; }
+.period-grid input { min-height: 46px; padding: .7rem .85rem; border: 1px solid #c9d8e2; border-radius: 10px; font: inherit; }
+.store-picker { padding: 1rem 1.1rem; border-radius: 14px; background: #f8f4e9; border: 1px solid #e7d9b3; }
+.store-picker h3 { margin: 0 0 .8rem; }
+.store-options { display: flex; flex-wrap: wrap; gap: .65rem 1.1rem; }
+.store-options label { display: flex; align-items: center; gap: .45rem; font-weight: 700; }
+.transfer-sources { margin-top: 1.25rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.action-row { display: flex; align-items: center; gap: 1rem; margin-top: 1.25rem; }
+.primary-button { border: 0; border-radius: 12px; padding: .9rem 1.25rem; color: #fff; background: var(--transfer-blue); font: inherit; font-weight: 800; cursor: pointer; }
+.primary-button:disabled { opacity: .45; cursor: not-allowed; }
+.status-line { color: #60788b; }
+.batch-list { display: grid; gap: .8rem; }
+.batch-card { display: grid; grid-template-columns: 1fr auto; gap: .65rem 1rem; padding: 1rem 1.1rem; border: 1px solid #d8e2e8; border-radius: 14px; background: #fff; }
+.batch-card h3, .batch-card p { margin: 0; }
+.batch-meta { color: #647b8d; }
+.batch-status { align-self: start; padding: .35rem .65rem; border-radius: 999px; background: #eaf2f7; color: #174b72; font-weight: 800; }
+.empty-state { padding: 1rem; color: #718494; background: var(--transfer-soft); border-radius: 12px; }
+.calculation-results { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid #dce4e9; }
+.result-table-wrap { overflow: auto; }
+.transfer-table { width: 100%; min-width: 980px; border-collapse: collapse; font-size: .9rem; }
+.transfer-table th, .transfer-table td { padding: .65rem; border-bottom: 1px solid #dfe7ec; text-align: left; vertical-align: top; }
+.transfer-table th { position: sticky; top: 0; background: #eef4f7; color: #23445c; }
+.transfer-table input { width: 90px; padding: .45rem; border: 1px solid #bfcfd9; border-radius: 8px; font: inherit; }
+.transfer-table input.reason-input { width: 220px; }
+.batch-card button { justify-self: end; }
+.batch-dialog { width: min(1180px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); padding: 1.4rem; border: 0; border-radius: 18px; box-shadow: 0 22px 70px rgba(15, 42, 61, .28); }
+.batch-dialog::backdrop { background: rgba(13, 35, 50, .5); }
+.dialog-close { float: right; border: 0; background: transparent; font-size: 2rem; cursor: pointer; }
+.detail-actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1rem; }
+.secondary-button.compact { padding: .55rem .8rem; }
+@media (max-width: 760px) { .period-grid, .transfer-sources { grid-template-columns: 1fr; } .batch-card { grid-template-columns: 1fr; } .action-row { align-items: stretch; flex-direction: column; } }

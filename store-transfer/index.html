@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="description" content="翔仔居家門市週補貨與調撥工具">
+  <title>門市週補貨與調撥｜翔仔居家</title>
+  <link rel="stylesheet" href="../site.css">
+  <link rel="stylesheet" href="../cost-analysis/style.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="回到公司工具首頁"><span class="brand-mark" aria-hidden="true">調</span><span>翔仔居家・門市週補貨與調撥</span></a>
+      <span id="account-badge" class="privacy-badge">正在確認公司帳號…</span>
+    </header>
+
+    <nav class="breadcrumb" aria-label="頁面導覽"><ol><li><a href="/">公司工具首頁</a></li><li aria-current="page">門市週補貨與調撥</li></ol><a class="back-link" href="/">← 返回公司工具首頁</a></nav>
+
+    <section class="hero compact-hero" aria-labelledby="page-title">
+      <div><p class="eyebrow">WEEKLY STORE REPLENISHMENT</p><h1 id="page-title">總部算一次，<br>各門市只確認自己的量。</h1><p class="hero-description">星期五由總部建立六間門市建議；門市於星期一回覆，總部核准後依門市分開產生 ERP 調撥檔。</p></div>
+      <aside class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>原始 Excel 不會上傳</strong><p>庫存與銷售只在瀏覽器運算；雲端只保存每週必要的品號、建議量、確認量與狀態，12個月後刪除。</p></div></aside>
+    </section>
+
+    <section class="steps" aria-label="使用步驟">
+      <div><span>1</span><strong>總部建立建議</strong><small>匯入最新資料，確認本週門市與作業期限。</small></div>
+      <div><span>2</span><strong>門市線上確認</strong><small>各門市只看自己的品項，可暫存並於期限前送出。</small></div>
+      <div><span>3</span><strong>總部核准轉ERP</strong><small>逐店覆核後，拆成每間門市一份ERP檔。</small></div>
+    </section>
+
+    <section id="hq-panel" class="panel" hidden aria-labelledby="hq-title">
+      <div class="section-heading"><div><p class="eyebrow">總部工作台</p><h2 id="hq-title">建立本週調撥建議</h2></div><p>星期五遇假日會提前；星期一遇假日，回覆期限順延至下一個工作日。</p></div>
+      <div class="period-grid">
+        <label><span>本週週次</span><input id="week-key" type="week" required></label>
+        <label><span>建議產生日</span><input id="proposal-date" type="date" required></label>
+        <label><span>門市回覆鎖定時間</span><input id="lock-at" type="datetime-local" required></label>
+      </div>
+      <div class="store-picker" aria-labelledby="store-picker-title"><h3 id="store-picker-title">本週產生門市</h3><div id="store-options" class="store-options"></div></div>
+      <div class="upload-grid transfer-sources">
+        <article class="upload-card"><h3>商品主檔</h3><p>辨識分類、尺寸、S品與成本。</p><label class="file-button">選擇商品主檔<input id="master-file" type="file" accept=".xlsx,.xls"></label><p class="file-name" data-for="master-file">尚未選擇</p></article>
+        <article class="upload-card"><h3>最新公司庫存</h3><p>使用含總倉與各門市庫存的完整檔。</p><label class="file-button">選擇最新庫存<input id="inventory-file" type="file" accept=".xlsx,.xls"></label><p class="file-name" data-for="inventory-file">尚未選擇</p></article>
+        <article class="upload-card"><h3>近12週銷售</h3><p>可多選；計算門市現場淨銷售、B3與14／42／84天消耗。</p><label class="file-button">選擇銷售明細<input id="sales-files" type="file" accept=".xlsx,.xls" multiple></label><p class="file-name" data-for="sales-files">尚未選擇</p></article>
+        <article class="upload-card"><h3>期間調撥單</h3><p>提交、發貨審核與未收貨數量都會先占用庫存。</p><label class="file-button">選擇期間調撥單<input id="transfer-file" type="file" accept=".xlsx,.xls"></label><p class="file-name" data-for="transfer-file">尚未選擇</p></article>
+      </div>
+      <div class="action-row"><button id="calculate-button" class="primary-button" type="button" disabled>產生本週調撥建議</button><p id="hq-status" class="status-line">請先選妥四類資料。</p></div>
+      <div id="calculation-results" class="calculation-results" hidden>
+        <div class="section-heading compact"><div><h3>本週建議預覽</h3><p id="calculation-summary"></p></div><button id="publish-button" class="primary-button" type="button">建立門市確認批次</button></div>
+        <div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>近42天現場銷售</th><th>B3銷售</th><th>目前庫存</th><th>目標／展示</th><th>系統建議</th><th>說明</th></tr></thead><tbody id="calculation-rows"></tbody></table></div>
+      </div>
+    </section>
+
+    <section id="store-panel" class="panel" hidden aria-labelledby="store-title">
+      <div class="section-heading"><div><p class="eyebrow">門市確認區</p><h2 id="store-title">本週待確認調撥</h2></div><p id="store-identity"></p></div>
+      <div id="store-batches" class="batch-list"><p class="empty-state">正在讀取本週資料…</p></div>
+    </section>
+
+    <section class="panel" aria-labelledby="history-title">
+      <div class="section-heading"><div><p class="eyebrow">每週進度</p><h2 id="history-title">批次與門市回覆狀態</h2></div><button id="refresh-button" class="secondary-button" type="button" disabled>重新整理</button></div>
+      <div id="batch-list" class="batch-list"><p class="empty-state">完成公司帳號驗證後顯示。</p></div>
+    </section>
+
+    <dialog id="batch-dialog" class="batch-dialog"><form method="dialog"><button class="dialog-close" aria-label="關閉">×</button></form><div id="batch-detail"></div></dialog>
+
+    <footer><p>翔仔居家公司工具・門市週補貨與調撥</p><p>如畫面顯示資料或權限異常，請保留訊息並通知總部。</p></footer>
+  </main>
+  <script src="../procurement-planning/assets/xlsx-js-style.bundle.js"></script>
+  <script src="../procurement-planning/xlsx-style-runtime.js"></script>
+  <script src="../procurement-planning/core.js"></script>
+  <script src="core.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
