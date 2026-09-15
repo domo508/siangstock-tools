@@ -48,6 +48,17 @@ function makePending() {
   return core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: "未到貨採購單.xlsx" });
 }
 
+function makeTransfer() {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    ["單據編碼", "狀態", "調出倉庫名", "調入倉庫名", "貨號", "品名", "數量", "開單日期", "發貨日期", "收貨日期"],
+    ["AT1", "提交", "寬承總倉", "翔仔居家-台北中山門市", "A1", "60天絲測試床包", 2, "2026/8/27", "", ""],
+    ["AT2", "發貨審核", "寬承總倉", "翔仔居家-台中北屯門市", "A1", "60天絲測試床包", 3, "2026/8/26", "2026/8/27", ""],
+    ["AT3", "收貨審核", "寬承總倉", "翔仔居家-新竹東區門市", "A1", "60天絲測試床包", 4, "2026/8/25", "2026/8/26", "2026/8/28"]
+  ]), "工作表1");
+  return core.parseTransferWorkbook(workbook, XLSX, { fileName: "期間調撥單.xlsx" });
+}
+
 function makeConsignment() {
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.aoa_to_sheet([
@@ -275,7 +286,7 @@ describe("採購規劃核心鎖定公式", () => {
   });
 });
 
-describe("四來源匯入與品號串接", () => {
+describe("五來源匯入與品號串接", () => {
   it("解析商品主檔、清理後庫存與標準採購單", () => {
     const master = makeMaster();
     const inventory = makeInventory();
@@ -288,6 +299,21 @@ describe("四來源匯入與品號串接", () => {
     expect(inventory.bySku.get("A1").inventoryCost).toBe(4000);
     expect(pending.records[0]).toMatchObject({ sku: "A1", quantity: 5, amount: 2500 });
     expect(pending.metadata).toMatchObject({ documentCode: "PR1", purchaseDate: "2026-08-24", deliveryDate: "2026-08-28" });
+  });
+
+  it("解析期間調撥單並依庫存截止日還原提交、發貨與收貨狀態", () => {
+    const report = makeTransfer();
+    expect(report.records).toHaveLength(3);
+    expect(report.records[0]).toMatchObject({ sourceWarehouseCode: "T00", destinationWarehouseCode: "R00", quantity: 2 });
+    const onAugust27 = core.aggregateTransferReports([report], { asOfDate: "2026-08-27" });
+    expect(onAugust27).toMatchObject({ activeDocumentCount: 3, submittedQty: 2, shippedQty: 7 });
+    expect(onAugust27.adjustmentBySkuWarehouse.get("A1\tT00")).toBe(-2);
+    expect(onAugust27.adjustmentBySkuWarehouse.get("A1\tR00")).toBe(2);
+    expect(onAugust27.adjustmentBySkuWarehouse.get("A1\tR01")).toBe(3);
+    expect(onAugust27.adjustmentBySkuWarehouse.get("A1\tR03")).toBe(4);
+    const onAugust28 = core.aggregateTransferReports([report], { asOfDate: "2026-08-28" });
+    expect(onAugust28).toMatchObject({ activeDocumentCount: 2, submittedQty: 2, shippedQty: 3 });
+    expect(onAugust28.adjustmentBySkuWarehouse.has("A1\tR03")).toBe(false);
   });
 
   it("辨識粉紅底未完成量、套用A42359-A正確列並固定排除A43359-A", () => {
@@ -350,10 +376,29 @@ describe("四來源匯入與品號串接", () => {
   it("同時點相差14天內才通過日期檢核", () => {
     expect(core.validateSourceDates({ inventory: "2026-08-20", pending: "2026-08-24", consignment: "2026-08-21" })).toMatchObject({ status: "PASS", gapDays: 4 });
     expect(core.validateSourceDates({ inventory: "", pending: "2026-08-24", consignment: "" }).status).toBe("REVIEW");
+    const analysis = core.buildAnalysis({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], transferReports: [makeTransfer()],
+      consignment: makeConsignment(), blacklist: [],
+      dates: { inventory: "2026-08-28", pending: "2026-08-28", transfer: "2026-08-25", consignment: "2026-08-28", sales: "2026-08-28" }
+    });
+    expect(analysis.dateCheck).toMatchObject({ status: "REVIEW", transferGapDays: 3 });
+    expect(analysis.dateCheck.message).toContain("同日或相差1天內");
   });
 });
 
 describe("採購建議第二階段", () => {
+  it("採購建議使用調撥後的總倉與逐店庫存，並揭露提交與發貨在途量", () => {
+    const recommendations = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], transferReports: [makeTransfer()],
+      inventoryDate: "2026-08-28", consignment: makeConsignment(), salesReports: [makeSales()], model: makeForecastModel(),
+      blacklist: [], asOfDate: "2026-08-28", checkpoint: "mid-month"
+    });
+    const row = recommendations.rows.find((item) => item.sku === "A1");
+    expect(row).toMatchObject({ inventoryQty: 4, transferSubmittedQty: 2, transferInTransitQty: 3 });
+    expect(row.storeInventoryByCode).toMatchObject({ R00: 4, R01: 3 });
+    expect(recommendations.totals).toMatchObject({ activeTransferDocumentCount: 2, transferSubmittedQty: 2, transferInTransitQty: 3 });
+  });
+
   it("人工匯入採購單保留草稿量並共用兩次回匯欄位", () => {
     const base = core.buildProcurementRecommendations({
       master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
@@ -601,7 +646,7 @@ describe("採購建議第二階段", () => {
     expect(rules.some((row) => row[0] === "力榮採購與寄庫" && String(row[1]).includes("每品號0或10的倍數"))).toBe(true);
     expect(rules.some((row) => row[0] === "上林檢視期" && String(row[1]).includes("固定28天"))).toBe(true);
     const summary = XLSX.utils.sheet_to_json(output.Sheets["01_採購摘要"], { header: 1, defval: "" });
-    expect(summary.some((row) => row[0] === "四來源日期檢核" && row[1] === "未提供")).toBe(true);
+    expect(summary.some((row) => row[0] === "五來源日期檢核" && row[1] === "未提供")).toBe(true);
     expect(summary.some((row) => row[0] === "使用限制" && String(row[1]).includes("不可直接下單"))).toBe(true);
   });
 

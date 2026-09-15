@@ -82,15 +82,16 @@
     <section class="panel stage-panel stage-two" aria-labelledby="source-title">
       <div class="section-heading">
         <div><p class="eyebrow"><span class="stage-number" aria-hidden="true">2</span> 本次資料・採購建議</p><h2 id="source-title">取得最新資料並產生採購建議</h2></div>
-        <p>固定 Google 來源須先用公司帳號授權；銷售、庫存與未到貨仍由人員選檔。</p>
+        <p>固定 Google 來源須先用公司帳號授權；銷售、庫存、未到貨與期間調撥單仍由人員選檔。</p>
       </div>
 
       <div class="period-grid procurement-period source-dates" aria-label="資料截止日設定">
         <label><span>庫存截止日＊</span><input id="inventory-date" type="date" required></label>
         <label><span>未到貨清單截止日＊</span><input id="pending-date" type="date" required></label>
+        <label><span>期間調撥單截止日＊</span><input id="transfer-date" type="date" required></label>
         <label><span>寄庫表截止日＊</span><input id="consignment-date" type="date" required></label>
         <label><span>銷售資料截止日＊</span><input id="sales-date" type="date" required></label>
-        <p>庫存、未到貨、寄庫與銷售四個截止日相差14天內才會通過同時點檢核；超過時仍可檢查品號，但不應直接採用實際淨需求。</p>
+        <p>五個來源的截止日須相差14天內；期間調撥單與庫存請使用同日資料（最多相差1天），工具再依庫存截止日還原狀態，避免重複扣減或漏算在途庫存。</p>
       </div>
 
       <div class="fixed-source-control" aria-labelledby="fixed-source-control-title">
@@ -174,7 +175,7 @@
             <div>
               <p class="eyebrow">每次執行</p>
               <h3 id="manual-source-title">本次必要匯入</h3>
-              <p>庫存、未到貨採購單與近期銷售集中在此區；三類檔案都要選妥，才會開放產生採購建議。</p>
+              <p>庫存、未到貨採購單、期間調撥單與近期銷售集中在此區；四類檔案都要選妥，才會開放產生採購建議。</p>
             </div>
           </div>
           <div class="upload-grid procurement-sources manual-source-grid">
@@ -190,6 +191,13 @@
               <p class="upload-help">每次重新匯入完整清單；不要沿用上次未到貨資料。</p>
               <label class="file-button">選擇未到貨採購單<input id="pending-files" type="file" accept=".xlsx,.xls,.csv" multiple></label>
               <p id="pending-files-name" class="file-name">尚未選擇</p>
+            </article>
+
+            <article class="upload-card" data-source="transfer">
+              <div class="upload-card-header"><h3>期間調撥單</h3><span class="source-badge required">必要</span></div>
+              <p class="upload-help">匯入ERP調撥明細完整清單；提交、發貨審核與收貨審核會依庫存截止日還原庫存位置。</p>
+              <label class="file-button">選擇期間調撥單<input id="transfer-file" type="file" accept=".xlsx,.xls"></label>
+              <p id="transfer-file-name" class="file-name">尚未選擇</p>
             </article>
 
             <article class="upload-card" data-source="sales">
@@ -236,7 +244,7 @@
 
       <div class="locked-formula" role="note">
         <strong>核心公式已鎖定</strong>
-        <p>淨採購需求＝MAX（預估未來出貨需求＋安全庫存－總倉可用庫存－已採購未到貨，0）</p>
+        <p>淨採購需求＝MAX（預估未來出貨需求＋安全庫存－調撥後總倉可用庫存－已採購未到貨，0）</p>
         <small>工廠寄倉可拉貨量不在這個扣除公式中；寄倉只用於後續供貨與缺貨警示。</small>
       </div>
 
@@ -311,11 +319,11 @@
       </details>
       <div class="result-table-wrap">
         <table class="procurement-table">
-          <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>狀態</th><th>供應交期類型</th><th>到貨天數</th><th>目標覆蓋天數</th><th>近6週</th><th>近12週</th><th>日需求</th><th>可用庫存</th><th>未到貨</th><th>建議採購量</th><th>建議金額</th><th>春節加量</th><th>春節增加金額</th><th>寄倉現貨</th><th>建議寄庫</th><th>供貨狀態</th></tr></thead>
+          <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>狀態</th><th>供應交期類型</th><th>到貨天數</th><th>目標覆蓋天數</th><th>近6週</th><th>近12週</th><th>日需求</th><th>調撥後可用庫存</th><th>未到貨</th><th>調撥提交中</th><th>發貨在途</th><th>建議採購量</th><th>建議金額</th><th>春節加量</th><th>春節增加金額</th><th>寄倉現貨</th><th>建議寄庫</th><th>供貨狀態</th></tr></thead>
           <tbody id="result-rows"></tbody>
         </table>
       </div>
-      <p class="result-note">淨採購需求＝總部需求＋逐店扣除各店現有庫存後的門市需求－總部可用庫存－未到貨採購；工廠寄倉不會被扣除。月初依熱銷70%、穩定50%、低銷0%分批釋放，月中與月底依最新缺口重算。國外供應商跨入年度春節停工期時，額外備貨不再套用月初折減，並於「春節加量／增加金額」分開揭露。</p>
+      <p class="result-note">淨採購需求＝總部需求＋逐店扣除調撥後門市庫存的需求－調撥後總部可用庫存－未到貨採購。提交狀態保留調出量並預計入調入倉；發貨審核只補回調入倉在途量；收貨審核不重複調整。工廠寄倉不會被扣除。</p>
     </section>
 
     <section class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
@@ -379,9 +387,9 @@
   <script src="xlsx-style-runtime.js?v=20260915-reader-fix-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260915-erp-flow-r1"></script>
+  <script src="core.js?v=20260915-transfer-r1"></script>
   <script src="seasonal-model.js?v=20260914-seasonal-wape-r2"></script>
   <script src="google-sources.js?v=20260914-seasonal-auto-r1"></script>
-  <script src="app.js?v=20260915-erp-flow-r1"></script>
+  <script src="app.js?v=20260915-transfer-r1"></script>
 </body>
 </html>

@@ -7,7 +7,7 @@
   const MODEL_CACHE = Object.freeze({ database: "siangstock-procurement-local", store: "files", key: "seasonal-model", refreshMonths: 6 });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
   const state = {
-    config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [],
+    config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
     salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, firstReview: null,
     secondReviewFile: null, review: null, ledger: null, monthPlan: null, procurementRules: null, revenueChannels: [], budgetDirty: false, sourceMetadata: null, modelMetadata: null, batchId: "", approved: false, erpDownloaded: false,
@@ -22,10 +22,10 @@
     accountBadge: get("#account-badge"), googleConnect: get("#google-connect-button"), autoSource: get("#auto-source-button"), autoSourceLabel: get("#auto-source-label"),
     autoSourceProgress: get("#auto-source-progress"), sourceStatus: get("#source-status"),
     month: get("#analysis-month"), checkpoint: get("#checkpoint"), orderDate: get("#order-date"), inventoryDate: get("#inventory-date"),
-    pendingDate: get("#pending-date"), consignmentDate: get("#consignment-date"), salesDate: get("#sales-date"),
-    masterFile: get("#master-file"), inventoryFile: get("#inventory-file"), pendingFiles: get("#pending-files"), consignmentFile: get("#consignment-file"),
+    pendingDate: get("#pending-date"), transferDate: get("#transfer-date"), consignmentDate: get("#consignment-date"), salesDate: get("#sales-date"),
+    masterFile: get("#master-file"), inventoryFile: get("#inventory-file"), pendingFiles: get("#pending-files"), transferFile: get("#transfer-file"), consignmentFile: get("#consignment-file"),
     lirongConsignmentFile: get("#lirong-consignment-file"), salesFiles: get("#sales-files"), modelFile: get("#model-file"), marketingFile: get("#marketing-file"),
-    masterFileName: get("#master-file-name"), inventoryFileName: get("#inventory-file-name"), pendingFilesName: get("#pending-files-name"),
+    masterFileName: get("#master-file-name"), inventoryFileName: get("#inventory-file-name"), pendingFilesName: get("#pending-files-name"), transferFileName: get("#transfer-file-name"),
     consignmentFileName: get("#consignment-file-name"), lirongConsignmentFileName: get("#lirong-consignment-file-name"), salesFilesName: get("#sales-files-name"),
     modelFileName: get("#model-file-name"), modelBadge: get("#model-badge"), marketingFileName: get("#marketing-file-name"), blacklist: get("#blacklist-input"),
     modelRunBadge: get("#model-run-badge"), modelRefresh: get("#model-refresh-button"), modelRefreshLabel: get("#model-refresh-label"),
@@ -374,10 +374,10 @@
     const span = document.createElement("span"); span.textContent = note; card.append(small, strong, span); return card;
   }
   function requirementsReady() {
-    return Boolean(state.config && state.procurementRules && (state.masterFile || state.masterWorkbook) && state.inventoryFile && state.pendingFiles.length
+    return Boolean(state.config && state.procurementRules && (state.masterFile || state.masterWorkbook) && state.inventoryFile && state.pendingFiles.length && state.transferFile
       && (state.consignmentFile || state.consignmentWorkbook) && (state.lirongConsignmentFile || state.lirongConsignmentWorkbook)
       && state.marketingFile && state.salesFiles.length && state.modelFile && !modelRefreshRequired() && elements.month.value && elements.orderDate.value
-      && elements.inventoryDate.value && elements.pendingDate.value && elements.consignmentDate.value && elements.salesDate.value);
+      && elements.inventoryDate.value && elements.pendingDate.value && elements.transferDate.value && elements.consignmentDate.value && elements.salesDate.value);
   }
   function updateReadyState() {
     renderModelStatus();
@@ -810,6 +810,7 @@
       createSummaryCard("建議採購SKU", formatNumber(rows.length), "只計本次勾選範圍"),
       createSummaryCard("建議採購數量", formatNumber(quantity), "已套用箱規／10件單位"),
       createSummaryCard("建議採購金額", formatCurrency(amount), "依最新商品主檔", "currency"),
+      createSummaryCard("期間調撥", formatNumber(state.analysis.totals.activeTransferDocumentCount || 0), `有效單據・提交${formatNumber(state.analysis.totals.transferSubmittedQty || 0)}件・發貨在途${formatNumber(state.analysis.totals.transferInTransitQty || 0)}件`),
       createSummaryCard("春節停工備貨", formatCurrency(springFestivalExtraAmount), `${formatNumber(springFestivalRows.length)}個SKU・額外${formatNumber(springFestivalExtraQty)}件；已含在建議金額`, "currency"),
       createSummaryCard("預計本月付款", formatCurrency(payments.current), "依下單日與付款規則", "currency"),
       createSummaryCard("預計未來付款", formatCurrency(payments.future), "依平均採購週期", "currency"),
@@ -876,9 +877,9 @@
       const row = document.createElement("tr");
       [item.supplier, item.sku, item.name, `${item.tier}・${item.abcClass}${item.xyzClass}`, item.supplyProfileLabel,
         item.supplierLeadDays, item.targetCoverageDays, item.recent6Qty, item.recent12Qty, item.forecastDailyQty,
-        item.inventoryQty, item.pendingQty, item.suggestedPurchaseQty, formatCurrency(item.suggestedPurchaseAmount),
+        item.inventoryQty, item.pendingQty, item.transferSubmittedQty, item.transferInTransitQty, item.suggestedPurchaseQty, formatCurrency(item.suggestedPurchaseAmount),
         item.springFestivalExtraSuggestedQty, formatCurrency(item.springFestivalExtraAmount),
-        item.consignmentCurrentQty, item.suggestedConsignmentQty, item.supplyStatus].forEach((value, index) => appendCell(row, typeof value === "number" ? formatNumber(value) : value, index === 17 && item.immediateConsignmentGap > 0 ? "negative" : ""));
+        item.consignmentCurrentQty, item.suggestedConsignmentQty, item.supplyStatus].forEach((value, index) => appendCell(row, typeof value === "number" ? formatNumber(value) : value, index === 19 && item.immediateConsignmentGap > 0 ? "negative" : ""));
       fragment.appendChild(row);
     });
     elements.resultRows.replaceChildren(fragment);
@@ -888,22 +889,24 @@
     if (!requirementsReady()) return;
     elements.analyze.disabled = true; elements.download.disabled = true; setStatus("正在本機解析資料並套用正式採購、寄庫與付款規則…");
     try {
-      const [masterWorkbook, inventoryWorkbook, consignmentWorkbook, lirongWorkbook, modelWorkbook, pendingWorkbooks, salesWorkbooks] = await Promise.all([
-        resolveWorkbook(state.masterFile, state.masterWorkbook), readWorkbook(state.inventoryFile), resolveWorkbook(state.consignmentFile, state.consignmentWorkbook),
+      const [masterWorkbook, inventoryWorkbook, transferWorkbook, consignmentWorkbook, lirongWorkbook, modelWorkbook, pendingWorkbooks, salesWorkbooks] = await Promise.all([
+        resolveWorkbook(state.masterFile, state.masterWorkbook), readWorkbook(state.inventoryFile), readWorkbook(state.transferFile),
+        resolveWorkbook(state.consignmentFile, state.consignmentWorkbook),
         resolveWorkbook(state.lirongConsignmentFile, state.lirongConsignmentWorkbook), readWorkbook(state.modelFile),
         Promise.all(state.pendingFiles.map(readWorkbook)), Promise.all(state.salesFiles.map(readWorkbook))
       ]);
       const master = core.parseProductMasterWorkbook(masterWorkbook, XLSX, { fileName: "本次商品主檔" });
       const inventory = core.parseInventoryWorkbook(inventoryWorkbook, XLSX, { fileName: "本次庫存" });
+      const transferReport = core.parseTransferWorkbook(transferWorkbook, XLSX, { fileName: state.transferFile.name || "期間調撥單" });
       const consignment = core.parseConsignmentWorkbook(consignmentWorkbook, XLSX, { fileName: "普優瑪寄庫" });
       const lirongConsignment = core.parseLirongConsignmentWorkbook(lirongWorkbook, XLSX, { fileName: "力榮寄庫" });
       const pendingReports = pendingWorkbooks.map((workbook, index) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: state.pendingFiles[index]?.name || "未到貨採購單" }));
       const salesReports = salesWorkbooks.map((workbook, index) => core.parseSalesWorkbook(workbook, XLSX, { fileName: state.salesFiles[index]?.name || "銷售明細" }));
       const model = core.parseForecastModelWorkbook(modelWorkbook, XLSX, { fileName: "季節模型" });
-      const validation = core.buildAnalysis({ master, inventory, pendingReports, consignment, blacklist: blacklistEntries(), dates: {
-        inventory: elements.inventoryDate.value, pending: elements.pendingDate.value, consignment: elements.consignmentDate.value, sales: elements.salesDate.value
+      const validation = core.buildAnalysis({ master, inventory, pendingReports, transferReports: [transferReport], consignment, blacklist: blacklistEntries(), dates: {
+        inventory: elements.inventoryDate.value, pending: elements.pendingDate.value, transfer: elements.transferDate.value, consignment: elements.consignmentDate.value, sales: elements.salesDate.value
       } });
-      const analysis = core.buildProcurementRecommendations({ master, inventory, pendingReports, consignment, salesReports, model,
+      const analysis = core.buildProcurementRecommendations({ master, inventory, pendingReports, transferReports: [transferReport], inventoryDate: elements.inventoryDate.value, consignment, salesReports, model,
         blacklist: blacklistEntries(), asOfDate: elements.salesDate.value, checkpoint: elements.checkpoint.value,
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
         springFestivalRule: state.procurementRules?.springFestival,
@@ -926,7 +929,7 @@
         } : {}
       };
       state.analysis = analysis; state.baseAnalysis = analysis; state.workflowType = "system_recommendation";
-      state.parsedSources = { master, inventory, pendingReports, consignment, lirongConsignment, salesReports, model };
+      state.parsedSources = { master, inventory, pendingReports, transferReports: [transferReport], consignment, lirongConsignment, salesReports, model };
       state.consignmentSource = consignment; state.returnScope = null; renderSummary(analysis, consignment);
       elements.resultPanel.hidden = false;
       resetReviewWorkflow("採購建議已完成；請先勾選本次供應商並下載Excel，下載後才會開放第一次人工回匯。");
@@ -1292,6 +1295,7 @@
   bindFileInput(elements.masterFile, "masterFile", elements.masterFileName, false, "masterWorkbook");
   bindFileInput(elements.inventoryFile, "inventoryFile", elements.inventoryFileName);
   bindFileInput(elements.pendingFiles, "pendingFiles", elements.pendingFilesName, true);
+  bindFileInput(elements.transferFile, "transferFile", elements.transferFileName);
   bindFileInput(elements.consignmentFile, "consignmentFile", elements.consignmentFileName, false, "consignmentWorkbook");
   bindFileInput(elements.lirongConsignmentFile, "lirongConsignmentFile", elements.lirongConsignmentFileName, false, "lirongConsignmentWorkbook");
   bindFileInput(elements.salesFiles, "salesFiles", elements.salesFilesName, true);
@@ -1327,7 +1331,7 @@
     [elements.supplierFilterList, elements.otherSupplierFilterList].forEach((list) => list.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; }));
     resetScopeForNewExport();
   });
-  [elements.checkpoint, elements.orderDate, elements.inventoryDate, elements.pendingDate, elements.consignmentDate, elements.salesDate].forEach((element) => element.addEventListener("change", () => {
+  [elements.checkpoint, elements.orderDate, elements.inventoryDate, elements.pendingDate, elements.transferDate, elements.consignmentDate, elements.salesDate].forEach((element) => element.addEventListener("change", () => {
     if (state.analysis) invalidateAnalysis();
     updateReadyState();
   }));

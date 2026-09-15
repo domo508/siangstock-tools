@@ -2,11 +2,12 @@
   "use strict";
 
   const LOCKED_RULES = Object.freeze({
-    netDemandFormula: "MAX(總部需求＋逐店扣除各店現有庫存後的門市需求－總部可用庫存－已採購未到貨, 0)",
+    netDemandFormula: "MAX(總部需求＋逐店扣除調撥後庫存的門市需求－調撥後總部可用庫存－已採購未到貨, 0)",
     releaseRule: "月初依熱銷70%、穩定50%、低銷0%分批釋放；月中與月底依最新缺口重新計算。",
     consignmentRule: "工廠寄倉可拉貨量不得扣減淨採購需求；只用於供貨分配、交期核對與缺貨警示。",
     shortageAction: "寄倉現貨與可按時完成量不足時，顯示缺貨警示並新增寄庫單；不提供改向其他供應商採購。",
     pendingPurchaseRule: "未到貨採購單每次完整重匯，不沿用上次清單。",
+    transferRule: "期間調撥單依庫存截止日還原在途狀態：提交須保留調出倉並預計入調入倉；發貨審核因ERP已扣調出倉，只預計入調入倉；收貨審核因ERP已入庫，不重複調整。",
     blacklistRule: "一次性代工品由人工以ERP品號或完整品名加入黑名單，不做系統猜測。",
     sellThroughStopRule: "只有品名結尾的獨立括號標記(S)視為已斷貨、售完即停；停止對外採購與新增寄庫，但保留線上銷售及門市由總倉現貨調撥去化。",
     sellThroughTransferRule: "(S)商品先保留總倉已知訂單及必要安全庫存，再以剩餘可調撥現貨供門市去化；不足只顯示缺貨，不得轉成供應商採購或寄庫需求。"
@@ -125,6 +126,23 @@
       },
       required: ["sku", "quantity"]
     },
+    transfer: {
+      fields: {
+        documentCode: ["單據編碼", "調撥單號", "單據號"],
+        status: ["狀態", "單據狀態"],
+        sourceWarehouseCode: ["調出倉庫編號", "調出倉編號", "調出倉庫代碼"],
+        sourceWarehouseName: ["調出倉庫名", "調出倉庫名稱", "調出倉"],
+        destinationWarehouseCode: ["調入倉庫編號", "調入倉編號", "調入倉庫代碼"],
+        destinationWarehouseName: ["調入倉庫名", "調入倉庫名稱", "調入倉"],
+        sku: ["貨號", "ERP品號", "品號"],
+        name: ["品名", "商品名稱"],
+        quantity: ["數量", "調撥數量"],
+        openedDate: ["開單日期", "建立日期"],
+        shippedDate: ["發貨日期"],
+        receivedDate: ["收貨日期"]
+      },
+      required: ["documentCode", "status", "sourceWarehouseName", "destinationWarehouseName", "sku", "quantity"]
+    },
     sales: {
       fields: {
         saleType: ["銷別"],
@@ -166,7 +184,11 @@
     shipWarehouseCode: "出貨倉編號",
     shipWarehouseName: "出貨倉名稱",
     deductQuantity: "扣庫量",
-    ecommercePlatform: "電商平台"
+    ecommercePlatform: "電商平台",
+    documentCode: "單據編碼",
+    status: "狀態",
+    sourceWarehouseName: "調出倉庫名",
+    destinationWarehouseName: "調入倉庫名"
   };
 
   function normalizeText(value) {
@@ -292,7 +314,7 @@
     const inspection = inspectWorkbook(workbook, XLSX, schemaName);
     const selected = inspection.sheets[0];
     if (!selected || !selected.validation.valid) {
-      const sourceLabel = ({ master: "商品主檔", inventory: "庫存檔", pending: "未到貨採購單", sales: "銷售明細" })[schemaName] || schemaName;
+      const sourceLabel = ({ master: "商品主檔", inventory: "庫存檔", pending: "未到貨採購單", transfer: "期間調撥單", sales: "銷售明細" })[schemaName] || schemaName;
       throw new Error(`${sourceLabel}缺少：${selected?.validation.missing.join("、") || "可讀取的工作表"}`);
     }
     return selected;
@@ -456,6 +478,80 @@
       records,
       metadata: { ...metadata, isCustomOrder: records.some((row) => row.isCustomOrder) }
     };
+  }
+
+  const ERP_TRANSFER_WAREHOUSES = Object.freeze([
+    ["T00", ["寬承總倉", "總倉"]],
+    ["R00", ["翔仔居家-台北中山門市", "台北中山門市"]],
+    ["R01", ["翔仔居家-台中北屯門市", "台中北屯門市"]],
+    ["R03", ["翔仔居家-新竹東區門市", "新竹東區門市"]],
+    ["R06", ["翔仔居家-台中文心秀泰專櫃", "文心秀泰門市", "台中文心秀泰專櫃"]],
+    ["R07", ["翔仔居家-台中誠品480專櫃", "誠品480門市", "台中誠品480專櫃"]],
+    ["R10", ["翔仔居家-新莊門市", "新莊門市"]],
+    ["R09", ["翔仔居家-高雄夢時代專櫃", "高雄夢時代專櫃"]]
+  ]);
+
+  function transferWarehouseCode(code, name) {
+    const normalizedCode = normalizeSku(code);
+    if (/^(?:T|R|W)\d{2}$/.test(normalizedCode)) return normalizedCode;
+    const normalizedName = normalizeName(name);
+    for (const [warehouseCode, aliases] of ERP_TRANSFER_WAREHOUSES) {
+      if (aliases.some((alias) => normalizeName(alias) === normalizedName)) return warehouseCode;
+    }
+    return "";
+  }
+
+  function parseTransferWorkbook(workbook, XLSX, options = {}) {
+    const selected = selectSheet(workbook, XLSX, "transfer");
+    const records = [];
+    const errors = [];
+    const allowedStatuses = new Set(["提交", "發貨審核", "收貨審核"]);
+    for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
+      const row = selected.rows[index];
+      const documentCode = String(valueAt(row, selected.mapping, "documentCode") || "").trim();
+      const status = String(valueAt(row, selected.mapping, "status") || "").trim();
+      const sku = normalizeSku(valueAt(row, selected.mapping, "sku"));
+      const quantity = parseNumber(valueAt(row, selected.mapping, "quantity"));
+      if (!documentCode && !status && !sku) continue;
+      if (!documentCode || !status || !sku || quantity == null || quantity <= 0) {
+        errors.push({ sourceRow: index + 1, message: "單據編碼、狀態、ERP品號或正數數量不完整。" });
+        continue;
+      }
+      if (!allowedStatuses.has(status)) {
+        errors.push({ sourceRow: index + 1, documentCode, sku, message: `不支援的調撥狀態：${status}` });
+        continue;
+      }
+      const sourceWarehouseName = String(valueAt(row, selected.mapping, "sourceWarehouseName") || "").trim();
+      const destinationWarehouseName = String(valueAt(row, selected.mapping, "destinationWarehouseName") || "").trim();
+      const sourceWarehouseCode = transferWarehouseCode(valueAt(row, selected.mapping, "sourceWarehouseCode"), sourceWarehouseName);
+      const destinationWarehouseCode = transferWarehouseCode(valueAt(row, selected.mapping, "destinationWarehouseCode"), destinationWarehouseName);
+      if (!sourceWarehouseCode || !destinationWarehouseCode) {
+        errors.push({ sourceRow: index + 1, documentCode, sku, message: `無法辨識調出／調入倉：${sourceWarehouseName} → ${destinationWarehouseName}` });
+        continue;
+      }
+      records.push({
+        sourceRow: index + 1,
+        fileName: options.fileName || "",
+        documentCode,
+        status,
+        sourceWarehouseCode,
+        sourceWarehouseName,
+        destinationWarehouseCode,
+        destinationWarehouseName,
+        sku,
+        name: String(valueAt(row, selected.mapping, "name") || "").trim(),
+        quantity,
+        openedDate: parseDateValue(valueAt(row, selected.mapping, "openedDate")),
+        shippedDate: parseDateValue(valueAt(row, selected.mapping, "shippedDate")),
+        receivedDate: parseDateValue(valueAt(row, selected.mapping, "receivedDate"))
+      });
+    }
+    if (!records.length) throw new Error(errors[0]?.message || "期間調撥單沒有可辨識的明細。");
+    if (errors.length) {
+      const preview = errors.slice(0, 3).map((error) => `第${error.sourceRow}列：${error.message}`).join("；");
+      throw new Error(`期間調撥單有${errors.length}筆無法安全判斷：${preview}`);
+    }
+    return { fileName: options.fileName || "", sheetName: selected.name, records, errors };
   }
 
   function parseNewProductWorkbook(workbook, XLSX, options = {}) {
@@ -1053,6 +1149,55 @@
     return { records, bySku, customRecords: records.filter((row) => row.isCustomOrder) };
   }
 
+  function transferStateAtDate(record, asOfDate) {
+    const cutoff = parseDateValue(asOfDate);
+    if (!cutoff) return record.status === "收貨審核" ? "received" : (record.status === "發貨審核" ? "shipped" : "submitted");
+    if (record.receivedDate && record.receivedDate <= cutoff) return "received";
+    if (record.shippedDate && record.shippedDate <= cutoff) return "shipped";
+    if (record.openedDate && record.openedDate <= cutoff) return "submitted";
+    if (!record.openedDate) return record.status === "收貨審核" ? "received" : (record.status === "發貨審核" ? "shipped" : "submitted");
+    return "future";
+  }
+
+  function aggregateTransferReports(reports, options = {}) {
+    const records = (reports || []).flatMap((report) => report.records || []);
+    const adjustmentBySkuWarehouse = new Map();
+    const bySku = new Map();
+    const activeDocuments = new Set();
+    const stateCounts = { submitted: 0, shipped: 0, received: 0, future: 0 };
+    const addAdjustment = (sku, warehouseCode, quantity) => {
+      const key = compositeKey(sku, warehouseCode);
+      adjustmentBySkuWarehouse.set(key, (adjustmentBySkuWarehouse.get(key) || 0) + quantity);
+    };
+    for (const record of records) {
+      const effectiveState = transferStateAtDate(record, options.asOfDate);
+      stateCounts[effectiveState] += 1;
+      if (!bySku.has(record.sku)) bySku.set(record.sku, { sku: record.sku, submittedQty: 0, shippedQty: 0, projectedDeltaQty: 0 });
+      const sku = bySku.get(record.sku);
+      if (effectiveState === "submitted") {
+        addAdjustment(record.sku, record.sourceWarehouseCode, -record.quantity);
+        addAdjustment(record.sku, record.destinationWarehouseCode, record.quantity);
+        sku.submittedQty += record.quantity;
+        activeDocuments.add(record.documentCode);
+      } else if (effectiveState === "shipped") {
+        // ERP在發貨審核時已扣調出倉，庫存檔尚未含調入倉，故只補回在途目的地。
+        addAdjustment(record.sku, record.destinationWarehouseCode, record.quantity);
+        sku.shippedQty += record.quantity;
+        sku.projectedDeltaQty += record.quantity;
+        activeDocuments.add(record.documentCode);
+      }
+    }
+    return {
+      records,
+      bySku,
+      adjustmentBySkuWarehouse,
+      stateCounts,
+      activeDocumentCount: activeDocuments.size,
+      submittedQty: [...bySku.values()].reduce((sum, row) => sum + row.submittedQty, 0),
+      shippedQty: [...bySku.values()].reduce((sum, row) => sum + row.shippedQty, 0)
+    };
+  }
+
   function calculateNetProcurementDemand(input) {
     const forecastDemandQty = Math.max(0, Number(input.forecastDemandQty || 0));
     const safetyStockQty = Math.max(0, Number(input.safetyStockQty || 0));
@@ -1482,6 +1627,7 @@
     const puyoumaTargetDays = puyoumaRules.targetDays || PROCUREMENT_POLICY.puyoumaFactoryTargetDays;
     const lirongProductionDays = Math.max(0, Number(lirongRules.productionDays ?? PROCUREMENT_POLICY.lirongProductionDays));
     const pending = aggregatePendingReports(input.pendingReports || []);
+    const transfers = aggregateTransferReports(input.transferReports || [], { asOfDate: input.inventoryDate || input.asOfDate });
     const resolvedConsignment = resolveConsignment(input.consignment, input.master, input.blacklist || []);
     const blacklist = normalizeBlacklist(input.blacklist || []);
     const salesRecords = (input.salesReports || []).flatMap((report) => report.records || []);
@@ -1552,11 +1698,21 @@
     };
     const activeStoreCodes = new Set();
     for (const key of [...plannedRevenueByChannel.keys(), ...channelTotals42.keys()]) if (/^R\d{2}$/.test(key) && key !== "R09") activeStoreCodes.add(key);
+    for (const record of transfers.records) {
+      const effectiveState = transferStateAtDate(record, input.inventoryDate || input.asOfDate);
+      if ((effectiveState === "submitted" || effectiveState === "shipped") && /^R\d{2}$/.test(record.destinationWarehouseCode) && record.destinationWarehouseCode !== "R09") {
+        activeStoreCodes.add(record.destinationWarehouseCode);
+      }
+    }
     const inventoryBySkuWarehouse = new Map();
     (input.inventory.records || []).forEach((record) => {
       const key = compositeKey(record.sku, record.warehouseCode);
       inventoryBySkuWarehouse.set(key, (inventoryBySkuWarehouse.get(key) || 0) + Number(record.quantity || 0));
     });
+    const projectedInventoryBySkuWarehouse = new Map(inventoryBySkuWarehouse);
+    for (const [key, adjustment] of transfers.adjustmentBySkuWarehouse) {
+      projectedInventoryBySkuWarehouse.set(key, (projectedInventoryBySkuWarehouse.get(key) || 0) + adjustment);
+    }
     const demandBySku = new Map();
 
     const ensureDemand = (sku, name = "") => {
@@ -1773,7 +1929,7 @@
       const storeInventoryByCode = {};
       for (const storeCode of activeStoreCodes) {
         const storeDaily = Math.max(0, Number(storeDailyByCode[storeCode] || 0));
-        const currentStoreInventory = Math.max(0, Number(inventoryBySkuWarehouse.get(compositeKey(row.demand.sku, storeCode)) || 0));
+        const currentStoreInventory = Math.max(0, Number(projectedInventoryBySkuWarehouse.get(compositeKey(row.demand.sku, storeCode)) || 0));
         const storeSafety = storeTargetQty(storeDaily, row.tier);
         const storeNeed = Math.max(storeDaily * horizonDays + storeSafety - currentStoreInventory, 0);
         storeInventoryByCode[storeCode] = currentStoreInventory;
@@ -1784,9 +1940,11 @@
       const hqDemandQty = hqDailyQty * horizonDays + hqSafetyStockQty;
       const safetyStockQty = hqSafetyStockQty + storeSafetyStockQty;
       const hqUsableCodes = ["T00", "R19", "R09"];
-      const inventoryQty = hqUsableCodes.reduce((sum, code) => sum + Math.max(0, Number(inventoryBySkuWarehouse.get(compositeKey(row.demand.sku, code)) || 0)), 0);
-      const excludedInventoryQty = Math.max(0, Number(row.inventory?.quantity || 0) - inventoryQty);
+      const inventoryQty = hqUsableCodes.reduce((sum, code) => sum + Math.max(0, Number(projectedInventoryBySkuWarehouse.get(compositeKey(row.demand.sku, code)) || 0)), 0);
+      const actualHqInventoryQty = hqUsableCodes.reduce((sum, code) => sum + Math.max(0, Number(inventoryBySkuWarehouse.get(compositeKey(row.demand.sku, code)) || 0)), 0);
+      const excludedInventoryQty = Math.max(0, Number(row.inventory?.quantity || 0) - actualHqInventoryQty);
       const pendingQty = row.purchase?.quantity || 0;
+      const transfer = transfers.bySku.get(row.demand.sku);
       const rawPurchaseQty = calculateNetProcurementDemand({
         forecastDemandQty: hqDemandQty + storeDemandQty,
         safetyStockQty: 0,
@@ -1934,6 +2092,8 @@
         inventoryQty,
         excludedInventoryQty,
         pendingQty,
+        transferSubmittedQty: transfer?.submittedQty || 0,
+        transferInTransitQty: transfer?.shippedQty || 0,
         rawPurchaseQty,
         releaseRate,
         standardReleasedPurchaseQty,
@@ -2006,6 +2166,7 @@
       suggestedRows,
       consignmentRows,
       pending,
+      transfers,
       consignment: resolvedConsignment,
       productExclusions,
       factoryTargetDays,
@@ -2033,6 +2194,9 @@
         consignmentSuggestionSkuCount: consignmentRows.length,
         seasonalFallbackSkuCount: rows.filter((row) => !row.seasonalDataReady).length,
         sellThroughStopExcludedCount: productExclusions.length,
+        activeTransferDocumentCount: transfers.activeDocumentCount,
+        transferSubmittedQty: transfers.submittedQty,
+        transferInTransitQty: transfers.shippedQty,
         kuanMuForecastRevenue,
         kuanMuManagementTargetAmount,
         kuanMuOperationalDemandAmount,
@@ -2190,6 +2354,7 @@
 
   function buildAnalysis(input) {
     const pending = aggregatePendingReports(input.pendingReports || []);
+    const transfers = aggregateTransferReports(input.transferReports || [], { asOfDate: input.dates?.inventory });
     const resolvedConsignment = resolveConsignment(input.consignment, input.master, input.blacklist || []);
     const rows = [];
     for (const [sku, purchase] of [...pending.bySku.entries()].sort(([left], [right]) => left.localeCompare(right))) {
@@ -2217,10 +2382,26 @@
         purchaseSources: [...purchase.files]
       });
     }
-    const dateCheck = validateSourceDates(input.dates || {});
+    let dateCheck = validateSourceDates(input.dates || {});
+    const inventoryDate = dateKey(input.dates?.inventory);
+    const transferDate = dateKey(input.dates?.transfer);
+    if (inventoryDate && transferDate) {
+      const transferGapDays = Math.abs(Math.round((dateToUtcMs(inventoryDate) - dateToUtcMs(transferDate)) / 86400000));
+      if (transferGapDays > 1) {
+        dateCheck = {
+          status: "REVIEW",
+          gapDays: dateCheck.gapDays,
+          transferGapDays,
+          message: `期間調撥單與庫存截止日相差${transferGapDays}天；無法安全還原中間新增的調撥，請改用同日或相差1天內的完整調撥清單。`
+        };
+      } else {
+        dateCheck = { ...dateCheck, transferGapDays };
+      }
+    }
     return {
       rows,
       pending,
+      transfers,
       consignment: resolvedConsignment,
       dateCheck,
       dates: input.dates || {},
@@ -2228,6 +2409,9 @@
         skuCount: rows.length,
         pendingQty: rows.reduce((sum, row) => sum + row.pendingQty, 0),
         pendingAmount: rows.reduce((sum, row) => sum + row.pendingAmount, 0),
+        activeTransferDocumentCount: transfers.activeDocumentCount,
+        transferSubmittedQty: transfers.submittedQty,
+        transferInTransitQty: transfers.shippedQty,
         inventoryMatched: rows.filter((row) => row.inventoryMatched).length,
         consignmentMatched: rows.filter((row) => row.consignmentMatched).length,
         consignmentCurrentQty: rows.reduce((sum, row) => sum + row.consignmentCurrentQty, 0),
@@ -2376,6 +2560,9 @@
       ["未到貨採購SKU", analysis.totals.skuCount],
       ["未到貨採購數量", analysis.totals.pendingQty],
       ["未到貨採購金額", analysis.totals.pendingAmount],
+      ["有效期間調撥單", analysis.totals.activeTransferDocumentCount],
+      ["調撥提交中數量", analysis.totals.transferSubmittedQty],
+      ["發貨在途數量", analysis.totals.transferInTransitQty],
       ["庫存品號命中", analysis.totals.inventoryMatched],
       ["寄倉品號命中", analysis.totals.consignmentMatched],
       ["寄倉現貨可拉量", analysis.totals.consignmentCurrentQty],
@@ -2451,6 +2638,7 @@
       ["寄倉處理", LOCKED_RULES.consignmentRule, "核心鎖定"],
       ["缺貨處理", LOCKED_RULES.shortageAction, "核心鎖定"],
       ["未到貨採購單", LOCKED_RULES.pendingPurchaseRule, "核心鎖定"],
+      ["期間調撥單", LOCKED_RULES.transferRule, "核心鎖定"],
       ["一次性代工", LOCKED_RULES.blacklistRule, "核心鎖定"],
       ["售完即停(S)", LOCKED_RULES.sellThroughStopRule, "核心鎖定"],
       ["(S)門市調撥", LOCKED_RULES.sellThroughTransferRule, "核心鎖定"],
@@ -2505,6 +2693,8 @@
       "門市可售庫存": storeInventoryQty,
       "非採購可用庫存": row.excludedInventoryQty,
       "已採購未到貨": row.pendingQty,
+      "調撥提交中": row.transferSubmittedQty,
+      "發貨在途": row.transferInTransitQty,
       "未進位淨採購需求": row.rawPurchaseQty,
       "本次釋放率": row.releaseRate,
       "釋放後未取整需求": row.releasedPurchaseQty,
@@ -2703,7 +2893,7 @@
       ["採購流程", recommendations.meta?.workflowLabel || "一般採購建議"],
       ["固定來源模式", recommendations.meta?.sourceMode || "未標示"],
       ...Object.entries(recommendations.meta?.sourceHashes || {}).map(([source, hash]) => [`來源SHA-256：${source}`, String(hash)]),
-      ["四來源日期檢核", sourceDateCheck?.status || "未提供", sourceDateCheck?.message || "下載前請確認庫存、未到貨、寄倉與銷售截止日。"],
+      ["五來源日期檢核", sourceDateCheck?.status || "未提供", sourceDateCheck?.message || "下載前請確認庫存、未到貨、期間調撥、寄庫與銷售截止日。"],
       ...(sourceDateCheck?.status === "PASS" ? [] : [["使用限制", "資料時點未通過檢核；本檔只供串接驗收，不可直接下單。"]]),
       [],
       ["指標", "結果"],
@@ -2711,6 +2901,9 @@
       ["建議採購SKU", selectedTotals.suggestedSkuCount],
       ["建議採購數量", selectedTotals.suggestedPurchaseQty],
       ["建議採購金額", selectedTotals.suggestedPurchaseAmount],
+      ["有效期間調撥單", recommendations.totals.activeTransferDocumentCount || 0],
+      ["調撥提交中數量", recommendations.totals.transferSubmittedQty || 0],
+      ["發貨在途數量", recommendations.totals.transferInTransitQty || 0],
       ["春節停工備貨影響SKU", selectedTotals.springFestivalSkuCount],
       ["春節額外建議量", selectedTotals.springFestivalExtraQty],
       ["春節額外採購金額", selectedTotals.springFestivalExtraAmount, "已包含在建議採購金額與額度影響內"],
@@ -2872,6 +3065,7 @@
       ["付款認列", "國內預計到貨100%；國外下單30%、預計出貨70%；付款分配合計必須等於核准總額", "已確認"],
       ["一般自動採購排除", "凱信達一次性、歐必斯客訂型、所有總部贈品均不產生一般自動採購", "已確認"],
       ["寄倉處理", LOCKED_RULES.consignmentRule, "核心鎖定"],
+      ["期間調撥單", LOCKED_RULES.transferRule, "核心鎖定"],
       ["售完即停(S)", LOCKED_RULES.sellThroughStopRule, "核心鎖定"],
       ["(S)門市調撥", LOCKED_RULES.sellThroughTransferRule, "核心鎖定"],
       ["寄庫建議", `工廠目標${recommendations.factoryTargetDays}天；寄倉現貨不足採購需求時必列缺貨警示`, "核心鎖定"],
@@ -3130,6 +3324,7 @@
     parseProductMasterWorkbook,
     parseInventoryWorkbook,
     parsePendingPurchaseWorkbook,
+    parseTransferWorkbook,
     parseNewProductWorkbook,
     parseSalesWorkbook,
     parseForecastModelWorkbook,
@@ -3140,6 +3335,7 @@
     blacklistMatch,
     resolveConsignment,
     aggregatePendingReports,
+    aggregateTransferReports,
     calculateNetProcurementDemand,
     roundSuggestedQuantity,
     roundByPack,
