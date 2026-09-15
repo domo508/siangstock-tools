@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
   <meta name="description" content="翔仔居家門市週補貨與調撥工具">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>門市週補貨與調撥｜翔仔居家</title>
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="../cost-analysis/style.css">
@@ -38,16 +39,26 @@
         <label><span>門市回覆鎖定時間</span><input id="lock-at" type="datetime-local" required></label>
       </div>
       <div class="store-picker" aria-labelledby="store-picker-title"><h3 id="store-picker-title">本週產生門市</h3><div id="store-options" class="store-options"></div></div>
+      <section class="fixed-source-panel" aria-labelledby="fixed-source-title">
+        <div><p class="eyebrow">沿用主採購工具設定</p><h3 id="fixed-source-title">固定 Google 資料</h3><p>先以公司帳號授權，再一次唯讀取得最新商品主檔與整體行銷策略；授權只留在目前分頁。</p></div>
+        <div class="fixed-source-actions">
+          <button id="google-connect-button" class="secondary-button" type="button">公司 Google 授權</button>
+          <button id="auto-source-button" class="secondary-button source-action-button" type="button" disabled><span class="button-spinner" aria-hidden="true"></span><span id="auto-source-label">自動取得兩項資料</span></button>
+        </div>
+        <p id="source-status" class="status-line" role="status">尚未完成公司 Google 授權；也可使用下方手動備援。</p>
+      </section>
       <div class="upload-grid transfer-sources">
-        <article class="upload-card"><h3>商品主檔</h3><p>辨識分類、尺寸、S品與成本。</p><label class="file-button">選擇商品主檔<input id="master-file" type="file" accept=".xlsx,.xls"></label><p class="file-name" data-for="master-file">尚未選擇</p></article>
+        <article class="upload-card"><div class="upload-card-header"><h3>商品主檔</h3><span class="source-badge required">自動取得・必要</span></div><p>辨識分類、尺寸、S品與成本。</p><a class="source-file-link" href="https://drive.google.com/drive/folders/1uQVKi42veJfq-taIcSd0aKp3oETLeaey" target="_blank" rel="noopener noreferrer">查看主檔資料夾 ↗</a><label class="file-button">手動備援<input id="master-file" type="file" accept=".xlsx,.xls"></label><p class="file-name" data-for="master-file">尚未取得</p></article>
+        <article class="upload-card"><div class="upload-card-header"><h3>整體行銷策略</h3><span class="source-badge required">自動取得・必要</span></div><p>辨識活動期間與贈品貨號，另列活動／贈品調撥。</p><a class="source-file-link" href="https://docs.google.com/spreadsheets/d/1l-3gd0gmx-nX6Je5XeWBRxZ1bFzZeGY0/edit?gid=1208853232#gid=1208853232" target="_blank" rel="noopener noreferrer">查看整體行銷策略 ↗</a><label class="file-button">手動備援<input id="marketing-file" type="file" accept=".xlsx,.xls"></label><p class="file-name" data-for="marketing-file">尚未取得</p></article>
         <article class="upload-card"><h3>最新公司庫存</h3><p>使用含總倉與各門市庫存的完整檔。</p><label class="file-button">選擇最新庫存<input id="inventory-file" type="file" accept=".xlsx,.xls"></label><p class="file-name" data-for="inventory-file">尚未選擇</p></article>
         <article class="upload-card"><h3>近12週銷售</h3><p>可多選；計算門市現場淨銷售、B3與14／42／84天消耗。</p><label class="file-button">選擇銷售明細<input id="sales-files" type="file" accept=".xlsx,.xls" multiple></label><p class="file-name" data-for="sales-files">尚未選擇</p></article>
         <article class="upload-card"><h3>期間調撥單</h3><p>提交、發貨審核與未收貨數量都會先占用庫存。</p><label class="file-button">選擇期間調撥單<input id="transfer-file" type="file" accept=".xlsx,.xls"></label><p class="file-name" data-for="transfer-file">尚未選擇</p></article>
       </div>
-      <div class="action-row"><button id="calculate-button" class="primary-button" type="button" disabled>產生本週調撥建議</button><p id="hq-status" class="status-line">請先選妥四類資料。</p></div>
+      <div class="action-row"><button id="calculate-button" class="primary-button" type="button" disabled>產生本週調撥建議</button><p id="hq-status" class="status-line">請先備妥兩項固定來源及三類本次資料。</p></div>
       <div id="calculation-results" class="calculation-results" hidden>
         <div class="section-heading compact"><div><h3>本週建議預覽</h3><p id="calculation-summary"></p></div><button id="publish-button" class="primary-button" type="button">建立門市確認批次</button></div>
-        <div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>近42天現場銷售</th><th>B3銷售</th><th>目前庫存</th><th>目標／展示</th><th>系統建議</th><th>說明</th></tr></thead><tbody id="calculation-rows"></tbody></table></div>
+        <section class="result-section"><h4>一般週補貨</h4><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>近42天現場銷售</th><th>B3銷售</th><th>目前庫存</th><th>目標／展示</th><th>系統建議</th><th>說明</th></tr></thead><tbody id="calculation-rows"></tbody></table></div></section>
+        <section id="activity-results" class="result-section activity-result-section" hidden><h4>活動／贈品調撥</h4><p>依行銷策略的活動期間、贈品貨號及近21天實際耗用估算；不會放大一般補貨量。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>贈品貨號</th><th>品名</th><th>活動期間</th><th>近21天耗用</th><th>目前庫存</th><th>系統建議</th><th>說明</th></tr></thead><tbody id="activity-rows"></tbody></table></div><p id="marketing-warnings" class="status-line"></p></section>
       </div>
     </section>
 
@@ -68,6 +79,8 @@
   <script src="../procurement-planning/assets/xlsx-js-style.bundle.js"></script>
   <script src="../procurement-planning/xlsx-style-runtime.js"></script>
   <script src="../procurement-planning/core.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="../procurement-planning/google-sources.js"></script>
   <script src="core.js"></script>
   <script src="app.js"></script>
 </body>

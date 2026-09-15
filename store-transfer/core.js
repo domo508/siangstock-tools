@@ -77,8 +77,76 @@
     return null;
   }
 
+  function excludedFromRegularTransfer(record) {
+    const value = normalizeName(`${record?.name || ""} ${record?.size || ""}`);
+    const category = String(record?.style1 || "");
+    return /贈品|運費|客製|代工|拍照樣|拍攝樣|樣品|耗材|保費|折扣|折價|蝦幣|手續費|服務費|商品券/i.test(value) || /贈品|輔料|客製/.test(category);
+  }
+
   function daysBetween(value, latest) {
     return Math.floor((Date.parse(`${latest}T12:00:00`) - Date.parse(`${value}T12:00:00`)) / 86400000);
+  }
+
+  function dateKey(year, month, day) {
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return "";
+    return date.toISOString().slice(0, 10);
+  }
+
+  function parseMarketingWorkbook(workbook, XLSX, asOfDate) {
+    const reference = localDate(asOfDate);
+    const year = reference.getFullYear();
+    const referenceMs = Date.parse(`${asOfDate}T12:00:00Z`);
+    const futureLimit = referenceMs + 21 * 86400000;
+    const activities = [];
+    const dateRange = /^(\d{1,2})\s*[\/.]\s*(\d{1,2})\s*(?:-|–|—|~|～|至)\s*(?:(\d{1,2})\s*[\/.]\s*)?(\d{1,2})(?=\s|$)/;
+    const singleDate = /^(\d{1,2})\s*[\/.]\s*(\d{1,2})(?=\s|[-–—:：]|$)/;
+    for (const sheetName of workbook.SheetNames || []) {
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: false, defval: "" });
+      let section = "";
+      rows.forEach((row) => {
+        const rowText = row.map((value) => String(value || "").normalize("NFKC").trim()).filter(Boolean).join("\n");
+        if (/門市銷售波段/.test(rowText)) section = "store";
+        else if (/(?:官網|平台|電商).*銷售波段/.test(rowText)) section = "online";
+        for (const cell of row) {
+          const text = String(cell || "").normalize("NFKC").trim();
+          if (!text || !/(?:\d{1,2}\s*[\/.]\s*\d{1,2})/.test(text)) continue;
+          const segments = text.split(/\n(?=\s*\d{1,2}\s*[\/.]\s*\d{1,2})/).map((value) => value.trim()).filter(Boolean);
+          segments.forEach((rawSegment) => {
+            const range = rawSegment.match(dateRange);
+            const single = range ? null : rawSegment.match(singleDate);
+            if (!range && !single) return;
+            const segment = rawSegment.replace(/\s+/g, " ").trim();
+            const startMonth = Number((range || single)[1]), startDay = Number((range || single)[2]);
+            const endMonth = range ? Number(range[3] || range[1]) : startMonth;
+            const endDay = range ? Number(range[4]) : new Date(Date.UTC(year, startMonth, 0)).getUTCDate();
+            const start = dateKey(year, startMonth, startDay);
+            const endYear = endMonth < startMonth ? year + 1 : year;
+            const end = dateKey(endYear, endMonth, endDay);
+            if (!start || !end) return;
+            const startMs = Date.parse(`${start}T12:00:00Z`), endMs = Date.parse(`${end}T12:00:00Z`);
+            if (endMs < referenceMs || startMs > futureLimit) return;
+            const explicitOnlineOnly = /門市不參與|官網專屬|電商專屬/.test(segment);
+            if (explicitOnlineOnly) return;
+            const giftSkus = [...segment.matchAll(/贈品(?:貨號|品號)\s*[：:]\s*([A-Z0-9-]+)/gi)].map((item) => item[1].toUpperCase());
+            const isGift = /贈|滿額禮|滿件禮|加價購/.test(segment) || giftSkus.length > 0;
+            if (!isGift) return;
+            activities.push({ sheetName, section, startDate: start, endDate: end, description: segment.slice(0, 420), giftSkus: [...new Set(giftSkus)] });
+          });
+        }
+      });
+    }
+    const seen = new Set();
+    const unique = activities.filter((activity) => {
+      const key = `${activity.startDate}|${activity.endDate}|${activity.giftSkus.join(",")}|${activity.description}`;
+      if (seen.has(key)) return false;
+      seen.add(key); return true;
+    });
+    return {
+      activities: unique,
+      giftActivities: unique.filter((activity) => activity.giftSkus.length),
+      warnings: unique.filter((activity) => !activity.giftSkus.length).map((activity) => `${activity.startDate}～${activity.endDate}活動未標示贈品貨號，需人工確認。`)
+    };
   }
 
   function buildSuggestions(input) {
@@ -111,6 +179,7 @@
     const needsBySku = new Map();
     for (const store of stores) {
       for (const [sku, master] of masterBySku) {
+        if (excludedFromRegularTransfer(master)) continue;
         const key = `${store}|${sku}`, local42 = Math.max(0, local.get(key) || 0), b342 = Math.max(0, b3.get(key) || 0);
         const performance = local42 + b342, weeks = activeWeeks.get(key)?.size || 0;
         const tier = performance >= 12 && weeks >= 4 ? "熱銷" : performance >= 4 && weeks >= 2 ? "穩定" : "低銷";
@@ -142,17 +211,75 @@
           if (!open.length) break; allocated[open[0].storeCode] += 1;
         }
       }
-      for (const row of rows) if (allocated[row.storeCode] > 0) result.push({ ...row, suggestedQuantity: allocated[row.storeCode], hqAvailable: available, ruleSummary: `${row.ruleSummary}${available < totalNeed ? "；總倉不足依70/30分配" : ""}` });
+      for (const row of rows) if (allocated[row.storeCode] > 0) result.push({ ...row, itemType: "regular", suggestedQuantity: allocated[row.storeCode], hqAvailable: available, ruleSummary: `${row.ruleSummary}${available < totalNeed ? "；總倉不足依70/30分配" : ""}` });
     }
-    return { latestSalesDate: latest, rows: result.sort((a, b) => STORE_ORDER.indexOf(a.storeCode) - STORE_ORDER.indexOf(b.storeCode) || a.sku.localeCompare(b.sku)), totals: { itemCount: result.length, quantity: result.reduce((sum, row) => sum + row.suggestedQuantity, 0) } };
+    const regularBySku = new Map();
+    result.forEach((row) => regularBySku.set(row.sku, (regularBySku.get(row.sku) || 0) + row.suggestedQuantity));
+    const activityRows = [];
+    const activityKeys = new Set();
+    for (const activity of input.marketing?.giftActivities || []) {
+      const remainingDays = Math.max(0, Math.floor((Date.parse(`${activity.endDate}T12:00:00`) - Date.parse(`${latest}T12:00:00`)) / 86400000) + 1);
+      const coverageDays = Math.min(21, remainingDays);
+      for (const sku of activity.giftSkus) {
+        const master = masterBySku.get(sku);
+        const hqAvailable = Math.max(0, Math.floor((inventory.get(`T00|${sku}`) || 0) - (pendingOutbound.get(`T00|${sku}`) || 0) - (regularBySku.get(sku) || 0)));
+        const candidates = stores.map((storeCode) => {
+          const key = `${storeCode}|${sku}`;
+          const recentUsage = sales.reduce((sum, row) => {
+            if (row.warehouseCode !== storeCode || row.shipWarehouseCode !== storeCode || row.sku !== sku) return sum;
+            const age = daysBetween(row.date, latest);
+            return age >= 0 && age < 21 ? sum + Math.max(0, Number(row.deductQuantity || row.quantity || 0)) : sum;
+          }, 0);
+          const current = Math.max(0, (inventory.get(key) || 0) + (pendingInbound.get(key) || 0));
+          const target = recentUsage > 0 ? Math.ceil(recentUsage / 21 * coverageDays) : 0;
+          return { storeCode, current, recentUsage, rawNeed: Math.max(0, target - current), target };
+        });
+        const totalNeed = candidates.reduce((sum, row) => sum + row.rawNeed, 0);
+        const weights = Object.fromEntries(candidates.map((row) => [row.storeCode, row.recentUsage || 1]));
+        const allocated = hqAvailable >= totalNeed
+          ? Object.fromEntries(candidates.map((row) => [row.storeCode, row.rawNeed]))
+          : allocateQuantity(hqAvailable, weights, stores);
+        for (const candidate of candidates) {
+          const key = `${candidate.storeCode}|${sku}`;
+          if (activityKeys.has(key)) continue;
+          activityKeys.add(key);
+          const suggested = Math.min(candidate.rawNeed, allocated[candidate.storeCode] || 0);
+          const note = candidate.recentUsage > 0
+            ? `近21天實際贈品耗用${candidate.recentUsage}件，依活動剩餘${coverageDays}天估算`
+            : "近21天無可辨識贈品耗用，請人工確認活動門檻與預估量";
+          activityRows.push({
+            storeCode: candidate.storeCode, sku, productName: master?.name || `活動贈品 ${sku}`,
+            localSales42: candidate.recentUsage, b3Sales42: 0, currentInventory: candidate.current,
+            tier: "活動／贈品", targetQuantity: candidate.target, displayQuantity: 0, rawNeed: candidate.rawNeed,
+            suggestedQuantity: suggested, hqAvailable, itemType: "activity_gift",
+            activityPeriod: `${activity.startDate}～${activity.endDate}`,
+            ruleSummary: `活動／贈品；${activity.startDate}～${activity.endDate}；${note}${hqAvailable < totalNeed ? "；總倉不足依耗用比例分配" : ""}`
+          });
+        }
+      }
+    }
+    const regularRows = result.sort((a, b) => STORE_ORDER.indexOf(a.storeCode) - STORE_ORDER.indexOf(b.storeCode) || a.sku.localeCompare(b.sku));
+    activityRows.sort((a, b) => STORE_ORDER.indexOf(a.storeCode) - STORE_ORDER.indexOf(b.storeCode) || a.sku.localeCompare(b.sku));
+    const rows = [...regularRows, ...activityRows];
+    return {
+      latestSalesDate: latest, rows, regularRows, activityRows, marketingWarnings: input.marketing?.warnings || [],
+      totals: { itemCount: rows.length, quantity: rows.reduce((sum, row) => sum + row.suggestedQuantity, 0), regularItemCount: regularRows.length, activityItemCount: activityRows.length }
+    };
   }
 
   function buildErpWorkbook(items, XLSX, storeCode) {
-    const rows = items.filter((item) => item.store_code === storeCode && Number(item.hq_approved_quantity) > 0).map((item) => ({ 貨號: item.sku, 品名: item.product_name, 顏色: "", 尺碼: "", 數量: Number(item.hq_approved_quantity), 價格: "", 備註: "門市週調撥", 倉庫: "" }));
+    const grouped = new Map();
+    items.filter((item) => item.store_code === storeCode && Number(item.hq_approved_quantity) > 0).forEach((item) => {
+      const current = grouped.get(item.sku) || { sku: item.sku, productName: item.product_name, quantity: 0, types: new Set() };
+      current.quantity += Number(item.hq_approved_quantity);
+      current.types.add(item.item_type === "activity_gift" ? "活動／贈品" : "一般補貨");
+      grouped.set(item.sku, current);
+    });
+    const rows = [...grouped.values()].map((item) => ({ 貨號: item.sku, 品名: item.productName, 顏色: "", 尺碼: "", 數量: item.quantity, 價格: "", 備註: [...item.types].join("＋"), 倉庫: "" }));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows, { header: ["貨號", "品名", "顏色", "尺碼", "數量", "價格", "備註", "倉庫"] }), "通用貨品數量");
     return workbook;
   }
 
-  return { STORE_ORDER, previousWorkingDay, nextWorkingDay, allocateQuantity, combinedAllocationWeights, stockRule, buildSuggestions, buildErpWorkbook };
+  return { STORE_ORDER, previousWorkingDay, nextWorkingDay, allocateQuantity, combinedAllocationWeights, stockRule, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook };
 });

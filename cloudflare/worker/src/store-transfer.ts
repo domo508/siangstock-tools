@@ -1,7 +1,8 @@
 import { verifyCompanyUser, type AccessConfig } from "./access";
 import { RequestValidationError } from "./schema";
+import { FIXED_SOURCES } from "./fixed-sources";
 
-type StoreTransferEnv = AccessConfig & { DB: D1Database; ALLOWED_ORIGINS: string; PROCUREMENT_ACCESS_AUD?: string };
+type StoreTransferEnv = AccessConfig & { DB: D1Database; ALLOWED_ORIGINS: string; GOOGLE_OAUTH_CLIENT_ID?: string; PROCUREMENT_ACCESS_AUD?: string };
 type Role = "admin" | "hq" | "store";
 
 const ADMIN = "siang01@siangapato.com.tw";
@@ -82,6 +83,8 @@ function visibleStore(requested: string | null, role: Role, ownStore: StoreCode 
 async function config(request: Request, env: StoreTransferEnv): Promise<Response> {
   const who = await actor(request, env);
   return json({ email: who.email, role: who.role, storeCode: who.storeCode, stores: STORES, retentionMonths: 12,
+    googleOAuthClientId: env.GOOGLE_OAUTH_CLIENT_ID || "",
+    fixedSources: { marketingDriveFileId: FIXED_SOURCES.marketingDriveFileId, productMasterFolderId: FIXED_SOURCES.productMasterFolderId },
     permissions: { canCreate: who.role !== "store", canApprove: who.role !== "store", canReviewAll: who.role !== "store" } });
 }
 
@@ -131,16 +134,17 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
     const storeCode = text(item.storeCode, "門市代碼", 5) as StoreCode;
     if (!(storeCode in STORES)) throw new RequestValidationError(`未知門市：${storeCode}。`);
     const sku = text(item.sku, "ERP品號", 80);
-    const key = `${storeCode}\u0000${sku}`;
+    const itemType = item.itemType === "activity_gift" ? "activity_gift" : "regular";
+    const key = `${storeCode}\u0000${sku}\u0000${itemType}`;
     if (seen.has(key)) throw new RequestValidationError(`${storeCode}／${sku}重複。`);
     seen.add(key);
-    return { storeCode, sku, productName: text(item.productName, "品名"), suggested: quantity(item.suggestedQuantity, "系統建議量"), ruleSummary: String(item.ruleSummary || "").slice(0, 500) };
+    return { storeCode, sku, productName: text(item.productName, "品名"), suggested: quantity(item.suggestedQuantity, "系統建議量"), ruleSummary: String(item.ruleSummary || "").slice(0, 500), itemType };
   });
   const stores = [...new Set(normalized.map((item) => item.storeCode))];
   const now = new Date().toISOString();
   const statements = [
     env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, ?, ?, ?)").bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), now, who.email, now, who.email),
-    ...normalized.map((item) => env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, rule_summary, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id, item.storeCode, item.sku, item.productName, item.suggested, item.ruleSummary, now, who.email)),
+    ...normalized.map((item) => env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, rule_summary, item_type, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, item.storeCode, item.sku, item.productName, item.suggested, item.ruleSummary, item.itemType, now, who.email)),
     ...stores.map((storeCode) => env.DB.prepare("INSERT INTO store_transfer_store_status (batch_id, store_code, status, updated_at) VALUES (?, ?, 'pending', ?)").bind(id, storeCode, now)),
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'created', ?, ?, ?)").bind(id, `建立${stores.length}間門市、${normalized.length}筆建議`, now, who.email)
   ];
@@ -164,9 +168,10 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("確認明細格式錯誤。");
     const item = raw as Record<string, unknown>;
     const sku = text(item.sku, "ERP品號", 80);
+    const itemType = item.itemType === "activity_gift" ? "activity_gift" : "regular";
     const confirmed = quantity(item.confirmedQuantity, "門市確認量");
     const reason = String(item.reason || "").normalize("NFKC").trim().slice(0, 300);
-    return env.DB.prepare("UPDATE store_transfer_items SET store_confirmed_quantity = ?, store_reason = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ?").bind(confirmed, reason, now, who.email, batchId, storeCode, sku);
+    return env.DB.prepare("UPDATE store_transfer_items SET store_confirmed_quantity = ?, store_reason = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ? AND item_type = ?").bind(confirmed, reason, now, who.email, batchId, storeCode, sku, itemType);
   });
   const status = submit ? "submitted" : "saved";
   const results = await env.DB.batch([
@@ -197,8 +202,9 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
     const storeCode = text(item.storeCode, "門市代碼", 5);
     if (!(storeCode in STORES)) throw new RequestValidationError(`未知門市：${storeCode}。`);
     const sku = text(item.sku, "ERP品號", 80);
+    const itemType = item.itemType === "activity_gift" ? "activity_gift" : "regular";
     const approved = quantity(item.approvedQuantity, "總部核准量"); total += approved;
-    return env.DB.prepare("UPDATE store_transfer_items SET hq_approved_quantity = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ?").bind(approved, now, who.email, batchId, storeCode, sku);
+    return env.DB.prepare("UPDATE store_transfer_items SET hq_approved_quantity = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ? AND item_type = ?").bind(approved, now, who.email, batchId, storeCode, sku, itemType);
   });
   const results = await env.DB.batch([
     ...updates,

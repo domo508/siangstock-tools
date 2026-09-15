@@ -48,3 +48,39 @@ describe("總倉不足分配", () => {
     expect(result.rows[0].rawNeed).toBe(1);
   });
 });
+
+describe("整體行銷策略與活動贈品", () => {
+  const fakeXlsx = { utils: { sheet_to_json: (sheet) => sheet.rows } };
+
+  it("會辨識仍在進行中的贈品期間與貨號", () => {
+    const workbook = {
+      SheetNames: ["官網銷售波段"],
+      Sheets: { "官網銷售波段": { rows: [["09/06 - Apple聯名天絲上市；購買四件組贈送隨身鏡\n贈品貨號：N00144"]] } }
+    };
+    const result = core.parseMarketingWorkbook(workbook, fakeXlsx, "2026-09-14");
+    expect(result.giftActivities).toHaveLength(1);
+    expect(result.giftActivities[0].giftSkus).toEqual(["N00144"]);
+    expect(result.giftActivities[0].endDate).toBe("2026-09-30");
+  });
+
+  it("活動贈品獨立估算，不會併入一般補貨", () => {
+    const gift = { sku: "N00144", name: "聯名隨身鏡", size: "", style1: "贈品" };
+    const result = core.buildSuggestions({
+      storeCodes: ["R00"],
+      master: { bySku: new Map([["N00144", gift]]) },
+      inventory: { records: [
+        { warehouseCode: "T00", sku: "N00144", quantity: 10 },
+        { warehouseCode: "R00", sku: "N00144", quantity: 0 }
+      ] },
+      transfer: { records: [] },
+      sales: [{ maxDate: "2026-09-14", records: [
+        { warehouseCode: "R00", shipWarehouseCode: "R00", sku: "N00144", date: "2026-09-10", quantity: 3, deductQuantity: 3, saleType: "銷貨" }
+      ], takeRecords: [] }],
+      marketing: { giftActivities: [{ startDate: "2026-09-06", endDate: "2026-09-30", giftSkus: ["N00144"] }], warnings: [] }
+    });
+    expect(result.regularRows).toHaveLength(0);
+    expect(result.activityRows).toHaveLength(1);
+    expect(result.activityRows[0].itemType).toBe("activity_gift");
+    expect(result.activityRows[0].suggestedQuantity).toBe(3);
+  });
+});
