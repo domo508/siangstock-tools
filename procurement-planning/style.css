@@ -126,8 +126,7 @@
   outline: none;
 }
 .source-file-link:focus-visible { box-shadow: 0 0 0 3px rgba(23, 107, 135, 0.2); }
-.automatic-source-grid .upload-card:last-child,
-.manual-source-grid .upload-card:last-child { grid-column: 1 / -1; }
+.automatic-source-grid .upload-card:last-child { grid-column: 1 / -1; }
 .fixed-source-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(230px, 0.38fr);
