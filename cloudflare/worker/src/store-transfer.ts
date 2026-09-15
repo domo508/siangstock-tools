@@ -87,6 +87,11 @@ function dateText(value: unknown, label: string): string {
   return result;
 }
 
+function isWorkday(value: string, holidays: Set<string>): boolean {
+  const day = new Date(`${value}T12:00:00+08:00`).getDay();
+  return day !== 0 && day !== 6 && !holidays.has(value);
+}
+
 function validateConsumablePack(type: ItemType, value: number, label: string): void {
   if (type === "consumable" && value % 100 !== 0) throw new RequestValidationError(`${label}須為0或100的倍數。`);
 }
@@ -105,12 +110,29 @@ function visibleStore(requested: string | null, role: Role, ownStore: StoreCode 
   return requested as StoreCode;
 }
 
+function parseJson(value: unknown): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(String(value || "{}"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch { return {}; }
+}
+
+async function storeInventoryConfig(env: StoreTransferEnv): Promise<{ version: number; updatedAt: string; updatedBy: string; config: Record<string, unknown> }> {
+  const row = await env.DB.prepare("SELECT version, payload, updated_at, updated_by FROM procurement_rules_current WHERE id = 1").first<Record<string, unknown>>();
+  const rules = parseJson(row?.payload);
+  const config = rules.storeInventory && typeof rules.storeInventory === "object" && !Array.isArray(rules.storeInventory)
+    ? rules.storeInventory as Record<string, unknown> : {};
+  return { version: Number(row?.version || 0), updatedAt: String(row?.updated_at || ""), updatedBy: String(row?.updated_by || ""), config };
+}
+
 async function config(request: Request, env: StoreTransferEnv): Promise<Response> {
   const who = await actor(request, env);
+  const inventoryRules = await storeInventoryConfig(env);
   return json({ email: who.email, role: who.role, storeCode: who.storeCode, stores: STORES, retentionMonths: 12,
     googleOAuthClientId: env.GOOGLE_OAUTH_CLIENT_ID || "",
     fixedSources: { marketingDriveFileId: FIXED_SOURCES.marketingDriveFileId, productMasterFolderId: FIXED_SOURCES.productMasterFolderId },
-    permissions: { canCreate: who.role !== "store", canApprove: who.role !== "store", canReviewAll: who.role !== "store" } });
+    storeInventoryRules: inventoryRules,
+    permissions: { canCreate: who.role !== "store", canApprove: who.role !== "store", canReviewAll: who.role !== "store", canManageRules: who.role !== "store" } });
 }
 
 async function listBatches(request: Request, env: StoreTransferEnv): Promise<Response> {
@@ -118,7 +140,7 @@ async function listBatches(request: Request, env: StoreTransferEnv): Promise<Res
   const scope = visibleStore(new URL(request.url).searchParams.get("store"), who.role, who.storeCode);
   const result = scope
     ? await env.DB.prepare("SELECT b.*, s.status store_status FROM store_transfer_batches b JOIN store_transfer_store_status s ON s.batch_id = b.id WHERE s.store_code = ? ORDER BY b.updated_at DESC LIMIT 100").bind(scope).all()
-    : await env.DB.prepare("SELECT * FROM store_transfer_batches ORDER BY updated_at DESC LIMIT 100").all();
+    : await env.DB.prepare("SELECT b.*, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id) store_total, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'submitted') store_submitted, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'approved') store_approved, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.erp_created_at IS NOT NULL) store_erp_created FROM store_transfer_batches b ORDER BY b.updated_at DESC LIMIT 100").all();
   return json({ batches: result.results, scope });
 }
 
@@ -134,7 +156,8 @@ async function detail(request: Request, env: StoreTransferEnv, batchId: string):
   const statuses = scope
     ? await env.DB.prepare("SELECT * FROM store_transfer_store_status WHERE batch_id = ? AND store_code = ?").bind(batchId, scope).all()
     : await env.DB.prepare("SELECT * FROM store_transfer_store_status WHERE batch_id = ? ORDER BY store_code").bind(batchId).all();
-  return json({ batch, items: items.results, storeStatuses: statuses.results, scope });
+  const events = await env.DB.prepare("SELECT store_code, event_type, summary, created_at, created_by FROM store_transfer_events WHERE batch_id = ? ORDER BY created_at DESC LIMIT 100").bind(batchId).all();
+  return json({ batch, items: items.results, storeStatuses: statuses.results, events: events.results, scope });
 }
 
 async function createBatch(request: Request, env: StoreTransferEnv): Promise<Response> {
@@ -149,6 +172,11 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   const lockAt = text(input.lockAt, "鎖定時間", 40);
   if (Number.isNaN(Date.parse(responseDueAt)) || Number.isNaN(Date.parse(lockAt))) throw new RequestValidationError("回覆期限或鎖定時間格式錯誤。");
   if (Date.parse(responseDueAt) > Date.parse(lockAt)) throw new RequestValidationError("門市回覆期限不可晚於鎖定時間。");
+  const inventoryRules = await storeInventoryConfig(env);
+  const holidays = new Set(Array.isArray(inventoryRules.config.workdayHolidays) ? inventoryRules.config.workdayHolidays.map(String) : []);
+  if (!isWorkday(proposalDate, holidays)) throw new RequestValidationError("建議產生日不是公司工作日，請依國定假日規則提前。");
+  const lockDate = new Date(lockAt).toLocaleDateString("en-CA", { timeZone: "Asia/Taipei" });
+  if (!isWorkday(lockDate, holidays)) throw new RequestValidationError("門市回覆鎖定日不是公司工作日，請順延至下一工作日。");
   const items = input.items;
   if (!Array.isArray(items) || !items.length || items.length > 5000) throw new RequestValidationError("逐品項建議須為1至5000筆。");
   const seen = new Set<string>();
@@ -194,28 +222,60 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
   if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
   if (!["open", "review"].includes(String(batch.status))) throw new RequestValidationError("此批次目前不可再修改。", 409);
   if (who.role === "store" && Date.now() >= Date.parse(String(batch.lock_at))) throw new RequestValidationError("回覆時間已截止；請聯絡總部協助更正。", 409);
+  const storeState = await env.DB.prepare("SELECT status FROM store_transfer_store_status WHERE batch_id = ? AND store_code = ?").bind(batchId, storeCode).first<Record<string, unknown>>();
+  if (!storeState) throw new RequestValidationError("此批次沒有這間門市。", 404);
+  if (who.role === "store" && String(storeState.status) === "submitted") throw new RequestValidationError("已送出總部覆核；請先按撤回修改。", 409);
   const input = await readBody(request);
   if (!Array.isArray(input.items) || input.items.length > 2000) throw new RequestValidationError("確認明細格式錯誤。");
+  const existing = await env.DB.prepare("SELECT sku, item_type, suggested_quantity FROM store_transfer_items WHERE batch_id = ? AND store_code = ?").bind(batchId, storeCode).all<Record<string, unknown>>();
+  const suggested = new Map(existing.results.map((row) => [`${row.sku}\u0000${row.item_type}`, Number(row.suggested_quantity)]));
+  if (input.items.length !== existing.results.length) throw new RequestValidationError("確認明細不完整，請重新載入。", 409);
   const now = new Date().toISOString();
+  const seen = new Set<string>();
   const updates = (input.items as unknown[]).map((raw) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("確認明細格式錯誤。");
     const item = raw as Record<string, unknown>;
     const sku = text(item.sku, "ERP品號", 80);
     const type = itemType(item.itemType);
+    const key = `${sku}\u0000${type}`;
+    if (seen.has(key)) throw new RequestValidationError(`${sku}確認明細重複。`);
+    seen.add(key);
     const confirmed = quantity(item.confirmedQuantity, "門市確認量");
     validateConsumablePack(type, confirmed, "門市確認量");
     const reason = String(item.reason || "").normalize("NFKC").trim().slice(0, 300);
+    const original = suggested.get(`${sku}\u0000${type}`);
+    if (original == null) throw new RequestValidationError(`${sku}不存在或已變更，請重新載入。`, 409);
+    if (confirmed !== original && !reason) throw new RequestValidationError(`${sku}的門市確認量與系統建議不同，請填寫人工調整原因。`);
     return env.DB.prepare("UPDATE store_transfer_items SET store_confirmed_quantity = ?, store_reason = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ? AND item_type = ?").bind(confirmed, reason, now, who.email, batchId, storeCode, sku, type);
   });
   const status = submit ? "submitted" : "saved";
   const results = await env.DB.batch([
     ...updates,
     env.DB.prepare("UPDATE store_transfer_store_status SET status = ?, submitted_at = CASE WHEN ? = 'submitted' THEN ? ELSE submitted_at END, submitted_by = CASE WHEN ? = 'submitted' THEN ? ELSE submitted_by END, updated_at = ? WHERE batch_id = ? AND store_code = ?").bind(status, status, now, status, who.email, now, batchId, storeCode),
-    env.DB.prepare("UPDATE store_transfer_batches SET status = CASE WHEN ? = 'submitted' THEN 'review' ELSE status END, updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ?").bind(status, now, who.email, batchId),
+    env.DB.prepare("UPDATE store_transfer_batches SET status = CASE WHEN NOT EXISTS (SELECT 1 FROM store_transfer_store_status s WHERE s.batch_id = ? AND s.status NOT IN ('submitted', 'approved')) THEN 'review' ELSE 'open' END, updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ?").bind(batchId, now, who.email, batchId),
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, store_code, event_type, summary, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)").bind(batchId, storeCode, submit ? "store_submitted" : "store_saved", submit ? "門市送出確認" : "門市暫存確認", now, who.email)
   ]);
   if (updates.some((_, index) => Number(results[index].meta.changes || 0) !== 1)) throw new RequestValidationError("部分品號不存在或已變更，請重新載入。", 409);
   return json({ batchId, storeCode, status, updatedAt: now });
+}
+
+async function withdrawStore(request: Request, env: StoreTransferEnv, batchId: string, requestedStore: string): Promise<Response> {
+  requireSameOrigin(request, env);
+  const who = await actor(request, env);
+  const storeCode = visibleStore(requestedStore, who.role, who.storeCode);
+  if (!storeCode) throw new RequestValidationError("必須指定門市。");
+  const batch = await env.DB.prepare("SELECT status, lock_at FROM store_transfer_batches WHERE id = ?").bind(batchId).first<Record<string, unknown>>();
+  if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
+  if (!["open", "review"].includes(String(batch.status))) throw new RequestValidationError("此批次已核准，不能撤回。", 409);
+  if (who.role === "store" && Date.now() >= Date.parse(String(batch.lock_at))) throw new RequestValidationError("星期一上午9點後只限總部更正。", 409);
+  const now = new Date().toISOString();
+  const result = await env.DB.prepare("UPDATE store_transfer_store_status SET status = 'saved', submitted_at = NULL, submitted_by = NULL, withdrawn_at = ?, withdrawn_by = ?, updated_at = ? WHERE batch_id = ? AND store_code = ? AND status = 'submitted'").bind(now, who.email, now, batchId, storeCode).run();
+  if (Number(result.meta.changes || 0) !== 1) throw new RequestValidationError("此門市目前不是已送出狀態，無需撤回。", 409);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE store_transfer_batches SET status = 'open', updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ?").bind(now, who.email, batchId),
+    env.DB.prepare("INSERT INTO store_transfer_events (batch_id, store_code, event_type, summary, created_at, created_by) VALUES (?, ?, 'store_withdrawn', '門市撤回修改', ?, ?)").bind(batchId, storeCode, now, who.email)
+  ]);
+  return json({ batchId, storeCode, status: "saved", withdrawnAt: now });
 }
 
 async function approveBatch(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
@@ -228,8 +288,12 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   const input = await readBody(request);
   if (Number(pending?.count || 0) > 0 && input.confirmPendingStores !== true) throw new RequestValidationError("仍有門市尚未送出；確認要以目前資料核准後再操作。", 409);
   if (!Array.isArray(input.items) || !input.items.length || input.items.length > 5000) throw new RequestValidationError("總部核准明細格式錯誤。");
+  const existing = await env.DB.prepare("SELECT store_code, sku, item_type, suggested_quantity, store_confirmed_quantity FROM store_transfer_items WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
+  const baseline = new Map(existing.results.map((row) => [`${row.store_code}\u0000${row.sku}\u0000${row.item_type}`, Number(row.store_confirmed_quantity ?? row.suggested_quantity)]));
+  if (input.items.length !== existing.results.length) throw new RequestValidationError("總部核准明細不完整，請重新載入。", 409);
   const now = new Date().toISOString();
   let total = 0;
+  const seen = new Set<string>();
   const updates = (input.items as unknown[]).map((raw) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("總部核准明細格式錯誤。");
     const item = raw as Record<string, unknown>;
@@ -237,9 +301,16 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
     if (!(storeCode in STORES)) throw new RequestValidationError(`未知門市：${storeCode}。`);
     const sku = text(item.sku, "ERP品號", 80);
     const type = itemType(item.itemType);
+    const key = `${storeCode}\u0000${sku}\u0000${type}`;
+    if (seen.has(key)) throw new RequestValidationError(`${storeCode}／${sku}核准明細重複。`);
+    seen.add(key);
     const approved = quantity(item.approvedQuantity, "總部核准量"); total += approved;
     validateConsumablePack(type, approved, "總部核准量");
-    return env.DB.prepare("UPDATE store_transfer_items SET hq_approved_quantity = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ? AND item_type = ?").bind(approved, now, who.email, batchId, storeCode, sku, type);
+    const reason = String(item.reason || "").normalize("NFKC").trim().slice(0, 300);
+    const original = baseline.get(`${storeCode}\u0000${sku}\u0000${type}`);
+    if (original == null) throw new RequestValidationError(`${storeCode}／${sku}不存在或已變更。`, 409);
+    if (approved !== original && !reason) throw new RequestValidationError(`${storeCode}／${sku}的核准量與門市確認量不同，請填寫總部調整原因。`);
+    return env.DB.prepare("UPDATE store_transfer_items SET hq_approved_quantity = ?, hq_reason = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ? AND item_type = ?").bind(approved, reason, now, who.email, batchId, storeCode, sku, type);
   });
   const results = await env.DB.batch([
     ...updates,
@@ -249,6 +320,38 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   ]);
   if (updates.some((_, index) => Number(results[index].meta.changes || 0) !== 1)) throw new RequestValidationError("部分品號不存在或已變更，請重新載入。", 409);
   return json({ batchId, status: "approved", approvedQuantity: total, updatedAt: now });
+}
+
+async function markErpCreated(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
+  requireSameOrigin(request, env);
+  const who = await actor(request, env); assertHq(who.role);
+  const input = await readBody(request);
+  const storeCode = text(input.storeCode, "門市代碼", 5) as StoreCode;
+  if (!(storeCode in STORES)) throw new RequestValidationError("門市代碼不存在。");
+  const batch = await env.DB.prepare("SELECT status FROM store_transfer_batches WHERE id = ?").bind(batchId).first<Record<string, unknown>>();
+  if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
+  if (!["approved", "erp_created"].includes(String(batch.status))) throw new RequestValidationError("此批次尚未核准或已結案。", 409);
+  const now = new Date().toISOString();
+  const result = await env.DB.prepare("UPDATE store_transfer_store_status SET erp_created_at = COALESCE(erp_created_at, ?), erp_created_by = COALESCE(erp_created_by, ?), updated_at = ? WHERE batch_id = ? AND store_code = ?").bind(now, who.email, now, batchId, storeCode).run();
+  if (Number(result.meta.changes || 0) !== 1) throw new RequestValidationError("此批次沒有這間門市。", 404);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE store_transfer_batches SET status = CASE WHEN NOT EXISTS (SELECT 1 FROM store_transfer_store_status s WHERE s.batch_id = ? AND s.erp_created_at IS NULL) THEN 'erp_created' ELSE status END, updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ?").bind(batchId, now, who.email, batchId),
+    env.DB.prepare("INSERT INTO store_transfer_events (batch_id, store_code, event_type, summary, created_at, created_by) VALUES (?, ?, 'erp_created', '已產生門市ERP調撥檔', ?, ?)").bind(batchId, storeCode, now, who.email)
+  ]);
+  return json({ batchId, storeCode, status: "erp_created", updatedAt: now });
+}
+
+async function closeBatch(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
+  requireSameOrigin(request, env);
+  const who = await actor(request, env); assertHq(who.role);
+  const now = new Date().toISOString();
+  const result = await env.DB.prepare("UPDATE store_transfer_batches SET status = 'closed', updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ? AND status = 'erp_created'").bind(now, who.email, batchId).run();
+  if (Number(result.meta.changes || 0) !== 1) throw new RequestValidationError("須先完成所有門市ERP檔，才可結束批次。", 409);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE store_transfer_store_status SET status = 'closed', updated_at = ? WHERE batch_id = ?").bind(now, batchId),
+    env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'closed', '總部標記本週批次完成', ?, ?)").bind(batchId, now, who.email)
+  ]);
+  return json({ batchId, status: "closed", updatedAt: now });
 }
 
 async function consumableHistory(request: Request, env: StoreTransferEnv): Promise<Response> {
@@ -300,8 +403,14 @@ export async function storeTransferRoute(request: Request, env: StoreTransferEnv
   if (detailMatch && request.method === "GET") return detail(request, env, decodeURIComponent(detailMatch[1]));
   const storeMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/stores\/([^/]+)\/(save|submit)$/);
   if (storeMatch && request.method === "PUT") return saveStore(request, env, decodeURIComponent(storeMatch[1]), decodeURIComponent(storeMatch[2]), storeMatch[3] === "submit");
+  const withdrawMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/stores\/([^/]+)\/withdraw$/);
+  if (withdrawMatch && request.method === "POST") return withdrawStore(request, env, decodeURIComponent(withdrawMatch[1]), decodeURIComponent(withdrawMatch[2]));
   const approveMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/approve$/);
   if (approveMatch && request.method === "POST") return approveBatch(request, env, decodeURIComponent(approveMatch[1]));
+  const erpMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/erp-created$/);
+  if (erpMatch && request.method === "POST") return markErpCreated(request, env, decodeURIComponent(erpMatch[1]));
+  const closeMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/close$/);
+  if (closeMatch && request.method === "POST") return closeBatch(request, env, decodeURIComponent(closeMatch[1]));
   return json({ error: "不支援此方法或路徑。" }, 405);
 }
 

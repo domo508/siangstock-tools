@@ -56,10 +56,18 @@
 .transfer-table input { width: 90px; padding: .45rem; border: 1px solid #bfcfd9; border-radius: 8px; font: inherit; }
 .transfer-table input.reason-input { width: 220px; }
 .batch-card button { justify-self: end; }
+.heading-actions { display: grid; justify-items: end; gap: .55rem; }
+.heading-actions p { margin: 0; }
+.store-status-overview { margin: 1rem 0 1.25rem; padding: 1rem; border: 1px solid #cbdde7; border-radius: 14px; background: #f5f9fb; }
+.store-status-overview h3 { margin-top: 0; }
+.status-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .7rem; }
+.status-grid article { display: grid; gap: .25rem; padding: .8rem; border-radius: 11px; background: #fff; border: 1px solid #dce6eb; }
+.status-grid span { color: var(--transfer-blue); font-weight: 800; }
+.status-grid small { color: #647b8d; }
 .batch-dialog { width: min(1180px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); padding: 1.4rem; border: 0; border-radius: 18px; box-shadow: 0 22px 70px rgba(15, 42, 61, .28); }
 .batch-dialog::backdrop { background: rgba(13, 35, 50, .5); }
 .dialog-close { float: right; border: 0; background: transparent; font-size: 2rem; cursor: pointer; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1rem; }
 .secondary-button.compact { padding: .55rem .8rem; }
 @media (max-width: 960px) { .guide-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 760px) { .period-grid, .transfer-sources, .fixed-source-panel, .guide-grid { grid-template-columns: 1fr; } .fixed-source-panel > .status-line { grid-column: auto; } .fixed-source-actions { justify-content: stretch; } .fixed-source-actions button { width: 100%; } .batch-card { grid-template-columns: 1fr; } .action-row { align-items: stretch; flex-direction: column; } }
+@media (max-width: 760px) { .period-grid, .transfer-sources, .fixed-source-panel, .guide-grid, .status-grid { grid-template-columns: 1fr; } .fixed-source-panel > .status-line { grid-column: auto; } .fixed-source-actions { justify-content: stretch; } .fixed-source-actions button { width: 100%; } .batch-card { grid-template-columns: 1fr; } .action-row { align-items: stretch; flex-direction: column; } .heading-actions { justify-items: start; } }

@@ -120,6 +120,17 @@ function validateProcurementRules(value: unknown): Record<string, unknown> {
   if (!Array.isArray(rules.blacklist) || rules.blacklist.length > 1000) throw new RequestValidationError("黑名單格式錯誤。");
   if (!rules.consignment || typeof rules.consignment !== "object" || Array.isArray(rules.consignment)) throw new RequestValidationError("寄庫規則格式錯誤。");
   if (!rules.storeInventory || typeof rules.storeInventory !== "object" || Array.isArray(rules.storeInventory)) throw new RequestValidationError("門市庫存規則格式錯誤。");
+  const storeInventory = rules.storeInventory as Record<string, unknown>;
+  if (!Array.isArray(storeInventory.rules) || storeInventory.rules.length > 100) throw new RequestValidationError("門市庫存規則清單格式錯誤。");
+  const holidays = storeInventory.workdayHolidays == null ? [] : storeInventory.workdayHolidays;
+  if (!Array.isArray(holidays) || holidays.length > 100 || holidays.some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(String(date)) || Number.isNaN(Date.parse(`${date}T00:00:00Z`)))) throw new RequestValidationError("公司不作業日須為有效 YYYY-MM-DD 日期。");
+  storeInventory.workdayHolidays = [...new Set(holidays.map(String))].sort();
+  for (const rule of storeInventory.rules as Record<string, unknown>[]) {
+    if (!rule || typeof rule !== "object" || !String(rule.name || "").trim()) throw new RequestValidationError("門市庫存規則名稱不可空白。");
+    if (!["不可售展示", "可售最低庫存", "可售特殊備貨", "排除規則"].includes(String(rule.inventoryRole))) throw new RequestValidationError("門市庫存角色格式錯誤。");
+    if (!Number.isInteger(Number(rule.quantity)) || Number(rule.quantity) < 0 || Number(rule.quantity) > 100) throw new RequestValidationError("門市庫存規則數量須為0至100的整數。");
+    if (!Number.isInteger(Number(rule.priority)) || Number(rule.priority) < 0 || Number(rule.priority) > 1000) throw new RequestValidationError("門市庫存規則優先序須為0至1000的整數。");
+  }
   if (!rules.springFestival || typeof rules.springFestival !== "object" || Array.isArray(rules.springFestival)) throw new RequestValidationError("國外供應商春節備貨規則格式錯誤。");
   const springFestival = rules.springFestival as Record<string, unknown>;
   if (typeof springFestival.enabled !== "boolean") throw new RequestValidationError("春節備貨啟用狀態格式錯誤。");

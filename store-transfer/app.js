@@ -79,7 +79,9 @@
 
   function batchCard(batch) {
     const status = { open: "等待門市", review: "總部覆核中", approved: "已核准", erp_created: "已產生ERP", closed: "已完成", cancelled: "已取消" }[batch.status] || batch.status;
-    return `<article class="batch-card"><div><h3>${escapeHtml(batch.week_key || batch.id)}</h3><p class="batch-meta">${escapeHtml(batch.item_count || 0)}項・系統建議${escapeHtml(batch.suggested_quantity || 0)}件・更新於${escapeHtml(batch.updated_at || "")}</p></div><span class="batch-status">${escapeHtml(status)}</span><button class="secondary-button compact" type="button" data-open-batch="${escapeHtml(batch.id)}">查看／處理</button></article>`;
+    const ownStatus = { pending: "尚未處理", saved: "已暫存", submitted: "已送出", approved: "已核准", closed: "已完成" }[batch.store_status] || batch.store_status;
+    const progress = batch.store_total == null ? (ownStatus ? `本店：${ownStatus}` : "") : `門市已送出 ${Number(batch.store_submitted || 0) + Number(batch.store_approved || 0)}/${batch.store_total}・ERP ${batch.store_erp_created || 0}/${batch.store_total}`;
+    return `<article class="batch-card"><div><h3>${escapeHtml(batch.week_key || batch.id)}</h3><p class="batch-meta">${escapeHtml(batch.item_count || 0)}項・系統建議${escapeHtml(batch.suggested_quantity || 0)}件・${escapeHtml(progress)}・更新於${escapeHtml(batch.updated_at || "")}</p></div><span class="batch-status">${escapeHtml(status)}</span><button class="secondary-button compact" type="button" data-open-batch="${escapeHtml(batch.id)}">查看／處理</button></article>`;
   }
 
   async function loadBatches() {
@@ -90,15 +92,26 @@
     if (state.config.role === "store") $("store-batches").innerHTML = html;
   }
 
+  function applyScheduleForWeek(weekKey) {
+    const match = String(weekKey || "").match(/^(\d{4})-W(\d{2})$/); if (!match) return;
+    const jan4 = new Date(Number(match[1]), 0, 4, 12), jan4Offset = (jan4.getDay() + 6) % 7;
+    const monday = new Date(jan4); monday.setDate(jan4.getDate() - jan4Offset + (Number(match[2]) - 1) * 7);
+    const friday = new Date(monday); friday.setDate(monday.getDate() + 4);
+    const nextMonday = new Date(monday); nextMonday.setDate(monday.getDate() + 7);
+    const iso = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const holidays = state.config.storeInventoryRules?.config?.workdayHolidays || [];
+    const proposal = transferCore.previousWorkingDay(iso(friday), holidays);
+    const lock = transferCore.nextWorkingDay(iso(nextMonday), holidays);
+    $("proposal-date").value = proposal; $("lock-at").value = `${lock}T09:00`;
+  }
+
   function defaults() {
     const today = new Date(), offset = (today.getDay() + 6) % 7;
     const monday = new Date(today); monday.setDate(today.getDate() - offset);
     const friday = new Date(monday); friday.setDate(monday.getDate() + 4);
-    const nextMonday = new Date(monday); nextMonday.setDate(monday.getDate() + 7);
-    const iso = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-    $("proposal-date").value = iso(friday); $("lock-at").value = `${iso(nextMonday)}T09:00`;
     const start = new Date(friday.getFullYear(), 0, 1), days = Math.floor((friday - start) / 86400000);
     $("week-key").value = `${friday.getFullYear()}-W${String(Math.ceil((days + start.getDay() + 1) / 7)).padStart(2, "0")}`;
+    applyScheduleForWeek($("week-key").value);
   }
 
   function rowProjection(item, quantity) {
@@ -133,10 +146,13 @@
         transfer: parser.parseTransferWorkbook(transferBook, XLSX, { fileName: transferFile.name }),
         sales,
         marketing: transferCore.parseMarketingWorkbook(marketingBook, XLSX, latestSalesDate),
-        consumableHistory: historyPayload.snapshots || []
+        consumableHistory: historyPayload.snapshots || [],
+        storeInventory: state.config.storeInventoryRules?.config || {}
       });
       await api("/consumable-snapshots", { method: "POST", body: { snapshots: state.calculation.consumableSnapshots } });
-      $("calculation-summary").textContent = `銷售截止${state.calculation.latestSalesDate}；必要補貨${state.calculation.totals.regularItemCount}項、建議備貨${state.calculation.totals.specialStockItemCount}項、活動／贈品${state.calculation.totals.activityItemCount}項、耗材${state.calculation.totals.consumableItemCount}項、缺貨未配${state.calculation.totals.shortageItemCount}項；提袋快照已記錄。`;
+      $("calculation-summary").textContent = `銷售截止${state.calculation.latestSalesDate}；必要補貨${state.calculation.totals.regularItemCount}項、建議備貨${state.calculation.totals.specialStockItemCount}項、活動／贈品${state.calculation.totals.activityItemCount}項、耗材${state.calculation.totals.consumableItemCount}項、缺貨未配${state.calculation.totals.shortageItemCount}項；B3成功配對${state.calculation.b3Audit.matchedCount}筆、待人工確認${state.calculation.b3Audit.pendingCount}筆；提袋快照已記錄。`;
+      $("b3-audit").hidden = !state.calculation.b3Audit.pendingCount;
+      $("b3-audit").innerHTML = state.calculation.b3Audit.pendingCount ? `<strong>B3待人工確認：</strong>${state.calculation.b3Audit.pendingRows.slice(0, 20).map((row) => `${escapeHtml(row.storeCode)}／${escapeHtml(row.sku)}／來源單${escapeHtml(row.sourceOrder || "未填")}`).join("、")}${state.calculation.b3Audit.pendingCount > 20 ? "…" : ""}。這些資料未納入B3與門市能力。` : "";
       $("calculation-rows").innerHTML = state.calculation.regularRows.length ? state.calculation.regularRows.map((row) => previewRow(row, "regular")).join("") : '<tr><td colspan="10">本週沒有一般必要補貨。</td></tr>';
       $("special-stock-results").hidden = !state.calculation.specialStockRows.length;
       $("special-stock-rows").innerHTML = state.calculation.specialStockRows.map((row) => previewRow(row, "special")).join("");
@@ -167,13 +183,14 @@
   }
 
   function itemTable(payload) {
-    const editable = state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && Date.now() < Date.parse(payload.batch.lock_at);
+    const ownStatus = payload.storeStatuses.find((row) => row.store_code === state.config.storeCode)?.status;
+    const editable = state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && ownStatus !== "submitted" && Date.now() < Date.parse(payload.batch.lock_at);
     const hqEditable = state.config.role !== "store" && ["open", "review"].includes(payload.batch.status);
-    const table = (items, title, note = "") => items.length ? `<section class="result-section"><h3>${title}</h3>${note ? `<p>${note}</p>` : ""}<div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>建議量</th><th>建議後</th><th>門市確認量</th><th>確認後</th><th>調整原因</th>${state.config.role !== "store" ? "<th>總部核准量</th><th>核准後</th>" : ""}</tr></thead><tbody>${items.map((item) => {
+    const table = (items, title, note = "") => items.length ? `<section class="result-section"><h3>${title}</h3>${note ? `<p>${note}</p>` : ""}<div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>建議量</th><th>建議後</th><th>門市確認量</th><th>確認後</th><th>門市調整原因</th>${state.config.role !== "store" ? "<th>總部核准量</th><th>核准後</th><th>總部調整原因</th>" : ""}</tr></thead><tbody>${items.map((item) => {
       const step = item.item_type === "consumable" ? 100 : 1;
       const confirmed = item.store_confirmed_quantity ?? item.suggested_quantity;
       const approved = item.hq_approved_quantity ?? confirmed;
-      return `<tr data-store="${item.store_code}" data-sku="${escapeHtml(item.sku)}" data-item-type="${item.item_type || "regular"}" data-calculation-date="${escapeHtml(item.calculation_date)}" data-base="${Number(item.base_quantity || 0)}" data-daily="${Number(item.daily_usage || 0)}" data-system-projection="${escapeHtml(item.system_projection || "")}"><td>${item.store_code}</td><td>${escapeHtml(item.sku)}</td><td>${escapeHtml(item.product_name)}</td><td>${item.suggested_quantity}</td><td>${escapeHtml(item.system_projection || rowProjection(item, item.suggested_quantity))}</td><td><input data-confirmed type="number" min="0" step="${step}" value="${confirmed}" ${editable || hqEditable ? "" : "disabled"}></td><td data-confirmed-projection>${escapeHtml(rowProjection(item, confirmed))}</td><td><input data-reason class="reason-input" value="${escapeHtml(item.store_reason || "")}" ${editable || hqEditable ? "" : "disabled"}></td>${state.config.role !== "store" ? `<td><input data-approved type="number" min="0" step="${step}" value="${approved}" ${hqEditable ? "" : "disabled"}></td><td data-approved-projection>${escapeHtml(rowProjection(item, approved))}</td>` : ""}</tr>`;
+      return `<tr data-store="${item.store_code}" data-sku="${escapeHtml(item.sku)}" data-item-type="${item.item_type || "regular"}" data-calculation-date="${escapeHtml(item.calculation_date)}" data-base="${Number(item.base_quantity || 0)}" data-daily="${Number(item.daily_usage || 0)}" data-system-projection="${escapeHtml(item.system_projection || "")}"><td>${item.store_code}</td><td>${escapeHtml(item.sku)}</td><td>${escapeHtml(item.product_name)}</td><td>${item.suggested_quantity}</td><td>${escapeHtml(item.system_projection || rowProjection(item, item.suggested_quantity))}</td><td><input data-confirmed type="number" min="0" step="${step}" value="${confirmed}" ${editable ? "" : "disabled"}></td><td data-confirmed-projection>${escapeHtml(rowProjection(item, confirmed))}</td><td><input data-reason class="reason-input" value="${escapeHtml(item.store_reason || "")}" ${editable ? "" : "disabled"}></td>${state.config.role !== "store" ? `<td><input data-approved type="number" min="0" step="${step}" value="${approved}" ${hqEditable ? "" : "disabled"}></td><td data-approved-projection>${escapeHtml(rowProjection(item, approved))}</td><td><input data-hq-reason class="reason-input" value="${escapeHtml(item.hq_reason || "")}" ${hqEditable ? "" : "disabled"}></td>` : ""}</tr>`;
     }).join("")}</tbody></table></div></section>` : "";
     return [
       table(payload.items.filter((item) => item.item_type === "regular"), "一般週補貨（必要調撥）"),
@@ -193,22 +210,30 @@
   }
 
   function detailActions(payload) {
-    if (state.config.role === "store" && ["open", "review"].includes(payload.batch.status)) return '<button class="secondary-button" type="button" data-action="save">暫存</button><button class="primary-button" type="button" data-action="submit">送出總部覆核</button>';
+    const ownStatus = payload.storeStatuses.find((row) => row.store_code === state.config.storeCode)?.status;
+    if (state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && ownStatus === "submitted" && Date.now() < Date.parse(payload.batch.lock_at)) return '<button class="secondary-button" type="button" data-action="withdraw">撤回修改</button>';
+    if (state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && Date.now() < Date.parse(payload.batch.lock_at)) return '<button class="secondary-button" type="button" data-action="save">暫存</button><button class="primary-button" type="button" data-action="submit">送出總部覆核</button>';
     if (state.config.role !== "store" && ["open", "review"].includes(payload.batch.status)) return '<button class="primary-button" type="button" data-action="approve">核准本週調撥</button>';
-    if (state.config.role !== "store" && payload.batch.status === "approved") return [...new Set(payload.items.map((item) => item.store_code))].map((store) => `<button class="secondary-button" type="button" data-action="erp" data-store="${store}">下載${store} ERP檔</button>`).join("");
+    if (state.config.role !== "store" && ["approved", "erp_created"].includes(payload.batch.status)) return `${[...new Set(payload.items.map((item) => item.store_code))].map((store) => { const done = payload.storeStatuses.find((row) => row.store_code === store)?.erp_created_at; return `<button class="secondary-button" type="button" data-action="erp" data-store="${store}">${done ? "重新下載" : "下載"}${store} ERP檔</button>`; }).join("")}${payload.batch.status === "erp_created" ? '<button class="primary-button" type="button" data-action="close">標記本週批次完成</button>' : ""}`;
     return "";
+  }
+
+  function statusOverview(payload) {
+    if (state.config.role === "store") return "";
+    const labels = { pending: "尚未處理", saved: "已暫存", submitted: "已送出", approved: "已核准", closed: "已完成" };
+    return `<section class="store-status-overview"><h3>門市回覆與ERP狀態</h3><div class="status-grid">${payload.storeStatuses.map((row) => `<article><strong>${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</strong><span>${escapeHtml(labels[row.status] || row.status)}</span><small>${row.erp_created_at ? `ERP已產生・${escapeHtml(row.erp_created_at)}` : "ERP尚未產生"}</small></article>`).join("")}</div></section>`;
   }
 
   async function openBatch(id) {
     const query = state.config.storeCode ? `?store=${state.config.storeCode}` : "";
     state.activeBatch = await api(`/batches/${encodeURIComponent(id)}${query}`);
     const p = state.activeBatch;
-    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・狀態：${escapeHtml(p.batch.status)}</p>${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
+    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(p.batch.status)}</p>${statusOverview(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
     $("batch-dialog").showModal();
   }
 
   function rowsFromDialog(mode) {
-    return [...$("batch-detail").querySelectorAll("tbody tr")].map((row) => ({ storeCode: row.dataset.store, sku: row.dataset.sku, itemType: row.dataset.itemType, ...(mode === "approve" ? { approvedQuantity: Number(row.querySelector("[data-approved]").value) } : { confirmedQuantity: Number(row.querySelector("[data-confirmed]").value), reason: row.querySelector("[data-reason]").value }) }));
+    return [...$("batch-detail").querySelectorAll("tbody tr")].map((row) => ({ storeCode: row.dataset.store, sku: row.dataset.sku, itemType: row.dataset.itemType, ...(mode === "approve" ? { approvedQuantity: Number(row.querySelector("[data-approved]").value), reason: row.querySelector("[data-hq-reason]").value } : { confirmedQuantity: Number(row.querySelector("[data-confirmed]").value), reason: row.querySelector("[data-reason]").value }) }));
   }
 
   async function handleDialog(event) {
@@ -216,13 +241,18 @@
     const action = button.dataset.action, batch = state.activeBatch; button.disabled = true;
     try {
       if (action === "save" || action === "submit") await api(`/batches/${encodeURIComponent(batch.batch.id)}/stores/${state.config.storeCode}/${action}`, { method: "PUT", body: { items: rowsFromDialog(action) } });
+      else if (action === "withdraw") await api(`/batches/${encodeURIComponent(batch.batch.id)}/stores/${state.config.storeCode}/withdraw`, { method: "POST", body: {} });
       else if (action === "approve") {
         try { await api(`/batches/${encodeURIComponent(batch.batch.id)}/approve`, { method: "POST", body: { items: rowsFromDialog("approve") } }); }
         catch (error) { if (!/尚未送出/.test(error.message) || !confirm(`${error.message}\n\n是否以目前資料繼續核准？`)) throw error; await api(`/batches/${encodeURIComponent(batch.batch.id)}/approve`, { method: "POST", body: { items: rowsFromDialog("approve"), confirmPendingStores: true } }); }
       } else if (action === "erp") {
         const store = button.dataset.store, wb = transferCore.buildErpWorkbook(batch.items, XLSX, store);
         XLSX.writeFile(wb, `${batch.batch.week_key}_${store}_ERP調撥單.xlsx`, { compression: true });
-        $("dialog-status").textContent = `${store} ERP調撥檔已下載；調出與調入倉請在ERP下拉選單人工指定。`; return;
+        await api(`/batches/${encodeURIComponent(batch.batch.id)}/erp-created`, { method: "POST", body: { storeCode: store } });
+        $("dialog-status").textContent = `${store} ERP調撥檔已下載並記錄；調出與調入倉請在ERP下拉選單人工指定。`;
+        $("batch-dialog").close(); await openBatch(batch.batch.id); await loadBatches(); return;
+      } else if (action === "close") {
+        await api(`/batches/${encodeURIComponent(batch.batch.id)}/close`, { method: "POST", body: {} });
       }
       $("batch-dialog").close(); await loadBatches();
     } catch (error) { $("dialog-status").textContent = error.message; } finally { button.disabled = false; }
@@ -237,6 +267,7 @@
       if (state.config.role === "store") { $("store-panel").hidden = false; const store = state.config.stores[state.config.storeCode]; $("store-identity").textContent = `${state.config.storeCode} ${store.name}；只會顯示本店資料。`; }
       else {
         $("hq-panel").hidden = false; renderStores(); defaults();
+        if (state.config.permissions?.canManageRules) $("rules-link").hidden = false;
         if (!state.config.googleOAuthClientId) { $("google-connect-button").disabled = true; $("source-status").textContent = "正式環境尚未設定 Google OAuth，用手動備援仍可操作。"; }
       }
       await loadBatches();
@@ -249,6 +280,7 @@
   $("publish-button").addEventListener("click", () => publish().catch((error) => { $("hq-status").textContent = error.message; }));
   $("google-connect-button").addEventListener("click", () => authorizeGoogle().catch((error) => { $("source-status").textContent = error.message; }));
   $("auto-source-button").addEventListener("click", () => loadGoogleSources().catch((error) => { $("source-status").textContent = `自動取得失敗：${error.message}；可改用手動備援。`; }));
+  $("week-key").addEventListener("change", () => applyScheduleForWeek($("week-key").value));
   document.addEventListener("click", (event) => { const button = event.target.closest("[data-open-batch]"); if (button) openBatch(button.dataset.openBatch).catch((error) => { $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; }); });
   $("batch-detail").addEventListener("click", handleDialog);
   $("batch-detail").addEventListener("input", updateDialogProjection);

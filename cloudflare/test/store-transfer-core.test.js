@@ -38,14 +38,26 @@ describe("總倉不足分配", () => {
       transfer: { records: [] },
       sales: [{ maxDate: "2026-09-14", records: [
         { warehouseCode: "R00", shipWarehouseCode: "R00", sku: "A001", date: "2026-09-14", quantity: 4, deductQuantity: 4, saleType: "銷貨" },
-        { warehouseCode: "R01", shipWarehouseCode: "R01", sku: "A001", date: "2026-09-14", quantity: 4, deductQuantity: 4, saleType: "銷貨" }
+        { warehouseCode: "R01", shipWarehouseCode: "R01", sku: "A001", date: "2026-09-14", quantity: 4, deductQuantity: 4, saleType: "銷貨" },
+        { warehouseCode: "R00", shipWarehouseCode: "R00", sku: "A001", date: "2026-09-14", quantity: 0, deductQuantity: 0, saleType: "訂貨", sourceOrder: "SO-1" }
       ], takeRecords: [
-        { warehouseCode: "R00", shipWarehouseCode: "T00", sku: "A001", date: "2026-09-14", quantity: 20, deductQuantity: 20, saleType: "取貨" }
+        { warehouseCode: "R00", shipWarehouseCode: "T00", sku: "A001", date: "2026-09-14", quantity: 20, deductQuantity: 20, saleType: "取貨", sourceOrder: "SO-1", pickupOrder: "PU-1" }
       ] }]
     });
     expect(result.totals.quantity).toBe(1);
     expect(result.rows[0].storeCode).toBe("R00");
     expect(result.rows[0].rawNeed).toBe(1);
+    expect(result.b3Audit).toMatchObject({ matchedCount: 1, pendingCount: 0 });
+  });
+
+  it("無法用來源單號與品號配對的總倉取貨不會靜默算入B3", () => {
+    const result = core.buildSuggestions({
+      storeCodes: ["R00"], master: { bySku: new Map() }, inventory: { records: [] }, transfer: { records: [] },
+      sales: [{ maxDate: "2026-09-14", records: [], takeRecords: [
+        { warehouseCode: "R00", shipWarehouseCode: "T00", sku: "A001", date: "2026-09-14", quantity: 2, deductQuantity: 2, saleType: "取貨", sourceOrder: "SO-X", pickupOrder: "PU-X" }
+      ] }]
+    });
+    expect(result.b3Audit).toMatchObject({ matchedCount: 0, pendingCount: 1 });
   });
 });
 
@@ -70,6 +82,13 @@ describe("S品、建議備貨與可售至", () => {
     });
     expect(result.specialStockRows.map((row) => row.sku)).toEqual(["A1", "A2"]);
     expect(result.specialStockRows.every((row) => row.itemType === "special_stock")).toBe(true);
+  });
+});
+
+describe("展示與最低庫存管理規則", () => {
+  it("管理前台設定會取代程式預設量與適用門市", () => {
+    const managed = { rules: [{ name: "獨立5尺商品", enabled: true, scope: "R01", inventoryRole: "不可售展示", quantity: 2, priority: 120 }] };
+    expect(core.stockRule({ name: "天絲床包 獨立5尺" }, managed)).toMatchObject({ role: "不可售展示", quantity: 2, scope: "R01" });
   });
 });
 

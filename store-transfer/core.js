@@ -66,20 +66,55 @@
     return String(value || "").normalize("NFKC").replace(/\s+/g, "").replace(/[×X＊]/g, "x");
   }
 
-  function stockRule(record) {
+  function configuredRule(base, storeInventory) {
+    if (!base || !storeInventory || !Array.isArray(storeInventory.rules)) return base;
+    const managed = storeInventory.rules.find((rule) => String(rule?.name || "") === base.name);
+    if (!managed || managed.enabled === false) return null;
+    const quantity = Number(managed.quantity);
+    return {
+      ...base,
+      role: ["不可售展示", "可售最低庫存", "可售特殊備貨", "排除規則"].includes(managed.inventoryRole) ? managed.inventoryRole : base.role,
+      quantity: Number.isInteger(quantity) && quantity >= 0 ? quantity : base.quantity,
+      scope: String(managed.scope || base.scope || "R00、R06"),
+      priority: Number(managed.priority || 0)
+    };
+  }
+
+  function stockRule(record, storeInventory) {
     const value = normalizeName(`${record?.name || ""} ${record?.size || ""}`);
     const category = String(record?.style1 || "");
     if (/贈品|運費|客製|代工|拍照樣|拍攝樣|樣品|耗材|保費|折扣|折價|蝦幣|手續費|服務費|商品券/i.test(value) || /輔料|客製/.test(category)) return null;
     const standalone = [["3.5尺", /(?<![\dx*.])3\.5尺/], ["5尺", /(?<![\dx*.])5尺/], ["6尺", /(?<![\dx*.])6尺/], ["7尺", /(?<![\dx*.])7尺/]].find(([, pattern]) => pattern.test(value));
-    if (standalone) return standalone[0] === "5尺" ? { role: "不可售展示", quantity: 1, note: "5尺不可售展示1件" } : { role: "可售最低庫存", quantity: 1, note: `${standalone[0]}可售最低庫存1件` };
-    if (/6x7尺.*薄被套/.test(value)) return /天絲|華爾紗/.test(value) ? { role: "可售最低庫存", quantity: 1, note: "天絲／華爾紗雙人薄被套最低1件" } : { role: "不可售展示", quantity: 1, note: "雙人薄被套展示1件" };
-    if (/6x7尺.*兩用被套/.test(value)) return { role: "不可售展示", quantity: 1, note: "雙人兩用被套展示1件" };
+    if (standalone) return configuredRule(standalone[0] === "5尺"
+      ? { name: "獨立5尺商品", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "5尺不可售展示1件" }
+      : { name: "獨立3.5尺、6尺、7尺商品", role: "可售最低庫存", quantity: 1, scope: "全部有銷售資料的營運門市", note: `${standalone[0]}可售最低庫存1件` }, storeInventory);
+    if (/6x7尺.*薄被套/.test(value)) return configuredRule(/天絲|華爾紗/.test(value)
+      ? { name: "6×7尺雙人薄被套天絲／華爾紗", role: "可售最低庫存", quantity: 1, scope: "全部有銷售資料的營運門市", note: "天絲／華爾紗雙人薄被套最低1件" }
+      : { name: "6×7尺雙人薄被套一般材質", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "雙人薄被套展示1件" }, storeInventory);
+    if (/6x7尺.*兩用被套/.test(value)) return configuredRule({ name: "6×7尺雙人兩用被套", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "雙人兩用被套展示1件" }, storeInventory);
     if (/床包|被套/.test(value)) return null;
-    if (/抱枕|靠枕/.test(value)) return { role: "不可售展示", quantity: 1, note: "抱枕／靠枕展示1件" };
-    if (/枕套|枕頭套/.test(value)) return /(?:2|二|兩)(?:入|個|只|件|枚)|一對|x2(?:\D|$)/i.test(value) ? { role: "不可售展示", quantity: 1, note: "枕套2入組展示1組" } : { role: "不可售展示", quantity: 2, note: "單入枕套展示2件" };
-    if (/枕頭|枕芯|乳膠枕|羽絨枕|記憶枕|水洗枕|舒眠枕|柔眠枕/.test(value)) return { role: "不可售展示", quantity: 2, note: "枕頭／枕芯展示2件" };
-    if (/\d+(?:\.\d+)?(?:尺|cm|公分)|\d+(?:\.\d+)?x\d+(?:\.\d+)?/i.test(value)) return { role: "不可售展示", quantity: 1, note: "有尺寸配件展示1件" };
+    if (/抱枕|靠枕/.test(value)) return configuredRule({ name: "抱枕、靠枕及相關套件", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "抱枕／靠枕展示1件" }, storeInventory);
+    if (/枕套|枕頭套/.test(value)) return configuredRule(/(?:2|二|兩)(?:入|個|只|件|枚)|一對|x2(?:\D|$)/i.test(value)
+      ? { name: "枕套2入組", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "枕套2入組展示1組" }
+      : { name: "枕套1入／單入", role: "不可售展示", quantity: 2, scope: "R00、R06", note: "單入枕套展示2件" }, storeInventory);
+    if (/枕頭|枕芯|乳膠枕|羽絨枕|記憶枕|水洗枕|舒眠枕|柔眠枕/.test(value)) return configuredRule({ name: "枕頭／枕芯", role: "不可售展示", quantity: 2, scope: "R00、R06", note: "枕頭／枕芯展示2件" }, storeInventory);
+    if (/\d+(?:\.\d+)?(?:尺|cm|公分)|\d+(?:\.\d+)?x\d+(?:\.\d+)?/i.test(value)) return configuredRule({ name: "有尺寸配件", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "有尺寸配件展示1件" }, storeInventory);
     return null;
+  }
+
+  function appliesToStore(rule, store, localSales42) {
+    if (!rule) return false;
+    const scope = String(rule.scope || "");
+    if (/全部有銷售資料/.test(scope)) return Number(localSales42) > 0;
+    const codes = scope.match(/R\d{2}/g) || [];
+    return codes.length ? codes.includes(store) : true;
+  }
+
+  function managedRuleByName(storeInventory, name, fallback) {
+    if (!storeInventory || !Array.isArray(storeInventory.rules)) return fallback;
+    const rule = storeInventory.rules.find((item) => String(item?.name || "") === name);
+    if (!rule || rule.enabled === false) return null;
+    return { ...fallback, role: rule.inventoryRole || fallback.role, quantity: Math.max(0, Number(rule.quantity ?? fallback.quantity)), scope: String(rule.scope || fallback.scope), priority: Number(rule.priority || 0) };
   }
 
   function excludedFromRegularTransfer(record) {
@@ -260,7 +295,29 @@
     const masterBySku = input.master.bySku;
     const inventory = new Map();
     for (const row of input.inventory.records) inventory.set(`${row.warehouseCode}|${row.sku}`, (inventory.get(`${row.warehouseCode}|${row.sku}`) || 0) + row.quantity);
-    const sales = [...input.sales.flatMap((report) => report.records), ...input.sales.flatMap((report) => report.takeRecords || [])];
+    const regularSales = input.sales.flatMap((report) => report.records);
+    const takeSales = input.sales.flatMap((report) => report.takeRecords || []);
+    const dedupe = (rows, take = false) => {
+      const seen = new Set();
+      return rows.filter((row) => {
+        const transaction = take ? (row.pickupOrder || row.sourceOrder || row.transactionTimestamp || row.date) : (row.sourceOrder || row.posOrder || row.pickupOrder || row.transactionTimestamp || row.date);
+        const key = [take ? "B3" : row.saleType, row.warehouseCode, row.shipWarehouseCode, transaction, row.sku, row.quantity, row.deductQuantity, row.actualAmount || 0].join("|");
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+      });
+    };
+    const primarySales = dedupe(regularSales);
+    const uniqueTakeSales = dedupe(takeSales, true);
+    const orderKeys = new Set(primarySales.filter((row) => row.saleType === "訂貨" && row.sourceOrder).map((row) => `${row.sourceOrder}|${row.sku}`));
+    const b3PendingRows = [];
+    const matchedTakeSales = uniqueTakeSales.filter((row) => {
+      const eligible = /^R\d{2}$/.test(row.warehouseCode || "") && row.shipWarehouseCode === "T00" && row.saleType === "取貨";
+      if (!eligible) return false;
+      const matched = Boolean(row.sourceOrder) && orderKeys.has(`${row.sourceOrder}|${row.sku}`);
+      if (!matched) b3PendingRows.push({ storeCode: row.warehouseCode, sku: row.sku, sourceOrder: row.sourceOrder || "", pickupOrder: row.pickupOrder || "", quantity: Number(row.deductQuantity || row.quantity || 0), reason: "來源單號＋ERP品號無法配對門市訂貨" });
+      return matched;
+    });
+    const sales = [...primarySales, ...matchedTakeSales];
     const latest = input.sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "");
     if (!latest) throw new Error("銷售明細沒有可辨識的結帳日期。");
 
@@ -297,8 +354,10 @@
       pendingInbound.set(inKey, (pendingInbound.get(inKey) || 0) + row.quantity);
     }
 
-    const specialTopTwo = new Set();
+    const specialTopTwo = new Map();
+    const specialRule = managedRuleByName(input.storeInventory, "單人薄被套／單人兩用被套材質前2名", { role: "可售特殊備貨", quantity: 1, scope: "R00、R06" });
     for (const store of stores) {
+      if (!specialRule || !appliesToStore(specialRule, store, 1)) continue;
       const groups = new Map();
       for (const [sku, master] of masterBySku) {
         if (master.sellThroughStop || excludedFromRegularTransfer(master) || !isSingleDuvet(master)) continue;
@@ -310,7 +369,7 @@
       }
       for (const rows of groups.values()) {
         rows.sort((a, b) => b.sold - a.sold || b.weeks - a.weeks || a.sku.localeCompare(b.sku));
-        rows.slice(0, 2).forEach((row) => specialTopTwo.add(`${store}|${row.sku}`));
+        rows.slice(0, 2).forEach((row) => specialTopTwo.set(`${store}|${row.sku}`, specialRule.quantity));
       }
     }
 
@@ -323,14 +382,15 @@
         const tier = performance >= 12 && weeks >= 4 ? "熱銷" : performance >= 4 && weeks >= 2 ? "穩定" : "低銷";
         const daily = local42 / 42;
         const target = tier === "熱銷" ? daily * 10 : tier === "穩定" ? daily * 7 : local42 > 0 ? 1 : 0;
-        const rule = stockRule(master);
-        const appliesDisplay = ["R00", "R06"].includes(store) && rule?.role === "不可售展示";
-        const minimum = rule?.role === "可售最低庫存" ? rule.quantity : 0;
+        const rule = stockRule(master, input.storeInventory);
+        const ruleApplies = appliesToStore(rule, store, local42);
+        const appliesDisplay = ruleApplies && rule?.role === "不可售展示";
+        const minimum = ruleApplies && rule?.role === "可售最低庫存" ? rule.quantity : 0;
         const display = appliesDisplay ? rule.quantity : 0;
         const current = Math.max(0, (inventory.get(key) || 0) + (pendingInbound.get(key) || 0));
         const sellable = Math.max(0, current - display);
         const normalNeed = Math.max(0, Math.ceil(Math.max(target, minimum) - sellable - 1e-9));
-        const specialNeed = specialTopTwo.has(key) ? Math.max(0, 1 - sellable) : 0;
+        const specialNeed = specialTopTwo.has(key) ? Math.max(0, Number(specialTopTwo.get(key)) - sellable) : 0;
         const itemType = specialNeed > 0 && normalNeed <= specialNeed ? "special_stock" : "regular";
         const need = itemType === "special_stock" ? specialNeed : normalNeed;
         if (!need) continue;
@@ -519,6 +579,7 @@
     return {
       latestSalesDate: latest, rows, regularRows, specialStockRows, activityRows, consumableRows, shortageRows, consumableSnapshots,
       marketingWarnings: input.marketing?.warnings || [],
+      b3Audit: { matchedCount: matchedTakeSales.length, pendingCount: b3PendingRows.length, pendingRows: b3PendingRows },
       totals: {
         itemCount: rows.length, quantity: rows.reduce((sum, row) => sum + row.suggestedQuantity, 0),
         regularItemCount: regularRows.length, specialStockItemCount: specialStockRows.length,

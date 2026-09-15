@@ -6,7 +6,7 @@
   const elements = {
     account: get("#account-badge"), pageStatus: get("#page-status"), suppliers: get("#supplier-rows"), units: get("#unit-rows"), stores: get("#store-rows"),
     addSupplier: get("#add-supplier"), featuredSupplierSelect: get("#featured-supplier-select"), addFeaturedSupplier: get("#add-featured-supplier"), featuredSupplierList: get("#featured-supplier-list"),
-    addUnit: get("#add-unit"), addStore: get("#add-store-rule"), blacklist: get("#blacklist-input"),
+    addUnit: get("#add-unit"), addStore: get("#add-store-rule"), blacklist: get("#blacklist-input"), holidays: get("#workday-holidays"),
     accessPanel: get("#access-panel"), approvers: get("#approver-emails"), recipient: get("#notification-recipient"), retention: get("#retention-months"),
     saveAccess: get("#save-access"), accessStatus: get("#access-status"), reason: get("#change-reason"), save: get("#save-rules"), saveStatus: get("#save-status"),
     springFestivalEnabled: get("#spring-festival-enabled"), springFestivalStart: get("#spring-festival-start"), springFestivalRecovery: get("#spring-festival-recovery"), springFestivalExtraDays: get("#spring-festival-extra-days"),
@@ -126,7 +126,7 @@
     elements.springFestivalRecovery.value = rule.recoveryDate || "";
     elements.springFestivalExtraDays.value = String(rule.extraDays ?? 53);
   }
-  function render() { renderSuppliers(); renderFeaturedSuppliers(); renderUnits(); renderStores(); setConsignmentFields(); setSpringFestivalFields(); elements.blacklist.value = (state.rules.blacklist || []).join("\n"); }
+  function render() { renderSuppliers(); renderFeaturedSuppliers(); renderUnits(); renderStores(); setConsignmentFields(); setSpringFestivalFields(); elements.blacklist.value = (state.rules.blacklist || []).join("\n"); elements.holidays.value = (state.rules.storeInventory.workdayHolidays || []).join("\n"); }
 
   async function loadAccessSettings() {
     const settings = await request("/api/procurement/access-settings");
@@ -142,6 +142,7 @@
   async function saveRules() {
     const reason = elements.reason.value.trim(); if (!reason) { elements.saveStatus.textContent = "請填寫本次修改原因。"; elements.reason.focus(); return; }
     state.rules.blacklist = elements.blacklist.value.split(/\n/).map((item) => item.trim()).filter(Boolean);
+    state.rules.storeInventory.workdayHolidays = elements.holidays.value.split(/\n/).map((item) => item.trim()).filter(Boolean);
     elements.save.disabled = true; elements.saveStatus.textContent = "正在儲存新版本…";
     try {
       const result = await request("/api/procurement/rules", { method: "PUT", body: JSON.stringify({ expectedVersion: state.version, changeReason: reason, rules: state.rules }) });
@@ -167,5 +168,5 @@
   elements.springFestivalStart.addEventListener("input", () => { ensureSpringFestivalRule().closureStart = elements.springFestivalStart.value; markDirty(); });
   elements.springFestivalRecovery.addEventListener("input", () => { ensureSpringFestivalRule().recoveryDate = elements.springFestivalRecovery.value; markDirty(); });
   elements.springFestivalExtraDays.addEventListener("input", () => { ensureSpringFestivalRule().extraDays = Number(elements.springFestivalExtraDays.value || 0); markDirty(); });
-  elements.blacklist.addEventListener("input", markDirty); elements.save.addEventListener("click", saveRules); elements.saveAccess.addEventListener("click", saveAccessSettings); init();
+  elements.blacklist.addEventListener("input", markDirty); elements.holidays.addEventListener("input", markDirty); elements.save.addEventListener("click", saveRules); elements.saveAccess.addEventListener("click", saveAccessSettings); init();
 })();
