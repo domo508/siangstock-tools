@@ -4,6 +4,7 @@ import { FIXED_SOURCES } from "./fixed-sources";
 
 type StoreTransferEnv = AccessConfig & { DB: D1Database; ALLOWED_ORIGINS: string; GOOGLE_OAUTH_CLIENT_ID?: string; PROCUREMENT_ACCESS_AUD?: string };
 type Role = "admin" | "hq" | "store";
+type ItemType = "regular" | "activity_gift" | "special_stock" | "consumable";
 
 const ADMIN = "siang01@siangapato.com.tw";
 const HQ_EMAILS = new Set([ADMIN, "mcpheeyin@siangapato.com.tw", "elerin@siangapato.com.tw"]);
@@ -15,6 +16,8 @@ const STORES = Object.freeze({
   R07: { name: "誠品480門市", email: "r07_siangstore@siangapato.com.tw" },
   R06: { name: "文心秀泰門市", email: "r06_siangstore@siangapato.com.tw" }
 });
+const ITEM_TYPES = new Set<ItemType>(["regular", "activity_gift", "special_stock", "consumable"]);
+const CONSUMABLE_SKUS = new Set(["P11041", "P11042", "P11043"]);
 type StoreCode = keyof typeof STORES;
 
 function accessConfig(env: StoreTransferEnv): AccessConfig {
@@ -64,6 +67,28 @@ function quantity(value: unknown, label: string): number {
   const result = Number(value);
   if (!Number.isSafeInteger(result) || result < 0 || result > 100000) throw new RequestValidationError(`${label}須為0以上整數。`);
   return result;
+}
+
+function nonnegativeNumber(value: unknown, label: string, max = 100000): number {
+  const result = Number(value);
+  if (!Number.isFinite(result) || result < 0 || result > max) throw new RequestValidationError(`${label}須為0以上數字。`);
+  return result;
+}
+
+function itemType(value: unknown): ItemType {
+  const result = String(value || "regular") as ItemType;
+  if (!ITEM_TYPES.has(result)) throw new RequestValidationError("建議類型不存在。");
+  return result;
+}
+
+function dateText(value: unknown, label: string): string {
+  const result = text(value, label, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(result) || Number.isNaN(Date.parse(`${result}T00:00:00+08:00`))) throw new RequestValidationError(`${label}格式錯誤。`);
+  return result;
+}
+
+function validateConsumablePack(type: ItemType, value: number, label: string): void {
+  if (type === "consumable" && value % 100 !== 0) throw new RequestValidationError(`${label}須為0或100的倍數。`);
 }
 
 function assertHq(role: Role): void {
@@ -119,10 +144,9 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   const id = text(input.id, "批次編號", 80);
   const weekKey = text(input.weekKey, "週次", 8);
   if (!/^\d{4}-W\d{2}$/.test(weekKey)) throw new RequestValidationError("週次須為 YYYY-Www 格式。");
-  const proposalDate = text(input.proposalDate, "建議日", 10);
+  const proposalDate = dateText(input.proposalDate, "建議日");
   const responseDueAt = text(input.responseDueAt, "門市回覆期限", 40);
   const lockAt = text(input.lockAt, "鎖定時間", 40);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(proposalDate) || Number.isNaN(Date.parse(`${proposalDate}T00:00:00+08:00`))) throw new RequestValidationError("建議日格式錯誤。");
   if (Number.isNaN(Date.parse(responseDueAt)) || Number.isNaN(Date.parse(lockAt))) throw new RequestValidationError("回覆期限或鎖定時間格式錯誤。");
   if (Date.parse(responseDueAt) > Date.parse(lockAt)) throw new RequestValidationError("門市回覆期限不可晚於鎖定時間。");
   const items = input.items;
@@ -134,17 +158,26 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
     const storeCode = text(item.storeCode, "門市代碼", 5) as StoreCode;
     if (!(storeCode in STORES)) throw new RequestValidationError(`未知門市：${storeCode}。`);
     const sku = text(item.sku, "ERP品號", 80);
-    const itemType = item.itemType === "activity_gift" ? "activity_gift" : "regular";
-    const key = `${storeCode}\u0000${sku}\u0000${itemType}`;
+    const type = itemType(item.itemType);
+    const key = `${storeCode}\u0000${sku}\u0000${type}`;
     if (seen.has(key)) throw new RequestValidationError(`${storeCode}／${sku}重複。`);
     seen.add(key);
-    return { storeCode, sku, productName: text(item.productName, "品名"), suggested: quantity(item.suggestedQuantity, "系統建議量"), ruleSummary: String(item.ruleSummary || "").slice(0, 500), itemType };
+    const suggested = quantity(item.suggestedQuantity, "系統建議量");
+    validateConsumablePack(type, suggested, "系統建議量");
+    return {
+      storeCode, sku, productName: text(item.productName, "品名"), suggested,
+      ruleSummary: String(item.ruleSummary || "").slice(0, 500), itemType: type,
+      calculationDate: dateText(item.calculationDate || proposalDate, "計算日期"),
+      baseQuantity: nonnegativeNumber(item.baseSellableQuantity || 0, "調撥前可售量"),
+      dailyUsage: nonnegativeNumber(item.dailySales || 0, "日均現場銷售"),
+      systemProjection: String(item.systemSellThroughDate || "").normalize("NFKC").trim().slice(0, 80)
+    };
   });
   const stores = [...new Set(normalized.map((item) => item.storeCode))];
   const now = new Date().toISOString();
   const statements = [
     env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, ?, ?, ?)").bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), now, who.email, now, who.email),
-    ...normalized.map((item) => env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, rule_summary, item_type, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, item.storeCode, item.sku, item.productName, item.suggested, item.ruleSummary, item.itemType, now, who.email)),
+    ...normalized.map((item) => env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, rule_summary, item_type, calculation_date, base_quantity, daily_usage, system_projection, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, item.storeCode, item.sku, item.productName, item.suggested, item.ruleSummary, item.itemType, item.calculationDate, item.baseQuantity, item.dailyUsage, item.systemProjection, now, who.email)),
     ...stores.map((storeCode) => env.DB.prepare("INSERT INTO store_transfer_store_status (batch_id, store_code, status, updated_at) VALUES (?, ?, 'pending', ?)").bind(id, storeCode, now)),
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'created', ?, ?, ?)").bind(id, `建立${stores.length}間門市、${normalized.length}筆建議`, now, who.email)
   ];
@@ -168,10 +201,11 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("確認明細格式錯誤。");
     const item = raw as Record<string, unknown>;
     const sku = text(item.sku, "ERP品號", 80);
-    const itemType = item.itemType === "activity_gift" ? "activity_gift" : "regular";
+    const type = itemType(item.itemType);
     const confirmed = quantity(item.confirmedQuantity, "門市確認量");
+    validateConsumablePack(type, confirmed, "門市確認量");
     const reason = String(item.reason || "").normalize("NFKC").trim().slice(0, 300);
-    return env.DB.prepare("UPDATE store_transfer_items SET store_confirmed_quantity = ?, store_reason = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ? AND item_type = ?").bind(confirmed, reason, now, who.email, batchId, storeCode, sku, itemType);
+    return env.DB.prepare("UPDATE store_transfer_items SET store_confirmed_quantity = ?, store_reason = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ? AND item_type = ?").bind(confirmed, reason, now, who.email, batchId, storeCode, sku, type);
   });
   const status = submit ? "submitted" : "saved";
   const results = await env.DB.batch([
@@ -202,9 +236,10 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
     const storeCode = text(item.storeCode, "門市代碼", 5);
     if (!(storeCode in STORES)) throw new RequestValidationError(`未知門市：${storeCode}。`);
     const sku = text(item.sku, "ERP品號", 80);
-    const itemType = item.itemType === "activity_gift" ? "activity_gift" : "regular";
+    const type = itemType(item.itemType);
     const approved = quantity(item.approvedQuantity, "總部核准量"); total += approved;
-    return env.DB.prepare("UPDATE store_transfer_items SET hq_approved_quantity = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ? AND item_type = ?").bind(approved, now, who.email, batchId, storeCode, sku, itemType);
+    validateConsumablePack(type, approved, "總部核准量");
+    return env.DB.prepare("UPDATE store_transfer_items SET hq_approved_quantity = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ? AND item_type = ?").bind(approved, now, who.email, batchId, storeCode, sku, type);
   });
   const results = await env.DB.batch([
     ...updates,
@@ -216,10 +251,49 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   return json({ batchId, status: "approved", approvedQuantity: total, updatedAt: now });
 }
 
+async function consumableHistory(request: Request, env: StoreTransferEnv): Promise<Response> {
+  const who = await actor(request, env); assertHq(who.role);
+  const result = await env.DB.prepare("SELECT snapshot_date, store_code, sku, current_quantity, inbound_quantity, outbound_quantity, weekly_consumption, trusted FROM store_transfer_consumable_snapshots WHERE snapshot_date >= date('now', '-12 months') ORDER BY snapshot_date DESC, store_code, sku LIMIT 1000").all();
+  return json({ snapshots: result.results });
+}
+
+async function saveConsumableSnapshots(request: Request, env: StoreTransferEnv): Promise<Response> {
+  requireSameOrigin(request, env);
+  const who = await actor(request, env); assertHq(who.role);
+  const input = await readBody(request);
+  if (!Array.isArray(input.snapshots) || !input.snapshots.length || input.snapshots.length > 18) throw new RequestValidationError("提袋快照須為1至18筆。");
+  const seen = new Set<string>();
+  const rows = (input.snapshots as unknown[]).map((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("提袋快照格式錯誤。");
+    const row = raw as Record<string, unknown>;
+    const snapshotDate = dateText(row.snapshotDate, "快照日期");
+    const storeCode = text(row.storeCode, "門市代碼", 5) as StoreCode;
+    if (!(storeCode in STORES)) throw new RequestValidationError(`未知門市：${storeCode}。`);
+    const sku = text(row.sku, "提袋品號", 20);
+    if (!CONSUMABLE_SKUS.has(sku)) throw new RequestValidationError(`非現行提袋品號：${sku}。`);
+    const key = `${snapshotDate}\u0000${storeCode}\u0000${sku}`;
+    if (seen.has(key)) throw new RequestValidationError(`${storeCode}／${sku}快照重複。`);
+    seen.add(key);
+    const weekly = row.weeklyConsumption == null ? null : nonnegativeNumber(row.weeklyConsumption, "週耗用量");
+    return {
+      snapshotDate, storeCode, sku,
+      current: nonnegativeNumber(row.currentQuantity, "目前庫存"),
+      inbound: nonnegativeNumber(row.inboundQuantity || 0, "期間調入"),
+      outbound: nonnegativeNumber(row.outboundQuantity || 0, "期間調出"),
+      weekly, trusted: row.trusted === true ? 1 : 0
+    };
+  });
+  const now = new Date().toISOString();
+  await env.DB.batch(rows.map((row) => env.DB.prepare("INSERT INTO store_transfer_consumable_snapshots (snapshot_date, store_code, sku, current_quantity, inbound_quantity, outbound_quantity, weekly_consumption, trusted, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(snapshot_date, store_code, sku) DO UPDATE SET current_quantity = excluded.current_quantity, inbound_quantity = excluded.inbound_quantity, outbound_quantity = excluded.outbound_quantity, weekly_consumption = excluded.weekly_consumption, trusted = excluded.trusted, created_at = excluded.created_at, created_by = excluded.created_by").bind(row.snapshotDate, row.storeCode, row.sku, row.current, row.inbound, row.outbound, row.weekly, row.trusted, now, who.email)));
+  return json({ saved: rows.length, snapshotDate: rows[0].snapshotDate }, 201);
+}
+
 export async function storeTransferRoute(request: Request, env: StoreTransferEnv): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/store-transfer")) return null;
   if (url.pathname === "/api/store-transfer/config" && request.method === "GET") return config(request, env);
+  if (url.pathname === "/api/store-transfer/consumable-snapshots" && request.method === "GET") return consumableHistory(request, env);
+  if (url.pathname === "/api/store-transfer/consumable-snapshots" && request.method === "POST") return saveConsumableSnapshots(request, env);
   if (url.pathname === "/api/store-transfer/batches" && request.method === "GET") return listBatches(request, env);
   if (url.pathname === "/api/store-transfer/batches" && request.method === "POST") return createBatch(request, env);
   const detailMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)$/);
@@ -237,6 +311,7 @@ export async function cleanupStoreTransfers(env: StoreTransferEnv): Promise<void
     env.DB.prepare(`DELETE FROM store_transfer_events WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_items WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_store_status WHERE batch_id IN (${expired})`),
-    env.DB.prepare(`DELETE FROM store_transfer_batches WHERE id IN (${expired})`)
+    env.DB.prepare(`DELETE FROM store_transfer_batches WHERE id IN (${expired})`),
+    env.DB.prepare("DELETE FROM store_transfer_consumable_snapshots WHERE snapshot_date < date('now', '-12 months')")
   ]);
 }

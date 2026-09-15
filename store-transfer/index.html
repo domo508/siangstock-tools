@@ -9,7 +9,7 @@
   <title>門市週補貨與調撥｜翔仔居家</title>
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="../cost-analysis/style.css">
-  <link rel="stylesheet" href="style.css?v=20260915-google-sources-r1">
+  <link rel="stylesheet" href="style.css?v=20260916-transfer-sections-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -22,7 +22,7 @@
 
     <section class="hero compact-hero" aria-labelledby="page-title">
       <div><p class="eyebrow">WEEKLY STORE REPLENISHMENT</p><h1 id="page-title">總部算一次，<br>各門市只確認自己的量。</h1><p class="hero-description">星期五由總部建立六間門市建議；門市於星期一回覆，總部核准後依門市分開產生 ERP 調撥檔。</p></div>
-      <aside class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>原始 Excel 不會上傳</strong><p>庫存與銷售只在瀏覽器運算；雲端只保存每週必要的品號、建議量、確認量與狀態，12個月後刪除。</p></div></aside>
+      <aside class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>原始 Excel 不會上傳</strong><p>庫存與銷售只在瀏覽器運算；雲端只保存流程必要欄位及每店三種提袋的週彙總快照，12個月後刪除。</p></div></aside>
     </section>
 
     <section class="steps" aria-label="使用步驟">
@@ -57,8 +57,11 @@
       <div class="action-row"><button id="calculate-button" class="primary-button" type="button" disabled>產生本週調撥建議</button><p id="hq-status" class="status-line">請先備妥兩項固定來源及三類本次資料。</p></div>
       <div id="calculation-results" class="calculation-results" hidden>
         <div class="section-heading compact"><div><h3>本週建議預覽</h3><p id="calculation-summary"></p></div><button id="publish-button" class="primary-button" type="button">建立門市確認批次</button></div>
-        <section class="result-section"><h4>一般週補貨</h4><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>近42天現場銷售</th><th>B3銷售</th><th>目前庫存</th><th>目標／展示</th><th>系統建議</th><th>說明</th></tr></thead><tbody id="calculation-rows"></tbody></table></div></section>
+        <section class="result-section"><h4>一般週補貨（必要調撥）</h4><p>依門市現場淨銷售、B3銷售能力、展示與最低庫存計算；庫存檔的實際庫存已扣除顧客承諾，不會重複扣減。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>近42天現場銷售</th><th>B3銷售</th><th>目前庫存</th><th>目標／展示</th><th>系統建議</th><th>建議後可售至</th><th>說明</th></tr></thead><tbody id="calculation-rows"></tbody></table></div></section>
+        <section id="special-stock-results" class="result-section special-stock-section" hidden><h4>建議調撥（非必要）</h4><p>單人薄被套／兩用被套依各材質近42天門市現場銷售，列出前2名花色作備貨參考；門市可填0。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>近42天現場銷售</th><th>目前庫存</th><th>系統建議</th><th>建議後可售至</th><th>說明</th></tr></thead><tbody id="special-stock-rows"></tbody></table></div></section>
         <section id="activity-results" class="result-section activity-result-section" hidden><h4>活動／贈品調撥</h4><p>依行銷策略的活動門檻、各店POS平均客單與實際達標率，再和近21天贈品耗用交叉判斷；不會放大一般補貨量。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>贈品貨號</th><th>品名</th><th>活動門檻／期間</th><th>平均客單</th><th>達標率</th><th>預估達標訂單</th><th>近21天耗用</th><th>目前庫存</th><th>系統建議</th><th>說明</th></tr></thead><tbody id="activity-rows"></tbody></table></div><p id="marketing-warnings" class="status-line"></p></section>
+        <section id="consumable-results" class="result-section consumable-section" hidden><h4>門市耗材補貨</h4><p>僅顯示大、中、小提袋有需求的門市；至少累積4個可信週次才自動建議，確認量及核准量須為100的倍數。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>提袋品號</th><th>品名</th><th>目前庫存</th><th>週均耗用</th><th>系統建議</th><th>建議後可用週數</th><th>判斷說明</th></tr></thead><tbody id="consumable-rows"></tbody></table></div></section>
+        <section id="shortage-results" class="result-section shortage-section" hidden><h4>缺貨未配清單</h4><p>此區只顯示有需求但總倉無法配足的數量，不會混入門市可確認的調撥清單；S品總倉無可釋出量時會留在背景監控，不重複顯示。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>需求量</th><th>已配量</th><th>未配量</th><th>原因</th></tr></thead><tbody id="shortage-rows"></tbody></table></div></section>
       </div>
     </section>
 
@@ -72,6 +75,11 @@
       <div id="batch-list" class="batch-list"><p class="empty-state">完成公司帳號驗證後顯示。</p></div>
     </section>
 
+    <section class="panel operation-guide" aria-labelledby="guide-title">
+      <div class="section-heading"><div><p class="eyebrow">操作說明</p><h2 id="guide-title">四種結果怎麼看</h2></div></div>
+      <div class="guide-grid"><article><strong>一般週補貨</strong><p>本週必要調撥，門市依「系統建議後可售至」調整確認量。</p></article><article><strong>建議調撥</strong><p>單人被套各材質前2名花色，作展示／備貨參考，可填0。</p></article><article><strong>門市耗材補貨</strong><p>提袋依週耗用量判斷，以整箱100個為單位。</p></article><article><strong>缺貨未配</strong><p>只供總部掌握缺口，不會成為門市確認項目。</p></article></div>
+    </section>
+
     <dialog id="batch-dialog" class="batch-dialog"><form method="dialog"><button class="dialog-close" aria-label="關閉">×</button></form><div id="batch-detail"></div></dialog>
 
     <footer><p>翔仔居家公司工具・門市週補貨與調撥</p><p>如畫面顯示資料或權限異常，請保留訊息並通知總部。</p></footer>
@@ -81,7 +89,7 @@
   <script src="../procurement-planning/core.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="../procurement-planning/google-sources.js?v=20260915-google-sources-r1"></script>
-  <script src="core.js?v=20260915-activity-threshold-r2"></script>
-  <script src="app.js?v=20260915-activity-threshold-r2"></script>
+  <script src="core.js?v=20260916-transfer-sections-r1"></script>
+  <script src="app.js?v=20260916-transfer-sections-r1"></script>
 </body>
 </html>

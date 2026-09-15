@@ -37,6 +37,18 @@
 .result-section { margin-top: 1.2rem; padding: 1rem; border: 1px solid #dce6eb; border-radius: 14px; background: #fff; }
 .result-section h4, .result-section > p { margin-top: 0; }
 .activity-result-section { border-color: #e3d19b; background: #fffaf0; }
+.special-stock-section { border-color: #b9d4dc; background: #f4fafb; }
+.consumable-section { border-color: #c9dabd; background: #f6faf2; }
+.shortage-section { border-color: #e2b7ad; background: #fff7f5; }
+.shortage-section h4 { color: #8a3e32; }
+.compact-table { min-width: 820px; }
+.transfer-table details { max-width: 340px; }
+.transfer-table summary { color: var(--transfer-blue); font-weight: 800; cursor: pointer; }
+.operation-guide { background: linear-gradient(135deg, #f8fafb, #f8f4e9); }
+.guide-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .8rem; }
+.guide-grid article { padding: 1rem; border: 1px solid #dce6eb; border-radius: 13px; background: rgba(255,255,255,.85); }
+.guide-grid strong { color: #1e455f; }
+.guide-grid p { margin: .4rem 0 0; color: #60788b; }
 .result-table-wrap { overflow: auto; }
 .transfer-table { width: 100%; min-width: 980px; border-collapse: collapse; font-size: .9rem; }
 .transfer-table th, .transfer-table td { padding: .65rem; border-bottom: 1px solid #dfe7ec; text-align: left; vertical-align: top; }
@@ -49,4 +61,5 @@
 .dialog-close { float: right; border: 0; background: transparent; font-size: 2rem; cursor: pointer; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1rem; }
 .secondary-button.compact { padding: .55rem .8rem; }
-@media (max-width: 760px) { .period-grid, .transfer-sources, .fixed-source-panel { grid-template-columns: 1fr; } .fixed-source-panel > .status-line { grid-column: auto; } .fixed-source-actions { justify-content: stretch; } .fixed-source-actions button { width: 100%; } .batch-card { grid-template-columns: 1fr; } .action-row { align-items: stretch; flex-direction: column; } }
+@media (max-width: 960px) { .guide-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .period-grid, .transfer-sources, .fixed-source-panel, .guide-grid { grid-template-columns: 1fr; } .fixed-source-panel > .status-line { grid-column: auto; } .fixed-source-actions { justify-content: stretch; } .fixed-source-actions button { width: 100%; } .batch-card { grid-template-columns: 1fr; } .action-row { align-items: stretch; flex-direction: column; } }

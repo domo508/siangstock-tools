@@ -49,6 +49,54 @@ describe("總倉不足分配", () => {
   });
 });
 
+describe("S品、建議備貨與可售至", () => {
+  it("S品總倉5件內會先依周轉保留，無可釋出時不反覆列出", () => {
+    expect(core.sStockProtection(2, 1, 2, 2)).toMatchObject({ level: "高周轉", reserve: 2, releasable: 0 });
+    expect(core.sStockProtection(5, 0, 0, 0)).toMatchObject({ level: "無周轉", reserve: 0, releasable: 5 });
+  });
+
+  it("人工調整量會改變預估可售至日期", () => {
+    expect(core.projectedSellThroughDate("2026-09-14", 2, 5, 1)).toBe("2026-09-21");
+    expect(core.projectedSellThroughDate("2026-09-14", 2, 5, 0)).toBe("近期無現場銷售");
+  });
+
+  it("單人被套各材質前2名可進入非必要建議區", () => {
+    const products = ["A1", "A2", "A3"].map((sku) => [sku, { sku, name: `天絲單人薄被套${sku}`, style1: "被套" }]);
+    const records = [3, 2, 1].map((quantity, index) => ({ warehouseCode: "R00", shipWarehouseCode: "R00", sku: `A${index + 1}`, date: "2026-09-14", quantity, deductQuantity: quantity, saleType: "銷貨" }));
+    const result = core.buildSuggestions({
+      storeCodes: ["R00"], master: { bySku: new Map(products) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "A1", quantity: 2 }, { warehouseCode: "T00", sku: "A2", quantity: 2 }] },
+      transfer: { records: [] }, sales: [{ maxDate: "2026-09-14", records, takeRecords: [] }]
+    });
+    expect(result.specialStockRows.map((row) => row.sku)).toEqual(["A1", "A2"]);
+    expect(result.specialStockRows.every((row) => row.itemType === "special_stock")).toBe(true);
+  });
+});
+
+describe("提袋耗材模型", () => {
+  it("累積4個可信週次後依門檻以100個為單位建議", () => {
+    const history = ["2026-09-07", "2026-08-31", "2026-08-24", "2026-08-17"].map((snapshotDate) => ({ snapshot_date: snapshotDate, store_code: "R00", sku: "P11041", current_quantity: 10, weekly_consumption: 60, trusted: 1 }));
+    const result = core.buildSuggestions({
+      storeCodes: ["R00"], master: { bySku: new Map() },
+      inventory: { records: [{ warehouseCode: "T00", sku: "P11041", quantity: 1000 }, { warehouseCode: "R00", sku: "P11041", quantity: 40 }] },
+      transfer: { records: [] }, sales: [{ maxDate: "2026-09-14", records: [], takeRecords: [] }], consumableHistory: history
+    });
+    expect(result.consumableRows).toHaveLength(1);
+    expect(result.consumableRows[0]).toMatchObject({ sku: "P11041", suggestedQuantity: 200, itemType: "consumable" });
+    expect(result.consumableRows[0].suggestedQuantity % 100).toBe(0);
+  });
+
+  it("歷史不足4週時只保存快照、不自動建議", () => {
+    const result = core.buildSuggestions({
+      storeCodes: ["R00"], master: { bySku: new Map() },
+      inventory: { records: [{ warehouseCode: "T00", sku: "P11041", quantity: 1000 }, { warehouseCode: "R00", sku: "P11041", quantity: 0 }] },
+      transfer: { records: [] }, sales: [{ maxDate: "2026-09-14", records: [], takeRecords: [] }], consumableHistory: []
+    });
+    expect(result.consumableRows).toHaveLength(0);
+    expect(result.consumableSnapshots).toHaveLength(3);
+  });
+});
+
 describe("整體行銷策略與活動贈品", () => {
   const fakeXlsx = { utils: { sheet_to_json: (sheet) => sheet.rows } };
 

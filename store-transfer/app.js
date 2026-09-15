@@ -101,12 +101,29 @@
     $("week-key").value = `${friday.getFullYear()}-W${String(Math.ceil((days + start.getDay() + 1) / 7)).padStart(2, "0")}`;
   }
 
+  function rowProjection(item, quantity) {
+    if (item.item_type === "activity_gift") return item.system_projection || "依活動期間判斷";
+    if (item.item_type === "consumable") {
+      const weekly = Number(item.daily_usage || 0) * 7;
+      return weekly > 0 ? `約${((Number(item.base_quantity || 0) + Number(quantity || 0)) / weekly).toFixed(1)}週` : "耗用資料不足";
+    }
+    if (!item.calculation_date) return item.system_projection || "舊批次未保存推估基準";
+    return transferCore.projectedSellThroughDate(item.calculation_date, item.base_quantity, quantity, item.daily_usage);
+  }
+
+  function previewRow(row, kind) {
+    if (kind === "special") return `<tr><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.currentInventory}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
+    if (kind === "consumable") return `<tr><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.currentInventory}</td><td>${row.averageWeeklyUsage.toFixed(1)}</td><td>${row.suggestedQuantity / 100}箱／${row.suggestedQuantity}個</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td><details><summary>查看判斷</summary>${escapeHtml(row.ruleSummary)}</details></td></tr>`;
+    if (kind === "shortage") return `<tr><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.demandQuantity}</td><td>${row.allocatedQuantity}</td><td>${row.unfilledQuantity}</td><td>${escapeHtml(row.reason)}</td></tr>`;
+    return `<tr><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.b3Sales42}</td><td>${row.currentInventory}</td><td>${Number(row.targetQuantity).toFixed(1)}／${row.displayQuantity}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
+  }
+
   async function calculate() {
     const stores = selectedStores(); if (!stores.length) throw new Error("請至少勾選一間門市。");
     $("calculate-button").disabled = true; $("hq-status").textContent = "正在本機讀取與計算，檔案不會上傳…";
     try {
       const masterFile = state.files.master, marketingFile = state.files.marketing, inventoryFile = $("inventory-file").files[0], transferFile = $("transfer-file").files[0], salesFiles = [...$("sales-files").files];
-      const [masterBook, marketingBook, inventoryBook, transferBook, ...salesBooks] = await Promise.all([workbook(masterFile), workbook(marketingFile), workbook(inventoryFile), workbook(transferFile), ...salesFiles.map(workbook)]);
+      const [masterBook, marketingBook, inventoryBook, transferBook, historyPayload, ...salesBooks] = await Promise.all([workbook(masterFile), workbook(marketingFile), workbook(inventoryFile), workbook(transferFile), api("/consumable-snapshots"), ...salesFiles.map(workbook)]);
       const sales = salesBooks.map((book, index) => parser.parseSalesWorkbook(book, XLSX, { fileName: salesFiles[index].name }));
       const latestSalesDate = sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "") || $("proposal-date").value;
       state.calculation = transferCore.buildSuggestions({
@@ -115,15 +132,24 @@
         inventory: parser.parseInventoryWorkbook(inventoryBook, XLSX, { fileName: inventoryFile.name }),
         transfer: parser.parseTransferWorkbook(transferBook, XLSX, { fileName: transferFile.name }),
         sales,
-        marketing: transferCore.parseMarketingWorkbook(marketingBook, XLSX, latestSalesDate)
+        marketing: transferCore.parseMarketingWorkbook(marketingBook, XLSX, latestSalesDate),
+        consumableHistory: historyPayload.snapshots || []
       });
-      if (!state.calculation.rows.length) throw new Error("本次沒有可由總倉供應的門市調撥建議。");
-      $("calculation-summary").textContent = `銷售截止${state.calculation.latestSalesDate}；一般補貨${state.calculation.totals.regularItemCount}項、活動／贈品${state.calculation.totals.activityItemCount}項，共建議${state.calculation.totals.quantity}件。`;
-      $("calculation-rows").innerHTML = state.calculation.regularRows.length ? state.calculation.regularRows.map((row) => `<tr><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.b3Sales42}</td><td>${row.currentInventory}</td><td>${Number(row.targetQuantity).toFixed(1)}／${row.displayQuantity}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`).join("") : '<tr><td colspan="9">本週沒有一般補貨建議。</td></tr>';
+      await api("/consumable-snapshots", { method: "POST", body: { snapshots: state.calculation.consumableSnapshots } });
+      $("calculation-summary").textContent = `銷售截止${state.calculation.latestSalesDate}；必要補貨${state.calculation.totals.regularItemCount}項、建議備貨${state.calculation.totals.specialStockItemCount}項、活動／贈品${state.calculation.totals.activityItemCount}項、耗材${state.calculation.totals.consumableItemCount}項、缺貨未配${state.calculation.totals.shortageItemCount}項；提袋快照已記錄。`;
+      $("calculation-rows").innerHTML = state.calculation.regularRows.length ? state.calculation.regularRows.map((row) => previewRow(row, "regular")).join("") : '<tr><td colspan="10">本週沒有一般必要補貨。</td></tr>';
+      $("special-stock-results").hidden = !state.calculation.specialStockRows.length;
+      $("special-stock-rows").innerHTML = state.calculation.specialStockRows.map((row) => previewRow(row, "special")).join("");
       $("activity-results").hidden = !state.calculation.activityRows.length && !state.calculation.marketingWarnings.length;
       $("activity-rows").innerHTML = state.calculation.activityRows.length ? state.calculation.activityRows.map((row) => `<tr><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${escapeHtml(row.thresholdText)}<br><small>${escapeHtml(row.activityPeriod)}</small></td><td>${row.averageTicket == null ? "待確認" : `${Math.round(row.averageTicket).toLocaleString("zh-TW")}元`}</td><td>${row.eligibleRate == null ? "待確認" : `${(row.eligibleRate * 100).toFixed(1)}%`}</td><td>${row.forecastOrders == null ? "待確認" : `${row.forecastOrders}筆／${row.forecastGiftQuantity}件`}</td><td>${row.localSales42}</td><td>${row.currentInventory}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`).join("") : '<tr><td colspan="11">目前沒有可直接配對贈品貨號的活動。</td></tr>';
       $("marketing-warnings").textContent = state.calculation.marketingWarnings.join(" ");
-      $("calculation-results").hidden = false; $("hq-status").textContent = "計算完成，請先檢查預覽，再建立門市確認批次。";
+      $("consumable-results").hidden = !state.calculation.consumableRows.length;
+      $("consumable-rows").innerHTML = state.calculation.consumableRows.map((row) => previewRow(row, "consumable")).join("");
+      $("shortage-results").hidden = !state.calculation.shortageRows.length;
+      $("shortage-rows").innerHTML = state.calculation.shortageRows.map((row) => previewRow(row, "shortage")).join("");
+      $("publish-button").disabled = !state.calculation.rows.length;
+      $("calculation-results").hidden = false;
+      $("hq-status").textContent = state.calculation.rows.length ? "計算完成，請先檢查四類結果，再建立門市確認批次。" : "本週沒有可建立批次的調撥項目；缺貨與提袋快照仍已完成記錄。";
     } finally { $("calculate-button").disabled = false; }
   }
 
@@ -143,8 +169,27 @@
   function itemTable(payload) {
     const editable = state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && Date.now() < Date.parse(payload.batch.lock_at);
     const hqEditable = state.config.role !== "store" && ["open", "review"].includes(payload.batch.status);
-    const table = (items, title) => items.length ? `<section class="result-section"><h3>${title}</h3><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>建議量</th><th>門市確認量</th><th>調整原因</th>${state.config.role !== "store" ? "<th>總部核准量</th>" : ""}</tr></thead><tbody>${items.map((item) => `<tr data-store="${item.store_code}" data-sku="${escapeHtml(item.sku)}" data-item-type="${item.item_type || "regular"}"><td>${item.store_code}</td><td>${escapeHtml(item.sku)}</td><td>${escapeHtml(item.product_name)}</td><td>${item.suggested_quantity}</td><td><input data-confirmed type="number" min="0" step="1" value="${item.store_confirmed_quantity ?? item.suggested_quantity}" ${editable || hqEditable ? "" : "disabled"}></td><td><input data-reason class="reason-input" value="${escapeHtml(item.store_reason || "")}" ${editable || hqEditable ? "" : "disabled"}></td>${state.config.role !== "store" ? `<td><input data-approved type="number" min="0" step="1" value="${item.hq_approved_quantity ?? item.store_confirmed_quantity ?? item.suggested_quantity}" ${hqEditable ? "" : "disabled"}></td>` : ""}</tr>`).join("")}</tbody></table></div></section>` : "";
-    return table(payload.items.filter((item) => item.item_type !== "activity_gift"), "一般週補貨") + table(payload.items.filter((item) => item.item_type === "activity_gift"), "活動／贈品調撥");
+    const table = (items, title, note = "") => items.length ? `<section class="result-section"><h3>${title}</h3>${note ? `<p>${note}</p>` : ""}<div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>建議量</th><th>建議後</th><th>門市確認量</th><th>確認後</th><th>調整原因</th>${state.config.role !== "store" ? "<th>總部核准量</th><th>核准後</th>" : ""}</tr></thead><tbody>${items.map((item) => {
+      const step = item.item_type === "consumable" ? 100 : 1;
+      const confirmed = item.store_confirmed_quantity ?? item.suggested_quantity;
+      const approved = item.hq_approved_quantity ?? confirmed;
+      return `<tr data-store="${item.store_code}" data-sku="${escapeHtml(item.sku)}" data-item-type="${item.item_type || "regular"}" data-calculation-date="${escapeHtml(item.calculation_date)}" data-base="${Number(item.base_quantity || 0)}" data-daily="${Number(item.daily_usage || 0)}" data-system-projection="${escapeHtml(item.system_projection || "")}"><td>${item.store_code}</td><td>${escapeHtml(item.sku)}</td><td>${escapeHtml(item.product_name)}</td><td>${item.suggested_quantity}</td><td>${escapeHtml(item.system_projection || rowProjection(item, item.suggested_quantity))}</td><td><input data-confirmed type="number" min="0" step="${step}" value="${confirmed}" ${editable || hqEditable ? "" : "disabled"}></td><td data-confirmed-projection>${escapeHtml(rowProjection(item, confirmed))}</td><td><input data-reason class="reason-input" value="${escapeHtml(item.store_reason || "")}" ${editable || hqEditable ? "" : "disabled"}></td>${state.config.role !== "store" ? `<td><input data-approved type="number" min="0" step="${step}" value="${approved}" ${hqEditable ? "" : "disabled"}></td><td data-approved-projection>${escapeHtml(rowProjection(item, approved))}</td>` : ""}</tr>`;
+    }).join("")}</tbody></table></div></section>` : "";
+    return [
+      table(payload.items.filter((item) => item.item_type === "regular"), "一般週補貨（必要調撥）"),
+      table(payload.items.filter((item) => item.item_type === "special_stock"), "建議調撥（非必要）", "單人被套各材質前2名花色；可依現場判斷填0。"),
+      table(payload.items.filter((item) => item.item_type === "activity_gift"), "活動／贈品調撥"),
+      table(payload.items.filter((item) => item.item_type === "consumable"), "門市耗材補貨", "提袋請以100個為單位調整。")
+    ].join("");
+  }
+
+  function updateDialogProjection(event) {
+    const input = event.target.closest("[data-confirmed], [data-approved]");
+    if (!input) return;
+    const row = input.closest("tr");
+    const item = { item_type: row.dataset.itemType, calculation_date: row.dataset.calculationDate, base_quantity: Number(row.dataset.base), daily_usage: Number(row.dataset.daily), system_projection: row.dataset.systemProjection };
+    const target = input.matches("[data-approved]") ? row.querySelector("[data-approved-projection]") : row.querySelector("[data-confirmed-projection]");
+    if (target) target.textContent = rowProjection(item, Number(input.value || 0));
   }
 
   function detailActions(payload) {
@@ -206,5 +251,6 @@
   $("auto-source-button").addEventListener("click", () => loadGoogleSources().catch((error) => { $("source-status").textContent = `自動取得失敗：${error.message}；可改用手動備援。`; }));
   document.addEventListener("click", (event) => { const button = event.target.closest("[data-open-batch]"); if (button) openBatch(button.dataset.openBatch).catch((error) => { $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; }); });
   $("batch-detail").addEventListener("click", handleDialog);
+  $("batch-detail").addEventListener("input", updateDialogProjection);
   start();
 })();
