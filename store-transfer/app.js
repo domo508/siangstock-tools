@@ -6,6 +6,7 @@
   const parser = globalThis.ProcurementPlanningCore;
   const transferCore = globalThis.StoreTransferCore;
   const googleSources = globalThis.ProcurementGoogleSources;
+  const xlsxPreflight = globalThis.StoreTransferXlsxPreflight;
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -35,7 +36,32 @@
     updateReady();
   }
 
-  async function workbook(file) { return XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true, cellStyles: true, nodim: true }); }
+  function memoryFriendlyReadError(file, error) {
+    const message = String(error?.message || error || "");
+    if (/array buffer|allocation|out of memory|invalid array length/i.test(message)) {
+      return new Error(`讀取「${file.name}」時瀏覽器記憶體不足。工具已改採逐份輕量讀取；請先關閉其他大型試算表分頁、重新整理後再試一次。若仍失敗，請把近12週銷售拆成2～3份，內容不必刪欄。`);
+    }
+    return error instanceof Error ? error : new Error(message || `無法讀取「${file.name}」。`);
+  }
+
+  async function workbook(file) {
+    try {
+      const data = await file.arrayBuffer();
+      return XLSX.read(data, {
+        type: "array",
+        cellDates: true,
+        cellStyles: false,
+        dense: true,
+        nodim: true
+      });
+    } catch (error) {
+      throw memoryFriendlyReadError(file, error);
+    }
+  }
+
+  function yieldToBrowser() {
+    return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  }
   function selectedStores() { return [...document.querySelectorAll('#store-options input:checked')].map((input) => input.value); }
   function renderStores() { $("store-options").innerHTML = Object.entries(state.config.stores).map(([code, store]) => `<label><input type="checkbox" value="${code}" checked><span>${code} ${escapeHtml(store.name)}</span></label>`).join(""); }
 
@@ -136,14 +162,41 @@
     $("calculate-button").disabled = true; $("hq-status").textContent = "正在本機讀取與計算，檔案不會上傳…";
     try {
       const masterFile = state.files.master, marketingFile = state.files.marketing, inventoryFile = $("inventory-file").files[0], transferFile = $("transfer-file").files[0], salesFiles = [...$("sales-files").files];
-      const [masterBook, marketingBook, inventoryBook, transferBook, historyPayload, ...salesBooks] = await Promise.all([workbook(masterFile), workbook(marketingFile), workbook(inventoryFile), workbook(transferFile), api("/consumable-snapshots"), ...salesFiles.map(workbook)]);
-      const sales = salesBooks.map((book, index) => parser.parseSalesWorkbook(book, XLSX, { fileName: salesFiles[index].name }));
+
+      // Large ERP sales exports can expand to hundreds of MB even when the .xlsx
+      // itself is small. Read and compact each source sequentially so several
+      // decompressed workbooks are never retained at the same time.
+      $("hq-status").textContent = "正在預檢銷售明細的實際展開大小…";
+      for (const file of salesFiles) await xlsxPreflight.assertSalesWorkbookSize(file);
+      $("hq-status").textContent = "第1/5步：正在讀取商品主檔…";
+      const master = parser.parseProductMasterWorkbook(await workbook(masterFile), XLSX, { fileName: masterFile.name });
+      await yieldToBrowser();
+      $("hq-status").textContent = "第2/5步：正在讀取整體行銷策略…";
+      const marketingBook = await workbook(marketingFile);
+      await yieldToBrowser();
+      $("hq-status").textContent = "第3/5步：正在讀取公司庫存…";
+      const inventory = parser.parseInventoryWorkbook(await workbook(inventoryFile), XLSX, { fileName: inventoryFile.name });
+      await yieldToBrowser();
+      $("hq-status").textContent = "第4/5步：正在讀取期間調撥單…";
+      const transfer = parser.parseTransferWorkbook(await workbook(transferFile), XLSX, { fileName: transferFile.name });
+      await yieldToBrowser();
+
+      const sales = [];
+      for (let index = 0; index < salesFiles.length; index += 1) {
+        const file = salesFiles[index];
+        $("hq-status").textContent = `第5/5步：正在輕量讀取銷售明細 ${index + 1}/${salesFiles.length}（${file.name}）…`;
+        const report = parser.parseSalesWorkbook(await workbook(file), XLSX, { fileName: file.name });
+        sales.push(report);
+        await yieldToBrowser();
+      }
+      const historyPayload = await api("/consumable-snapshots");
       const latestSalesDate = sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "") || $("proposal-date").value;
+      $("hq-status").textContent = "資料讀取完成，正在計算各門市建議量…";
       state.calculation = transferCore.buildSuggestions({
         storeCodes: stores,
-        master: parser.parseProductMasterWorkbook(masterBook, XLSX, { fileName: masterFile.name }),
-        inventory: parser.parseInventoryWorkbook(inventoryBook, XLSX, { fileName: inventoryFile.name }),
-        transfer: parser.parseTransferWorkbook(transferBook, XLSX, { fileName: transferFile.name }),
+        master,
+        inventory,
+        transfer,
         sales,
         marketing: transferCore.parseMarketingWorkbook(marketingBook, XLSX, latestSalesDate),
         consumableHistory: historyPayload.snapshots || [],
@@ -260,7 +313,7 @@
 
   async function start() {
     try {
-      if (!XLSX || !parser || !transferCore || !googleSources) throw new Error("工具元件載入失敗，請重新整理頁面。");
+      if (!XLSX || !parser || !transferCore || !googleSources || !xlsxPreflight) throw new Error("工具元件載入失敗，請重新整理頁面。");
       state.config = await api("/config");
       $("account-badge").textContent = `${state.config.email}・${state.config.role === "store" ? state.config.storeCode : state.config.role === "admin" ? "最高權限" : "總部"}`;
       $("refresh-button").disabled = false;
