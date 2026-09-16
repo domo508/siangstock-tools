@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20260916-batch-delete-r1");
+    const appIndex = html.indexOf("app.js?v=20260916-store-filter-r1");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -174,6 +174,19 @@ describe("前台導覽", () => {
     expect(worker).toContain("request.method === \"DELETE\"");
     expect(worker).toContain("deleted_at IS NULL");
     expect(migration).toContain("ADD COLUMN deleted_at");
+  });
+
+  it("總部可在建議預覽與批次詳細資料切換單一門市", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const style = readFileSync("../store-transfer/style.css", "utf8");
+    expect(html).toContain('id="calculation-store-filter"');
+    expect(app).toContain('storeFilterBar("calculation"');
+    expect(app).toContain('storeFilterBar("batch"');
+    expect(app).toContain('data-store-filter-scope="batch"');
+    expect(app).toContain('data-store-row');
+    expect(style).toContain('.store-filter-button.is-active');
+    expect(style).toContain('[data-store-row][hidden]');
   });
 
   it("資料整理工具與規則頁都有清楚的名稱和上一層路徑", () => {

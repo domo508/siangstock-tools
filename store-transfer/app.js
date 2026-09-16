@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const state = { config: null, calculation: null, activeBatch: null, files: { master: null, marketing: null }, googleReady: false };
+  const state = { config: null, calculation: null, activeBatch: null, calculationStore: "all", batchStore: "all", files: { master: null, marketing: null }, googleReady: false };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
   const outputXlsx = globalThis.ProcurementXlsxWriter || inputXlsx;
@@ -108,6 +108,34 @@
     return { open: "目前作業・等待門市", review: "目前作業・總部覆核中", approved: "已核准", erp_created: "已產生ERP", closed: "已完成", cancelled: "已取代・僅供查閱" }[status] || status;
   }
 
+  function storeFilterBar(scope, storeCodes, selected = "all") {
+    if (state.config.role === "store") return "";
+    const button = (code, label) => `<button class="store-filter-button${selected === code ? " is-active" : ""}" type="button" data-store-filter="${escapeHtml(code)}" data-store-filter-scope="${scope}" aria-pressed="${selected === code}">${escapeHtml(label)}</button>`;
+    return `<nav class="store-filter-bar" aria-label="依門市查看"><span>依門市查看</span><div>${button("all", "全部門市")}${storeCodes.map((code) => button(code, `${code} ${state.config.stores[code]?.name || ""}`)).join("")}</div></nav>`;
+  }
+
+  function applyStoreFilter(scope, storeCode) {
+    const root = scope === "calculation" ? $("calculation-results") : $("batch-detail");
+    if (!root) return;
+    if (scope === "calculation") state.calculationStore = storeCode;
+    else state.batchStore = storeCode;
+    root.querySelectorAll(`[data-store-filter-scope="${scope}"]`).forEach((button) => {
+      const active = button.dataset.storeFilter === storeCode;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    root.querySelectorAll("[data-store-row]").forEach((row) => { row.hidden = storeCode !== "all" && row.dataset.store !== storeCode; });
+    root.querySelectorAll("[data-store-section]").forEach((section) => {
+      const rows = [...section.querySelectorAll("[data-store-row]")];
+      section.hidden = rows.length > 0 && !rows.some((row) => !row.hidden);
+    });
+    if (scope === "batch") {
+      root.querySelectorAll("[data-store-status]").forEach((card) => card.classList.toggle("is-selected", storeCode !== "all" && card.dataset.storeStatus === storeCode));
+      const manualStore = root.querySelector("[data-manual-store]");
+      if (manualStore && storeCode !== "all") manualStore.value = storeCode;
+    }
+  }
+
   function batchCard(batch) {
     const status = batchStatusLabel(batch.status);
     const ownStatus = { pending: "尚未處理", saved: "已暫存", submitted: "已送出", approved: "已核准", closed: "已完成" }[batch.store_status] || batch.store_status;
@@ -171,10 +199,11 @@
   }
 
   function previewRow(row, kind) {
-    if (kind === "special") return `<tr><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.currentInventory}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
-    if (kind === "consumable") return `<tr><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.currentInventory}</td><td>${row.averageWeeklyUsage.toFixed(1)}</td><td>${row.suggestedQuantity / 100}箱／${row.suggestedQuantity}個</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td><details><summary>查看判斷</summary>${escapeHtml(row.ruleSummary)}</details></td></tr>`;
-    if (kind === "shortage") return `<tr><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.demandQuantity}</td><td>${row.allocatedQuantity}</td><td>${row.unfilledQuantity}</td><td>${escapeHtml(row.reason)}</td></tr>`;
-    return `<tr><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.b3Sales42}</td><td>${row.currentInventory}</td><td>${Number(row.targetQuantity).toFixed(1)}／${row.displayQuantity}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
+    const start = `<tr data-store-row data-store="${escapeHtml(row.storeCode)}"><td>${row.storeCode}</td>`;
+    if (kind === "special") return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.currentInventory}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
+    if (kind === "consumable") return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.currentInventory}</td><td>${row.averageWeeklyUsage.toFixed(1)}</td><td>${row.suggestedQuantity / 100}箱／${row.suggestedQuantity}個</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td><details><summary>查看判斷</summary>${escapeHtml(row.ruleSummary)}</details></td></tr>`;
+    if (kind === "shortage") return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.demandQuantity}</td><td>${row.allocatedQuantity}</td><td>${row.unfilledQuantity}</td><td>${escapeHtml(row.reason)}</td></tr>`;
+    return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.b3Sales42}</td><td>${row.currentInventory}</td><td>${Number(row.targetQuantity).toFixed(1)}／${row.displayQuantity}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
   }
 
   async function calculate() {
@@ -222,6 +251,8 @@
         consumableHistory: historyPayload.snapshots || [],
         storeInventory: state.config.storeInventoryRules?.config || {}
       });
+      state.calculationStore = "all";
+      $("calculation-store-filter").innerHTML = storeFilterBar("calculation", stores, state.calculationStore);
       await api("/consumable-snapshots", { method: "POST", body: { snapshots: state.calculation.consumableSnapshots } });
       const ignoredTransferText = transfer.ignoredRows?.length ? `；另略過${transfer.ignoredRows.length}筆與總倉及既有門市皆無關的調撥` : "";
       $("calculation-summary").textContent = `銷售截止${state.calculation.latestSalesDate}；必要補貨${state.calculation.totals.regularItemCount}項、建議備貨${state.calculation.totals.specialStockItemCount}項、活動／贈品${state.calculation.totals.activityItemCount}項、耗材${state.calculation.totals.consumableItemCount}項、缺貨未配${state.calculation.totals.shortageItemCount}項；B3成功配對${state.calculation.b3Audit.matchedCount}筆、待人工確認${state.calculation.b3Audit.pendingCount}筆${ignoredTransferText}；提袋快照已記錄。`;
@@ -231,7 +262,7 @@
       $("special-stock-results").hidden = !state.calculation.specialStockRows.length;
       $("special-stock-rows").innerHTML = state.calculation.specialStockRows.map((row) => previewRow(row, "special")).join("");
       $("activity-results").hidden = !state.calculation.activityRows.length && !state.calculation.marketingWarnings.length;
-      $("activity-rows").innerHTML = state.calculation.activityRows.length ? state.calculation.activityRows.map((row) => `<tr><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${escapeHtml(row.thresholdText)}<br><small>${escapeHtml(row.activityPeriod)}</small></td><td>${row.averageTicket == null ? "待確認" : `${Math.round(row.averageTicket).toLocaleString("zh-TW")}元`}</td><td>${row.eligibleRate == null ? "待確認" : `${(row.eligibleRate * 100).toFixed(1)}%`}</td><td>${row.forecastOrders == null ? "待確認" : `${row.forecastOrders}筆／${row.forecastGiftQuantity}件`}</td><td>${row.localSales42}</td><td>${row.currentInventory}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`).join("") : '<tr><td colspan="11">目前沒有可直接配對贈品貨號的活動。</td></tr>';
+      $("activity-rows").innerHTML = state.calculation.activityRows.length ? state.calculation.activityRows.map((row) => `<tr data-store-row data-store="${escapeHtml(row.storeCode)}"><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${escapeHtml(row.thresholdText)}<br><small>${escapeHtml(row.activityPeriod)}</small></td><td>${row.averageTicket == null ? "待確認" : `${Math.round(row.averageTicket).toLocaleString("zh-TW")}元`}</td><td>${row.eligibleRate == null ? "待確認" : `${(row.eligibleRate * 100).toFixed(1)}%`}</td><td>${row.forecastOrders == null ? "待確認" : `${row.forecastOrders}筆／${row.forecastGiftQuantity}件`}</td><td>${row.localSales42}</td><td>${row.currentInventory}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`).join("") : '<tr><td colspan="11">目前沒有可直接配對贈品貨號的活動。</td></tr>';
       $("marketing-warnings").textContent = state.calculation.marketingWarnings.join(" ");
       $("consumable-results").hidden = !state.calculation.consumableRows.length;
       $("consumable-rows").innerHTML = state.calculation.consumableRows.map((row) => previewRow(row, "consumable")).join("");
@@ -239,6 +270,7 @@
       $("shortage-rows").innerHTML = state.calculation.shortageRows.map((row) => previewRow(row, "shortage")).join("");
       $("publish-button").disabled = !state.calculation.rows.length;
       $("calculation-results").hidden = false;
+      applyStoreFilter("calculation", state.calculationStore);
       const ignoredNotice = transfer.ignoredRows?.length ? ` 已略過${transfer.ignoredRows.length}筆兩端皆不屬於總倉或既有門市的資料。` : "";
       $("hq-status").textContent = (state.calculation.rows.length ? "計算完成，請先檢查四類結果，再建立門市確認批次。" : "本週沒有可建立批次的調撥項目；缺貨與提袋快照仍已完成記錄。") + ignoredNotice;
     } finally { $("calculate-button").disabled = false; }
@@ -262,12 +294,12 @@
     const editable = state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && ownStatus !== "submitted" && Date.now() < Date.parse(payload.batch.lock_at);
     const hqEditable = state.config.role !== "store" && ["open", "review"].includes(payload.batch.status);
     const canChangeItems = editable || hqEditable;
-    const table = (items, title, note = "") => items.length ? `<section class="result-section"><h3>${title}</h3>${note ? `<p>${note}</p>` : ""}<div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>建議量</th><th>建議後</th><th>門市確認量</th><th>確認後</th><th>門市調整原因</th>${state.config.role !== "store" ? "<th>總部核准量</th><th>核准後</th><th>總部調整原因</th>" : ""}${canChangeItems ? "<th>品項操作</th>" : ""}</tr></thead><tbody>${items.map((item) => {
+    const table = (items, title, note = "") => items.length ? `<section class="result-section" data-store-section><h3>${title}</h3>${note ? `<p>${note}</p>` : ""}<div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>建議量</th><th>建議後</th><th>門市確認量</th><th>確認後</th><th>門市調整原因</th>${state.config.role !== "store" ? "<th>總部核准量</th><th>核准後</th><th>總部調整原因</th>" : ""}${canChangeItems ? "<th>品項操作</th>" : ""}</tr></thead><tbody>${items.map((item) => {
       const step = item.item_type === "consumable" ? 100 : 1;
       const confirmed = item.store_confirmed_quantity ?? item.suggested_quantity;
       const approved = item.hq_approved_quantity ?? confirmed;
       const manual = Number(item.suggested_quantity) === 0 && /人工新增/.test(String(item.rule_summary || ""));
-      return `<tr data-store="${item.store_code}" data-sku="${escapeHtml(item.sku)}" data-product-name="${escapeHtml(item.product_name)}" data-item-type="${item.item_type || "regular"}" data-calculation-date="${escapeHtml(item.calculation_date)}" data-base="${Number(item.base_quantity || 0)}" data-daily="${Number(item.daily_usage || 0)}" data-system-projection="${escapeHtml(item.system_projection || "")}" data-manual="${manual ? "true" : "false"}"><td>${item.store_code}</td><td>${escapeHtml(item.sku)}${manual ? '<span class="manual-item-badge">人工新增</span>' : ""}</td><td>${escapeHtml(item.product_name)}</td><td>${item.suggested_quantity}</td><td>${escapeHtml(item.system_projection || rowProjection(item, item.suggested_quantity))}</td><td><input data-confirmed type="number" min="0" step="${step}" value="${confirmed}" ${editable ? "" : "disabled"}></td><td data-confirmed-projection>${escapeHtml(rowProjection(item, confirmed))}</td><td><input data-reason class="reason-input" value="${escapeHtml(item.store_reason || "")}" ${editable ? "" : "disabled"}></td>${state.config.role !== "store" ? `<td><input data-approved type="number" min="0" step="${step}" value="${approved}" ${hqEditable ? "" : "disabled"}></td><td data-approved-projection>${escapeHtml(rowProjection(item, approved))}</td><td><input data-hq-reason class="reason-input" value="${escapeHtml(item.hq_reason || "")}" ${hqEditable ? "" : "disabled"}></td>` : ""}${canChangeItems ? `<td><button class="secondary-button compact remove-item-button" type="button" data-remove-item data-mode="${state.config.role === "store" ? "store" : "hq"}">移除此品項</button></td>` : ""}</tr>`;
+      return `<tr data-store-row data-store="${item.store_code}" data-sku="${escapeHtml(item.sku)}" data-product-name="${escapeHtml(item.product_name)}" data-item-type="${item.item_type || "regular"}" data-calculation-date="${escapeHtml(item.calculation_date)}" data-base="${Number(item.base_quantity || 0)}" data-daily="${Number(item.daily_usage || 0)}" data-system-projection="${escapeHtml(item.system_projection || "")}" data-manual="${manual ? "true" : "false"}"><td>${item.store_code}</td><td>${escapeHtml(item.sku)}${manual ? '<span class="manual-item-badge">人工新增</span>' : ""}</td><td>${escapeHtml(item.product_name)}</td><td>${item.suggested_quantity}</td><td>${escapeHtml(item.system_projection || rowProjection(item, item.suggested_quantity))}</td><td><input data-confirmed type="number" min="0" step="${step}" value="${confirmed}" ${editable ? "" : "disabled"}></td><td data-confirmed-projection>${escapeHtml(rowProjection(item, confirmed))}</td><td><input data-reason class="reason-input" value="${escapeHtml(item.store_reason || "")}" ${editable ? "" : "disabled"}></td>${state.config.role !== "store" ? `<td><input data-approved type="number" min="0" step="${step}" value="${approved}" ${hqEditable ? "" : "disabled"}></td><td data-approved-projection>${escapeHtml(rowProjection(item, approved))}</td><td><input data-hq-reason class="reason-input" value="${escapeHtml(item.hq_reason || "")}" ${hqEditable ? "" : "disabled"}></td>` : ""}${canChangeItems ? `<td><button class="secondary-button compact remove-item-button" type="button" data-remove-item data-mode="${state.config.role === "store" ? "store" : "hq"}">移除此品項</button></td>` : ""}</tr>`;
     }).join("")}</tbody></table></div></section>` : "";
     const storeOptions = payload.storeStatuses.map((row) => `<option value="${row.store_code}">${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</option>`).join("");
     const manualForm = canChangeItems ? `<section class="result-section manual-item-section"><h3>人工新增品項</h3><p>總部與門市皆可新增；ERP品號、品名、數量與原因必填。移除既有品項時會把本階段數量改為0，原列仍保留供稽核。</p><div class="manual-item-form">${state.config.role !== "store" ? `<label><span>門市</span><select data-manual-store>${storeOptions}</select></label>` : ""}<label><span>品項類型</span><select data-manual-type><option value="regular">一般必要補貨</option><option value="special_stock">建議調撥</option><option value="activity_gift">活動／贈品</option><option value="consumable">提袋耗材</option></select></label><label><span>ERP品號</span><input data-manual-sku maxlength="80" autocomplete="off"></label><label><span>品名</span><input data-manual-name maxlength="300" autocomplete="off"></label><label><span>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</span><input data-manual-quantity type="number" min="1" step="1"></label><label class="manual-reason-field"><span>新增原因</span><input data-manual-reason maxlength="300" autocomplete="off"></label><button class="secondary-button" type="button" data-local-action="add-item">加入確認清單</button></div><p class="status-line" data-manual-status></p><div class="result-table-wrap"><table class="transfer-table manual-item-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>類型</th><th>系統建議</th><th>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</th><th>原因</th><th>操作</th></tr></thead><tbody data-manual-rows></tbody></table></div></section>` : "";
@@ -294,7 +326,7 @@
     if (duplicate) { status.textContent = `${storeCode}／${sku}已在清單中，請直接修改該列數量。`; return; }
     const labels = { regular: "一般必要補貨", special_stock: "建議調撥", activity_gift: "活動／贈品", consumable: "提袋耗材" };
     const row = document.createElement("tr");
-    row.dataset.store = storeCode; row.dataset.sku = sku; row.dataset.productName = productName; row.dataset.itemType = type; row.dataset.calculationDate = state.activeBatch.batch.proposal_date; row.dataset.base = "0"; row.dataset.daily = "0"; row.dataset.systemProjection = "人工新增，無歷史推估"; row.dataset.manual = "true";
+    row.dataset.storeRow = ""; row.dataset.store = storeCode; row.dataset.sku = sku; row.dataset.productName = productName; row.dataset.itemType = type; row.dataset.calculationDate = state.activeBatch.batch.proposal_date; row.dataset.base = "0"; row.dataset.daily = "0"; row.dataset.systemProjection = "人工新增，無歷史推估"; row.dataset.manual = "true";
     row.innerHTML = `<td>${storeCode}</td><td>${escapeHtml(sku)}<span class="manual-item-badge">尚未儲存</span></td><td>${escapeHtml(productName)}</td><td>${labels[type]}</td><td>0</td><td>${state.config.role === "store" ? `<input data-confirmed type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">` : `<input data-confirmed type="number" value="0" disabled><input data-approved type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">`}</td><td>${state.config.role === "store" ? `<input data-reason class="reason-input" value="${escapeHtml(reason)}">` : `<input data-reason type="hidden" value=""><input data-hq-reason class="reason-input" value="${escapeHtml(reason)}">`}</td><td><button class="secondary-button compact remove-item-button" type="button" data-remove-unsaved>取消新增</button></td>`;
     detail.querySelector("[data-manual-rows]").append(row);
     skuInput.value = ""; nameInput.value = ""; quantityInput.value = ""; reasonInput.value = "";
@@ -333,16 +365,19 @@
   function statusOverview(payload) {
     if (state.config.role === "store") return "";
     const labels = { pending: "尚未處理", saved: "已暫存", submitted: "已送出", approved: "已核准", closed: "已完成" };
-    return `<section class="store-status-overview"><h3>門市回覆與ERP狀態</h3><div class="status-grid">${payload.storeStatuses.map((row) => `<article><strong>${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</strong><span>${escapeHtml(labels[row.status] || row.status)}</span><small>${row.erp_created_at ? `ERP已產生・${escapeHtml(row.erp_created_at)}` : "ERP尚未產生"}</small></article>`).join("")}</div></section>`;
+    return `<section class="store-status-overview"><h3>門市回覆與ERP狀態</h3><p>可直接點選門市卡片，只查看該店調撥內容。</p><div class="status-grid">${payload.storeStatuses.map((row) => `<button class="store-status-card" type="button" data-store-status="${row.store_code}" data-store-filter="${row.store_code}" data-store-filter-scope="batch"><strong>${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</strong><span>${escapeHtml(labels[row.status] || row.status)}</span><small>${row.erp_created_at ? `ERP已產生・${escapeHtml(row.erp_created_at)}` : "ERP尚未產生"}</small></button>`).join("")}</div></section>`;
   }
 
   async function openBatch(id) {
     const query = state.config.storeCode ? `?store=${state.config.storeCode}` : "";
     state.activeBatch = await api(`/batches/${encodeURIComponent(id)}${query}`);
     const p = state.activeBatch;
+    state.batchStore = state.config.role === "store" ? state.config.storeCode : "all";
+    const storeCodes = p.storeStatuses.map((row) => row.store_code);
     const supersededNotice = p.batch.status === "cancelled" ? '<p class="result-alert warn"><strong>本批次已被新版取代。</strong>資料仍完整保留供查閱，但門市與總部都不能再修改、送出或核准。</p>' : "";
-    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${supersededNotice}${statusOverview(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
+    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${supersededNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${statusOverview(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
     $("batch-dialog").showModal();
+    applyStoreFilter("batch", state.batchStore);
   }
 
   function rowsFromDialog(mode) {
@@ -350,6 +385,8 @@
   }
 
   async function handleDialog(event) {
+    const filterButton = event.target.closest('[data-store-filter-scope="batch"]');
+    if (filterButton) { applyStoreFilter("batch", filterButton.dataset.storeFilter); return; }
     const localAction = event.target.closest("[data-local-action]");
     if (localAction?.dataset.localAction === "add-item") { addManualItem(); return; }
     const unsavedRemove = event.target.closest("[data-remove-unsaved]");
@@ -411,5 +448,9 @@
   });
   $("batch-detail").addEventListener("click", handleDialog);
   $("batch-detail").addEventListener("input", updateDialogProjection);
+  $("calculation-results").addEventListener("click", (event) => {
+    const filterButton = event.target.closest('[data-store-filter-scope="calculation"]');
+    if (filterButton) applyStoreFilter("calculation", filterButton.dataset.storeFilter);
+  });
   start();
 })();
