@@ -125,6 +125,13 @@ function validateProcurementRules(value: unknown): Record<string, unknown> {
   const holidays = storeInventory.workdayHolidays == null ? [] : storeInventory.workdayHolidays;
   if (!Array.isArray(holidays) || holidays.length > 100 || holidays.some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(String(date)) || Number.isNaN(Date.parse(`${date}T00:00:00Z`)))) throw new RequestValidationError("公司不作業日須為有效 YYYY-MM-DD 日期。");
   storeInventory.workdayHolidays = [...new Set(holidays.map(String))].sort();
+  const arrivalWeekdays = storeInventory.arrivalWeekdayByStore == null ? {} : storeInventory.arrivalWeekdayByStore;
+  if (!arrivalWeekdays || typeof arrivalWeekdays !== "object" || Array.isArray(arrivalWeekdays)) throw new RequestValidationError("門市到店日設定格式錯誤。");
+  const allowedStores = new Set(["R00", "R01", "R03", "R10", "R07", "R06"]);
+  for (const [storeCode, weekday] of Object.entries(arrivalWeekdays as Record<string, unknown>)) {
+    if (!allowedStores.has(storeCode) || ![3, 4].includes(Number(weekday))) throw new RequestValidationError("門市到店日只能設定為星期三或星期四。");
+  }
+  storeInventory.arrivalWeekdayByStore = Object.fromEntries(Object.entries(arrivalWeekdays as Record<string, unknown>).map(([storeCode, weekday]) => [storeCode, Number(weekday)]));
   for (const rule of storeInventory.rules as Record<string, unknown>[]) {
     if (!rule || typeof rule !== "object" || !String(rule.name || "").trim()) throw new RequestValidationError("門市庫存規則名稱不可空白。");
     if (!["不可售展示", "可售最低庫存", "可售特殊備貨", "排除規則"].includes(String(rule.inventoryRole))) throw new RequestValidationError("門市庫存角色格式錯誤。");

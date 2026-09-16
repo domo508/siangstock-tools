@@ -11,7 +11,8 @@
     saveAccess: get("#save-access"), accessStatus: get("#access-status"), reason: get("#change-reason"), save: get("#save-rules"), saveStatus: get("#save-status"),
     springFestivalEnabled: get("#spring-festival-enabled"), springFestivalStart: get("#spring-festival-start"), springFestivalRecovery: get("#spring-festival-recovery"), springFestivalExtraDays: get("#spring-festival-extra-days"),
     puyoumaPull: get("#puyouma-pull"), puyoumaProduction: get("#puyouma-production"), puyoumaHot: get("#puyouma-hot"), puyoumaStable: get("#puyouma-stable"), puyoumaLow: get("#puyouma-low"),
-    lirongPull: get("#lirong-pull"), lirongProduction: get("#lirong-production"), lirongDelivery: get("#lirong-delivery"), lirongHot: get("#lirong-hot"), lirongStable: get("#lirong-stable"), lirongLow: get("#lirong-low")
+    lirongPull: get("#lirong-pull"), lirongProduction: get("#lirong-production"), lirongDelivery: get("#lirong-delivery"), lirongHot: get("#lirong-hot"), lirongStable: get("#lirong-stable"), lirongLow: get("#lirong-low"),
+    arrivals: Object.fromEntries(["R00", "R01", "R03", "R10", "R07", "R06"].map((code) => [code, get(`#arrival-${code}`)]))
   };
 
   function configureReturnPath() {
@@ -141,7 +142,13 @@
     elements.springFestivalRecovery.value = rule.recoveryDate || "";
     elements.springFestivalExtraDays.value = String(rule.extraDays ?? 53);
   }
-  function render() { renderSuppliers(); renderFeaturedSuppliers(); renderUnits(); renderStores(); setConsignmentFields(); setSpringFestivalFields(); elements.blacklist.value = (state.rules.blacklist || []).join("\n"); elements.holidays.value = (state.rules.storeInventory.workdayHolidays || []).join("\n"); }
+  function render() {
+    renderSuppliers(); renderFeaturedSuppliers(); renderUnits(); renderStores(); setConsignmentFields(); setSpringFestivalFields();
+    elements.blacklist.value = (state.rules.blacklist || []).join("\n"); elements.holidays.value = (state.rules.storeInventory.workdayHolidays || []).join("\n");
+    const defaults = { R00: 3, R01: 4, R03: 4, R10: 3, R07: 3, R06: 4 };
+    state.rules.storeInventory.arrivalWeekdayByStore ||= {};
+    Object.entries(elements.arrivals).forEach(([code, control]) => { control.value = String(state.rules.storeInventory.arrivalWeekdayByStore[code] ?? defaults[code]); });
+  }
 
   async function loadAccessSettings() {
     const settings = await request("/api/procurement/access-settings");
@@ -158,6 +165,7 @@
     const reason = elements.reason.value.trim(); if (!reason) { elements.saveStatus.textContent = "請填寫本次修改原因。"; elements.reason.focus(); return; }
     state.rules.blacklist = elements.blacklist.value.split(/\n/).map((item) => item.trim()).filter(Boolean);
     state.rules.storeInventory.workdayHolidays = elements.holidays.value.split(/\n/).map((item) => item.trim()).filter(Boolean);
+    state.rules.storeInventory.arrivalWeekdayByStore = Object.fromEntries(Object.entries(elements.arrivals).map(([code, control]) => [code, Number(control.value)]));
     elements.save.disabled = true; elements.saveStatus.textContent = "正在儲存新版本…";
     try {
       const result = await request("/api/procurement/rules", { method: "PUT", body: JSON.stringify({ expectedVersion: state.version, changeReason: reason, rules: state.rules }) });
@@ -185,4 +193,5 @@
   elements.springFestivalExtraDays.addEventListener("input", () => { ensureSpringFestivalRule().extraDays = Number(elements.springFestivalExtraDays.value || 0); markDirty(); });
   configureReturnPath();
   elements.blacklist.addEventListener("input", markDirty); elements.holidays.addEventListener("input", markDirty); elements.save.addEventListener("click", saveRules); elements.saveAccess.addEventListener("click", saveAccessSettings); init();
+  Object.values(elements.arrivals).forEach((control) => control.addEventListener("change", markDirty));
 })();

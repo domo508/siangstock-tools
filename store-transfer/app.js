@@ -142,7 +142,8 @@
     const progress = batch.status === "cancelled" ? "新版批次已建立，本批不再接受修改或送出" : batch.store_total == null ? (ownStatus ? `本店：${ownStatus}` : "") : `門市已送出 ${Number(batch.store_submitted || 0) + Number(batch.store_approved || 0)}/${batch.store_total}・ERP ${batch.store_erp_created || 0}/${batch.store_total}`;
     const deleteButton = batch.status === "cancelled" && state.config.permissions?.canDeleteBatch
       ? `<button class="secondary-button compact delete-batch-button" type="button" data-delete-batch="${escapeHtml(batch.id)}" data-week-key="${escapeHtml(batch.week_key)}" data-item-count="${escapeHtml(batch.item_count || 0)}">刪除批次</button>` : "";
-    return `<article class="batch-card${batch.status === "cancelled" ? " superseded" : ""}"><div><h3>${escapeHtml(batch.week_key || batch.id)}</h3><p class="batch-meta">${escapeHtml(batch.item_count || 0)}項・系統建議${escapeHtml(batch.suggested_quantity || 0)}件・${escapeHtml(progress)}・更新於${escapeHtml(batch.updated_at || "")}</p></div><span class="batch-status">${escapeHtml(status)}</span><div class="batch-card-actions"><button class="secondary-button compact" type="button" data-open-batch="${escapeHtml(batch.id)}">${batch.status === "cancelled" ? "查看紀錄" : "查看／處理"}</button>${deleteButton}</div></article>`;
+    const shortage = Number(batch.shortage_count || 0) ? `・缺貨未配${escapeHtml(batch.shortage_count)}項／${escapeHtml(batch.unfilled_quantity || 0)}件` : "";
+    return `<article class="batch-card${batch.status === "cancelled" ? " superseded" : ""}"><div><h3>${escapeHtml(batch.week_key || batch.id)}</h3><p class="batch-meta">${escapeHtml(batch.item_count || 0)}項・系統建議${escapeHtml(batch.suggested_quantity || 0)}件${shortage}・${escapeHtml(progress)}・更新於${escapeHtml(batch.updated_at || "")}</p></div><span class="batch-status">${escapeHtml(status)}</span><div class="batch-card-actions"><button class="secondary-button compact" type="button" data-open-batch="${escapeHtml(batch.id)}">${batch.status === "cancelled" ? "查看紀錄" : "查看／處理"}</button>${deleteButton}</div></article>`;
   }
 
   async function deleteBatchFromHistory(button) {
@@ -202,8 +203,8 @@
     const start = `<tr data-store-row data-store="${escapeHtml(row.storeCode)}"><td>${row.storeCode}</td>`;
     if (kind === "special") return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.currentInventory}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
     if (kind === "consumable") return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.currentInventory}</td><td>${row.averageWeeklyUsage.toFixed(1)}</td><td>${row.suggestedQuantity / 100}箱／${row.suggestedQuantity}個</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td><details><summary>查看判斷</summary>${escapeHtml(row.ruleSummary)}</details></td></tr>`;
-    if (kind === "shortage") return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.demandQuantity}</td><td>${row.allocatedQuantity}</td><td>${row.unfilledQuantity}</td><td>${escapeHtml(row.reason)}</td></tr>`;
-    return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.b3Sales42}</td><td>${row.currentInventory}</td><td>${Number(row.targetQuantity).toFixed(1)}／${row.displayQuantity}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
+    if (kind === "shortage") return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.demandQuantity}</td><td>${row.allocatedQuantity}</td><td>${row.unfilledQuantity}</td><td>${escapeHtml(row.reason)}</td><td>${escapeHtml(row.followUpStatus || "待回拋主採購")}</td></tr>`;
+    return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.b3Sales42}</td><td>${row.currentInventory}</td><td>${Number(row.targetQuantity).toFixed(1)}／${row.displayQuantity}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.currentArrivalDate)}</td><td>${escapeHtml(row.nextArrivalDate)}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${row.preArrivalStockoutRisk ? "有缺貨空窗，需加急" : "可支撐至本批到店"}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
   }
 
   async function calculate() {
@@ -249,6 +250,7 @@
         sales,
         marketing: transferCore.parseMarketingWorkbook(marketingBook, inputXlsx, latestSalesDate),
         consumableHistory: historyPayload.snapshots || [],
+        proposalDate: $("proposal-date").value,
         storeInventory: state.config.storeInventoryRules?.config || {}
       });
       state.calculationStore = "all";
@@ -258,7 +260,7 @@
       $("calculation-summary").textContent = `銷售截止${state.calculation.latestSalesDate}；必要補貨${state.calculation.totals.regularItemCount}項、建議備貨${state.calculation.totals.specialStockItemCount}項、活動／贈品${state.calculation.totals.activityItemCount}項、耗材${state.calculation.totals.consumableItemCount}項、缺貨未配${state.calculation.totals.shortageItemCount}項；B3成功配對${state.calculation.b3Audit.matchedCount}筆、待人工確認${state.calculation.b3Audit.pendingCount}筆${ignoredTransferText}；提袋快照已記錄。`;
       $("b3-audit").hidden = !state.calculation.b3Audit.pendingCount;
       $("b3-audit").innerHTML = state.calculation.b3Audit.pendingCount ? `<strong>B3待人工確認：</strong>${state.calculation.b3Audit.pendingRows.slice(0, 20).map((row) => `${escapeHtml(row.storeCode)}／${escapeHtml(row.sku)}／來源單${escapeHtml(row.sourceOrder || "未填")}`).join("、")}${state.calculation.b3Audit.pendingCount > 20 ? "…" : ""}。這些資料未納入B3與門市能力。` : "";
-      $("calculation-rows").innerHTML = state.calculation.regularRows.length ? state.calculation.regularRows.map((row) => previewRow(row, "regular")).join("") : '<tr><td colspan="10">本週沒有一般必要補貨。</td></tr>';
+      $("calculation-rows").innerHTML = state.calculation.regularRows.length ? state.calculation.regularRows.map((row) => previewRow(row, "regular")).join("") : '<tr><td colspan="13">本週沒有一般必要補貨。</td></tr>';
       $("special-stock-results").hidden = !state.calculation.specialStockRows.length;
       $("special-stock-rows").innerHTML = state.calculation.specialStockRows.map((row) => previewRow(row, "special")).join("");
       $("activity-results").hidden = !state.calculation.activityRows.length && !state.calculation.marketingWarnings.length;
@@ -268,7 +270,7 @@
       $("consumable-rows").innerHTML = state.calculation.consumableRows.map((row) => previewRow(row, "consumable")).join("");
       $("shortage-results").hidden = !state.calculation.shortageRows.length;
       $("shortage-rows").innerHTML = state.calculation.shortageRows.map((row) => previewRow(row, "shortage")).join("");
-      $("publish-button").disabled = !state.calculation.rows.length;
+      $("publish-button").disabled = !state.calculation.rows.length && !state.calculation.shortageRows.length;
       $("calculation-results").hidden = false;
       applyStoreFilter("calculation", state.calculationStore);
       const ignoredNotice = transfer.ignoredRows?.length ? ` 已略過${transfer.ignoredRows.length}筆兩端皆不屬於總倉或既有門市的資料。` : "";
@@ -283,7 +285,7 @@
     $("publish-button").disabled = true;
     try {
       const id = `TR-${weekKey}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
-      await api("/batches", { method: "POST", body: { id, weekKey, proposalDate, responseDueAt: new Date(localLock).toISOString(), lockAt: new Date(localLock).toISOString(), items: state.calculation.rows } });
+      await api("/batches", { method: "POST", body: { id, weekKey, proposalDate, responseDueAt: new Date(localLock).toISOString(), lockAt: new Date(localLock).toISOString(), items: state.calculation.rows, shortages: state.calculation.shortageRows, arrivalSchedule: state.calculation.scheduleByStore } });
       $("hq-status").textContent = `已建立批次${id}；同週舊的未完成批次已改為僅供查閱，門市重新登入即可看到新版確認清單。`;
       $("calculation-results").hidden = true; state.calculation = null; await loadBatches();
     } finally { $("publish-button").disabled = false; }
@@ -303,11 +305,14 @@
     }).join("")}</tbody></table></div></section>` : "";
     const storeOptions = payload.storeStatuses.map((row) => `<option value="${row.store_code}">${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</option>`).join("");
     const manualForm = canChangeItems ? `<section class="result-section manual-item-section"><h3>人工新增品項</h3><p>總部與門市皆可新增；ERP品號、品名、數量與原因必填。移除既有品項時會把本階段數量改為0，原列仍保留供稽核。</p><div class="manual-item-form">${state.config.role !== "store" ? `<label><span>門市</span><select data-manual-store>${storeOptions}</select></label>` : ""}<label><span>品項類型</span><select data-manual-type><option value="regular">一般必要補貨</option><option value="special_stock">建議調撥</option><option value="activity_gift">活動／贈品</option><option value="consumable">提袋耗材</option></select></label><label><span>ERP品號</span><input data-manual-sku maxlength="80" autocomplete="off"></label><label><span>品名</span><input data-manual-name maxlength="300" autocomplete="off"></label><label><span>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</span><input data-manual-quantity type="number" min="1" step="1"></label><label class="manual-reason-field"><span>新增原因</span><input data-manual-reason maxlength="300" autocomplete="off"></label><button class="secondary-button" type="button" data-local-action="add-item">加入確認清單</button></div><p class="status-line" data-manual-status></p><div class="result-table-wrap"><table class="transfer-table manual-item-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>類型</th><th>系統建議</th><th>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</th><th>原因</th><th>操作</th></tr></thead><tbody data-manual-rows></tbody></table></div></section>` : "";
+    const shortages = payload.shortages || [];
+    const shortageTable = shortages.length ? `<section class="result-section shortage-section" data-store-section><h3>缺貨未配與後續補貨狀態</h3><p>這些數量不會加入門市確認量或ERP檔；用來說明總倉為何未能配足，並保留後續回拋主採購的狀態。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>需求量</th><th>已配量</th><th>未配不足量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody>${shortages.map((row) => `<tr data-store-row data-store="${escapeHtml(row.store_code)}"><td>${escapeHtml(row.store_code)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${row.demand_quantity}</td><td>${row.allocated_quantity}</td><td>${row.unfilled_quantity}</td><td>${escapeHtml(row.reason)}</td><td>${escapeHtml(row.follow_up_status)}</td></tr>`).join("")}</tbody></table></div></section>` : "";
     return [
       table(payload.items.filter((item) => item.item_type === "regular"), "一般週補貨（必要調撥）"),
       table(payload.items.filter((item) => item.item_type === "special_stock"), "建議調撥（非必要）", "單人被套各材質前2名花色；可依現場判斷填0。"),
       table(payload.items.filter((item) => item.item_type === "activity_gift"), "活動／贈品調撥"),
       table(payload.items.filter((item) => item.item_type === "consumable"), "門市耗材補貨", "提袋請以100個為單位調整。"),
+      shortageTable,
       manualForm
     ].join("");
   }
@@ -375,13 +380,15 @@
     state.batchStore = state.config.role === "store" ? state.config.storeCode : "all";
     const storeCodes = p.storeStatuses.map((row) => row.store_code);
     const supersededNotice = p.batch.status === "cancelled" ? '<p class="result-alert warn"><strong>本批次已被新版取代。</strong>資料仍完整保留供查閱，但門市與總部都不能再修改、送出或核准。</p>' : "";
-    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${supersededNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${statusOverview(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
+    const schedule = (() => { try { return JSON.parse(p.batch.arrival_schedule || "{}"); } catch { return {}; } })();
+    const scheduleText = Object.values(schedule).map((row) => `${row.storeCode} 本批${row.currentArrivalDate}／下一輪${row.nextArrivalDate}`).join("；");
+    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${statusOverview(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
     $("batch-dialog").showModal();
     applyStoreFilter("batch", state.batchStore);
   }
 
   function rowsFromDialog(mode) {
-    return [...$("batch-detail").querySelectorAll("tbody tr")].map((row) => ({ storeCode: row.dataset.store, sku: row.dataset.sku, productName: row.dataset.productName, itemType: row.dataset.itemType, ...(mode === "approve" ? { approvedQuantity: Number(row.querySelector("[data-approved]").value), reason: row.querySelector("[data-hq-reason]").value } : { confirmedQuantity: Number(row.querySelector("[data-confirmed]").value), reason: row.querySelector("[data-reason]").value }) }));
+    return [...$("batch-detail").querySelectorAll("tbody tr[data-item-type]")].map((row) => ({ storeCode: row.dataset.store, sku: row.dataset.sku, productName: row.dataset.productName, itemType: row.dataset.itemType, ...(mode === "approve" ? { approvedQuantity: Number(row.querySelector("[data-approved]").value), reason: row.querySelector("[data-hq-reason]").value } : { confirmedQuantity: Number(row.querySelector("[data-confirmed]").value), reason: row.querySelector("[data-reason]").value }) }));
   }
 
   async function handleDialog(event) {

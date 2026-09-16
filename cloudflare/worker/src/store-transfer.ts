@@ -139,8 +139,8 @@ async function listBatches(request: Request, env: StoreTransferEnv): Promise<Res
   const who = await actor(request, env);
   const scope = visibleStore(new URL(request.url).searchParams.get("store"), who.role, who.storeCode);
   const result = scope
-    ? await env.DB.prepare("SELECT b.*, s.status store_status FROM store_transfer_batches b JOIN store_transfer_store_status s ON s.batch_id = b.id WHERE s.store_code = ? AND b.deleted_at IS NULL ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").bind(scope).all()
-    : await env.DB.prepare("SELECT b.*, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id) store_total, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'submitted') store_submitted, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'approved') store_approved, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.erp_created_at IS NOT NULL) store_erp_created FROM store_transfer_batches b WHERE b.deleted_at IS NULL ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").all();
+    ? await env.DB.prepare("SELECT b.*, s.status store_status, (SELECT COUNT(*) FROM store_transfer_shortages x WHERE x.batch_id = b.id AND x.store_code = s.store_code AND x.unfilled_quantity > 0) shortage_count, (SELECT COALESCE(SUM(x.unfilled_quantity), 0) FROM store_transfer_shortages x WHERE x.batch_id = b.id AND x.store_code = s.store_code) unfilled_quantity FROM store_transfer_batches b JOIN store_transfer_store_status s ON s.batch_id = b.id WHERE s.store_code = ? AND b.deleted_at IS NULL ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").bind(scope).all()
+    : await env.DB.prepare("SELECT b.*, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id) store_total, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'submitted') store_submitted, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'approved') store_approved, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.erp_created_at IS NOT NULL) store_erp_created, (SELECT COUNT(*) FROM store_transfer_shortages x WHERE x.batch_id = b.id AND x.unfilled_quantity > 0) shortage_count, (SELECT COALESCE(SUM(x.unfilled_quantity), 0) FROM store_transfer_shortages x WHERE x.batch_id = b.id) unfilled_quantity FROM store_transfer_batches b WHERE b.deleted_at IS NULL ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").all();
   return json({ batches: result.results, scope });
 }
 
@@ -156,8 +156,11 @@ async function detail(request: Request, env: StoreTransferEnv, batchId: string):
   const statuses = scope
     ? await env.DB.prepare("SELECT * FROM store_transfer_store_status WHERE batch_id = ? AND store_code = ?").bind(batchId, scope).all()
     : await env.DB.prepare("SELECT * FROM store_transfer_store_status WHERE batch_id = ? ORDER BY store_code").bind(batchId).all();
+  const shortages = scope
+    ? await env.DB.prepare("SELECT * FROM store_transfer_shortages WHERE batch_id = ? AND store_code = ? ORDER BY sku").bind(batchId, scope).all()
+    : await env.DB.prepare("SELECT * FROM store_transfer_shortages WHERE batch_id = ? ORDER BY store_code, sku").bind(batchId).all();
   const events = await env.DB.prepare("SELECT store_code, event_type, summary, created_at, created_by FROM store_transfer_events WHERE batch_id = ? ORDER BY created_at DESC LIMIT 100").bind(batchId).all();
-  return json({ batch, items: items.results, storeStatuses: statuses.results, events: events.results, scope });
+  return json({ batch, items: items.results, shortages: shortages.results, storeStatuses: statuses.results, events: events.results, scope });
 }
 
 async function createBatch(request: Request, env: StoreTransferEnv): Promise<Response> {
@@ -174,11 +177,14 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   if (Date.parse(responseDueAt) > Date.parse(lockAt)) throw new RequestValidationError("門市回覆期限不可晚於鎖定時間。");
   const inventoryRules = await storeInventoryConfig(env);
   const holidays = new Set(Array.isArray(inventoryRules.config.workdayHolidays) ? inventoryRules.config.workdayHolidays.map(String) : []);
-  if (!isWorkday(proposalDate, holidays)) throw new RequestValidationError("建議產生日不是公司工作日，請依國定假日規則提前。");
+  // 建議日以實際執行日為準，允許臨時於週末補跑；標準週次仍由前台依假日規則帶入。
   const lockDate = new Date(lockAt).toLocaleDateString("en-CA", { timeZone: "Asia/Taipei" });
   if (!isWorkday(lockDate, holidays)) throw new RequestValidationError("門市回覆鎖定日不是公司工作日，請順延至下一工作日。");
   const items = input.items;
-  if (!Array.isArray(items) || !items.length || items.length > 5000) throw new RequestValidationError("逐品項建議須為1至5000筆。");
+  const shortages = input.shortages == null ? [] : input.shortages;
+  if (!Array.isArray(items) || items.length > 5000) throw new RequestValidationError("逐品項建議須為0至5000筆。");
+  if (!Array.isArray(shortages) || shortages.length > 5000) throw new RequestValidationError("缺貨未配明細須為0至5000筆。");
+  if (!items.length && !shortages.length) throw new RequestValidationError("本批沒有可保存的調撥建議或缺貨未配資料。");
   const seen = new Set<string>();
   const normalized = items.map((raw) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("逐品項建議格式錯誤。");
@@ -201,18 +207,41 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
       systemProjection: String(item.systemSellThroughDate || "").normalize("NFKC").trim().slice(0, 80)
     };
   });
-  const stores = [...new Set(normalized.map((item) => item.storeCode))];
+  const shortageSeen = new Set<string>();
+  const normalizedShortages = shortages.map((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("缺貨未配明細格式錯誤。");
+    const row = raw as Record<string, unknown>;
+    const storeCode = text(row.storeCode, "門市代碼", 5) as StoreCode;
+    if (!(storeCode in STORES)) throw new RequestValidationError(`未知門市：${storeCode}。`);
+    const sku = text(row.sku, "ERP品號", 80);
+    const type = itemType(row.itemType);
+    const key = `${storeCode}\u0000${sku}\u0000${type}`;
+    if (shortageSeen.has(key)) throw new RequestValidationError(`${storeCode}／${sku}缺貨未配重複。`);
+    shortageSeen.add(key);
+    const demand = quantity(row.demandQuantity, "需求量");
+    const allocated = quantity(row.allocatedQuantity, "已配量");
+    const unfilled = quantity(row.unfilledQuantity, "未配量");
+    if (allocated + unfilled !== demand) throw new RequestValidationError(`${storeCode}／${sku}需求量不等於已配量加未配量。`);
+    return { storeCode, sku, type, productName: text(row.productName, "品名"), demand, allocated, unfilled,
+      reason: text(row.reason, "未配原因", 500), followUpStatus: String(row.followUpStatus || "待回拋主採購").slice(0, 80),
+      currentArrivalDate: row.currentArrivalDate ? dateText(row.currentArrivalDate, "本批到店日") : null,
+      nextArrivalDate: row.nextArrivalDate ? dateText(row.nextArrivalDate, "下一輪到店日") : null };
+  });
+  const stores = [...new Set([...normalized.map((item) => item.storeCode), ...normalizedShortages.map((item) => item.storeCode)])];
+  const arrivalSchedule = input.arrivalSchedule && typeof input.arrivalSchedule === "object" && !Array.isArray(input.arrivalSchedule) ? JSON.stringify(input.arrivalSchedule) : "{}";
+  if (arrivalSchedule.length > 5000) throw new RequestValidationError("到店日快照內容過長。");
   const now = new Date().toISOString();
   const statements = [
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) SELECT id, 'cancelled', ?, ?, ? FROM store_transfer_batches WHERE week_key = ? AND status IN ('open', 'review') AND deleted_at IS NULL AND id <> ?").bind(`已由新版批次${id}取代，僅供查閱`, now, who.email, weekKey, id),
     env.DB.prepare("UPDATE store_transfer_batches SET status = 'cancelled', updated_at = ?, updated_by = ?, revision = revision + 1 WHERE week_key = ? AND status IN ('open', 'review') AND deleted_at IS NULL AND id <> ?").bind(now, who.email, weekKey, id),
-    env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, ?, ?, ?)").bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), now, who.email, now, who.email),
+    env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, arrival_schedule, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, ?, ?, ?, ?)").bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), arrivalSchedule, now, who.email, now, who.email),
     ...normalized.map((item) => env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, rule_summary, item_type, calculation_date, base_quantity, daily_usage, system_projection, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, item.storeCode, item.sku, item.productName, item.suggested, item.ruleSummary, item.itemType, item.calculationDate, item.baseQuantity, item.dailyUsage, item.systemProjection, now, who.email)),
+    ...normalizedShortages.map((row) => env.DB.prepare("INSERT INTO store_transfer_shortages (batch_id, store_code, sku, product_name, item_type, demand_quantity, allocated_quantity, unfilled_quantity, reason, follow_up_status, current_arrival_date, next_arrival_date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, row.storeCode, row.sku, row.productName, row.type, row.demand, row.allocated, row.unfilled, row.reason, row.followUpStatus, row.currentArrivalDate, row.nextArrivalDate, now, now)),
     ...stores.map((storeCode) => env.DB.prepare("INSERT INTO store_transfer_store_status (batch_id, store_code, status, updated_at) VALUES (?, ?, 'pending', ?)").bind(id, storeCode, now)),
-    env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'created', ?, ?, ?)").bind(id, `建立${stores.length}間門市、${normalized.length}筆建議`, now, who.email)
+    env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'created', ?, ?, ?)").bind(id, `建立${stores.length}間門市、${normalized.length}筆建議、${normalizedShortages.length}筆缺貨未配`, now, who.email)
   ];
   await env.DB.batch(statements);
-  return json({ id, status: "open", stores, itemCount: normalized.length }, 201);
+  return json({ id, status: "open", stores, itemCount: normalized.length, shortageCount: normalizedShortages.length }, 201);
 }
 
 async function deleteBatch(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
@@ -316,7 +345,7 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   const pending = await env.DB.prepare("SELECT COUNT(*) count FROM store_transfer_store_status WHERE batch_id = ? AND status NOT IN ('submitted', 'approved')").bind(batchId).first<{ count: number }>();
   const input = await readBody(request);
   if (Number(pending?.count || 0) > 0 && input.confirmPendingStores !== true) throw new RequestValidationError("仍有門市尚未送出；確認要以目前資料核准後再操作。", 409);
-  if (!Array.isArray(input.items) || !input.items.length || input.items.length > 5000) throw new RequestValidationError("總部核准明細格式錯誤。");
+  if (!Array.isArray(input.items) || input.items.length > 5000) throw new RequestValidationError("總部核准明細格式錯誤。");
   const existing = await env.DB.prepare("SELECT store_code, sku, item_type, suggested_quantity, store_confirmed_quantity FROM store_transfer_items WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
   const allowedStores = await env.DB.prepare("SELECT store_code FROM store_transfer_store_status WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
   const allowedStoreCodes = new Set(allowedStores.results.map((row) => String(row.store_code)));
@@ -357,6 +386,7 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
     ...updates,
     env.DB.prepare("UPDATE store_transfer_store_status SET status = 'approved', updated_at = ? WHERE batch_id = ?").bind(now, batchId),
     env.DB.prepare("UPDATE store_transfer_batches SET status = 'approved', item_count = (SELECT COUNT(*) FROM store_transfer_items WHERE batch_id = ? AND COALESCE(hq_approved_quantity, store_confirmed_quantity, suggested_quantity) > 0), approved_quantity = ?, updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ? AND status IN ('open', 'review')").bind(batchId, total, now, who.email, batchId),
+    env.DB.prepare("UPDATE store_transfer_shortages SET allocated_quantity = MIN(demand_quantity, COALESCE((SELECT COALESCE(i.hq_approved_quantity, i.store_confirmed_quantity, i.suggested_quantity) FROM store_transfer_items i WHERE i.batch_id = store_transfer_shortages.batch_id AND i.store_code = store_transfer_shortages.store_code AND i.sku = store_transfer_shortages.sku AND i.item_type = store_transfer_shortages.item_type), 0)), unfilled_quantity = demand_quantity - MIN(demand_quantity, COALESCE((SELECT COALESCE(i.hq_approved_quantity, i.store_confirmed_quantity, i.suggested_quantity) FROM store_transfer_items i WHERE i.batch_id = store_transfer_shortages.batch_id AND i.store_code = store_transfer_shortages.store_code AND i.sku = store_transfer_shortages.sku AND i.item_type = store_transfer_shortages.item_type), 0)), follow_up_status = CASE WHEN COALESCE((SELECT COALESCE(i.hq_approved_quantity, i.store_confirmed_quantity, i.suggested_quantity) FROM store_transfer_items i WHERE i.batch_id = store_transfer_shortages.batch_id AND i.store_code = store_transfer_shortages.store_code AND i.sku = store_transfer_shortages.sku AND i.item_type = store_transfer_shortages.item_type), 0) >= demand_quantity THEN '已於本批補配' ELSE '待回拋主採購' END, updated_at = ? WHERE batch_id = ?").bind(now, batchId),
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'hq_approved', ?, ?, ?)").bind(batchId, `總部核准${total}件；人工新增${addedCount}項、移除${removedCount}項`, now, who.email)
   ]);
   if (updates.some((_, index) => Number(results[index].meta.changes || 0) !== 1)) throw new RequestValidationError("部分品號不存在或已變更，請重新載入。", 409);
@@ -460,6 +490,7 @@ export async function cleanupStoreTransfers(env: StoreTransferEnv): Promise<void
   const expired = "SELECT id FROM store_transfer_batches WHERE created_at < datetime('now', '-12 months')";
   await env.DB.batch([
     env.DB.prepare(`DELETE FROM store_transfer_events WHERE batch_id IN (${expired})`),
+    env.DB.prepare(`DELETE FROM store_transfer_shortages WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_items WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_store_status WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_batches WHERE id IN (${expired})`),

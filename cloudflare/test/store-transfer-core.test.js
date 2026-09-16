@@ -15,6 +15,11 @@ describe("門市週調撥日期規則", () => {
   it("星期一遇國定假日會順延到下一工作日", () => {
     expect(core.nextWorkingDay("2026-10-12", ["2026-10-12"])).toBe("2026-10-13");
   });
+
+  it("9月13日補跑時會保護到下一輪實際到店日", () => {
+    expect(core.storeSchedule("2026-09-13", "R00", {})).toMatchObject({ currentArrivalDate: "2026-09-16", nextArrivalDate: "2026-09-23", coverageDays: 10 });
+    expect(core.storeSchedule("2026-09-13", "R06", {})).toMatchObject({ currentArrivalDate: "2026-09-17", nextArrivalDate: "2026-09-24", coverageDays: 11 });
+  });
 });
 
 describe("總倉不足分配", () => {
@@ -72,6 +77,10 @@ describe("S品、建議備貨與可售至", () => {
     expect(core.projectedSellThroughDate("2026-09-14", 2, 5, 0)).toBe("近期無現場銷售");
   });
 
+  it("一般品會依總部14／42／84天最高日速保留安全庫存", () => {
+    expect(core.generalHqStockProtection(4, 26, 26, 26, 10)).toMatchObject({ reserve: 4, releasable: 0 });
+  });
+
   it("單人被套各材質前2名可進入非必要建議區", () => {
     const products = ["A1", "A2", "A3"].map((sku) => [sku, { sku, name: `天絲單人薄被套${sku}`, style1: "被套" }]);
     const records = [3, 2, 1].map((quantity, index) => ({ warehouseCode: "R00", shipWarehouseCode: "R00", sku: `A${index + 1}`, date: "2026-09-14", quantity, deductQuantity: quantity, saleType: "銷貨" }));
@@ -123,6 +132,22 @@ describe("展示與最低庫存管理規則", () => {
     const managed = { rules: [{ name: "坐墊展示", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "坐墊｜椅墊", scope: "R01", inventoryRole: "不可售展示", quantity: 1, priority: 90 }] };
     expect(core.stockRule({ name: "舒適椅墊", mainCategory: "配件" }, managed)).toMatchObject({ name: "坐墊展示", scope: "R01" });
     expect(core.stockRule({ name: "浴巾", mainCategory: "配件" }, managed)).toBeNull();
+  });
+
+  it("毛巾、浴巾與手巾可穩定命中無尺寸配件規則", () => {
+    const managed = { rules: [{ name: "無尺寸配件", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "", scope: "R00", inventoryRole: "不可售展示", quantity: 1, priority: 50 }] };
+    for (const name of ["純棉毛巾", "長絨棉浴巾", "隨身手巾"]) expect(core.stockRule({ name }, managed)).toMatchObject({ name: "無尺寸配件", quantity: 1 });
+  });
+
+  it("不可售展示缺口與可售需求會分開相加", () => {
+    const result = core.buildSuggestions({
+      proposalDate: "2026-09-13", storeCodes: ["R00"],
+      master: { bySku: new Map([["D001", { sku: "D001", name: "5尺展示商品" }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "D001", quantity: 20 }, { warehouseCode: "R00", sku: "D001", quantity: 0 }] },
+      transfer: { records: [] },
+      sales: [{ maxDate: "2026-09-13", records: [{ warehouseCode: "R00", shipWarehouseCode: "R00", sku: "D001", date: "2026-09-13", quantity: 6, deductQuantity: 6, saleType: "銷貨" }], takeRecords: [] }]
+    });
+    expect(result.regularRows[0]).toMatchObject({ displayGap: 1, sellableNeed: 2, rawNeed: 3, suggestedQuantity: 3 });
   });
 
   it("前台設定排除規則後不會進入一般調撥建議", () => {
