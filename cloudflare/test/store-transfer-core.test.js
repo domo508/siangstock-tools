@@ -90,6 +90,32 @@ describe("展示與最低庫存管理規則", () => {
     const managed = { rules: [{ name: "獨立5尺商品", enabled: true, scope: "R01", inventoryRole: "不可售展示", quantity: 2, priority: 120 }] };
     expect(core.stockRule({ name: "天絲床包 獨立5尺" }, managed)).toMatchObject({ role: "不可售展示", quantity: 2, scope: "R01" });
   });
+
+  it("前台新增的無尺寸配件規則可直接命中一般配件", () => {
+    const managed = { rules: [
+      { name: "枕頭／枕芯", enabled: true, scope: "R00、R06", inventoryRole: "不可售展示", quantity: 2, priority: 80 },
+      { name: "無尺寸配件", enabled: true, scope: "全部有銷售資料的營運門市", matchText: "配件|無尺寸", inventoryRole: "不可售展示", quantity: 1, priority: 50 }
+    ] };
+    expect(core.stockRule({ name: "一般收納小配件", mainCategory: "配件", size: "" }, managed)).toMatchObject({ name: "無尺寸配件", quantity: 1 });
+    expect(core.stockRule({ name: "人體工學枕芯 40×70cm", mainCategory: "配件", size: "40×70cm" }, managed)).toMatchObject({ name: "枕頭／枕芯", quantity: 2 });
+  });
+
+  it("新自訂規則依商品大類、尺寸屬性及任一品項關鍵字判斷", () => {
+    const managed = { rules: [{ name: "坐墊展示", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "坐墊｜椅墊", scope: "R01", inventoryRole: "不可售展示", quantity: 1, priority: 90 }] };
+    expect(core.stockRule({ name: "舒適椅墊", mainCategory: "配件" }, managed)).toMatchObject({ name: "坐墊展示", scope: "R01" });
+    expect(core.stockRule({ name: "浴巾", mainCategory: "配件" }, managed)).toBeNull();
+  });
+
+  it("前台設定排除規則後不會進入一般調撥建議", () => {
+    const result = core.buildSuggestions({
+      storeCodes: ["R00"],
+      master: { bySku: new Map([["X001", { sku: "X001", name: "測試椅墊", mainCategory: "配件" }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "X001", quantity: 10 }] }, transfer: { records: [] },
+      sales: [{ maxDate: "2026-09-14", records: [{ warehouseCode: "R00", shipWarehouseCode: "R00", sku: "X001", date: "2026-09-14", quantity: 4, deductQuantity: 4, saleType: "銷貨" }], takeRecords: [] }],
+      storeInventory: { rules: [{ name: "排除測試椅墊", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "椅墊", scope: "R00", inventoryRole: "排除規則", quantity: 0, priority: 200 }] }
+    });
+    expect(result.regularRows).toHaveLength(0);
+  });
 });
 
 describe("提袋耗材模型", () => {

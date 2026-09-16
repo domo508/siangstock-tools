@@ -80,10 +80,8 @@
     };
   }
 
-  function stockRule(record, storeInventory) {
+  function builtInStockRule(record, storeInventory) {
     const value = normalizeName(`${record?.name || ""} ${record?.size || ""}`);
-    const category = String(record?.style1 || "");
-    if (/贈品|運費|客製|代工|拍照樣|拍攝樣|樣品|耗材|保費|折扣|折價|蝦幣|手續費|服務費|商品券/i.test(value) || /輔料|客製/.test(category)) return null;
     const standalone = [["3.5尺", /(?<![\dx*.])3\.5尺/], ["5尺", /(?<![\dx*.])5尺/], ["6尺", /(?<![\dx*.])6尺/], ["7尺", /(?<![\dx*.])7尺/]].find(([, pattern]) => pattern.test(value));
     if (standalone) return configuredRule(standalone[0] === "5尺"
       ? { name: "獨立5尺商品", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "5尺不可售展示1件" }
@@ -100,6 +98,76 @@
     if (/枕頭|枕芯|乳膠枕|羽絨枕|記憶枕|水洗枕|舒眠枕|柔眠枕/.test(value)) return configuredRule({ name: "枕頭／枕芯", role: "不可售展示", quantity: 2, scope: "R00、R06", note: "枕頭／枕芯展示2件" }, storeInventory);
     if (/\d+(?:\.\d+)?(?:尺|cm|公分)|\d+(?:\.\d+)?x\d+(?:\.\d+)?/i.test(value)) return configuredRule({ name: "有尺寸配件", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "有尺寸配件展示1件" }, storeInventory);
     return null;
+  }
+
+  function productRuleFacts(record) {
+    const fields = {
+      mainCategory: normalizeName(record?.mainCategory),
+      style1: normalizeName(record?.style1),
+      style2: normalizeName(record?.style2),
+      sizeGroup: normalizeName(record?.sizeGroup),
+      size: normalizeName(record?.size),
+      name: normalizeName(record?.name)
+    };
+    const categorySource = `${fields.mainCategory}${fields.style1}${fields.style2}`;
+    const itemSource = `${categorySource}${fields.name}${fields.sizeGroup}${fields.size}`;
+    const isKnownNoSize = /枕套|枕頭套|枕頭|枕芯|乳膠枕|羽絨枕|記憶枕|水洗枕|舒眠枕|柔眠枕|抱枕|靠枕/.test(itemSource);
+    const hasBedDimension = /(?<![\dx*.])(?:3\.5|5|6|7)尺|6x7尺|\d+(?:\.\d+)?(?:cm|公分)|\d+(?:\.\d+)?x\d+(?:\.\d+)?/i.test(`${fields.sizeGroup}${fields.size}${fields.name}`);
+    let productCategory = "";
+    if (/配件/.test(categorySource) || isKnownNoSize || /保潔墊/.test(itemSource)) productCategory = "配件";
+    else if (/床包/.test(itemSource)) productCategory = "床包";
+    else if (/被套/.test(itemSource)) productCategory = "被套";
+    else productCategory = String(record?.mainCategory || record?.style1 || "").trim();
+    let sizeAttribute = "";
+    if (/無尺寸/.test(`${fields.sizeGroup}${fields.size}`) || isKnownNoSize) sizeAttribute = "無尺寸";
+    else if (/有尺寸/.test(`${fields.sizeGroup}${fields.size}`) || hasBedDimension) sizeAttribute = "有尺寸";
+    else if (productCategory === "配件") sizeAttribute = "無尺寸";
+    return { productCategory, sizeAttribute, itemSource };
+  }
+
+  function normalizedRuleConditions(rule) {
+    const productCategory = String(rule?.productCategory || "").trim();
+    const sizeAttribute = String(rule?.sizeAttribute || "").trim();
+    const itemTypeKeywords = String(rule?.itemTypeKeywords || "").trim();
+    if (rule?.conditionMode === "structured") {
+      if ((!productCategory || productCategory === "全部") && (!sizeAttribute || sizeAttribute === "全部") && !itemTypeKeywords) return null;
+      return { productCategory, sizeAttribute, itemTypeKeywords };
+    }
+    const legacy = normalizeName(`${rule?.name || ""}${rule?.matchText || ""}`);
+    if (/無尺寸配件|配件.*無尺寸/.test(legacy)) return { productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "" };
+    if (/有尺寸配件|配件.*有尺寸/.test(legacy)) return { productCategory: "配件", sizeAttribute: "有尺寸", itemTypeKeywords: "" };
+    return null;
+  }
+
+  function matchesManagedRule(record, rule) {
+    const conditions = normalizedRuleConditions(rule);
+    if (!conditions) return false;
+    const facts = productRuleFacts(record);
+    if (conditions.productCategory && conditions.productCategory !== "全部" && normalizeName(conditions.productCategory) !== normalizeName(facts.productCategory)) return false;
+    if (conditions.sizeAttribute && conditions.sizeAttribute !== "全部" && conditions.sizeAttribute !== facts.sizeAttribute) return false;
+    const keywords = conditions.itemTypeKeywords.split(/[|｜、,，]/).map(normalizeName).filter(Boolean);
+    return !keywords.length || keywords.some((keyword) => facts.itemSource.includes(keyword));
+  }
+
+  function managedConditionRule(record, storeInventory) {
+    const rules = Array.isArray(storeInventory?.rules) ? storeInventory.rules : [];
+    const match = rules.filter((rule) => rule?.enabled !== false && matchesManagedRule(record, rule))
+      .sort((left, right) => Number(right.priority || 0) - Number(left.priority || 0))[0];
+    if (!match) return null;
+    return {
+      name: String(match.name || "自訂門市規則"),
+      role: String(match.inventoryRole || "可售最低庫存"),
+      quantity: Math.max(0, Number(match.quantity || 0)),
+      scope: String(match.scope || "R00、R06"),
+      priority: Number(match.priority || 0),
+      note: `${String(match.name || "自訂門市規則")}：${String(match.inventoryRole || "庫存規則")}${Math.max(0, Number(match.quantity || 0))}件`
+    };
+  }
+
+  function stockRule(record, storeInventory) {
+    if (excludedFromRegularTransfer(record)) return null;
+    const candidates = [builtInStockRule(record, storeInventory), managedConditionRule(record, storeInventory)].filter(Boolean);
+    return candidates.sort((left, right) => Number(right.priority || 0) - Number(left.priority || 0))[0] || null;
   }
 
   function appliesToStore(rule, store, localSales42) {
@@ -383,6 +451,7 @@
         const daily = local42 / 42;
         const target = tier === "熱銷" ? daily * 10 : tier === "穩定" ? daily * 7 : local42 > 0 ? 1 : 0;
         const rule = stockRule(master, input.storeInventory);
+        if (rule?.role === "排除規則") continue;
         const ruleApplies = appliesToStore(rule, store, local42);
         const appliesDisplay = ruleApplies && rule?.role === "不可售展示";
         const minimum = ruleApplies && rule?.role === "可售最低庫存" ? rule.quantity : 0;

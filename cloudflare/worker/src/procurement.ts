@@ -130,6 +130,15 @@ function validateProcurementRules(value: unknown): Record<string, unknown> {
     if (!["不可售展示", "可售最低庫存", "可售特殊備貨", "排除規則"].includes(String(rule.inventoryRole))) throw new RequestValidationError("門市庫存角色格式錯誤。");
     if (!Number.isInteger(Number(rule.quantity)) || Number(rule.quantity) < 0 || Number(rule.quantity) > 100) throw new RequestValidationError("門市庫存規則數量須為0至100的整數。");
     if (!Number.isInteger(Number(rule.priority)) || Number(rule.priority) < 0 || Number(rule.priority) > 1000) throw new RequestValidationError("門市庫存規則優先序須為0至1000的整數。");
+    if (rule.conditionMode != null) {
+      if (rule.conditionMode !== "structured") throw new RequestValidationError("門市庫存規則的判斷模式錯誤。");
+      const productCategory = String(rule.productCategory || "").trim();
+      const sizeAttribute = String(rule.sizeAttribute || "").trim();
+      const itemTypeKeywords = String(rule.itemTypeKeywords || "").trim();
+      if (productCategory.length > 50 || itemTypeKeywords.length > 200) throw new RequestValidationError("門市庫存規則的分類或品項關鍵字過長。");
+      if (sizeAttribute && !["全部", "有尺寸", "無尺寸"].includes(sizeAttribute)) throw new RequestValidationError("門市庫存規則的尺寸屬性錯誤。");
+      if (rule.enabled !== false && (!productCategory || productCategory === "全部") && (!sizeAttribute || sizeAttribute === "全部") && !itemTypeKeywords) throw new RequestValidationError("已啟用的自訂門市規則至少須設定一個商品判斷條件。");
+    }
   }
   if (!rules.springFestival || typeof rules.springFestival !== "object" || Array.isArray(rules.springFestival)) throw new RequestValidationError("國外供應商春節備貨規則格式錯誤。");
   const springFestival = rules.springFestival as Record<string, unknown>;

@@ -14,6 +14,15 @@
     lirongPull: get("#lirong-pull"), lirongProduction: get("#lirong-production"), lirongDelivery: get("#lirong-delivery"), lirongHot: get("#lirong-hot"), lirongStable: get("#lirong-stable"), lirongLow: get("#lirong-low")
   };
 
+  function configureReturnPath() {
+    if (new URLSearchParams(location.search).get("from") !== "store-transfer") return;
+    const target = "../../store-transfer/";
+    const source = get("#source-tool-link"); const back = get("#source-back-link"); const brand = get("#tool-brand-link");
+    source.href = target; source.textContent = "門市週補貨與調撥";
+    back.href = target; back.textContent = "← 返回週調撥工具";
+    brand.href = target;
+  }
+
   async function request(url, options = {}) {
     const response = await fetch(url, { cache: "no-store", headers: { Accept: "application/json", ...(options.body ? { "Content-Type": "application/json" } : {}) }, ...options });
     const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
@@ -105,9 +114,15 @@
   function renderStores() {
     const fragment = document.createDocumentFragment(); const rules = state.rules.storeInventory.rules || [];
     rules.forEach((item, index) => {
+      const legacy = `${item.name || ""}${item.matchText || ""}`;
+      const inferredCategory = item.productCategory || (/配件/.test(legacy) ? "配件" : "全部");
+      const inferredSize = item.sizeAttribute || (/無尺寸/.test(legacy) ? "無尺寸" : /有尺寸/.test(legacy) ? "有尺寸" : "全部");
+      const setCondition = (key, value) => { item.conditionMode = "structured"; item[key] = value; };
       const row = document.createElement("tr");
       row.append(cell(input("checkbox", item.enabled !== false, (value) => item.enabled = value)), cell(input("text", item.name, (value) => item.name = value)),
-        cell(input("text", item.scope || "", (value) => item.scope = value)), cell(input("text", item.matchText || "", (value) => item.matchText = value)),
+        cell(input("text", item.scope || "", (value) => item.scope = value)), cell(input("text", inferredCategory, (value) => setCondition("productCategory", value), { placeholder: "全部或主檔值" })),
+        cell(select(inferredSize, ["全部", "有尺寸", "無尺寸"], (value) => setCondition("sizeAttribute", value))),
+        cell(input("text", item.itemTypeKeywords || "", (value) => setCondition("itemTypeKeywords", value), { placeholder: "留白或枕頭｜枕芯" })),
         cell(select(item.inventoryRole, ["不可售展示", "可售最低庫存", "可售特殊備貨", "排除規則"], (value) => item.inventoryRole = value)),
         cell(input("number", item.quantity, (value) => item.quantity = Number(value), { min: 0, step: 1 })), cell(input("number", item.priority, (value) => item.priority = Number(value), { min: 0, step: 1 })),
         cell(removeButton(() => rules.splice(index, 1)))); fragment.appendChild(row);
@@ -163,10 +178,11 @@
   elements.addSupplier.addEventListener("click", () => { state.rules.suppliers.push({ name: "新供應商", aliases: [], country: "國內", leadDays: 14, reviewDays: 14, automaticPurchase: true, exclusionReason: "" }); markDirty(); render(); });
   elements.addFeaturedSupplier.addEventListener("click", () => { const name = elements.featuredSupplierSelect.value; if (!name) return; ensureFeaturedSuppliers().push(name); markDirty(); renderFeaturedSuppliers(); });
   elements.addUnit.addEventListener("click", () => { state.rules.purchaseUnits.push({ supplier: "普優瑪寢具有限公司", ruleName: "其它品項", matchText: "", quantity: null, enabled: true }); markDirty(); render(); });
-  elements.addStore.addEventListener("click", () => { state.rules.storeInventory.rules.push({ name: "新門市規則", enabled: true, scope: "R00、R06", matchText: "", inventoryRole: "可售最低庫存", quantity: 1, priority: 50 }); markDirty(); render(); });
+  elements.addStore.addEventListener("click", () => { state.rules.storeInventory.rules.push({ name: "新門市規則", enabled: false, scope: "R00、R06", conditionMode: "structured", productCategory: "全部", sizeAttribute: "全部", itemTypeKeywords: "", matchText: "", inventoryRole: "可售最低庫存", quantity: 1, priority: 50 }); markDirty(); render(); });
   elements.springFestivalEnabled.addEventListener("change", () => { ensureSpringFestivalRule().enabled = elements.springFestivalEnabled.checked; markDirty(); });
   elements.springFestivalStart.addEventListener("input", () => { ensureSpringFestivalRule().closureStart = elements.springFestivalStart.value; markDirty(); });
   elements.springFestivalRecovery.addEventListener("input", () => { ensureSpringFestivalRule().recoveryDate = elements.springFestivalRecovery.value; markDirty(); });
   elements.springFestivalExtraDays.addEventListener("input", () => { ensureSpringFestivalRule().extraDays = Number(elements.springFestivalExtraDays.value || 0); markDirty(); });
+  configureReturnPath();
   elements.blacklist.addEventListener("input", markDirty); elements.holidays.addEventListener("input", markDirty); elements.save.addEventListener("click", saveRules); elements.saveAccess.addEventListener("click", saveAccessSettings); init();
 })();

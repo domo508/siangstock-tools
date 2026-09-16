@@ -1,6 +1,7 @@
 .compact-hero { min-height: auto; padding-bottom: 1rem; }
 .compact-hero h1 { font-size: clamp(2.2rem, 5vw, 4.5rem); }
 .rules-table { width: 100%; border-collapse: collapse; min-width: 1100px; }
+.store-rules-table { min-width: 1420px; }
 .rules-table th, .rules-table td { border-bottom: 1px solid var(--line, #ddd); padding: .65rem; text-align: left; vertical-align: top; }
 .rules-table input, .rules-table select, .rule-form-grid input, .rule-form-grid textarea, .wide-field input, .wide-field textarea { width: 100%; box-sizing: border-box; }
 .rules-table input[type="checkbox"] { width: auto; }
@@ -37,6 +38,8 @@
 .table-action { border: 0; background: transparent; color: #9e342b; cursor: pointer; text-decoration: underline; }
 .save-panel { position: sticky; bottom: 1rem; z-index: 3; box-shadow: 0 10px 30px rgb(0 0 0 / 12%); }
 #access-status { margin-left: 1rem; }
+.rule-condition-help { display: flex; gap: .65rem; align-items: baseline; margin: .9rem 0; padding: .8rem 1rem; border: 1px solid #c9dde3; border-radius: 14px; color: var(--navy, #153f63); background: #f3f9f9; }
+.rule-condition-help span { color: var(--muted, #64778a); line-height: 1.6; }
 
 @media (max-width: 760px) {
   .featured-supplier-manager { grid-template-columns: 1fr; }
@@ -45,4 +48,5 @@
   .featured-supplier-controls .secondary-button { width: 100%; }
   .spring-festival-rule { grid-template-columns: 1fr; }
   .spring-festival-rule p { grid-column: auto; }
+  .rule-condition-help { display: grid; }
 }
