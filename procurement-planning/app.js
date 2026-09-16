@@ -14,7 +14,7 @@
     selectedSuppliers: new Set(), returnScope: null, consignmentSource: null,
     googleAuthorized: false, modelWorker: null, modelDraft: null,
     baseAnalysis: null, parsedSources: null, workflowType: "system_recommendation",
-    newProductFile: null, manualDraftFiles: [], postedOrderFiles: []
+    newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], shortageRunMode: "merge_next"
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -48,7 +48,8 @@
     reviewFileLabel: get("#review-file-label"), secondReviewFileLabel: get("#second-review-file-label"),
     workflowStepDownload: get("#workflow-step-download"), workflowStepFirst: get("#workflow-step-first"), workflowStepSecond: get("#workflow-step-second"), workflowStepApproval: get("#workflow-step-approval")
     ,newProductFile: get("#new-product-file"), newProductButton: get("#new-product-button"), manualDraftFiles: get("#manual-draft-files"), manualDraftButton: get("#manual-draft-button"),
-    postedOrderFiles: get("#posted-order-files"), postedOrderButton: get("#posted-order-button"), specialWorkflowStatus: get("#special-workflow-status"), activeLedgerRows: get("#active-ledger-rows")
+    postedOrderFiles: get("#posted-order-files"), postedOrderButton: get("#posted-order-button"), specialWorkflowStatus: get("#special-workflow-status"), activeLedgerRows: get("#active-ledger-rows"),
+    storeShortageCount: get("#store-shortage-count"), storeShortageEmpty: get("#store-shortage-empty"), storeShortageTableWrap: get("#store-shortage-table-wrap"), storeShortageRows: get("#store-shortage-rows"), storeShortageStatus: get("#store-shortage-status"), runShortageOrder: get("#run-shortage-order-button")
   };
 
   function today() { return new Date().toISOString().slice(0, 10); }
@@ -60,6 +61,7 @@
   }
   function formatNumber(value) { return new Intl.NumberFormat("zh-TW", { maximumFractionDigits: 2 }).format(Number(value || 0)); }
   function formatCurrency(value) { return new Intl.NumberFormat("zh-TW", { style: "currency", currency: "TWD", maximumFractionDigits: 0 }).format(Number(value || 0)); }
+  function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
   function sourceProof(id, metadata) { return `ID…${String(id || "").slice(-6)}・更新${metadata?.modifiedTime || "依工作表內容"}・抓取${String(metadata?.fetchedAt || "").replace("T", " ").slice(0, 19)}・SHA-256 ${String(metadata?.sha256 || "").slice(0, 12)}…`; }
   function setStatus(message, type = "") { elements.status.textContent = message; elements.status.className = `main-status ${type}`.trim(); }
   function setWorkflowStatus(message, type = "") { elements.workflowStatus.textContent = message; elements.workflowStatus.className = `main-status ${type}`.trim(); }
@@ -382,6 +384,7 @@
   function updateReadyState() {
     renderModelStatus();
     elements.analyze.disabled = !requirementsReady();
+    elements.runShortageOrder.disabled = !requirementsReady() || !state.storeShortageNeeds.some((row) => row.handling_mode === "new_order" && Number(row.unfilled_quantity || 0) > Number(row.covered_quantity || 0));
     updateSpecialWorkflowReady();
     if (!requirementsReady() && !state.analysis) setStatus(modelRefreshRequired()
       ? "請完成公司登入、日期與必要資料；本月季節模型需要提供或更新。"
@@ -664,12 +667,63 @@
       }
       elements.saveBudget.disabled = !state.config.permissions?.canManageBudget;
       elements.addChannel.disabled = !state.config.permissions?.canManageBudget;
-      await Promise.all([loadProcurementRules(), loadLedger(), loadMonthPlan()]);
+      await Promise.all([loadProcurementRules(), loadLedger(), loadMonthPlan(), loadStoreShortageNeeds()]);
     } catch (error) {
       state.config = null; elements.accountBadge.textContent = "公司登入驗證失敗";
       elements.sourceStatus.textContent = error.message; elements.sourceStatus.classList.add("error");
     }
     updateReadyState();
+  }
+
+  function handlingLabel(row) {
+    if (row.status === "covered_waiting") return "已由採購覆蓋待到貨";
+    return ({ pending_decision: "待決定", merge_next: "等待併入下一張採購單", new_order: "建立門市不足補採新單" })[row.handling_mode] || row.status || "待決定";
+  }
+  function renderStoreShortageNeeds() {
+    const rows = state.storeShortageNeeds || [];
+    const total = rows.reduce((sum, row) => sum + Number(row.unfilled_quantity || 0), 0);
+    elements.storeShortageCount.textContent = rows.length ? `${rows.length}項・${formatNumber(total)}件` : "目前無待辦";
+    elements.storeShortageEmpty.hidden = rows.length > 0;
+    elements.storeShortageTableWrap.hidden = rows.length === 0;
+    elements.storeShortageRows.innerHTML = rows.map((row) => `<tr><td>${escapeHtml(row.store_code)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${formatNumber(row.approved_demand_quantity)}</td><td>${formatNumber(row.allocated_quantity)}</td><td>${formatNumber(row.unfilled_quantity)}</td><td>${formatNumber(row.covered_quantity)}</td><td>${formatNumber(Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.covered_quantity || 0)))}</td><td>${escapeHtml(row.needed_by || "待確認")}</td><td>${escapeHtml(handlingLabel(row))}</td><td><div class="shortage-actions"><button type="button" data-shortage-mode="merge_next" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "merge_next" ? "is-selected" : ""}">併入下一張</button><button type="button" data-shortage-mode="new_order" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "new_order" ? "is-selected" : ""}">建立補採新單</button></div></td></tr>`).join("");
+    elements.runShortageOrder.disabled = !rows.some((row) => row.handling_mode === "new_order" && Number(row.unfilled_quantity || 0) > Number(row.covered_quantity || 0)) || !requirementsReady();
+  }
+  async function loadStoreShortageNeeds() {
+    try {
+      const response = await fetch("/api/procurement/store-shortages", { headers: { Accept: "application/json" }, cache: "no-store" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      state.storeShortageNeeds = result.rows || [];
+      renderStoreShortageNeeds();
+      elements.storeShortageStatus.textContent = state.storeShortageNeeds.length ? "請先選擇處理方式；已選擇的最新版需求會在本次計算與未到貨量交叉檢查。" : "目前沒有已由總部核准、仍未配足的門市需求。";
+    } catch (error) {
+      state.storeShortageNeeds = [];
+      renderStoreShortageNeeds();
+      elements.storeShortageStatus.textContent = `門市未配需求同步失敗：${error.message}`;
+    }
+  }
+  async function decideStoreShortage(event) {
+    const button = event.target.closest("[data-shortage-mode]");
+    if (!button) return;
+    button.disabled = true;
+    try {
+      await postJson(`/api/procurement/store-shortages/${encodeURIComponent(button.dataset.store)}/${encodeURIComponent(button.dataset.sku)}`, { handlingMode: button.dataset.shortageMode }, {}, "PUT");
+      await loadStoreShortageNeeds();
+      if (state.analysis) invalidateAnalysis();
+      elements.storeShortageStatus.textContent = "處理方式已儲存；請重新產生採購建議，系統會用最新版需求防重計算。";
+    } catch (error) {
+      button.disabled = false;
+      elements.storeShortageStatus.textContent = `處理方式儲存失敗：${error.message}`;
+    }
+  }
+
+  async function savePendingSnapshot(pendingReports) {
+    const pending = core.aggregatePendingReports(pendingReports);
+    const rows = [...pending.bySku.values()].map((row) => ({
+      sku: row.sku, productName: row.name || "", pendingQuantity: row.quantity,
+      expectedDeliveryDate: (row.deliveries || []).map((item) => item.deliveryDate).filter(Boolean).sort()[0] || ""
+    }));
+    await postJson("/api/procurement/pending-purchase-snapshot", { sourceDate: elements.pendingDate.value, rows }, {}, "PUT");
   }
   async function connectGoogle() {
     elements.googleConnect.disabled = true; elements.sourceStatus.textContent = "正在等待公司 Google 授權…";
@@ -906,6 +960,8 @@
       const validation = core.buildAnalysis({ master, inventory, pendingReports, transferReports: [transferReport], consignment, blacklist: blacklistEntries(), dates: {
         inventory: elements.inventoryDate.value, pending: elements.pendingDate.value, transfer: elements.transferDate.value, consignment: elements.consignmentDate.value, sales: elements.salesDate.value
       } });
+      const selectedStoreShortageNeeds = state.storeShortageNeeds.filter((row) => row.handling_mode === state.shortageRunMode);
+      const uncoveredStoreShortageNeeds = selectedStoreShortageNeeds.map((row) => ({ ...row, unfilledQuantity: Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.covered_quantity || 0)) }));
       const analysis = core.buildProcurementRecommendations({ master, inventory, pendingReports, transferReports: [transferReport], inventoryDate: elements.inventoryDate.value, consignment, salesReports, model,
         blacklist: blacklistEntries(), asOfDate: elements.salesDate.value, checkpoint: elements.checkpoint.value,
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
@@ -913,7 +969,7 @@
         purchaseUnitRules: state.procurementRules?.purchaseUnits,
         consignmentRules: state.procurementRules?.consignment,
         storeInventoryRules: state.procurementRules?.storeInventory,
-        revenueChannels: state.revenueChannels });
+        revenueChannels: state.revenueChannels, storeTransferNeeds: uncoveredStoreShortageNeeds, onlyStoreTransferNeedSkus: state.shortageRunMode === "new_order" });
       analysis.validation = validation;
       analysis.lirongConsignmentRows = core.buildLirongConsignmentRecommendations(analysis, lirongConsignment, {
         orderDate: elements.orderDate.value, purchaseUnitRules: state.procurementRules?.purchaseUnits, consignmentRules: state.procurementRules?.consignment
@@ -928,7 +984,7 @@
           lirong: state.sourceMetadata.lirongMetadata.sha256
         } : {}
       };
-      state.analysis = analysis; state.baseAnalysis = analysis; state.workflowType = "system_recommendation";
+      state.analysis = analysis; state.baseAnalysis = analysis; state.workflowType = state.shortageRunMode === "new_order" ? "store_shortage_replenishment" : "system_recommendation";
       state.parsedSources = { master, inventory, pendingReports, transferReports: [transferReport], consignment, lirongConsignment, salesReports, model };
       state.consignmentSource = consignment; state.returnScope = null; renderSummary(analysis, consignment);
       elements.resultPanel.hidden = false;
@@ -938,6 +994,7 @@
         : "本次無春節停工備貨加量。";
       setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。${springFestivalNote}`, "success");
       await syncDetectedCustomOrders(pendingReports, master);
+      await savePendingSnapshot(pendingReports);
       renderBudget(); updateSpecialWorkflowReady(); elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
       state.analysis = null; elements.resultPanel.hidden = true; setStatus(`無法完成：${error.message || "請確認檔案格式"}`, "error");
@@ -1214,6 +1271,15 @@
   }
   function batchPayload() {
     const currentMonthPayment = state.review.payments.flatMap((row) => row.entries).filter((row) => row.month === elements.month.value).reduce((sum, row) => sum + row.amount, 0);
+    const availableBySku = new Map();
+    state.review.rows.filter((row) => row.finalQty > 0).forEach((row) => availableBySku.set(row.sku, (availableBySku.get(row.sku) || 0) + row.finalQty));
+    const mode = state.workflowType === "store_shortage_replenishment" ? "new_order" : "merge_next";
+    const linkedNeeds = state.storeShortageNeeds.filter((row) => row.handling_mode === mode).sort((left, right) => String(left.needed_by || "9999").localeCompare(String(right.needed_by || "9999"))).map((row) => {
+      const remaining = Math.max(0, Number(availableBySku.get(row.sku) || 0));
+      const quantity = Math.min(remaining, Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.covered_quantity || 0)));
+      availableBySku.set(row.sku, remaining - quantity);
+      return { storeCode: row.store_code, sku: row.sku, quantity };
+    }).filter((row) => row.quantity > 0);
     return {
       batchId: state.batchId, analysisMonth: elements.month.value, supplierSummary: [...new Set(state.review.rows.filter((row) => row.finalQty > 0).map((row) => row.supplier))],
       workflowType: state.workflowType,
@@ -1221,6 +1287,7 @@
       approvedAmount: state.review.totals.approvedAmount, adjustmentAmount: state.review.totals.adjustmentAmount, budgetAmount: currentBudget().availableBudget,
       paymentCurrentMonth: currentMonthPayment, paymentFutureMonths: state.review.totals.approvedAmount - currentMonthPayment,
       paymentSchedule: state.review.payments.flatMap((row) => row.entries.map((entry) => ({ supplier: row.supplier, country: row.supplierCountry, ...entry }))),
+      storeShortageNeeds: linkedNeeds,
       warningSummary: currentBudget().remainingBudget - state.review.totals.approvedAmount < 0 ? "本批核准後超出中性情境尚可承諾額度" : "無",
       idempotencyKey: `${state.batchId}:submit`
     };
@@ -1341,6 +1408,8 @@
   elements.purchasedToDate.addEventListener("input", renderBudget); elements.saveBudget.addEventListener("click", saveMonthPlan);
   elements.addChannel.addEventListener("click", addRevenueChannel); elements.refreshQueue.addEventListener("click", loadLedger);
   elements.googleConnect.addEventListener("click", connectGoogle); elements.autoSource.addEventListener("click", loadAutomaticSources);
+  elements.storeShortageRows.addEventListener("click", decideStoreShortage);
+  elements.runShortageOrder.addEventListener("click", async () => { state.shortageRunMode = "new_order"; try { await analyze(); } finally { state.shortageRunMode = "merge_next"; } });
   elements.analyze.addEventListener("click", analyze); elements.download.addEventListener("click", downloadRecommendation);
   elements.reviewButton.addEventListener("click", reviewReturn); elements.confirmReview.addEventListener("click", confirmSecondReview);
   elements.submitApproval.addEventListener("click", submitForApproval); elements.approve.addEventListener("click", approveBatch);

@@ -77,6 +77,13 @@
       <div id="batch-list" class="batch-list"><p class="empty-state">完成公司帳號驗證後顯示。</p></div>
     </section>
 
+    <section class="panel" aria-labelledby="pending-purchase-title">
+      <div class="section-heading"><div><p class="eyebrow">主採購工具唯讀摘要</p><h2 id="pending-purchase-title">採購未交量</h2></div><span id="pending-purchase-updated" class="status-line">尚未由主採購工具同步</span></div>
+      <p>此區只供判斷與提示；未到貨商品仍不能當成本週可調撥庫存。主採購工具每次成功讀取完整未到貨清單後會覆寫此摘要。</p>
+      <div id="pending-purchase-empty" class="empty-state">目前沒有可顯示的未到貨摘要。</div>
+      <div id="pending-purchase-wrap" class="result-table-wrap" hidden><table class="transfer-table compact-table"><thead><tr><th>ERP品號</th><th>品名</th><th>採購未交量</th><th>預計到貨日</th><th>清單截止日</th><th>提示</th></tr></thead><tbody id="pending-purchase-rows"></tbody></table></div>
+    </section>
+
     <section class="panel operation-guide" aria-labelledby="guide-title">
       <div class="section-heading"><div><p class="eyebrow">操作說明</p><h2 id="guide-title">每週流程怎麼走</h2></div></div>
       <div class="guide-grid"><article><strong>同週批次版本</strong><p>同一週重新建立時，新批次會成為目前作業版本；舊的未完成批次保留紀錄，但不能再修改或送出。</p></article><article><strong>刪除舊批次</strong><p>總部可將已取代／已取消批次移出前台；目前作業與已完成批次不能直接刪除，稽核資料仍保留12個月。</p></article><article><strong>門市可撤回</strong><p>送出後、星期一上午9點鎖定前可不限次數撤回；鎖定後只能由總部更正。</p></article><article><strong>人工增減品項</strong><p>門市與總部皆可新增品項；移除時以本階段數量歸零處理，原因與原始建議仍會保留。</p></article><article><strong>人工調整原因</strong><p>新增、移除或數量不同於上一階段時，必須填原因才可送出。</p></article><article><strong>B3判斷</strong><p>只有來源單號＋ERP品號成功配對的總倉代出才認列；無法配對會列待人工確認。</p></article><article><strong>批次狀態</strong><p>等待門市→總部覆核→已核准→ERP皆完成→本週完成，每店進度會分開顯示。</p></article></div>
@@ -89,11 +96,11 @@
   <script src="../procurement-planning/assets/xlsx-js-style.bundle.js"></script>
   <script src="../procurement-planning/xlsx-style-runtime.js"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
-  <script src="../procurement-planning/core.js?v=20260916-transfer-other-warehouse-r1"></script>
+  <script src="../procurement-planning/core.js?v=20260917-shortage-bridge-r1"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="../procurement-planning/google-sources.js?v=20260915-google-sources-r1"></script>
   <script src="core.js?v=20260917-p0-r1"></script>
   <script src="xlsx-preflight.js?v=20260916-xlsx-reader-r1"></script>
-  <script src="app.js?v=20260917-p0-r1"></script>
+  <script src="app.js?v=20260917-shortage-bridge-r1"></script>
 </body>
 </html>

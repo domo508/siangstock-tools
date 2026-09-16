@@ -5,7 +5,7 @@ import { FIXED_SOURCES } from "./fixed-sources";
 type ProcurementEnv = AccessConfig & { DB: D1Database; ALLOWED_ORIGINS: string; GOOGLE_OAUTH_CLIENT_ID?: string; PROCUREMENT_ACCESS_AUD?: string };
 
 const ADMIN_EMAIL = "siang01@siangapato.com.tw";
-const MAX_SUMMARY_BYTES = 16384;
+const MAX_SUMMARY_BYTES = 524288;
 const SUPPLIERS = Object.freeze([
   ["家禾", "domestic", 40], ["上林", "domestic", 5], ["力榮", "domestic", 14],
   ["普優瑪寢具有限公司", "domestic", 5], ["歐必斯", "domestic", 10], ["昭元棉業", "domestic", 50],
@@ -105,6 +105,55 @@ async function verifyApprover(request: Request, env: ProcurementEnv): Promise<{ 
   const role = roleFor(email, settings);
   if (role === "operator") throw new RequestValidationError("此帳號沒有核准或規則管理權限。", 403);
   return { email, role, settings };
+}
+
+async function storeShortageNeeds(request: Request, env: ProcurementEnv): Promise<Response> {
+  const email = await verifyCompanyUser(request, procurementAccess(env));
+  const settings = await readProcurementSettings(env);
+  const role = roleFor(email, settings);
+  const rows = await env.DB.prepare("SELECT store_code, sku, product_name, source_batch_id, approved_demand_quantity, allocated_quantity, unfilled_quantity, covered_quantity, needed_by, reason, handling_mode, status, updated_at FROM store_transfer_procurement_needs WHERE unfilled_quantity > 0 AND status NOT IN ('resolved', 'cancelled') ORDER BY needed_by, store_code, sku").all();
+  return json({ rows: rows.results, permissions: { canDecide: role !== "operator" } });
+}
+
+async function decideStoreShortageNeed(request: Request, env: ProcurementEnv, storeCode: string, sku: string): Promise<Response> {
+  requireSameOrigin(request, env);
+  const access = await verifyApprover(request, env);
+  const input = await body(request);
+  const mode = String(input.handlingMode || "");
+  if (!['merge_next', 'new_order'].includes(mode)) throw new RequestValidationError("處理方式只能是併入下一張採購單或建立門市不足補採新單。");
+  const status = mode === 'merge_next' ? 'waiting_merge' : 'new_order';
+  const now = new Date().toISOString();
+  const source = await env.DB.prepare("SELECT source_batch_id FROM store_transfer_procurement_needs WHERE store_code = ? AND sku = ? AND unfilled_quantity > 0").bind(storeCode, sku).first<{ source_batch_id: string }>();
+  if (!source) throw new RequestValidationError("找不到這筆待處理門市未配需求。", 404);
+  const label = mode === 'merge_next' ? '等待併入下一張採購單' : '建立門市不足補採新單';
+  await env.DB.batch([
+    env.DB.prepare("UPDATE store_transfer_procurement_needs SET handling_mode = ?, status = ?, updated_at = ?, updated_by = ? WHERE store_code = ? AND sku = ? AND unfilled_quantity > 0").bind(mode, status, now, access.email, storeCode, sku),
+    env.DB.prepare("UPDATE store_transfer_shortages SET follow_up_status = ?, updated_at = ? WHERE batch_id = ? AND store_code = ? AND sku = ?").bind(label, now, source.source_batch_id, storeCode, sku)
+  ]);
+  return json({ storeCode, sku, handlingMode: mode, status, updatedAt: now });
+}
+
+async function savePendingPurchaseSnapshot(request: Request, env: ProcurementEnv): Promise<Response> {
+  requireSameOrigin(request, env);
+  const email = await verifyCompanyUser(request, procurementAccess(env));
+  const input = await body(request);
+  if (!Array.isArray(input.rows) || input.rows.length > 5000) throw new RequestValidationError("未到貨摘要格式錯誤。");
+  const sourceDate = string(input.sourceDate, "未到貨清單截止日", 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(sourceDate)) throw new RequestValidationError("未到貨清單截止日格式錯誤。");
+  const now = new Date().toISOString();
+  const statements = [env.DB.prepare("DELETE FROM procurement_pending_purchase_snapshot")];
+  for (const raw of input.rows as unknown[]) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("未到貨摘要格式錯誤。");
+    const row = raw as Record<string, unknown>;
+    const sku = string(row.sku, "ERP品號", 80);
+    const name = String(row.productName || "").normalize("NFKC").trim().slice(0, 300);
+    const qty = money(row.pendingQuantity, "未到貨量");
+    const expected = String(row.expectedDeliveryDate || "").trim();
+    if (expected && !/^\d{4}-\d{2}-\d{2}$/.test(expected)) throw new RequestValidationError(`${sku}預計到貨日格式錯誤。`);
+    statements.push(env.DB.prepare("INSERT INTO procurement_pending_purchase_snapshot (sku, product_name, pending_quantity, expected_delivery_date, source_date, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(sku, name, qty, expected || null, sourceDate, now, email));
+  }
+  await env.DB.batch(statements);
+  return json({ saved: input.rows.length, sourceDate, updatedAt: now });
 }
 
 function validateProcurementRules(value: unknown): Record<string, unknown> {
@@ -356,12 +405,19 @@ function validatedBatch(input: Record<string, unknown>, actor: string) {
   if (supplierSummary.length > 4096 || paymentSchedule.length > 8192) throw new RequestValidationError("供應商或付款摘要過長。");
   const now = new Date().toISOString();
   const workflowType = typeof input.workflowType === "string" ? input.workflowType.trim() : "system_recommendation";
-  if (!["system_recommendation", "new_product", "manual_draft", "manual_posted", "customer_custom"].includes(workflowType)) throw new RequestValidationError("採購流程類型錯誤。");
+  if (!["system_recommendation", "store_shortage_replenishment", "new_product", "manual_draft", "manual_posted", "customer_custom"].includes(workflowType)) throw new RequestValidationError("採購流程類型錯誤。");
+  const storeNeeds = input.storeShortageNeeds == null ? [] : input.storeShortageNeeds;
+  if (!Array.isArray(storeNeeds) || storeNeeds.length > 5000) throw new RequestValidationError("門市未配需求來源格式錯誤。");
+  const normalizedStoreNeeds = storeNeeds.map((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("門市未配需求來源格式錯誤。");
+    const row = raw as Record<string, unknown>;
+    return { storeCode: string(row.storeCode, "門市代碼", 5), sku: string(row.sku, "ERP品號", 80), quantity: Math.round(money(row.quantity, "門市未配量")) };
+  });
   return {
     id: string(input.batchId, "批次編號", 80), analysisMonth: month(input.analysisMonth), supplierSummary,
     suggested, manual, blocked, approved, adjustment, budget: money(input.budgetAmount, "整月預估額度"),
     currentPayment, futurePayments, paymentSchedule, warning: typeof input.warningSummary === "string" ? input.warningSummary.trim().slice(0, 1024) : "",
-    idempotencyKey: string(input.idempotencyKey, "冪等鍵", 120), workflowType, now, actor
+    idempotencyKey: string(input.idempotencyKey, "冪等鍵", 120), workflowType, storeNeeds: normalizedStoreNeeds, now, actor
   };
 }
 
@@ -374,7 +430,8 @@ async function submit(request: Request, env: ProcurementEnv): Promise<Response> 
       env.DB.prepare("INSERT INTO procurement_batches (id, analysis_month, workflow_type, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, updated_at, idempotency_key) VALUES (?, ?, ?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(item.id, item.analysisMonth, item.workflowType, item.supplierSummary, item.suggested, item.manual, item.blocked, item.approved, item.adjustment, item.budget, item.currentPayment, item.futurePayments, item.paymentSchedule, item.warning, item.now, actor, item.now, item.idempotencyKey),
       env.DB.prepare("INSERT INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) VALUES (?, 'submitted', 0, ?, ?, '第二次回匯完成，待正式核准', ?, ?, ?)")
-        .bind(item.id, item.approved, item.approved, item.now, actor, `${item.idempotencyKey}:event`)
+        .bind(item.id, item.approved, item.approved, item.now, actor, `${item.idempotencyKey}:event`),
+      ...item.storeNeeds.map((row) => env.DB.prepare("INSERT INTO procurement_batch_store_needs (batch_id, store_code, sku, covered_quantity, created_at) VALUES (?, ?, ?, ?, ?)").bind(item.id, row.storeCode, row.sku, row.quantity, item.now))
     ]);
   } catch (error) {
     const existing = await env.DB.prepare("SELECT id, status FROM procurement_batches WHERE idempotency_key = ?").bind(item.idempotencyKey).first();
@@ -422,7 +479,9 @@ async function approve(request: Request, env: ProcurementEnv, batchId: string): 
   const result = await env.DB.batch([
     env.DB.prepare("UPDATE procurement_batches SET status = 'approved', approved_at = ?, approved_by = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND status = 'pending_approval'").bind(now, actor, now, batchId),
     env.DB.prepare("INSERT OR IGNORE INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) SELECT id, 'approved', 0, approved_amount, approved_amount, '正式核准', ?, ?, ? FROM procurement_batches WHERE id = ? AND status = 'approved' AND approved_at = ? AND approved_by = ?").bind(now, actor, key, batchId, now, actor),
-    env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'approved', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(batchId, access.settings.notificationRecipient, now, key)
+    env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'approved', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(batchId, access.settings.notificationRecipient, now, key),
+    env.DB.prepare("UPDATE store_transfer_procurement_needs SET status = CASE WHEN covered_quantity + (SELECT x.covered_quantity FROM procurement_batch_store_needs x WHERE x.batch_id = ? AND x.store_code = store_transfer_procurement_needs.store_code AND x.sku = store_transfer_procurement_needs.sku) >= unfilled_quantity THEN 'covered_waiting' WHEN handling_mode = 'new_order' THEN 'new_order' ELSE 'waiting_merge' END, covered_quantity = MIN(unfilled_quantity, covered_quantity + (SELECT x.covered_quantity FROM procurement_batch_store_needs x WHERE x.batch_id = ? AND x.store_code = store_transfer_procurement_needs.store_code AND x.sku = store_transfer_procurement_needs.sku)), updated_at = ?, updated_by = ? WHERE EXISTS (SELECT 1 FROM procurement_batch_store_needs x WHERE x.batch_id = ? AND x.store_code = store_transfer_procurement_needs.store_code AND x.sku = store_transfer_procurement_needs.sku)").bind(batchId, batchId, now, actor, batchId),
+    env.DB.prepare("UPDATE store_transfer_shortages SET follow_up_status = '已由採購覆蓋待到貨', updated_at = ? WHERE EXISTS (SELECT 1 FROM procurement_batch_store_needs x WHERE x.batch_id = ? AND x.store_code = store_transfer_shortages.store_code AND x.sku = store_transfer_shortages.sku) AND batch_id = (SELECT source_batch_id FROM store_transfer_procurement_needs n WHERE n.store_code = store_transfer_shortages.store_code AND n.sku = store_transfer_shortages.sku)").bind(now, batchId)
   ]);
   if (Number(result[0].meta.changes || 0) === 0) {
     const existing = await env.DB.prepare("SELECT id, status, approved_at, approved_by FROM procurement_batches WHERE id = ?").bind(batchId).first();
@@ -460,7 +519,8 @@ async function revoke(request: Request, env: ProcurementEnv, batchId: string): P
   const result = await env.DB.batch([
     env.DB.prepare("UPDATE procurement_batches SET status = 'revoked', updated_at = ?, revision = revision + 1 WHERE id = ? AND status IN ('approved', 'erp_created')").bind(now, batchId),
     env.DB.prepare("INSERT OR IGNORE INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) SELECT id, 'revoked', approved_amount, -approved_amount, 0, ?, ?, ?, ? FROM procurement_batches WHERE id = ? AND status = 'revoked' AND updated_at = ?").bind(reason, now, actor, key, batchId, now),
-    env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'revoked', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(batchId, settings.notificationRecipient, now, key)
+    env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'revoked', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(batchId, settings.notificationRecipient, now, key),
+    env.DB.prepare("UPDATE store_transfer_procurement_needs SET covered_quantity = MAX(0, covered_quantity - (SELECT x.covered_quantity FROM procurement_batch_store_needs x WHERE x.batch_id = ? AND x.store_code = store_transfer_procurement_needs.store_code AND x.sku = store_transfer_procurement_needs.sku)), status = CASE handling_mode WHEN 'new_order' THEN 'new_order' ELSE 'waiting_merge' END, updated_at = ?, updated_by = ? WHERE EXISTS (SELECT 1 FROM procurement_batch_store_needs x WHERE x.batch_id = ? AND x.store_code = store_transfer_procurement_needs.store_code AND x.sku = store_transfer_procurement_needs.sku)").bind(batchId, now, actor, batchId)
   ]);
   if (Number(result[0].meta.changes || 0) === 0) {
     const duplicate = await env.DB.prepare("SELECT id FROM procurement_events WHERE idempotency_key = ? AND batch_id = ? AND event_type = 'revoked'").bind(key, batchId).first();
@@ -594,6 +654,10 @@ export async function procurementRoute(request: Request, env: ProcurementEnv): P
   if (url.pathname === "/api/procurement/access-settings" && request.method === "GET") return accessSettings(request, env);
   if (url.pathname === "/api/procurement/access-settings" && request.method === "PUT") return saveAccessSettings(request, env);
   if (url.pathname === "/api/procurement/ledger" && request.method === "GET") return ledger(request, env);
+  if (url.pathname === "/api/procurement/store-shortages" && request.method === "GET") return storeShortageNeeds(request, env);
+  if (url.pathname === "/api/procurement/pending-purchase-snapshot" && request.method === "PUT") return savePendingPurchaseSnapshot(request, env);
+  const shortageDecisionMatch = url.pathname.match(/^\/api\/procurement\/store-shortages\/([^/]+)\/([^/]+)$/);
+  if (shortageDecisionMatch && request.method === "PUT") return decideStoreShortageNeed(request, env, decodeURIComponent(shortageDecisionMatch[1]), decodeURIComponent(shortageDecisionMatch[2]));
   if (url.pathname === "/api/procurement/month-plan" && request.method === "GET") return monthPlan(request, env);
   if (url.pathname === "/api/procurement/month-plan" && request.method === "PUT") return saveMonthPlan(request, env);
   if (url.pathname === "/api/procurement/batches" && request.method === "POST") return submit(request, env);

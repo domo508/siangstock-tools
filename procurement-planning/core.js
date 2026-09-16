@@ -1161,13 +1161,16 @@
     for (const row of records) {
       if (row.isCustomOrder) continue;
       if (!bySku.has(row.sku)) {
-        bySku.set(row.sku, { sku: row.sku, name: row.name, quantity: 0, amount: 0, files: new Set(), sourceRows: [] });
+        bySku.set(row.sku, { sku: row.sku, name: row.name, quantity: 0, amount: 0, files: new Set(), sourceRows: [], deliveries: [] });
       }
       const aggregated = bySku.get(row.sku);
       aggregated.quantity += row.quantity;
       aggregated.amount += row.amount;
       aggregated.files.add(row.fileName);
       aggregated.sourceRows.push(`${row.fileName || "採購單"}#${row.sourceRow}`);
+      const report = reports.find((item) => (item.records || []).includes(row));
+      const deliveryDate = parseDateValue(report?.metadata?.deliveryDate);
+      aggregated.deliveries.push({ quantity: row.quantity, deliveryDate });
       if (!aggregated.name && row.name) aggregated.name = row.name;
     }
     return { records, bySku, customRecords: records.filter((row) => row.isCustomOrder) };
@@ -1651,6 +1654,19 @@
     const puyoumaTargetDays = puyoumaRules.targetDays || PROCUREMENT_POLICY.puyoumaFactoryTargetDays;
     const lirongProductionDays = Math.max(0, Number(lirongRules.productionDays ?? PROCUREMENT_POLICY.lirongProductionDays));
     const pending = aggregatePendingReports(input.pendingReports || []);
+    const storeTransferNeeds = (input.storeTransferNeeds || []).filter((row) => Number(row.unfilledQuantity || row.unfilled_quantity || 0) > 0 && ["merge_next", "new_order"].includes(String(row.handlingMode || row.handling_mode || "")));
+    const storeTransferNeedBySkuStore = new Map();
+    for (const need of storeTransferNeeds) {
+      const sku = normalizeSku(need.sku);
+      const storeCode = normalizeSku(need.storeCode || need.store_code);
+      if (!sku || !storeCode) continue;
+      storeTransferNeedBySkuStore.set(compositeKey(sku, storeCode), {
+        quantity: Math.max(0, Number(need.unfilledQuantity || need.unfilled_quantity || 0)),
+        neededBy: parseDateValue(need.neededBy || need.needed_by),
+        handlingMode: String(need.handlingMode || need.handling_mode || ""),
+        sourceBatchId: String(need.sourceBatchId || need.source_batch_id || "")
+      });
+    }
     const transfers = aggregateTransferReports(input.transferReports || [], { asOfDate: input.inventoryDate || input.asOfDate });
     const resolvedConsignment = resolveConsignment(input.consignment, input.master, input.blacklist || []);
     const blacklist = normalizeBlacklist(input.blacklist || []);
@@ -1722,6 +1738,10 @@
     };
     const activeStoreCodes = new Set();
     for (const key of [...plannedRevenueByChannel.keys(), ...channelTotals42.keys()]) if (/^R\d{2}$/.test(key) && key !== "R09") activeStoreCodes.add(key);
+    for (const need of storeTransferNeeds) {
+      const storeCode = normalizeSku(need.storeCode || need.store_code);
+      if (/^R\d{2}$/.test(storeCode) && storeCode !== "R09") activeStoreCodes.add(storeCode);
+    }
     for (const record of transfers.records) {
       const effectiveState = transferStateAtDate(record, input.inventoryDate || input.asOfDate);
       if ((effectiveState === "submitted" || effectiveState === "shipped") && /^R\d{2}$/.test(record.destinationWarehouseCode) && record.destinationWarehouseCode !== "R09") {
@@ -1776,6 +1796,7 @@
       if (sale.fileName) demand.sourceFiles.add(sale.fileName);
     }
     for (const [sku, purchase] of pending.bySku) ensureDemand(sku, purchase.name);
+    for (const need of storeTransferNeeds) ensureDemand(normalizeSku(need.sku), String(need.productName || need.product_name || ""));
 
     const candidates = [];
     const productExclusions = [];
@@ -1783,7 +1804,9 @@
       const masterRecord = input.master.bySku.get(demand.sku);
       const inventory = input.inventory.bySku.get(demand.sku);
       const purchase = pending.bySku.get(demand.sku);
-      if (Math.max(0, demand.recent12Qty) <= 0 && !purchase) continue;
+      const hasStoreTransferNeed = [...storeTransferNeedBySkuStore.keys()].some((key) => key.startsWith(`${demand.sku}\t`));
+      if (input.onlyStoreTransferNeedSkus && !hasStoreTransferNeed) continue;
+      if (Math.max(0, demand.recent12Qty) <= 0 && !purchase && !hasStoreTransferNeed) continue;
       const effectiveName = masterRecord?.name || demand.name;
       if (masterRecord?.sellThroughStop || isSellThroughStopName(effectiveName)) {
         productExclusions.push({
@@ -1951,13 +1974,19 @@
       let storeSafetyStockQty = 0;
       const storeDemandByCode = {};
       const storeInventoryByCode = {};
+      const storeTransferNeedByCode = {};
+      let earliestStoreNeedDate = null;
       for (const storeCode of activeStoreCodes) {
         const storeDaily = Math.max(0, Number(storeDailyByCode[storeCode] || 0));
         const currentStoreInventory = Math.max(0, Number(projectedInventoryBySkuWarehouse.get(compositeKey(row.demand.sku, storeCode)) || 0));
         const storeSafety = storeTargetQty(storeDaily, row.tier);
-        const storeNeed = Math.max(storeDaily * horizonDays + storeSafety - currentStoreInventory, 0);
+        const modelStoreNeed = Math.max(storeDaily * horizonDays + storeSafety - currentStoreInventory, 0);
+        const confirmedNeed = storeTransferNeedBySkuStore.get(compositeKey(row.demand.sku, storeCode));
+        const storeNeed = Math.max(modelStoreNeed, Number(confirmedNeed?.quantity || 0));
         storeInventoryByCode[storeCode] = currentStoreInventory;
         storeDemandByCode[storeCode] = storeNeed;
+        storeTransferNeedByCode[storeCode] = Number(confirmedNeed?.quantity || 0);
+        if (confirmedNeed?.neededBy && (!earliestStoreNeedDate || confirmedNeed.neededBy < earliestStoreNeedDate)) earliestStoreNeedDate = confirmedNeed.neededBy;
         storeSafetyStockQty += storeSafety;
         storeDemandQty += storeNeed;
       }
@@ -1968,12 +1997,16 @@
       const actualHqInventoryQty = hqUsableCodes.reduce((sum, code) => sum + Math.max(0, Number(inventoryBySkuWarehouse.get(compositeKey(row.demand.sku, code)) || 0)), 0);
       const excludedInventoryQty = Math.max(0, Number(row.inventory?.quantity || 0) - actualHqInventoryQty);
       const pendingQty = row.purchase?.quantity || 0;
+      const timelyPendingQty = earliestStoreNeedDate
+        ? (row.purchase?.deliveries || []).reduce((sum, delivery) => sum + (delivery.deliveryDate && delivery.deliveryDate <= earliestStoreNeedDate ? Math.max(0, Number(delivery.quantity || 0)) : 0), 0)
+        : pendingQty;
+      const effectivePendingQty = earliestStoreNeedDate ? Math.min(pendingQty, timelyPendingQty) : pendingQty;
       const transfer = transfers.bySku.get(row.demand.sku);
       const rawPurchaseQty = calculateNetProcurementDemand({
         forecastDemandQty: hqDemandQty + storeDemandQty,
         safetyStockQty: 0,
         availableInventoryQty: inventoryQty,
-        pendingPurchaseQty: pendingQty,
+        pendingPurchaseQty: effectivePendingQty,
         factoryConsignmentQty: resolvedConsignment.bySku.get(row.demand.sku)?.currentQty || 0
       });
       const springFestivalAdjustedRawPurchaseQty = springFestival.active
@@ -1981,7 +2014,7 @@
           forecastDemandQty: hqDemandQty + storeDemandQty + channelAdjustedDaily * springFestival.extraDays,
           safetyStockQty: 0,
           availableInventoryQty: inventoryQty,
-          pendingPurchaseQty: pendingQty,
+          pendingPurchaseQty: effectivePendingQty,
           factoryConsignmentQty: resolvedConsignment.bySku.get(row.demand.sku)?.currentQty || 0
         })
         : rawPurchaseQty;
@@ -2019,9 +2052,9 @@
       const normalizedSupplier = normalizeText(supplier);
       const packSize = purchaseUnitFromRules(supplier, row.masterRecord, row.demand.name, input.purchaseUnitRules);
       const standardDownQty = Math.floor(standardBaseSuggestedPurchaseQty / packSize) * packSize;
-      const standardCoverageWithDown = channelAdjustedDaily > 0 ? (inventoryQty + pendingQty + standardDownQty) / channelAdjustedDaily : 9999;
+      const standardCoverageWithDown = channelAdjustedDaily > 0 ? (inventoryQty + effectivePendingQty + standardDownQty) / channelAdjustedDaily : 9999;
       const downQty = Math.floor(baseSuggestedPurchaseQty / packSize) * packSize;
-      const coverageWithDown = channelAdjustedDaily > 0 ? (inventoryQty + pendingQty + downQty) / channelAdjustedDaily : 9999;
+      const coverageWithDown = channelAdjustedDaily > 0 ? (inventoryQty + effectivePendingQty + downQty) / channelAdjustedDaily : 9999;
       const minimumCoverageDays = /力榮/.test(normalizedSupplier) ? lirongProductionDays : reviewDays + supplierLeadDays;
       const standardPacked = roundByPack(standardBaseSuggestedPurchaseQty, packSize, standardCoverageWithDown, minimumCoverageDays);
       const packed = roundByPack(baseSuggestedPurchaseQty, packSize, coverageWithDown, minimumCoverageDays);
@@ -2107,6 +2140,9 @@
         storeDirectDailyByCode,
         storeInventoryByCode,
         storeDemandByCode,
+        storeTransferNeedByCode,
+        storeTransferNeedQty: Object.values(storeTransferNeedByCode).reduce((sum, value) => sum + Number(value || 0), 0),
+        earliestStoreNeedDate,
         reviewDays,
         safetyDays: safetyBufferDays,
         safetyBufferDays,
@@ -2116,6 +2152,7 @@
         inventoryQty,
         excludedInventoryQty,
         pendingQty,
+        effectivePendingQty,
         transferSubmittedQty: transfer?.submittedQty || 0,
         transferInTransitQty: transfer?.shippedQty || 0,
         rawPurchaseQty,
@@ -2680,7 +2717,7 @@
       const storeInventoryQty = Object.values(row.storeInventoryByCode || {})
         .reduce((sum, quantity) => sum + Math.max(0, Number(quantity || 0)), 0);
       const systemAvailableDays = row.forecastDailyQty > 0
-        ? (Number(row.inventoryQty || 0) + storeInventoryQty + Number(row.pendingQty || 0) + Number(row.suggestedPurchaseQty || 0)) / row.forecastDailyQty
+        ? (Number(row.inventoryQty || 0) + storeInventoryQty + Number((row.effectivePendingQty ?? row.pendingQty) || 0) + Number(row.suggestedPurchaseQty || 0)) / row.forecastDailyQty
         : null;
       const systemAvailableTo = systemAvailableDays == null
         ? "需求為0"
@@ -2712,11 +2749,14 @@
       "安全庫存量": row.safetyStockQty,
       "總部需求（系統）": row.hqDemandQty,
       "門市需求（系統）": row.storeDemandQty,
+      "門市核准未配需求": row.storeTransferNeedQty || 0,
+      "門市最早需要到店日": row.earliestStoreNeedDate || "",
       "加總需求（公式）": "",
       "可用公司庫存": row.inventoryQty,
       "門市可售庫存": storeInventoryQty,
       "非採購可用庫存": row.excludedInventoryQty,
       "已採購未到貨": row.pendingQty,
+      "本次可抵扣未到貨": row.effectivePendingQty ?? row.pendingQty,
       "調撥提交中": row.transferSubmittedQty,
       "發貨在途": row.transferInTransitQty,
       "未進位淨採購需求": row.rawPurchaseQty,

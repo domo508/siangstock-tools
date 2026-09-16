@@ -167,6 +167,15 @@
     if (state.config.role === "store") $("store-batches").innerHTML = html;
   }
 
+  async function loadPendingPurchases() {
+    const payload = await api("/pending-purchases");
+    const rows = payload.rows || [];
+    $("pending-purchase-empty").hidden = rows.length > 0;
+    $("pending-purchase-wrap").hidden = rows.length === 0;
+    $("pending-purchase-rows").innerHTML = rows.map((row) => `<tr><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${Number(row.pending_quantity || 0).toLocaleString("zh-TW")}</td><td>${escapeHtml(row.expected_delivery_date || "未提供")}</td><td>${escapeHtml(row.source_date)}</td><td>已有未交，但本週仍須以總倉現貨判斷可配量</td></tr>`).join("");
+    $("pending-purchase-updated").textContent = rows.length ? `共${rows.length}個品號・更新${String(rows[0].updated_at || "").replace("T", " ").slice(0, 19)}` : "目前無未到貨摘要";
+  }
+
   function applyScheduleForWeek(weekKey) {
     const match = String(weekKey || "").match(/^(\d{4})-W(\d{2})$/); if (!match) return;
     const jan4 = new Date(Number(match[1]), 0, 4, 12), jan4Offset = (jan4.getDay() + 6) % 7;
@@ -433,7 +442,7 @@
         if (state.config.permissions?.canManageRules) $("rules-link").hidden = false;
         if (!state.config.googleOAuthClientId) { $("google-connect-button").disabled = true; $("source-status").textContent = "正式環境尚未設定 Google OAuth，用手動備援仍可操作。"; }
       }
-      await loadBatches();
+      await Promise.all([loadBatches(), loadPendingPurchases()]);
     } catch (error) { $("account-badge").textContent = "公司帳號驗證失敗"; $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; }
   }
 

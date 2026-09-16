@@ -535,6 +535,26 @@ describe("採購建議第二階段", () => {
     expect(midMonth.suggestedPurchaseQty).toBeGreaterThanOrEqual(monthStart.suggestedPurchaseQty);
   });
 
+  it("門市核准未配需求以同店同品號最新版防重，並只抵扣需要日前可到貨的未交量", () => {
+    const source = {
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", checkpoint: "mid-month",
+      storeTransferNeeds: [
+        { storeCode: "R00", sku: "A1", productName: "60天絲測試床包", unfilledQuantity: 20, neededBy: "2026-08-27", handlingMode: "merge_next", sourceBatchId: "W1" },
+        { storeCode: "R00", sku: "A1", productName: "60天絲測試床包", unfilledQuantity: 12, neededBy: "2026-08-27", handlingMode: "merge_next", sourceBatchId: "W2" }
+      ]
+    };
+    const late = core.buildProcurementRecommendations(source).rows.find((row) => row.sku === "A1");
+    expect(late.storeTransferNeedByCode.R00).toBe(12);
+    expect(late.storeDemandByCode.R00).toBeGreaterThanOrEqual(12);
+    expect(late.storeTransferNeedQty).toBe(12);
+    expect(late.pendingQty).toBe(5);
+    expect(late.effectivePendingQty).toBe(0);
+    const timely = core.buildProcurementRecommendations({ ...source, storeTransferNeeds: [{ ...source.storeTransferNeeds[1], neededBy: "2026-08-29" }] }).rows.find((row) => row.sku === "A1");
+    expect(timely.effectivePendingQty).toBe(5);
+    expect(late.rawPurchaseQty).toBeGreaterThanOrEqual(timely.rawPurchaseQty);
+  });
+
   it("國外供應商跨春節停工期時完整加入53天需求，並在報表分開揭露額度影響", () => {
     const master = makeMaster();
     master.records.find((row) => row.sku === "A1").supplier = "潤泰羽絨";

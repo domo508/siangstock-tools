@@ -135,6 +135,12 @@ async function config(request: Request, env: StoreTransferEnv): Promise<Response
     permissions: { canCreate: who.role !== "store", canApprove: who.role !== "store", canReviewAll: who.role !== "store", canManageRules: who.role !== "store", canDeleteBatch: who.role !== "store" } });
 }
 
+async function pendingPurchases(request: Request, env: StoreTransferEnv): Promise<Response> {
+  const who = await actor(request, env);
+  const rows = await env.DB.prepare("SELECT sku, product_name, pending_quantity, expected_delivery_date, source_date, updated_at FROM procurement_pending_purchase_snapshot WHERE pending_quantity > 0 ORDER BY sku LIMIT 3000").all();
+  return json({ rows: rows.results, visibleTo: who.role === "store" ? who.storeCode : "hq" });
+}
+
 async function listBatches(request: Request, env: StoreTransferEnv): Promise<Response> {
   const who = await actor(request, env);
   const scope = visibleStore(new URL(request.url).searchParams.get("store"), who.role, who.storeCode);
@@ -390,6 +396,20 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'hq_approved', ?, ?, ?)").bind(batchId, `總部核准${total}件；人工新增${addedCount}項、移除${removedCount}項`, now, who.email)
   ]);
   if (updates.some((_, index) => Number(results[index].meta.changes || 0) !== 1)) throw new RequestValidationError("部分品號不存在或已變更，請重新載入。", 409);
+  const approvedShortages = await env.DB.prepare("SELECT store_code, sku, product_name, demand_quantity, allocated_quantity, unfilled_quantity, reason, next_arrival_date FROM store_transfer_shortages WHERE batch_id = ? ORDER BY store_code, sku").bind(batchId).all<Record<string, unknown>>();
+  if (approvedShortages.results.length) {
+    const bridge = approvedShortages.results.flatMap((row) => {
+      const storeCode = String(row.store_code);
+      const sku = String(row.sku);
+      const unfilled = Number(row.unfilled_quantity || 0);
+      const status = unfilled > 0 ? "awaiting_decision" : "resolved";
+      return [
+        env.DB.prepare("INSERT OR IGNORE INTO store_transfer_procurement_need_history (batch_id, store_code, sku, product_name, approved_demand_quantity, allocated_quantity, unfilled_quantity, needed_by, reason, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(batchId, storeCode, sku, String(row.product_name), Number(row.demand_quantity), Number(row.allocated_quantity), unfilled, row.next_arrival_date, String(row.reason), now, who.email),
+        env.DB.prepare("INSERT INTO store_transfer_procurement_needs (store_code, sku, product_name, source_batch_id, approved_demand_quantity, allocated_quantity, unfilled_quantity, needed_by, reason, handling_mode, status, created_at, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_decision', ?, ?, ?, ?) ON CONFLICT(store_code, sku) DO UPDATE SET product_name = excluded.product_name, source_batch_id = excluded.source_batch_id, approved_demand_quantity = excluded.approved_demand_quantity, allocated_quantity = excluded.allocated_quantity, unfilled_quantity = excluded.unfilled_quantity, needed_by = excluded.needed_by, reason = excluded.reason, handling_mode = store_transfer_procurement_needs.handling_mode, status = CASE WHEN excluded.unfilled_quantity = 0 THEN 'resolved' WHEN store_transfer_procurement_needs.covered_quantity >= excluded.unfilled_quantity THEN 'covered_waiting' WHEN store_transfer_procurement_needs.status IN ('waiting_merge', 'new_order') THEN store_transfer_procurement_needs.status ELSE 'awaiting_decision' END, updated_at = excluded.updated_at, updated_by = excluded.updated_by").bind(storeCode, sku, String(row.product_name), batchId, Number(row.demand_quantity), Number(row.allocated_quantity), unfilled, row.next_arrival_date, String(row.reason), status, now, now, who.email)
+      ];
+    });
+    await env.DB.batch(bridge);
+  }
   return json({ batchId, status: "approved", approvedQuantity: total, updatedAt: now });
 }
 
@@ -466,6 +486,7 @@ export async function storeTransferRoute(request: Request, env: StoreTransferEnv
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/store-transfer")) return null;
   if (url.pathname === "/api/store-transfer/config" && request.method === "GET") return config(request, env);
+  if (url.pathname === "/api/store-transfer/pending-purchases" && request.method === "GET") return pendingPurchases(request, env);
   if (url.pathname === "/api/store-transfer/consumable-snapshots" && request.method === "GET") return consumableHistory(request, env);
   if (url.pathname === "/api/store-transfer/consumable-snapshots" && request.method === "POST") return saveConsumableSnapshots(request, env);
   if (url.pathname === "/api/store-transfer/batches" && request.method === "GET") return listBatches(request, env);
@@ -491,6 +512,7 @@ export async function cleanupStoreTransfers(env: StoreTransferEnv): Promise<void
   await env.DB.batch([
     env.DB.prepare(`DELETE FROM store_transfer_events WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_shortages WHERE batch_id IN (${expired})`),
+    env.DB.prepare("DELETE FROM store_transfer_procurement_need_history WHERE created_at < datetime('now', '-12 months')"),
     env.DB.prepare(`DELETE FROM store_transfer_items WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_store_status WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_batches WHERE id IN (${expired})`),

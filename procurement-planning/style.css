@@ -612,3 +612,22 @@
   .budget-grid .budget-source-field { grid-column: auto; }
   .procurement-period p { grid-column: auto; }
 }
+.store-shortage-card {
+  margin: 24px 0;
+  padding: 24px;
+  border: 1px solid #d8bd78;
+  border-left: 6px solid #aa7c16;
+  border-radius: 22px;
+  background: linear-gradient(135deg, #fffdf7, #f8f2e4);
+  box-shadow: 0 12px 30px rgba(79, 58, 22, .08);
+}
+.store-shortage-heading { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
+.store-shortage-heading h3 { margin: 4px 0 8px; }
+.store-shortage-heading p { margin-bottom: 0; }
+.store-shortage-empty { margin-top: 18px; padding: 16px; border-radius: 14px; background: rgba(255,255,255,.72); color: #62748a; }
+.store-shortage-card .result-table-wrap { margin-top: 18px; }
+.shortage-actions { display: flex; gap: 8px; flex-wrap: wrap; min-width: 260px; }
+.shortage-actions button { padding: 8px 11px; border-radius: 10px; border: 1px solid #1c6078; background: #fff; color: #164f65; cursor: pointer; font-weight: 700; }
+.shortage-actions button.is-selected { background: #164f65; color: #fff; }
+.shortage-run-actions { margin-top: 16px; justify-content: flex-start; }
+@media (max-width: 760px) { .store-shortage-heading { flex-direction: column; } }
