@@ -115,6 +115,11 @@
 
   function builtInStockRule(record, storeInventory) {
     const value = normalizeName(`${record?.name || ""} ${record?.size || ""}`);
+    const isQuilt = !/被套/.test(value) && /被胎|棉被|被子|夏季被|四季被|涼被|羽絨被|羊毛被|蠶絲被|機能被|舒眠被|冷被|暖被/.test(value);
+    if (isQuilt) {
+      if (/6x7尺/.test(value)) return configuredRule({ name: "有尺寸配件", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "6×7尺棉被／被子展示1件" }, storeInventory);
+      return null;
+    }
     const standalone = [["3.5尺", /(?<![\dx*.])3\.5尺/], ["5尺", /(?<![\dx*.])5尺/], ["6尺", /(?<![\dx*.])6尺/], ["7尺", /(?<![\dx*.])7尺/]].find(([, pattern]) => pattern.test(value));
     if (standalone) return configuredRule(standalone[0] === "5尺"
       ? { name: "獨立5尺商品", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "5尺不可售展示1件" }
@@ -530,7 +535,7 @@
           baseSellableQuantity: Math.max(0, sellable - daily * schedule.preArrivalDays), dailySales: daily, calculationDate: schedule.currentArrivalDate,
           currentArrivalDate: schedule.currentArrivalDate, nextArrivalDate: schedule.nextArrivalDate, coverageDays: schedule.coverageDays,
           preArrivalStockoutRisk: daily > 0 && sellable < daily * schedule.preArrivalDays,
-          systemSellThroughDate: projectedSellThroughDate(schedule.currentArrivalDate, Math.max(0, sellable - daily * schedule.preArrivalDays), need, daily),
+          systemSellThroughDate: projectedSellThroughDate(schedule.currentArrivalDate, Math.max(0, sellable - daily * schedule.preArrivalDays), Math.max(0, need - displayGap), daily),
           isSellThroughStop: Boolean(master.sellThroughStop),
           ruleSummary: [itemType === "special_stock" ? `${singleDuvetType(master)}／${materialName(master)}前2名花色；建議維持1件，非必要調撥` : `${tier}；保護${schedule.coverageDays}天至${schedule.nextArrivalDate}`, displayGap ? `展示缺口${displayGap}件另補` : "", rule?.note, pendingInbound.get(key) ? `在途${pendingInbound.get(key)}件` : "", daily > 0 && sellable < daily * schedule.preArrivalDays ? `本批${schedule.currentArrivalDate}到店前有缺貨風險` : ""].filter(Boolean).join("；")
         };
@@ -567,7 +572,7 @@
         for (const row of rows) {
           const suggested = allocated[row.storeCode] || 0;
           if (suggested > 0) {
-            const output = { ...row, suggestedQuantity: suggested, hqAvailable, hqReserve: protection.reserve, hqReleasable: protection.releasable, systemSellThroughDate: projectedSellThroughDate(row.calculationDate, row.baseSellableQuantity, suggested, row.dailySales), ruleSummary: `${row.ruleSummary}；${isS ? "S品" : "總部安全庫存"}${protection.reason}，可釋出${protection.releasable}件${suggested < row.rawNeed ? "；總倉不足依70/30分配" : ""}` };
+            const output = { ...row, suggestedQuantity: suggested, hqAvailable, hqReserve: protection.reserve, hqReleasable: protection.releasable, systemSellThroughDate: projectedSellThroughDate(row.calculationDate, row.baseSellableQuantity, Math.max(0, suggested - row.displayGap), row.dailySales), ruleSummary: `${row.ruleSummary}；${isS ? "S品" : "總部安全庫存"}${protection.reason}，可釋出${protection.releasable}件${suggested < row.rawNeed ? "；總倉不足依70/30分配" : ""}` };
             (type === "special_stock" ? specialStockRows : regularRows).push(output);
           }
           const unfilled = Math.max(0, row.rawNeed - suggested);

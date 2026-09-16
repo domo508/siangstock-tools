@@ -139,6 +139,37 @@ describe("展示與最低庫存管理規則", () => {
     for (const name of ["純棉毛巾", "長絨棉浴巾", "隨身手巾"]) expect(core.stockRule({ name }, managed)).toMatchObject({ name: "無尺寸配件", quantity: 1 });
   });
 
+  it("棉被與被子只有6×7尺列不可售展示", () => {
+    const managed = { rules: [{ name: "有尺寸配件", enabled: true, scope: "R00、R06", inventoryRole: "不可售展示", quantity: 1, priority: 70 }] };
+    expect(core.stockRule({ name: "6×7尺法國灰鵝絨夏季被" }, managed)).toMatchObject({ name: "有尺寸配件", role: "不可售展示", quantity: 1 });
+    expect(core.stockRule({ name: "4.5×6.5尺石墨烯機能被" }, managed)).toBeNull();
+    expect(core.stockRule({ name: "8×7尺法國灰鵝絨夏季被" }, managed)).toBeNull();
+  });
+
+  it("不可售展示不會算入可售至，8×7尺被子不會多補展示", () => {
+    const managed = { rules: [{ name: "有尺寸配件", enabled: true, scope: "R00、R06", inventoryRole: "不可售展示", quantity: 1, priority: 70 }] };
+    const products = new Map([
+      ["F13007", { sku: "F13007", name: "6×7尺法國灰鵝絨夏季被" }],
+      ["F14007", { sku: "F14007", name: "8×7尺法國灰鵝絨夏季被" }]
+    ]);
+    const result = core.buildSuggestions({
+      proposalDate: "2026-09-13", storeCodes: ["R00"], master: { bySku: products },
+      inventory: { records: [
+        { warehouseCode: "T00", sku: "F13007", quantity: 2 }, { warehouseCode: "R00", sku: "F13007", quantity: 0 },
+        { warehouseCode: "T00", sku: "F14007", quantity: 2 }, { warehouseCode: "R00", sku: "F14007", quantity: 0 }
+      ] }, transfer: { records: [] }, storeInventory: managed,
+      sales: [{ maxDate: "2026-09-13", records: [
+        { warehouseCode: "R00", shipWarehouseCode: "R00", sku: "F13007", date: "2026-09-13", quantity: 1, deductQuantity: 1, saleType: "銷貨" },
+        { warehouseCode: "R00", shipWarehouseCode: "R00", sku: "F14007", date: "2026-09-13", quantity: 1, deductQuantity: 1, saleType: "銷貨" }
+      ], takeRecords: [] }]
+    });
+    const sixBySeven = result.regularRows.find((row) => row.sku === "F13007");
+    const eightBySeven = result.regularRows.find((row) => row.sku === "F14007");
+    expect(sixBySeven).toMatchObject({ displayGap: 1, sellableNeed: 1, suggestedQuantity: 2 });
+    expect(eightBySeven).toMatchObject({ displayGap: 0, sellableNeed: 1, suggestedQuantity: 1 });
+    expect(sixBySeven.systemSellThroughDate).toBe(eightBySeven.systemSellThroughDate);
+  });
+
   it("不可售展示缺口與可售需求會分開相加", () => {
     const result = core.buildSuggestions({
       proposalDate: "2026-09-13", storeCodes: ["R00"],
