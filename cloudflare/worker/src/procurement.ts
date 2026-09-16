@@ -111,7 +111,7 @@ async function storeShortageNeeds(request: Request, env: ProcurementEnv): Promis
   const email = await verifyCompanyUser(request, procurementAccess(env));
   const settings = await readProcurementSettings(env);
   const role = roleFor(email, settings);
-  const rows = await env.DB.prepare("SELECT store_code, sku, product_name, source_batch_id, approved_demand_quantity, allocated_quantity, unfilled_quantity, covered_quantity, needed_by, reason, handling_mode, status, updated_at FROM store_transfer_procurement_needs WHERE unfilled_quantity > 0 AND status NOT IN ('resolved', 'cancelled') ORDER BY needed_by, store_code, sku").all();
+  const rows = await env.DB.prepare("SELECT store_code, sku, product_name, source_batch_id, approved_demand_quantity, allocated_quantity, unfilled_quantity, covered_quantity, fulfilled_quantity, needed_by, reason, handling_mode, status, resolution_note, resolved_at, resolved_by, updated_at FROM store_transfer_procurement_needs WHERE unfilled_quantity > 0 AND status NOT IN ('resolved', 'cancelled') ORDER BY needed_by, store_code, sku").all();
   return json({ rows: rows.results, permissions: { canDecide: role !== "operator" } });
 }
 
@@ -133,6 +133,26 @@ async function decideStoreShortageNeed(request: Request, env: ProcurementEnv, st
   return json({ storeCode, sku, handlingMode: mode, status, updatedAt: now });
 }
 
+async function closeStoreShortageNeed(request: Request, env: ProcurementEnv, storeCode: string, sku: string): Promise<Response> {
+  requireSameOrigin(request, env);
+  const access = await verifyApprover(request, env);
+  const input = await body(request);
+  const resolutionType = String(input.resolutionType || "");
+  if (!["resolved", "cancelled"].includes(resolutionType)) throw new RequestValidationError("結案方式只能是已補配結案或取消需求。");
+  const reason = string(input.reason, "結案原因", 500);
+  const current = await env.DB.prepare("SELECT source_batch_id, status, unfilled_quantity, fulfilled_quantity FROM store_transfer_procurement_needs WHERE store_code = ? AND sku = ? AND status NOT IN ('resolved', 'cancelled')").bind(storeCode, sku).first<Record<string, unknown>>();
+  if (!current) throw new RequestValidationError("找不到可結案的門市未配需求。", 404);
+  const now = new Date().toISOString();
+  const eventType = resolutionType === "resolved" ? "manual_resolved" : "manual_cancelled";
+  const label = resolutionType === "resolved" ? "人工確認已補配結案" : "已取消或人工結案";
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO store_transfer_procurement_need_events (store_code, sku, source_batch_id, event_type, quantity, status_before, status_after, reason, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(storeCode, sku, String(current.source_batch_id), eventType, resolutionType === "resolved" ? Math.max(0, Number(current.unfilled_quantity || 0) - Number(current.fulfilled_quantity || 0)) : 0, String(current.status), resolutionType, reason, now, access.email),
+    env.DB.prepare("UPDATE store_transfer_procurement_needs SET status = ?, fulfilled_quantity = CASE WHEN ? = 'resolved' THEN unfilled_quantity ELSE fulfilled_quantity END, covered_quantity = 0, resolution_note = ?, resolved_at = ?, resolved_by = ?, updated_at = ?, updated_by = ? WHERE store_code = ? AND sku = ? AND status NOT IN ('resolved', 'cancelled')").bind(resolutionType, resolutionType, reason, now, access.email, now, access.email, storeCode, sku),
+    env.DB.prepare("UPDATE store_transfer_shortages SET follow_up_status = ?, updated_at = ? WHERE batch_id = ? AND store_code = ? AND sku = ?").bind(label, now, String(current.source_batch_id), storeCode, sku)
+  ]);
+  return json({ storeCode, sku, status: resolutionType, reason, resolvedAt: now, resolvedBy: access.email });
+}
+
 async function savePendingPurchaseSnapshot(request: Request, env: ProcurementEnv): Promise<Response> {
   requireSameOrigin(request, env);
   const email = await verifyCompanyUser(request, procurementAccess(env));
@@ -152,6 +172,12 @@ async function savePendingPurchaseSnapshot(request: Request, env: ProcurementEnv
     if (expected && !/^\d{4}-\d{2}-\d{2}$/.test(expected)) throw new RequestValidationError(`${sku}預計到貨日格式錯誤。`);
     statements.push(env.DB.prepare("INSERT INTO procurement_pending_purchase_snapshot (sku, product_name, pending_quantity, expected_delivery_date, source_date, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(sku, name, qty, expected || null, sourceDate, now, email));
   }
+  statements.push(
+    env.DB.prepare("INSERT INTO procurement_pending_purchase_runs (id, source_date, updated_at, updated_by) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET source_date = excluded.source_date, updated_at = excluded.updated_at, updated_by = excluded.updated_by").bind(sourceDate, now, email),
+    env.DB.prepare("INSERT INTO store_transfer_procurement_need_events (store_code, sku, source_batch_id, event_type, quantity, status_before, status_after, reason, created_at, created_by) SELECT n.store_code, n.sku, n.source_batch_id, 'arrival_detected', n.covered_quantity, n.status, 'arrived', '最新版完整未到貨清單已無此品號，且ERP採購建立日在清單截止日前，轉為已到貨待下次調撥', ?, ? FROM store_transfer_procurement_needs n WHERE n.status = 'covered_waiting' AND n.covered_quantity > 0 AND NOT EXISTS (SELECT 1 FROM procurement_pending_purchase_snapshot p WHERE p.sku = n.sku AND p.pending_quantity > 0) AND EXISTS (SELECT 1 FROM procurement_batch_store_needs x JOIN procurement_batches b ON b.id = x.batch_id WHERE x.store_code = n.store_code AND x.sku = n.sku AND b.status = 'erp_created' AND date(b.updated_at) < date(?))").bind(now, email, sourceDate),
+    env.DB.prepare("UPDATE store_transfer_shortages SET follow_up_status = '已到貨待下次調撥', updated_at = ? WHERE EXISTS (SELECT 1 FROM store_transfer_procurement_needs n WHERE n.source_batch_id = store_transfer_shortages.batch_id AND n.store_code = store_transfer_shortages.store_code AND n.sku = store_transfer_shortages.sku AND n.status = 'covered_waiting' AND n.covered_quantity > 0 AND NOT EXISTS (SELECT 1 FROM procurement_pending_purchase_snapshot p WHERE p.sku = n.sku AND p.pending_quantity > 0) AND EXISTS (SELECT 1 FROM procurement_batch_store_needs x JOIN procurement_batches b ON b.id = x.batch_id WHERE x.store_code = n.store_code AND x.sku = n.sku AND b.status = 'erp_created' AND date(b.updated_at) < date(?)))").bind(now, sourceDate),
+    env.DB.prepare("UPDATE store_transfer_procurement_needs SET status = 'arrived', resolution_note = '最新版完整未到貨清單已無此品號，等待下次門市調撥補配', updated_at = ?, updated_by = ? WHERE status = 'covered_waiting' AND covered_quantity > 0 AND NOT EXISTS (SELECT 1 FROM procurement_pending_purchase_snapshot p WHERE p.sku = store_transfer_procurement_needs.sku AND p.pending_quantity > 0) AND EXISTS (SELECT 1 FROM procurement_batch_store_needs x JOIN procurement_batches b ON b.id = x.batch_id WHERE x.store_code = store_transfer_procurement_needs.store_code AND x.sku = store_transfer_procurement_needs.sku AND b.status = 'erp_created' AND date(b.updated_at) < date(?))").bind(now, email, sourceDate)
+  );
   await env.DB.batch(statements);
   return json({ saved: input.rows.length, sourceDate, updatedAt: now });
 }
@@ -658,6 +684,8 @@ export async function procurementRoute(request: Request, env: ProcurementEnv): P
   if (url.pathname === "/api/procurement/pending-purchase-snapshot" && request.method === "PUT") return savePendingPurchaseSnapshot(request, env);
   const shortageDecisionMatch = url.pathname.match(/^\/api\/procurement\/store-shortages\/([^/]+)\/([^/]+)$/);
   if (shortageDecisionMatch && request.method === "PUT") return decideStoreShortageNeed(request, env, decodeURIComponent(shortageDecisionMatch[1]), decodeURIComponent(shortageDecisionMatch[2]));
+  const shortageCloseMatch = url.pathname.match(/^\/api\/procurement\/store-shortages\/([^/]+)\/([^/]+)\/close$/);
+  if (shortageCloseMatch && request.method === "POST") return closeStoreShortageNeed(request, env, decodeURIComponent(shortageCloseMatch[1]), decodeURIComponent(shortageCloseMatch[2]));
   if (url.pathname === "/api/procurement/month-plan" && request.method === "GET") return monthPlan(request, env);
   if (url.pathname === "/api/procurement/month-plan" && request.method === "PUT") return saveMonthPlan(request, env);
   if (url.pathname === "/api/procurement/batches" && request.method === "POST") return submit(request, env);

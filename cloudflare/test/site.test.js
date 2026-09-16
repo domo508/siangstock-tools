@@ -136,6 +136,23 @@ describe("前台導覽", () => {
     expect(app).toContain("outputXlsx.writeFile");
   });
 
+  it("主採購完整呈現門市未配判斷並串接到貨與補配結案", () => {
+    const html = readFileSync("../procurement-planning/index.html", "utf8");
+    const app = readFileSync("../procurement-planning/app.js", "utf8");
+    const procurementWorker = readFileSync("../cloudflare/worker/src/procurement.ts", "utf8");
+    const transferWorker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    const migration = readFileSync("../cloudflare/worker/migrations/0019_store_shortage_resolution_lifecycle.sql", "utf8");
+    expect(html).toContain("尚未採購覆蓋");
+    expect(html).toContain("尚待門市補配");
+    expect(app).toContain("已到貨待下次調撥");
+    expect(app).toContain("已補配結案");
+    expect(procurementWorker).toContain("b.status = 'erp_created'");
+    expect(procurementWorker).toContain("date(b.updated_at) < date(?)");
+    expect(transferWorker).toContain("later_transfer_fulfilled");
+    expect(migration).toContain("fulfilled_quantity");
+    expect(migration).toContain("manual_cancelled");
+  });
+
   it("週調撥允許門市與總部人工新增或移除品項並保留原因", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");

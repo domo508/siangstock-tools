@@ -550,8 +550,14 @@ describe("採購建議第二階段", () => {
     expect(late.storeTransferNeedQty).toBe(12);
     expect(late.pendingQty).toBe(5);
     expect(late.effectivePendingQty).toBe(0);
+    expect(late.originalDemandSource).toContain("門市核准未配");
+    expect(late.earliestPendingDeliveryDate).toBe("2026-08-28");
+    expect(late.pendingArrivalStatus).toBe("未到貨晚於需要日，不能抵扣");
+    expect(late.pendingArrivalGap).toBe("晚1天");
     const timely = core.buildProcurementRecommendations({ ...source, storeTransferNeeds: [{ ...source.storeTransferNeeds[1], neededBy: "2026-08-29" }] }).rows.find((row) => row.sku === "A1");
     expect(timely.effectivePendingQty).toBe(5);
+    expect(timely.pendingArrivalStatus).toBe("可於需要日前部分抵扣5件");
+    expect(timely.pendingArrivalGap).toBe("提前1天");
     expect(late.rawPurchaseQty).toBeGreaterThanOrEqual(timely.rawPurchaseQty);
   });
 

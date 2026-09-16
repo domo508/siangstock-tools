@@ -1971,6 +1971,7 @@
       const forecastFutureQty = channelAdjustedDaily * horizonDays;
       const hqSafetyStockQty = hqDailyQty * safetyBufferDays;
       let storeDemandQty = 0;
+      let modelStoreDemandQty = 0;
       let storeSafetyStockQty = 0;
       const storeDemandByCode = {};
       const storeInventoryByCode = {};
@@ -1988,6 +1989,7 @@
         storeTransferNeedByCode[storeCode] = Number(confirmedNeed?.quantity || 0);
         if (confirmedNeed?.neededBy && (!earliestStoreNeedDate || confirmedNeed.neededBy < earliestStoreNeedDate)) earliestStoreNeedDate = confirmedNeed.neededBy;
         storeSafetyStockQty += storeSafety;
+        modelStoreDemandQty += modelStoreNeed;
         storeDemandQty += storeNeed;
       }
       const hqDemandQty = hqDailyQty * horizonDays + hqSafetyStockQty;
@@ -2001,6 +2003,33 @@
         ? (row.purchase?.deliveries || []).reduce((sum, delivery) => sum + (delivery.deliveryDate && delivery.deliveryDate <= earliestStoreNeedDate ? Math.max(0, Number(delivery.quantity || 0)) : 0), 0)
         : pendingQty;
       const effectivePendingQty = earliestStoreNeedDate ? Math.min(pendingQty, timelyPendingQty) : pendingQty;
+      const pendingDeliveryDates = (row.purchase?.deliveries || []).map((delivery) => parseDateValue(delivery.deliveryDate)).filter(Boolean).sort();
+      const earliestPendingDeliveryDate = pendingDeliveryDates[0] || null;
+      const confirmedStoreNeedQty = Object.values(storeTransferNeedByCode).reduce((sum, value) => sum + Number(value || 0), 0);
+      const demandSources = [];
+      if (hqDemandQty > 0) demandSources.push("總部需求");
+      if (modelStoreDemandQty > 0) demandSources.push("門市模型需求");
+      if (confirmedStoreNeedQty > 0) demandSources.push("門市核准未配");
+      const originalDemandSource = demandSources.join("＋") || "無需求";
+      let pendingArrivalStatus = "無門市回拋需求";
+      let pendingArrivalGap = "—";
+      if (earliestStoreNeedDate) {
+        if (pendingQty <= 0) {
+          pendingArrivalStatus = "無未到貨可抵扣";
+          pendingArrivalGap = "無未到貨覆蓋";
+        } else if (!earliestPendingDeliveryDate) {
+          pendingArrivalStatus = "未提供到貨日，不能抵扣";
+          pendingArrivalGap = "到貨日未提供";
+        } else {
+          const gapDays = Math.round((dateToUtcMs(earliestPendingDeliveryDate) - dateToUtcMs(earliestStoreNeedDate)) / 86400000);
+          pendingArrivalGap = gapDays > 0 ? `晚${gapDays}天` : gapDays < 0 ? `提前${Math.abs(gapDays)}天` : "同日到貨";
+          pendingArrivalStatus = effectivePendingQty <= 0
+            ? "未到貨晚於需要日，不能抵扣"
+            : effectivePendingQty >= confirmedStoreNeedQty
+              ? "可於需要日前完整覆蓋門市未配"
+              : `可於需要日前部分抵扣${effectivePendingQty}件`;
+        }
+      }
       const transfer = transfers.bySku.get(row.demand.sku);
       const rawPurchaseQty = calculateNetProcurementDemand({
         forecastDemandQty: hqDemandQty + storeDemandQty,
@@ -2141,8 +2170,12 @@
         storeInventoryByCode,
         storeDemandByCode,
         storeTransferNeedByCode,
-        storeTransferNeedQty: Object.values(storeTransferNeedByCode).reduce((sum, value) => sum + Number(value || 0), 0),
+        storeTransferNeedQty: confirmedStoreNeedQty,
         earliestStoreNeedDate,
+        originalDemandSource,
+        earliestPendingDeliveryDate,
+        pendingArrivalStatus,
+        pendingArrivalGap,
         reviewDays,
         safetyDays: safetyBufferDays,
         safetyBufferDays,
@@ -2751,12 +2784,16 @@
       "門市需求（系統）": row.storeDemandQty,
       "門市核准未配需求": row.storeTransferNeedQty || 0,
       "門市最早需要到店日": row.earliestStoreNeedDate || "",
+      "原採購需求歸屬": row.originalDemandSource || "",
       "加總需求（公式）": "",
       "可用公司庫存": row.inventoryQty,
       "門市可售庫存": storeInventoryQty,
       "非採購可用庫存": row.excludedInventoryQty,
       "已採購未到貨": row.pendingQty,
       "本次可抵扣未到貨": row.effectivePendingQty ?? row.pendingQty,
+      "未到貨最早到貨日": row.earliestPendingDeliveryDate || "",
+      "到貨是否來得及": row.pendingArrivalStatus || "",
+      "到貨前時間缺口": row.pendingArrivalGap || "",
       "調撥提交中": row.transferSubmittedQty,
       "發貨在途": row.transferInTransitQty,
       "未進位淨採購需求": row.rawPurchaseQty,
@@ -2774,6 +2811,7 @@
       "系統取整方向": row.packDirection,
       "調整前建議採購量": row.standardSuggestedPurchaseQty,
       "建議採購量": row.suggestedPurchaseQty,
+      "本次新增採購量": row.suggestedPurchaseQty,
       "系統建議採購後可售至": systemAvailableTo,
       "寄倉現貨": row.consignmentCurrentQty,
       "粉紅排程": row.consignmentScheduledQty,

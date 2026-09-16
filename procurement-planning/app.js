@@ -14,7 +14,7 @@
     selectedSuppliers: new Set(), returnScope: null, consignmentSource: null,
     googleAuthorized: false, modelWorker: null, modelDraft: null,
     baseAnalysis: null, parsedSources: null, workflowType: "system_recommendation",
-    newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], shortageRunMode: "merge_next"
+    newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], storeShortagePermissions: { canDecide: false }, shortageRunMode: "merge_next"
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -677,15 +677,22 @@
 
   function handlingLabel(row) {
     if (row.status === "covered_waiting") return "已由採購覆蓋待到貨";
+    if (row.status === "arrived") return Number(row.fulfilled_quantity || 0) > 0 ? "已到貨，後續批次部分補配" : "已到貨待下次調撥";
     return ({ pending_decision: "待決定", merge_next: "等待併入下一張採購單", new_order: "建立門市不足補採新單" })[row.handling_mode] || row.status || "待決定";
   }
   function renderStoreShortageNeeds() {
     const rows = state.storeShortageNeeds || [];
     const total = rows.reduce((sum, row) => sum + Number(row.unfilled_quantity || 0), 0);
+    const canDecide = Boolean(state.storeShortagePermissions?.canDecide);
     elements.storeShortageCount.textContent = rows.length ? `${rows.length}項・${formatNumber(total)}件` : "目前無待辦";
     elements.storeShortageEmpty.hidden = rows.length > 0;
     elements.storeShortageTableWrap.hidden = rows.length === 0;
-    elements.storeShortageRows.innerHTML = rows.map((row) => `<tr><td>${escapeHtml(row.store_code)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${formatNumber(row.approved_demand_quantity)}</td><td>${formatNumber(row.allocated_quantity)}</td><td>${formatNumber(row.unfilled_quantity)}</td><td>${formatNumber(row.covered_quantity)}</td><td>${formatNumber(Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.covered_quantity || 0)))}</td><td>${escapeHtml(row.needed_by || "待確認")}</td><td>${escapeHtml(handlingLabel(row))}</td><td><div class="shortage-actions"><button type="button" data-shortage-mode="merge_next" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "merge_next" ? "is-selected" : ""}">併入下一張</button><button type="button" data-shortage-mode="new_order" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "new_order" ? "is-selected" : ""}">建立補採新單</button></div></td></tr>`).join("");
+    elements.storeShortageRows.innerHTML = rows.map((row) => {
+      const purchaseUncovered = Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.covered_quantity || 0));
+      const transferRemaining = Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.fulfilled_quantity || 0));
+      const disabled = canDecide ? "" : " disabled";
+      return `<tr><td>${escapeHtml(row.store_code)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${formatNumber(row.approved_demand_quantity)}</td><td>${formatNumber(row.allocated_quantity)}</td><td>${formatNumber(row.unfilled_quantity)}</td><td>${formatNumber(row.covered_quantity)}</td><td>${formatNumber(purchaseUncovered)}</td><td>${formatNumber(row.fulfilled_quantity || 0)}</td><td>${formatNumber(transferRemaining)}</td><td>${escapeHtml(row.needed_by || "待確認")}</td><td>${escapeHtml(handlingLabel(row))}</td><td><div class="shortage-actions"><button type="button" data-shortage-mode="merge_next" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "merge_next" ? "is-selected" : ""}"${disabled}>併入下一張</button><button type="button" data-shortage-mode="new_order" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "new_order" ? "is-selected" : ""}"${disabled}>建立補採新單</button><button type="button" data-shortage-close="resolved" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"${disabled}>已補配結案</button><button type="button" data-shortage-close="cancelled" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"${disabled}>取消需求</button></div></td></tr>`;
+    }).join("");
     elements.runShortageOrder.disabled = !rows.some((row) => row.handling_mode === "new_order" && Number(row.unfilled_quantity || 0) > Number(row.covered_quantity || 0)) || !requirementsReady();
   }
   async function loadStoreShortageNeeds() {
@@ -694,15 +701,34 @@
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
       state.storeShortageNeeds = result.rows || [];
+      state.storeShortagePermissions = result.permissions || { canDecide: false };
       renderStoreShortageNeeds();
       elements.storeShortageStatus.textContent = state.storeShortageNeeds.length ? "請先選擇處理方式；已選擇的最新版需求會在本次計算與未到貨量交叉檢查。" : "目前沒有已由總部核准、仍未配足的門市需求。";
     } catch (error) {
       state.storeShortageNeeds = [];
+      state.storeShortagePermissions = { canDecide: false };
       renderStoreShortageNeeds();
       elements.storeShortageStatus.textContent = `門市未配需求同步失敗：${error.message}`;
     }
   }
   async function decideStoreShortage(event) {
+    const closeButton = event.target.closest("[data-shortage-close]");
+    if (closeButton) {
+      const actionLabel = closeButton.dataset.shortageClose === "resolved" ? "已補配結案" : "取消需求";
+      const reason = globalThis.prompt(`請輸入${closeButton.dataset.store}／${closeButton.dataset.sku}${actionLabel}的原因：`, "");
+      if (!reason?.trim()) return;
+      closeButton.disabled = true;
+      try {
+        await postJson(`/api/procurement/store-shortages/${encodeURIComponent(closeButton.dataset.store)}/${encodeURIComponent(closeButton.dataset.sku)}/close`, { resolutionType: closeButton.dataset.shortageClose, reason: reason.trim() });
+        await loadStoreShortageNeeds();
+        if (state.analysis) invalidateAnalysis();
+        elements.storeShortageStatus.textContent = `${closeButton.dataset.store}／${closeButton.dataset.sku}已${actionLabel}，並保留結案紀錄。`;
+      } catch (error) {
+        closeButton.disabled = false;
+        elements.storeShortageStatus.textContent = `結案失敗：${error.message}`;
+      }
+      return;
+    }
     const button = event.target.closest("[data-shortage-mode]");
     if (!button) return;
     button.disabled = true;
