@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20260916-manual-items-r1");
+    const appIndex = html.indexOf("app.js?v=20260916-batch-version-r1");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -145,6 +145,18 @@ describe("前台導覽", () => {
     expect(worker).toContain("門市人工新增");
     expect(worker).toContain("總部人工新增");
     expect(worker).toContain("移除品項請使用移除按鈕");
+  });
+
+  it("同週新版批次會取代舊的未完成批次並保留唯讀紀錄", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    expect(html).toContain("同週批次版本");
+    expect(app).toContain("已取代・僅供查閱");
+    expect(app).toContain("本批次已被新版取代");
+    expect(worker).toContain("已由新版批次${id}取代，僅供查閱");
+    expect(worker).toContain("status = 'cancelled'");
+    expect(worker).toContain("status IN ('open', 'review')");
   });
 
   it("資料整理工具與規則頁都有清楚的名稱和上一層路徑", () => {

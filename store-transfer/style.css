@@ -68,6 +68,9 @@
 .batch-card h3, .batch-card p { margin: 0; }
 .batch-meta { color: #647b8d; }
 .batch-status { align-self: start; padding: .35rem .65rem; border-radius: 999px; background: #eaf2f7; color: #174b72; font-weight: 800; }
+.batch-card.superseded { border-color: #ddd8ca; background: #faf9f5; }
+.batch-card.superseded .batch-status { color: #725e2c; background: #f3ecd9; }
+.batch-card.superseded .batch-meta { color: #7c7a71; }
 .empty-state { padding: 1rem; color: #718494; background: var(--transfer-soft); border-radius: 12px; }
 .calculation-results { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid #dce4e9; }
 .result-section { margin-top: 1.2rem; padding: 1rem; border: 1px solid #dce6eb; border-radius: 14px; background: #fff; }

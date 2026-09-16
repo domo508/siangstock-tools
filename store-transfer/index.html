@@ -9,7 +9,7 @@
   <title>門市週補貨與調撥｜翔仔居家</title>
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="../cost-analysis/style.css">
-  <link rel="stylesheet" href="style.css?v=20260916-manual-items-r1">
+  <link rel="stylesheet" href="style.css?v=20260916-batch-version-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -78,7 +78,7 @@
 
     <section class="panel operation-guide" aria-labelledby="guide-title">
       <div class="section-heading"><div><p class="eyebrow">操作說明</p><h2 id="guide-title">每週流程怎麼走</h2></div></div>
-      <div class="guide-grid"><article><strong>門市可撤回</strong><p>送出後、星期一上午9點鎖定前可不限次數撤回；鎖定後只能由總部更正。</p></article><article><strong>人工增減品項</strong><p>門市與總部皆可新增品項；移除時以本階段數量歸零處理，原因與原始建議仍會保留。</p></article><article><strong>人工調整原因</strong><p>新增、移除或數量不同於上一階段時，必須填原因才可送出。</p></article><article><strong>B3判斷</strong><p>只有來源單號＋ERP品號成功配對的總倉代出才認列；無法配對會列待人工確認。</p></article><article><strong>批次狀態</strong><p>等待門市→總部覆核→已核准→ERP皆完成→本週完成，每店進度會分開顯示。</p></article></div>
+      <div class="guide-grid"><article><strong>同週批次版本</strong><p>同一週重新建立時，新批次會成為目前作業版本；舊的未完成批次保留紀錄，但不能再修改或送出。</p></article><article><strong>門市可撤回</strong><p>送出後、星期一上午9點鎖定前可不限次數撤回；鎖定後只能由總部更正。</p></article><article><strong>人工增減品項</strong><p>門市與總部皆可新增品項；移除時以本階段數量歸零處理，原因與原始建議仍會保留。</p></article><article><strong>人工調整原因</strong><p>新增、移除或數量不同於上一階段時，必須填原因才可送出。</p></article><article><strong>B3判斷</strong><p>只有來源單號＋ERP品號成功配對的總倉代出才認列；無法配對會列待人工確認。</p></article><article><strong>批次狀態</strong><p>等待門市→總部覆核→已核准→ERP皆完成→本週完成，每店進度會分開顯示。</p></article></div>
     </section>
 
     <dialog id="batch-dialog" class="batch-dialog"><form method="dialog"><button class="dialog-close" aria-label="關閉">×</button></form><div id="batch-detail"></div></dialog>
@@ -93,6 +93,6 @@
   <script src="../procurement-planning/google-sources.js?v=20260915-google-sources-r1"></script>
   <script src="core.js?v=20260916-workflow-r1"></script>
   <script src="xlsx-preflight.js?v=20260916-xlsx-reader-r1"></script>
-  <script src="app.js?v=20260916-manual-items-r1"></script>
+  <script src="app.js?v=20260916-batch-version-r1"></script>
 </body>
 </html>

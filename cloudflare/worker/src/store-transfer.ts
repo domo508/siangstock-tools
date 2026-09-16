@@ -139,8 +139,8 @@ async function listBatches(request: Request, env: StoreTransferEnv): Promise<Res
   const who = await actor(request, env);
   const scope = visibleStore(new URL(request.url).searchParams.get("store"), who.role, who.storeCode);
   const result = scope
-    ? await env.DB.prepare("SELECT b.*, s.status store_status FROM store_transfer_batches b JOIN store_transfer_store_status s ON s.batch_id = b.id WHERE s.store_code = ? ORDER BY b.updated_at DESC LIMIT 100").bind(scope).all()
-    : await env.DB.prepare("SELECT b.*, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id) store_total, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'submitted') store_submitted, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'approved') store_approved, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.erp_created_at IS NOT NULL) store_erp_created FROM store_transfer_batches b ORDER BY b.updated_at DESC LIMIT 100").all();
+    ? await env.DB.prepare("SELECT b.*, s.status store_status FROM store_transfer_batches b JOIN store_transfer_store_status s ON s.batch_id = b.id WHERE s.store_code = ? ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").bind(scope).all()
+    : await env.DB.prepare("SELECT b.*, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id) store_total, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'submitted') store_submitted, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'approved') store_approved, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.erp_created_at IS NOT NULL) store_erp_created FROM store_transfer_batches b ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").all();
   return json({ batches: result.results, scope });
 }
 
@@ -204,6 +204,8 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   const stores = [...new Set(normalized.map((item) => item.storeCode))];
   const now = new Date().toISOString();
   const statements = [
+    env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) SELECT id, 'superseded', ?, ?, ? FROM store_transfer_batches WHERE week_key = ? AND status IN ('open', 'review') AND id <> ?").bind(`已由新版批次${id}取代，僅供查閱`, now, who.email, weekKey, id),
+    env.DB.prepare("UPDATE store_transfer_batches SET status = 'cancelled', updated_at = ?, updated_by = ?, revision = revision + 1 WHERE week_key = ? AND status IN ('open', 'review') AND id <> ?").bind(now, who.email, weekKey, id),
     env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, ?, ?, ?)").bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), now, who.email, now, who.email),
     ...normalized.map((item) => env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, rule_summary, item_type, calculation_date, base_quantity, daily_usage, system_projection, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, item.storeCode, item.sku, item.productName, item.suggested, item.ruleSummary, item.itemType, item.calculationDate, item.baseQuantity, item.dailyUsage, item.systemProjection, now, who.email)),
     ...stores.map((storeCode) => env.DB.prepare("INSERT INTO store_transfer_store_status (batch_id, store_code, status, updated_at) VALUES (?, ?, 'pending', ?)").bind(id, storeCode, now)),

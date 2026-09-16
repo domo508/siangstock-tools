@@ -104,11 +104,15 @@
     }
   }
 
+  function batchStatusLabel(status) {
+    return { open: "目前作業・等待門市", review: "目前作業・總部覆核中", approved: "已核准", erp_created: "已產生ERP", closed: "已完成", cancelled: "已取代・僅供查閱" }[status] || status;
+  }
+
   function batchCard(batch) {
-    const status = { open: "等待門市", review: "總部覆核中", approved: "已核准", erp_created: "已產生ERP", closed: "已完成", cancelled: "已取消" }[batch.status] || batch.status;
+    const status = batchStatusLabel(batch.status);
     const ownStatus = { pending: "尚未處理", saved: "已暫存", submitted: "已送出", approved: "已核准", closed: "已完成" }[batch.store_status] || batch.store_status;
-    const progress = batch.store_total == null ? (ownStatus ? `本店：${ownStatus}` : "") : `門市已送出 ${Number(batch.store_submitted || 0) + Number(batch.store_approved || 0)}/${batch.store_total}・ERP ${batch.store_erp_created || 0}/${batch.store_total}`;
-    return `<article class="batch-card"><div><h3>${escapeHtml(batch.week_key || batch.id)}</h3><p class="batch-meta">${escapeHtml(batch.item_count || 0)}項・系統建議${escapeHtml(batch.suggested_quantity || 0)}件・${escapeHtml(progress)}・更新於${escapeHtml(batch.updated_at || "")}</p></div><span class="batch-status">${escapeHtml(status)}</span><button class="secondary-button compact" type="button" data-open-batch="${escapeHtml(batch.id)}">查看／處理</button></article>`;
+    const progress = batch.status === "cancelled" ? "新版批次已建立，本批不再接受修改或送出" : batch.store_total == null ? (ownStatus ? `本店：${ownStatus}` : "") : `門市已送出 ${Number(batch.store_submitted || 0) + Number(batch.store_approved || 0)}/${batch.store_total}・ERP ${batch.store_erp_created || 0}/${batch.store_total}`;
+    return `<article class="batch-card${batch.status === "cancelled" ? " superseded" : ""}"><div><h3>${escapeHtml(batch.week_key || batch.id)}</h3><p class="batch-meta">${escapeHtml(batch.item_count || 0)}項・系統建議${escapeHtml(batch.suggested_quantity || 0)}件・${escapeHtml(progress)}・更新於${escapeHtml(batch.updated_at || "")}</p></div><span class="batch-status">${escapeHtml(status)}</span><button class="secondary-button compact" type="button" data-open-batch="${escapeHtml(batch.id)}">${batch.status === "cancelled" ? "查看紀錄" : "查看／處理"}</button></article>`;
   }
 
   async function loadBatches() {
@@ -233,7 +237,7 @@
     try {
       const id = `TR-${weekKey}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
       await api("/batches", { method: "POST", body: { id, weekKey, proposalDate, responseDueAt: new Date(localLock).toISOString(), lockAt: new Date(localLock).toISOString(), items: state.calculation.rows } });
-      $("hq-status").textContent = `已建立批次${id}；門市重新登入即可看到自己的確認清單。`;
+      $("hq-status").textContent = `已建立批次${id}；同週舊的未完成批次已改為僅供查閱，門市重新登入即可看到新版確認清單。`;
       $("calculation-results").hidden = true; state.calculation = null; await loadBatches();
     } finally { $("publish-button").disabled = false; }
   }
@@ -321,7 +325,8 @@
     const query = state.config.storeCode ? `?store=${state.config.storeCode}` : "";
     state.activeBatch = await api(`/batches/${encodeURIComponent(id)}${query}`);
     const p = state.activeBatch;
-    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(p.batch.status)}</p>${statusOverview(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
+    const supersededNotice = p.batch.status === "cancelled" ? '<p class="result-alert warn"><strong>本批次已被新版取代。</strong>資料仍完整保留供查閱，但門市與總部都不能再修改、送出或核准。</p>' : "";
+    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${supersededNotice}${statusOverview(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
     $("batch-dialog").showModal();
   }
 
