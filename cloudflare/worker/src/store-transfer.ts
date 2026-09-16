@@ -132,15 +132,15 @@ async function config(request: Request, env: StoreTransferEnv): Promise<Response
     googleOAuthClientId: env.GOOGLE_OAUTH_CLIENT_ID || "",
     fixedSources: { marketingDriveFileId: FIXED_SOURCES.marketingDriveFileId, productMasterFolderId: FIXED_SOURCES.productMasterFolderId },
     storeInventoryRules: inventoryRules,
-    permissions: { canCreate: who.role !== "store", canApprove: who.role !== "store", canReviewAll: who.role !== "store", canManageRules: who.role !== "store" } });
+    permissions: { canCreate: who.role !== "store", canApprove: who.role !== "store", canReviewAll: who.role !== "store", canManageRules: who.role !== "store", canDeleteBatch: who.role !== "store" } });
 }
 
 async function listBatches(request: Request, env: StoreTransferEnv): Promise<Response> {
   const who = await actor(request, env);
   const scope = visibleStore(new URL(request.url).searchParams.get("store"), who.role, who.storeCode);
   const result = scope
-    ? await env.DB.prepare("SELECT b.*, s.status store_status FROM store_transfer_batches b JOIN store_transfer_store_status s ON s.batch_id = b.id WHERE s.store_code = ? ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").bind(scope).all()
-    : await env.DB.prepare("SELECT b.*, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id) store_total, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'submitted') store_submitted, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'approved') store_approved, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.erp_created_at IS NOT NULL) store_erp_created FROM store_transfer_batches b ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").all();
+    ? await env.DB.prepare("SELECT b.*, s.status store_status FROM store_transfer_batches b JOIN store_transfer_store_status s ON s.batch_id = b.id WHERE s.store_code = ? AND b.deleted_at IS NULL ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").bind(scope).all()
+    : await env.DB.prepare("SELECT b.*, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id) store_total, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'submitted') store_submitted, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'approved') store_approved, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.erp_created_at IS NOT NULL) store_erp_created FROM store_transfer_batches b WHERE b.deleted_at IS NULL ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").all();
   return json({ batches: result.results, scope });
 }
 
@@ -148,7 +148,7 @@ async function detail(request: Request, env: StoreTransferEnv, batchId: string):
   const who = await actor(request, env);
   const requested = new URL(request.url).searchParams.get("store");
   const scope = visibleStore(requested, who.role, who.storeCode);
-  const batch = await env.DB.prepare("SELECT * FROM store_transfer_batches WHERE id = ?").bind(batchId).first();
+  const batch = await env.DB.prepare("SELECT * FROM store_transfer_batches WHERE id = ? AND deleted_at IS NULL").bind(batchId).first();
   if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
   const items = scope
     ? await env.DB.prepare("SELECT * FROM store_transfer_items WHERE batch_id = ? AND store_code = ? ORDER BY sku").bind(batchId, scope).all()
@@ -204,8 +204,8 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   const stores = [...new Set(normalized.map((item) => item.storeCode))];
   const now = new Date().toISOString();
   const statements = [
-    env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) SELECT id, 'superseded', ?, ?, ? FROM store_transfer_batches WHERE week_key = ? AND status IN ('open', 'review') AND id <> ?").bind(`已由新版批次${id}取代，僅供查閱`, now, who.email, weekKey, id),
-    env.DB.prepare("UPDATE store_transfer_batches SET status = 'cancelled', updated_at = ?, updated_by = ?, revision = revision + 1 WHERE week_key = ? AND status IN ('open', 'review') AND id <> ?").bind(now, who.email, weekKey, id),
+    env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) SELECT id, 'cancelled', ?, ?, ? FROM store_transfer_batches WHERE week_key = ? AND status IN ('open', 'review') AND deleted_at IS NULL AND id <> ?").bind(`已由新版批次${id}取代，僅供查閱`, now, who.email, weekKey, id),
+    env.DB.prepare("UPDATE store_transfer_batches SET status = 'cancelled', updated_at = ?, updated_by = ?, revision = revision + 1 WHERE week_key = ? AND status IN ('open', 'review') AND deleted_at IS NULL AND id <> ?").bind(now, who.email, weekKey, id),
     env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, ?, ?, ?)").bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), now, who.email, now, who.email),
     ...normalized.map((item) => env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, rule_summary, item_type, calculation_date, base_quantity, daily_usage, system_projection, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, item.storeCode, item.sku, item.productName, item.suggested, item.ruleSummary, item.itemType, item.calculationDate, item.baseQuantity, item.dailyUsage, item.systemProjection, now, who.email)),
     ...stores.map((storeCode) => env.DB.prepare("INSERT INTO store_transfer_store_status (batch_id, store_code, status, updated_at) VALUES (?, ?, 'pending', ?)").bind(id, storeCode, now)),
@@ -213,6 +213,20 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   ];
   await env.DB.batch(statements);
   return json({ id, status: "open", stores, itemCount: normalized.length }, 201);
+}
+
+async function deleteBatch(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
+  requireSameOrigin(request, env);
+  const who = await actor(request, env); assertHq(who.role);
+  const batch = await env.DB.prepare("SELECT status, week_key FROM store_transfer_batches WHERE id = ? AND deleted_at IS NULL").bind(batchId).first<Record<string, unknown>>();
+  if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
+  if (String(batch.status) !== "cancelled") throw new RequestValidationError("目前作業或已完成批次不能直接刪除；請只刪除已取代／已取消批次。", 409);
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'cancelled', ?, ?, ?)").bind(batchId, `總部將${String(batch.week_key)}批次移出前台清單；資料保留12個月`, now, who.email),
+    env.DB.prepare("UPDATE store_transfer_batches SET deleted_at = ?, deleted_by = ?, updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ? AND status = 'cancelled' AND deleted_at IS NULL").bind(now, who.email, now, who.email, batchId)
+  ]);
+  return json({ id: batchId, deleted: true, retainedMonths: 12 });
 }
 
 async function saveStore(request: Request, env: StoreTransferEnv, batchId: string, requestedStore: string, submit: boolean): Promise<Response> {
@@ -428,6 +442,7 @@ export async function storeTransferRoute(request: Request, env: StoreTransferEnv
   if (url.pathname === "/api/store-transfer/batches" && request.method === "POST") return createBatch(request, env);
   const detailMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)$/);
   if (detailMatch && request.method === "GET") return detail(request, env, decodeURIComponent(detailMatch[1]));
+  if (detailMatch && request.method === "DELETE") return deleteBatch(request, env, decodeURIComponent(detailMatch[1]));
   const storeMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/stores\/([^/]+)\/(save|submit)$/);
   if (storeMatch && request.method === "PUT") return saveStore(request, env, decodeURIComponent(storeMatch[1]), decodeURIComponent(storeMatch[2]), storeMatch[3] === "submit");
   const withdrawMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/stores\/([^/]+)\/withdraw$/);

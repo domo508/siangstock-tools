@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20260916-batch-version-r1");
+    const appIndex = html.indexOf("app.js?v=20260916-batch-delete-r1");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -157,6 +157,23 @@ describe("前台導覽", () => {
     expect(worker).toContain("已由新版批次${id}取代，僅供查閱");
     expect(worker).toContain("status = 'cancelled'");
     expect(worker).toContain("status IN ('open', 'review')");
+    expect(worker).toContain("'cancelled', ?, ?, ? FROM store_transfer_batches");
+    expect(worker).not.toContain("'superseded'");
+  });
+
+  it("總部只可將已取代批次安全移出前台並保留12個月稽核", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    const migration = readFileSync("../cloudflare/worker/migrations/0015_store_transfer_batch_soft_delete.sql", "utf8");
+    expect(html).toContain("刪除舊批次");
+    expect(app).toContain("data-delete-batch");
+    expect(app).toContain("稽核資料會保留12個月");
+    expect(worker).toContain("canDeleteBatch");
+    expect(worker).toContain("String(batch.status) !== \"cancelled\"");
+    expect(worker).toContain("request.method === \"DELETE\"");
+    expect(worker).toContain("deleted_at IS NULL");
+    expect(migration).toContain("ADD COLUMN deleted_at");
   });
 
   it("資料整理工具與規則頁都有清楚的名稱和上一層路徑", () => {

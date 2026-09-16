@@ -112,7 +112,22 @@
     const status = batchStatusLabel(batch.status);
     const ownStatus = { pending: "尚未處理", saved: "已暫存", submitted: "已送出", approved: "已核准", closed: "已完成" }[batch.store_status] || batch.store_status;
     const progress = batch.status === "cancelled" ? "新版批次已建立，本批不再接受修改或送出" : batch.store_total == null ? (ownStatus ? `本店：${ownStatus}` : "") : `門市已送出 ${Number(batch.store_submitted || 0) + Number(batch.store_approved || 0)}/${batch.store_total}・ERP ${batch.store_erp_created || 0}/${batch.store_total}`;
-    return `<article class="batch-card${batch.status === "cancelled" ? " superseded" : ""}"><div><h3>${escapeHtml(batch.week_key || batch.id)}</h3><p class="batch-meta">${escapeHtml(batch.item_count || 0)}項・系統建議${escapeHtml(batch.suggested_quantity || 0)}件・${escapeHtml(progress)}・更新於${escapeHtml(batch.updated_at || "")}</p></div><span class="batch-status">${escapeHtml(status)}</span><button class="secondary-button compact" type="button" data-open-batch="${escapeHtml(batch.id)}">${batch.status === "cancelled" ? "查看紀錄" : "查看／處理"}</button></article>`;
+    const deleteButton = batch.status === "cancelled" && state.config.permissions?.canDeleteBatch
+      ? `<button class="secondary-button compact delete-batch-button" type="button" data-delete-batch="${escapeHtml(batch.id)}" data-week-key="${escapeHtml(batch.week_key)}" data-item-count="${escapeHtml(batch.item_count || 0)}">刪除批次</button>` : "";
+    return `<article class="batch-card${batch.status === "cancelled" ? " superseded" : ""}"><div><h3>${escapeHtml(batch.week_key || batch.id)}</h3><p class="batch-meta">${escapeHtml(batch.item_count || 0)}項・系統建議${escapeHtml(batch.suggested_quantity || 0)}件・${escapeHtml(progress)}・更新於${escapeHtml(batch.updated_at || "")}</p></div><span class="batch-status">${escapeHtml(status)}</span><div class="batch-card-actions"><button class="secondary-button compact" type="button" data-open-batch="${escapeHtml(batch.id)}">${batch.status === "cancelled" ? "查看紀錄" : "查看／處理"}</button>${deleteButton}</div></article>`;
+  }
+
+  async function deleteBatchFromHistory(button) {
+    const id = button.dataset.deleteBatch;
+    const week = button.dataset.weekKey || id;
+    const itemCount = button.dataset.itemCount || 0;
+    if (!confirm(`確定要刪除 ${week} 的這筆已取代批次嗎？\n\n批次編號：${id}\n品項數：${itemCount}\n\n刪除後前台不再顯示，但稽核資料會保留12個月。`)) return;
+    button.disabled = true;
+    try {
+      await api(`/batches/${encodeURIComponent(id)}`, { method: "DELETE" });
+      $("hq-status").textContent = `已刪除${week}的舊批次；稽核資料仍保留12個月。`;
+      await loadBatches();
+    } finally { button.disabled = false; }
   }
 
   async function loadBatches() {
@@ -385,7 +400,15 @@
   $("google-connect-button").addEventListener("click", () => authorizeGoogle().catch((error) => { $("source-status").textContent = error.message; }));
   $("auto-source-button").addEventListener("click", () => loadGoogleSources().catch((error) => { $("source-status").textContent = `自動取得失敗：${error.message}；可改用手動備援。`; }));
   $("week-key").addEventListener("change", () => applyScheduleForWeek($("week-key").value));
-  document.addEventListener("click", (event) => { const button = event.target.closest("[data-open-batch]"); if (button) openBatch(button.dataset.openBatch).catch((error) => { $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; }); });
+  document.addEventListener("click", (event) => {
+    const deleteButton = event.target.closest("[data-delete-batch]");
+    if (deleteButton) {
+      deleteBatchFromHistory(deleteButton).catch((error) => { $("batch-list").insertAdjacentHTML("afterbegin", `<p class="empty-state">${escapeHtml(error.message)}</p>`); });
+      return;
+    }
+    const button = event.target.closest("[data-open-batch]");
+    if (button) openBatch(button.dataset.openBatch).catch((error) => { $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; });
+  });
   $("batch-detail").addEventListener("click", handleDialog);
   $("batch-detail").addEventListener("input", updateDialogProjection);
   start();

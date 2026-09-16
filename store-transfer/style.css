@@ -108,6 +108,8 @@
 .manual-item-table { min-width: 780px; margin-top: .75rem; }
 .manual-item-table tbody:empty::after { content: "尚未加入人工品項。"; display: table-cell; padding: .85rem; color: #718494; }
 .batch-card button { justify-self: end; }
+.batch-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; }
+.delete-batch-button { color: #8a3e32; border-color: #ddb9b0; background: #fff8f6; }
 .heading-actions { display: grid; justify-items: end; gap: .55rem; }
 .heading-actions p { margin: 0; }
 .store-status-overview { margin: 1rem 0 1.25rem; padding: 1rem; border: 1px solid #cbdde7; border-radius: 14px; background: #f5f9fb; }
@@ -122,4 +124,4 @@
 .detail-actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1rem; }
 .secondary-button.compact { padding: .55rem .8rem; }
 @media (max-width: 960px) { .guide-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .manual-item-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 760px) { .period-grid, .transfer-sources, .fixed-source-panel, .guide-grid, .status-grid, .manual-item-form { grid-template-columns: 1fr; } .manual-item-form .manual-reason-field { grid-column: auto; } .fixed-source-panel > .status-line { grid-column: auto; } .fixed-source-actions { justify-content: stretch; } .fixed-source-actions button { width: 100%; } .batch-card { grid-template-columns: 1fr; } .action-row { align-items: stretch; flex-direction: column; } .heading-actions { justify-items: start; } }
+@media (max-width: 760px) { .period-grid, .transfer-sources, .fixed-source-panel, .guide-grid, .status-grid, .manual-item-form { grid-template-columns: 1fr; } .manual-item-form .manual-reason-field { grid-column: auto; } .fixed-source-panel > .status-line { grid-column: auto; } .fixed-source-actions { justify-content: stretch; } .fixed-source-actions button { width: 100%; } .batch-card { grid-template-columns: 1fr; } .batch-card-actions { justify-content: stretch; } .batch-card-actions button { flex: 1 1 10rem; } .action-row { align-items: stretch; flex-direction: column; } .heading-actions { justify-items: start; } }
