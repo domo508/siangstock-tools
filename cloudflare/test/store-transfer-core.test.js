@@ -85,6 +85,25 @@ describe("S品、建議備貨與可售至", () => {
   });
 });
 
+describe("ERP調撥輸出", () => {
+  it("保留人工新增品項，排除最後核准量為0的移除品項", () => {
+    const sheets = {};
+    const fakeXlsx = { utils: {
+      book_new: () => ({ SheetNames: [], Sheets: sheets }),
+      json_to_sheet: (rows) => ({ rows }),
+      book_append_sheet: (workbook, sheet, name) => { workbook.SheetNames.push(name); workbook.Sheets[name] = sheet; }
+    } };
+    const workbook = core.buildErpWorkbook([
+      { store_code: "R00", sku: "A001", product_name: "已移除品項", item_type: "regular", hq_approved_quantity: 0 },
+      { store_code: "R00", sku: "M001", product_name: "人工新增品項", item_type: "regular", hq_approved_quantity: 2 },
+      { store_code: "R01", sku: "B001", product_name: "其它門市品項", item_type: "regular", hq_approved_quantity: 3 }
+    ], fakeXlsx, "R00");
+    expect(workbook.Sheets["通用貨品數量"].rows).toEqual([
+      { 貨號: "M001", 品名: "人工新增品項", 顏色: "", 尺碼: "", 數量: 2, 價格: "", 備註: "一般補貨", 倉庫: "" }
+    ]);
+  });
+});
+
 describe("展示與最低庫存管理規則", () => {
   it("管理前台設定會取代程式預設量與適用門市", () => {
     const managed = { rules: [{ name: "獨立5尺商品", enabled: true, scope: "R01", inventoryRole: "不可售展示", quantity: 2, priority: 120 }] };

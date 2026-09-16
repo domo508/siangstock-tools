@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20260916-transfer-other-warehouse-r1");
+    const appIndex = html.indexOf("app.js?v=20260916-manual-items-r1");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -134,6 +134,17 @@ describe("前台導覽", () => {
     expect(app).toContain("const outputXlsx = globalThis.ProcurementXlsxWriter || inputXlsx");
     expect(app).toContain("inputXlsx.read(data");
     expect(app).toContain("outputXlsx.writeFile");
+  });
+
+  it("週調撥允許門市與總部人工新增或移除品項並保留原因", () => {
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    expect(app).toContain("人工新增品項");
+    expect(app).toContain("data-remove-item");
+    expect(app).toContain("productName: row.dataset.productName");
+    expect(worker).toContain("門市人工新增");
+    expect(worker).toContain("總部人工新增");
+    expect(worker).toContain("移除品項請使用移除按鈕");
   });
 
   it("資料整理工具與規則頁都有清楚的名稱和上一層路徑", () => {

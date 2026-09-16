@@ -242,18 +242,55 @@
     const ownStatus = payload.storeStatuses.find((row) => row.store_code === state.config.storeCode)?.status;
     const editable = state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && ownStatus !== "submitted" && Date.now() < Date.parse(payload.batch.lock_at);
     const hqEditable = state.config.role !== "store" && ["open", "review"].includes(payload.batch.status);
-    const table = (items, title, note = "") => items.length ? `<section class="result-section"><h3>${title}</h3>${note ? `<p>${note}</p>` : ""}<div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>建議量</th><th>建議後</th><th>門市確認量</th><th>確認後</th><th>門市調整原因</th>${state.config.role !== "store" ? "<th>總部核准量</th><th>核准後</th><th>總部調整原因</th>" : ""}</tr></thead><tbody>${items.map((item) => {
+    const canChangeItems = editable || hqEditable;
+    const table = (items, title, note = "") => items.length ? `<section class="result-section"><h3>${title}</h3>${note ? `<p>${note}</p>` : ""}<div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>建議量</th><th>建議後</th><th>門市確認量</th><th>確認後</th><th>門市調整原因</th>${state.config.role !== "store" ? "<th>總部核准量</th><th>核准後</th><th>總部調整原因</th>" : ""}${canChangeItems ? "<th>品項操作</th>" : ""}</tr></thead><tbody>${items.map((item) => {
       const step = item.item_type === "consumable" ? 100 : 1;
       const confirmed = item.store_confirmed_quantity ?? item.suggested_quantity;
       const approved = item.hq_approved_quantity ?? confirmed;
-      return `<tr data-store="${item.store_code}" data-sku="${escapeHtml(item.sku)}" data-item-type="${item.item_type || "regular"}" data-calculation-date="${escapeHtml(item.calculation_date)}" data-base="${Number(item.base_quantity || 0)}" data-daily="${Number(item.daily_usage || 0)}" data-system-projection="${escapeHtml(item.system_projection || "")}"><td>${item.store_code}</td><td>${escapeHtml(item.sku)}</td><td>${escapeHtml(item.product_name)}</td><td>${item.suggested_quantity}</td><td>${escapeHtml(item.system_projection || rowProjection(item, item.suggested_quantity))}</td><td><input data-confirmed type="number" min="0" step="${step}" value="${confirmed}" ${editable ? "" : "disabled"}></td><td data-confirmed-projection>${escapeHtml(rowProjection(item, confirmed))}</td><td><input data-reason class="reason-input" value="${escapeHtml(item.store_reason || "")}" ${editable ? "" : "disabled"}></td>${state.config.role !== "store" ? `<td><input data-approved type="number" min="0" step="${step}" value="${approved}" ${hqEditable ? "" : "disabled"}></td><td data-approved-projection>${escapeHtml(rowProjection(item, approved))}</td><td><input data-hq-reason class="reason-input" value="${escapeHtml(item.hq_reason || "")}" ${hqEditable ? "" : "disabled"}></td>` : ""}</tr>`;
+      const manual = Number(item.suggested_quantity) === 0 && /人工新增/.test(String(item.rule_summary || ""));
+      return `<tr data-store="${item.store_code}" data-sku="${escapeHtml(item.sku)}" data-product-name="${escapeHtml(item.product_name)}" data-item-type="${item.item_type || "regular"}" data-calculation-date="${escapeHtml(item.calculation_date)}" data-base="${Number(item.base_quantity || 0)}" data-daily="${Number(item.daily_usage || 0)}" data-system-projection="${escapeHtml(item.system_projection || "")}" data-manual="${manual ? "true" : "false"}"><td>${item.store_code}</td><td>${escapeHtml(item.sku)}${manual ? '<span class="manual-item-badge">人工新增</span>' : ""}</td><td>${escapeHtml(item.product_name)}</td><td>${item.suggested_quantity}</td><td>${escapeHtml(item.system_projection || rowProjection(item, item.suggested_quantity))}</td><td><input data-confirmed type="number" min="0" step="${step}" value="${confirmed}" ${editable ? "" : "disabled"}></td><td data-confirmed-projection>${escapeHtml(rowProjection(item, confirmed))}</td><td><input data-reason class="reason-input" value="${escapeHtml(item.store_reason || "")}" ${editable ? "" : "disabled"}></td>${state.config.role !== "store" ? `<td><input data-approved type="number" min="0" step="${step}" value="${approved}" ${hqEditable ? "" : "disabled"}></td><td data-approved-projection>${escapeHtml(rowProjection(item, approved))}</td><td><input data-hq-reason class="reason-input" value="${escapeHtml(item.hq_reason || "")}" ${hqEditable ? "" : "disabled"}></td>` : ""}${canChangeItems ? `<td><button class="secondary-button compact remove-item-button" type="button" data-remove-item data-mode="${state.config.role === "store" ? "store" : "hq"}">移除此品項</button></td>` : ""}</tr>`;
     }).join("")}</tbody></table></div></section>` : "";
+    const storeOptions = payload.storeStatuses.map((row) => `<option value="${row.store_code}">${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</option>`).join("");
+    const manualForm = canChangeItems ? `<section class="result-section manual-item-section"><h3>人工新增品項</h3><p>總部與門市皆可新增；ERP品號、品名、數量與原因必填。移除既有品項時會把本階段數量改為0，原列仍保留供稽核。</p><div class="manual-item-form">${state.config.role !== "store" ? `<label><span>門市</span><select data-manual-store>${storeOptions}</select></label>` : ""}<label><span>品項類型</span><select data-manual-type><option value="regular">一般必要補貨</option><option value="special_stock">建議調撥</option><option value="activity_gift">活動／贈品</option><option value="consumable">提袋耗材</option></select></label><label><span>ERP品號</span><input data-manual-sku maxlength="80" autocomplete="off"></label><label><span>品名</span><input data-manual-name maxlength="300" autocomplete="off"></label><label><span>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</span><input data-manual-quantity type="number" min="1" step="1"></label><label class="manual-reason-field"><span>新增原因</span><input data-manual-reason maxlength="300" autocomplete="off"></label><button class="secondary-button" type="button" data-local-action="add-item">加入確認清單</button></div><p class="status-line" data-manual-status></p><div class="result-table-wrap"><table class="transfer-table manual-item-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>類型</th><th>系統建議</th><th>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</th><th>原因</th><th>操作</th></tr></thead><tbody data-manual-rows></tbody></table></div></section>` : "";
     return [
       table(payload.items.filter((item) => item.item_type === "regular"), "一般週補貨（必要調撥）"),
       table(payload.items.filter((item) => item.item_type === "special_stock"), "建議調撥（非必要）", "單人被套各材質前2名花色；可依現場判斷填0。"),
       table(payload.items.filter((item) => item.item_type === "activity_gift"), "活動／贈品調撥"),
-      table(payload.items.filter((item) => item.item_type === "consumable"), "門市耗材補貨", "提袋請以100個為單位調整。")
+      table(payload.items.filter((item) => item.item_type === "consumable"), "門市耗材補貨", "提袋請以100個為單位調整。"),
+      manualForm
     ].join("");
+  }
+
+  function addManualItem() {
+    const detail = $("batch-detail"), status = detail.querySelector("[data-manual-status]");
+    const storeCode = state.config.role === "store" ? state.config.storeCode : detail.querySelector("[data-manual-store]").value;
+    const type = detail.querySelector("[data-manual-type]").value;
+    const skuInput = detail.querySelector("[data-manual-sku]"), nameInput = detail.querySelector("[data-manual-name]");
+    const quantityInput = detail.querySelector("[data-manual-quantity]"), reasonInput = detail.querySelector("[data-manual-reason]");
+    const sku = skuInput.value.normalize("NFKC").trim().toUpperCase(), productName = nameInput.value.normalize("NFKC").trim();
+    const quantity = Number(quantityInput.value), reason = reasonInput.value.normalize("NFKC").trim();
+    if (!sku || !productName || !Number.isSafeInteger(quantity) || quantity <= 0 || !reason) { status.textContent = "請填妥ERP品號、品名、1以上整數數量與新增原因。"; return; }
+    if (type === "consumable" && quantity % 100 !== 0) { status.textContent = "提袋耗材數量須為100的倍數。"; return; }
+    const duplicate = [...detail.querySelectorAll("tbody tr")].some((row) => row.dataset.store === storeCode && row.dataset.sku === sku && row.dataset.itemType === type);
+    if (duplicate) { status.textContent = `${storeCode}／${sku}已在清單中，請直接修改該列數量。`; return; }
+    const labels = { regular: "一般必要補貨", special_stock: "建議調撥", activity_gift: "活動／贈品", consumable: "提袋耗材" };
+    const row = document.createElement("tr");
+    row.dataset.store = storeCode; row.dataset.sku = sku; row.dataset.productName = productName; row.dataset.itemType = type; row.dataset.calculationDate = state.activeBatch.batch.proposal_date; row.dataset.base = "0"; row.dataset.daily = "0"; row.dataset.systemProjection = "人工新增，無歷史推估"; row.dataset.manual = "true";
+    row.innerHTML = `<td>${storeCode}</td><td>${escapeHtml(sku)}<span class="manual-item-badge">尚未儲存</span></td><td>${escapeHtml(productName)}</td><td>${labels[type]}</td><td>0</td><td>${state.config.role === "store" ? `<input data-confirmed type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">` : `<input data-confirmed type="number" value="0" disabled><input data-approved type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">`}</td><td>${state.config.role === "store" ? `<input data-reason class="reason-input" value="${escapeHtml(reason)}">` : `<input data-reason type="hidden" value=""><input data-hq-reason class="reason-input" value="${escapeHtml(reason)}">`}</td><td><button class="secondary-button compact remove-item-button" type="button" data-remove-unsaved>取消新增</button></td>`;
+    detail.querySelector("[data-manual-rows]").append(row);
+    skuInput.value = ""; nameInput.value = ""; quantityInput.value = ""; reasonInput.value = "";
+    status.textContent = `${storeCode}／${sku}已加入畫面；按暫存、送出或核准後才會正式保存。`;
+  }
+
+  function removeDialogItem(button) {
+    const row = button.closest("tr"), mode = button.dataset.mode;
+    const quantityInput = row.querySelector(mode === "hq" ? "[data-approved]" : "[data-confirmed]");
+    const reasonInput = row.querySelector(mode === "hq" ? "[data-hq-reason]" : "[data-reason]");
+    quantityInput.value = "0";
+    reasonInput.placeholder = "請填寫移除原因";
+    row.classList.add("item-marked-removed");
+    updateDialogProjection({ target: quantityInput });
+    if (!reasonInput.value.trim()) reasonInput.focus();
   }
 
   function updateDialogProjection(event) {
@@ -289,10 +326,16 @@
   }
 
   function rowsFromDialog(mode) {
-    return [...$("batch-detail").querySelectorAll("tbody tr")].map((row) => ({ storeCode: row.dataset.store, sku: row.dataset.sku, itemType: row.dataset.itemType, ...(mode === "approve" ? { approvedQuantity: Number(row.querySelector("[data-approved]").value), reason: row.querySelector("[data-hq-reason]").value } : { confirmedQuantity: Number(row.querySelector("[data-confirmed]").value), reason: row.querySelector("[data-reason]").value }) }));
+    return [...$("batch-detail").querySelectorAll("tbody tr")].map((row) => ({ storeCode: row.dataset.store, sku: row.dataset.sku, productName: row.dataset.productName, itemType: row.dataset.itemType, ...(mode === "approve" ? { approvedQuantity: Number(row.querySelector("[data-approved]").value), reason: row.querySelector("[data-hq-reason]").value } : { confirmedQuantity: Number(row.querySelector("[data-confirmed]").value), reason: row.querySelector("[data-reason]").value }) }));
   }
 
   async function handleDialog(event) {
+    const localAction = event.target.closest("[data-local-action]");
+    if (localAction?.dataset.localAction === "add-item") { addManualItem(); return; }
+    const unsavedRemove = event.target.closest("[data-remove-unsaved]");
+    if (unsavedRemove) { unsavedRemove.closest("tr").remove(); return; }
+    const removeItem = event.target.closest("[data-remove-item]");
+    if (removeItem) { removeDialogItem(removeItem); return; }
     const button = event.target.closest("[data-action]"); if (!button) return;
     const action = button.dataset.action, batch = state.activeBatch; button.disabled = true;
     try {
