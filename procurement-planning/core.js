@@ -501,10 +501,16 @@
     return "";
   }
 
+  function otherTransferWarehouseCode(code, name) {
+    const identity = normalizeSku(code) || normalizeName(name) || "UNKNOWN";
+    return `OTHER:${identity}`;
+  }
+
   function parseTransferWorkbook(workbook, XLSX, options = {}) {
     const selected = selectSheet(workbook, XLSX, "transfer");
     const records = [];
     const errors = [];
+    const ignoredRows = [];
     const allowedStatuses = new Set(["提交", "發貨審核", "收貨審核"]);
     for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
       const row = selected.rows[index];
@@ -523,12 +529,28 @@
       }
       const sourceWarehouseName = String(valueAt(row, selected.mapping, "sourceWarehouseName") || "").trim();
       const destinationWarehouseName = String(valueAt(row, selected.mapping, "destinationWarehouseName") || "").trim();
-      const sourceWarehouseCode = transferWarehouseCode(valueAt(row, selected.mapping, "sourceWarehouseCode"), sourceWarehouseName);
-      const destinationWarehouseCode = transferWarehouseCode(valueAt(row, selected.mapping, "destinationWarehouseCode"), destinationWarehouseName);
-      if (!sourceWarehouseCode || !destinationWarehouseCode) {
-        errors.push({ sourceRow: index + 1, documentCode, sku, message: `無法辨識調出／調入倉：${sourceWarehouseName} → ${destinationWarehouseName}` });
+      const sourceWarehouseRawCode = valueAt(row, selected.mapping, "sourceWarehouseCode");
+      const destinationWarehouseRawCode = valueAt(row, selected.mapping, "destinationWarehouseCode");
+      if ((!sourceWarehouseName && !normalizeSku(sourceWarehouseRawCode)) || (!destinationWarehouseName && !normalizeSku(destinationWarehouseRawCode))) {
+        errors.push({ sourceRow: index + 1, documentCode, sku, message: "調出倉或調入倉資料不完整。" });
         continue;
       }
+      const managedSourceWarehouseCode = transferWarehouseCode(sourceWarehouseRawCode, sourceWarehouseName);
+      const managedDestinationWarehouseCode = transferWarehouseCode(destinationWarehouseRawCode, destinationWarehouseName);
+      if (!managedSourceWarehouseCode && !managedDestinationWarehouseCode) {
+        ignoredRows.push({
+          sourceRow: index + 1,
+          documentCode,
+          sku,
+          status,
+          sourceWarehouseName,
+          destinationWarehouseName,
+          message: `與總倉及既有門市無關：${sourceWarehouseName} → ${destinationWarehouseName}`
+        });
+        continue;
+      }
+      const sourceWarehouseCode = managedSourceWarehouseCode || otherTransferWarehouseCode(sourceWarehouseRawCode, sourceWarehouseName);
+      const destinationWarehouseCode = managedDestinationWarehouseCode || otherTransferWarehouseCode(destinationWarehouseRawCode, destinationWarehouseName);
       records.push({
         sourceRow: index + 1,
         fileName: options.fileName || "",
@@ -536,8 +558,10 @@
         status,
         sourceWarehouseCode,
         sourceWarehouseName,
+        sourceWarehouseManaged: Boolean(managedSourceWarehouseCode),
         destinationWarehouseCode,
         destinationWarehouseName,
+        destinationWarehouseManaged: Boolean(managedDestinationWarehouseCode),
         sku,
         name: String(valueAt(row, selected.mapping, "name") || "").trim(),
         quantity,
@@ -551,7 +575,7 @@
       const preview = errors.slice(0, 3).map((error) => `第${error.sourceRow}列：${error.message}`).join("；");
       throw new Error(`期間調撥單有${errors.length}筆無法安全判斷：${preview}`);
     }
-    return { fileName: options.fileName || "", sheetName: selected.name, records, errors };
+    return { fileName: options.fileName || "", sheetName: selected.name, records, errors, ignoredRows };
   }
 
   function parseNewProductWorkbook(workbook, XLSX, options = {}) {

@@ -316,6 +316,32 @@ describe("五來源匯入與品號串接", () => {
     expect(onAugust28.adjustmentBySkuWarehouse.has("A1\tR03")).toBe(false);
   });
 
+  it("期間調撥只要一端屬於管理倉即保留，兩端都無關則略過", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["單據編碼", "狀態", "調出倉庫名", "調入倉庫名", "貨號", "品名", "數量", "開單日期", "發貨日期", "收貨日期"],
+      ["AT4", "發貨審核", "[快閃] 高雄漢神巨蛋", "寬承總倉", "A1", "60天絲測試床包", 5, "2026/9/12", "2026/9/13", ""],
+      ["AT5", "收貨審核", "寬承總倉", "瑕疵倉", "A1", "60天絲測試床包", 2, "2026/9/10", "2026/9/11", "2026/9/12"],
+      ["AT6", "收貨審核", "行銷-活動&商品拍攝", "瑕疵倉", "A1", "60天絲測試床包", 1, "2026/9/10", "2026/9/11", "2026/9/12"]
+    ]), "工作表1");
+    const report = core.parseTransferWorkbook(workbook, XLSX, { fileName: "含其它倉調撥.xlsx" });
+    expect(report.records).toHaveLength(2);
+    expect(report.ignoredRows).toHaveLength(1);
+    expect(report.records[0]).toMatchObject({
+      sourceWarehouseManaged: false,
+      destinationWarehouseCode: "T00",
+      destinationWarehouseManaged: true
+    });
+    expect(report.records[0].sourceWarehouseCode).toMatch(/^OTHER:/);
+    expect(report.records[1]).toMatchObject({
+      sourceWarehouseCode: "T00",
+      sourceWarehouseManaged: true,
+      destinationWarehouseManaged: false
+    });
+    const projected = core.aggregateTransferReports([report], { asOfDate: "2026-09-13" });
+    expect(projected.adjustmentBySkuWarehouse.get("A1\tT00")).toBe(5);
+  });
+
   it("辨識粉紅底未完成量、套用A42359-A正確列並固定排除A43359-A", () => {
     const consignment = makeConsignment();
     expect(consignment.styleAudit).toMatchObject({ pinkDetected: true, pinkCells: 2 });
