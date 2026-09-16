@@ -72,11 +72,11 @@ describe("store transfer xlsx preflight", () => {
 
   it("stops an oversized sales workbook with an actionable split instruction", async () => {
     const preflight = loadPreflight();
-    await expect(preflight.assertSalesWorkbookSize(workbookBlob(236_000_000))).rejects.toThrow(/至少3份.*欄位不必刪除.*自動合併/);
+    await expect(preflight.assertSalesWorkbookSize(workbookBlob(420_000_000))).rejects.toThrow(/至少3份.*欄位不必刪除.*自動合併/);
   });
 
-  it("allows a worksheet below the browser-safe threshold", async () => {
+  it("allows the current 225MB ERP sales worksheet with the modern reader", async () => {
     const preflight = loadPreflight();
-    await expect(preflight.assertSalesWorkbookSize(workbookBlob(50_000_000))).resolves.toBeTruthy();
+    await expect(preflight.assertSalesWorkbookSize(workbookBlob(235_921_218))).resolves.toBeTruthy();
   });
 });

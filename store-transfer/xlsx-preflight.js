@@ -1,8 +1,8 @@
 (function (global) {
   "use strict";
 
-  const MAX_SALES_SHEET_BYTES = 100 * 1024 * 1024;
-  const TARGET_SPLIT_BYTES = 80 * 1024 * 1024;
+  const MAX_SALES_SHEET_BYTES = 320 * 1024 * 1024;
+  const TARGET_SPLIT_BYTES = 160 * 1024 * 1024;
 
   function findEndOfCentralDirectory(bytes) {
     for (let index = bytes.length - 22; index >= 0; index -= 1) {

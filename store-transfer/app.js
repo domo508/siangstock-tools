@@ -2,7 +2,8 @@
   "use strict";
   const state = { config: null, calculation: null, activeBatch: null, files: { master: null, marketing: null }, googleReady: false };
   const $ = (id) => document.getElementById(id);
-  const XLSX = globalThis.ProcurementXlsxWriter || globalThis.XLSX;
+  const inputXlsx = globalThis.XLSX;
+  const outputXlsx = globalThis.ProcurementXlsxWriter || inputXlsx;
   const parser = globalThis.ProcurementPlanningCore;
   const transferCore = globalThis.StoreTransferCore;
   const googleSources = globalThis.ProcurementGoogleSources;
@@ -47,7 +48,7 @@
   async function workbook(file) {
     try {
       const data = await file.arrayBuffer();
-      return XLSX.read(data, {
+      return inputXlsx.read(data, {
         type: "array",
         cellDates: true,
         cellStyles: false,
@@ -169,23 +170,23 @@
       $("hq-status").textContent = "正在預檢銷售明細的實際展開大小…";
       for (const file of salesFiles) await xlsxPreflight.assertSalesWorkbookSize(file);
       $("hq-status").textContent = "第1/5步：正在讀取商品主檔…";
-      const master = parser.parseProductMasterWorkbook(await workbook(masterFile), XLSX, { fileName: masterFile.name });
+      const master = parser.parseProductMasterWorkbook(await workbook(masterFile), inputXlsx, { fileName: masterFile.name });
       await yieldToBrowser();
       $("hq-status").textContent = "第2/5步：正在讀取整體行銷策略…";
       const marketingBook = await workbook(marketingFile);
       await yieldToBrowser();
       $("hq-status").textContent = "第3/5步：正在讀取公司庫存…";
-      const inventory = parser.parseInventoryWorkbook(await workbook(inventoryFile), XLSX, { fileName: inventoryFile.name });
+      const inventory = parser.parseInventoryWorkbook(await workbook(inventoryFile), inputXlsx, { fileName: inventoryFile.name });
       await yieldToBrowser();
       $("hq-status").textContent = "第4/5步：正在讀取期間調撥單…";
-      const transfer = parser.parseTransferWorkbook(await workbook(transferFile), XLSX, { fileName: transferFile.name });
+      const transfer = parser.parseTransferWorkbook(await workbook(transferFile), inputXlsx, { fileName: transferFile.name });
       await yieldToBrowser();
 
       const sales = [];
       for (let index = 0; index < salesFiles.length; index += 1) {
         const file = salesFiles[index];
         $("hq-status").textContent = `第5/5步：正在輕量讀取銷售明細 ${index + 1}/${salesFiles.length}（${file.name}）…`;
-        const report = parser.parseSalesWorkbook(await workbook(file), XLSX, { fileName: file.name });
+        const report = parser.parseSalesWorkbook(await workbook(file), inputXlsx, { fileName: file.name });
         sales.push(report);
         await yieldToBrowser();
       }
@@ -198,7 +199,7 @@
         inventory,
         transfer,
         sales,
-        marketing: transferCore.parseMarketingWorkbook(marketingBook, XLSX, latestSalesDate),
+        marketing: transferCore.parseMarketingWorkbook(marketingBook, inputXlsx, latestSalesDate),
         consumableHistory: historyPayload.snapshots || [],
         storeInventory: state.config.storeInventoryRules?.config || {}
       });
@@ -299,8 +300,8 @@
         try { await api(`/batches/${encodeURIComponent(batch.batch.id)}/approve`, { method: "POST", body: { items: rowsFromDialog("approve") } }); }
         catch (error) { if (!/尚未送出/.test(error.message) || !confirm(`${error.message}\n\n是否以目前資料繼續核准？`)) throw error; await api(`/batches/${encodeURIComponent(batch.batch.id)}/approve`, { method: "POST", body: { items: rowsFromDialog("approve"), confirmPendingStores: true } }); }
       } else if (action === "erp") {
-        const store = button.dataset.store, wb = transferCore.buildErpWorkbook(batch.items, XLSX, store);
-        XLSX.writeFile(wb, `${batch.batch.week_key}_${store}_ERP調撥單.xlsx`, { compression: true });
+        const store = button.dataset.store, wb = transferCore.buildErpWorkbook(batch.items, outputXlsx, store);
+        outputXlsx.writeFile(wb, `${batch.batch.week_key}_${store}_ERP調撥單.xlsx`, { compression: true });
         await api(`/batches/${encodeURIComponent(batch.batch.id)}/erp-created`, { method: "POST", body: { storeCode: store } });
         $("dialog-status").textContent = `${store} ERP調撥檔已下載並記錄；調出與調入倉請在ERP下拉選單人工指定。`;
         $("batch-dialog").close(); await openBatch(batch.batch.id); await loadBatches(); return;
@@ -313,7 +314,7 @@
 
   async function start() {
     try {
-      if (!XLSX || !parser || !transferCore || !googleSources || !xlsxPreflight) throw new Error("工具元件載入失敗，請重新整理頁面。");
+      if (!inputXlsx || !outputXlsx || !parser || !transferCore || !googleSources || !xlsxPreflight) throw new Error("工具元件載入失敗，請重新整理頁面。");
       state.config = await api("/config");
       $("account-badge").textContent = `${state.config.email}・${state.config.role === "store" ? state.config.storeCode : state.config.role === "admin" ? "最高權限" : "總部"}`;
       $("refresh-button").disabled = false;

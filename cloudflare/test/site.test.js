@@ -121,6 +121,21 @@ describe("前台導覽", () => {
     expect(homeHtml).toContain('name="twitter:title" content="翔仔居家-公司工具"');
   });
 
+  it("週調撥以新版元件讀取輸入，並保留獨立的ERP樣式輸出元件", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const writerIndex = html.indexOf("xlsx-style-runtime.js");
+    const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
+    const appIndex = html.indexOf("app.js?v=20260916-xlsx-reader-r1");
+    expect(writerIndex).toBeGreaterThan(-1);
+    expect(readerIndex).toBeGreaterThan(writerIndex);
+    expect(appIndex).toBeGreaterThan(readerIndex);
+    expect(app).toContain("const inputXlsx = globalThis.XLSX");
+    expect(app).toContain("const outputXlsx = globalThis.ProcurementXlsxWriter || inputXlsx");
+    expect(app).toContain("inputXlsx.read(data");
+    expect(app).toContain("outputXlsx.writeFile");
+  });
+
   it("資料整理工具與規則頁都有清楚的名稱和上一層路徑", () => {
     const homeHtml = readFileSync("../index.html", "utf8");
     const inventoryHtml = readFileSync("../inventory/index.html", "utf8");
