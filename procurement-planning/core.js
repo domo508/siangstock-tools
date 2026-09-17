@@ -8,7 +8,7 @@
     shortageAction: "寄倉現貨與可按時完成量不足時，顯示缺貨警示並新增寄庫單；不提供改向其他供應商採購。",
     pendingPurchaseRule: "採購單每次完整重匯；新單視為草稿不占用，主管審核與未結案部分到貨只扣未交量，已結案或全部到貨不再扣未到貨。",
     transferRule: "期間調撥單依庫存截止日還原在途狀態：提交須保留調出倉並預計入調入倉；發貨審核因ERP已扣調出倉，只預計入調入倉；收貨審核因ERP已入庫，不重複調整。",
-    blacklistRule: "一次性代工品由人工以ERP品號或完整品名加入黑名單，不做系統猜測。",
+    blacklistRule: "一次性代工品由人工以ERP品號或完整品名加入黑名單；SA／OA／SB／OB開頭品號固定視為一次性客製或組合品，不進一般採購與寄庫。",
     sellThroughStopRule: "只有品名結尾的獨立括號標記(S)視為已斷貨、售完即停；停止對外採購與新增寄庫，但保留線上銷售及門市由總倉現貨調撥去化。",
     sellThroughTransferRule: "(S)商品先保留總倉已知訂單及必要安全庫存，再以剩餘可調撥現貨供門市去化；不足只顯示缺貨，不得轉成供應商採購或寄庫需求。"
   });
@@ -22,6 +22,25 @@
   });
 
   const DEMAND_SALE_TYPES = Object.freeze(["銷貨", "訂貨", "退貨", "退訂"]);
+  const CUSTOM_SKU_PREFIXES = Object.freeze(["SA", "OA", "SB", "OB"]);
+  const CONFIRMED_COMBINATION_SKUS = Object.freeze(new Set(["OA41361", "OA42361", "OA43361", "OA44361"]));
+
+  function isAutomaticProcurementExcludedSku(value) {
+    const sku = normalizeSku(value);
+    return CUSTOM_SKU_PREFIXES.some((prefix) => sku.startsWith(prefix));
+  }
+
+  function isCustomerCustomSku(value) {
+    const sku = normalizeSku(value);
+    return isAutomaticProcurementExcludedSku(sku) && !CONFIRMED_COMBINATION_SKUS.has(sku);
+  }
+
+  function customerCustomExclusionReason(value) {
+    const sku = normalizeSku(value);
+    return CONFIRMED_COMBINATION_SKUS.has(sku)
+      ? "組合品號且掛(S)，不採購組合成品"
+      : "一次性客製品號，不列一般採購與寄庫";
+  }
 
   const PROCUREMENT_POLICY = Object.freeze({
     reviewDays: 14,
@@ -507,7 +526,8 @@
       if (amount == null && orderedAmount != null && orderedQuantity) amount = orderedAmount * quantity / orderedQuantity;
       const remark = String(valueAt(row, selected.mapping, "remark") || "").trim();
       const customText = `${metadata.remark} ${remark}`.trim();
-      const isCustomOrder = /客製/.test(customText);
+      const automaticProcurementExcluded = isAutomaticProcurementExcludedSku(sku);
+      const isCustomOrder = !CONFIRMED_COMBINATION_SKUS.has(sku) && (/客製/.test(customText) || isCustomerCustomSku(sku));
       const receiptDate = parseDateValue(valueAt(row, selected.mapping, "receiptDate"));
       const expectedDeliveryDate = parseDateValue(valueAt(row, selected.mapping, "expectedDeliveryDate")) || parseDateValue(metadata.deliveryDate);
       records.push({
@@ -534,7 +554,8 @@
         hasLifecycleColumns,
         remark,
         isCustomOrder,
-        customChannel: isCustomOrder ? (remark || metadata.remark).replace(/客製/g, "").trim() : "",
+        automaticProcurementExcluded,
+        customChannel: /客製/.test(customText) ? (remark || metadata.remark).replace(/客製/g, "").trim() : "",
         fileName: options.fileName || ""
       });
     }
@@ -1232,7 +1253,7 @@
     const bySku = new Map();
     const records = reports.flatMap((report) => report.records);
     for (const row of records) {
-      if (row.isCustomOrder || row.quantity <= 0) continue;
+      if (row.isCustomOrder || row.automaticProcurementExcluded || row.quantity <= 0) continue;
       if (!bySku.has(row.sku)) {
         bySku.set(row.sku, { sku: row.sku, name: row.name, quantity: 0, amount: 0, files: new Set(), sourceRows: [], deliveries: [] });
       }
@@ -1251,7 +1272,7 @@
     const records = (reports || []).flatMap((report) => report.records || []);
     const month = String(analysisMonth || "").slice(0, 7);
     const received = records.filter((row) => row.receiptDate && (!month || row.receiptDate.slice(0, 7) === month) && row.deliveredQuantity > 0);
-    const pending = records.filter((row) => !row.isCustomOrder && row.quantity > 0);
+    const pending = records.filter((row) => !row.isCustomOrder && !row.automaticProcurementExcluded && row.quantity > 0);
     const drafts = records.filter((row) => row.draft);
     const documentCount = (rows) => new Set(rows.map((row) => row.documentCode || `${row.fileName}#${row.sourceRow}`)).size;
     return {
@@ -1823,6 +1844,7 @@
     const resolvedConsignment = resolveConsignment(input.consignment, input.master, input.blacklist || []);
     const blacklist = normalizeBlacklist(input.blacklist || []);
     const salesRecords = (input.salesReports || []).flatMap((report) => report.records || []);
+    const procurementSalesRecords = salesRecords.filter((row) => !isAutomaticProcurementExcludedSku(row.sku));
     const maxSalesDate = salesRecords.reduce((max, row) => (!max || row.date > max ? row.date : max), "");
     const asOfDate = parseDateValue(input.asOfDate) || maxSalesDate;
     const asOfMs = dateToUtcMs(asOfDate);
@@ -1846,7 +1868,7 @@
     const skuChannel84 = new Map();
     const skuDirect42 = new Map();
     const skuDirect84 = new Map();
-    for (const sale of salesRecords) {
+    for (const sale of procurementSalesRecords) {
       const saleMs = dateToUtcMs(sale.date);
       if (saleMs == null || saleMs > asOfMs) continue;
       const ageDays = Math.floor((asOfMs - saleMs) / 86400000);
@@ -1929,7 +1951,7 @@
       return demandBySku.get(sku);
     };
 
-    for (const sale of salesRecords) {
+    for (const sale of procurementSalesRecords) {
       const saleMs = dateToUtcMs(sale.date);
       if (saleMs == null || saleMs > asOfMs) continue;
       const demand = ensureDemand(sale.sku, sale.name);
@@ -1952,6 +1974,21 @@
 
     const candidates = [];
     const productExclusions = [];
+    const customSalesSkus = new Set();
+    for (const sale of salesRecords) {
+      if (!isAutomaticProcurementExcludedSku(sale.sku) || customSalesSkus.has(sale.sku)) continue;
+      customSalesSkus.add(sale.sku);
+      const masterRecord = input.master.bySku.get(sale.sku);
+      productExclusions.push({
+        type: CONFIRMED_COMBINATION_SKUS.has(sale.sku) ? "組合品號排除" : "一次性客製品號排除",
+        sourceRow: masterRecord?.sourceRow || sale.sourceRow || "",
+        sku: sale.sku,
+        supplierSku: masterRecord?.supplierSku || "",
+        supplier: masterRecord?.supplier || "未辨識供應商",
+        name: masterRecord?.name || sale.name,
+        action: customerCustomExclusionReason(sale.sku)
+      });
+    }
     for (const demand of demandBySku.values()) {
       const masterRecord = input.master.bySku.get(demand.sku);
       const inventory = input.inventory.bySku.get(demand.sku);
@@ -1960,6 +1997,18 @@
       if (input.onlyStoreTransferNeedSkus && !hasStoreTransferNeed) continue;
       if (Math.max(0, demand.recent12Qty) <= 0 && !purchase && !hasStoreTransferNeed) continue;
       const effectiveName = masterRecord?.name || demand.name;
+      if (isAutomaticProcurementExcludedSku(demand.sku)) {
+        if (!customSalesSkus.has(demand.sku)) productExclusions.push({
+            type: CONFIRMED_COMBINATION_SKUS.has(demand.sku) ? "組合品號排除" : "一次性客製品號排除",
+            sourceRow: masterRecord?.sourceRow || "",
+            sku: demand.sku,
+            supplierSku: masterRecord?.supplierSku || "",
+            supplier: masterRecord?.supplier || "未辨識供應商",
+            name: effectiveName,
+            action: customerCustomExclusionReason(demand.sku)
+          });
+        continue;
+      }
       if (masterRecord?.sellThroughStop || isSellThroughStopName(effectiveName)) {
         productExclusions.push({
           type: "品名結尾停採標記(S)",
@@ -2462,6 +2511,10 @@
       const sku = normalizeSku(source.sku);
       const masterRecord = input.master.bySku.get(sku);
       if (!masterRecord) throw new Error(`${sku}不在最新商品主檔；請先更新商品主檔再繼續。`);
+      if (isAutomaticProcurementExcludedSku(sku)) {
+        const nextStep = CONFIRMED_COMBINATION_SKUS.has(sku) ? "不得建立組合成品採購。" : "請改由客製採購流程處理。";
+        throw new Error(`${sku}為${customerCustomExclusionReason(sku)}；${nextStep}`);
+      }
       if (!masterRecord.supplier || !(Number(masterRecord.unitCost) > 0) || !(Number(masterRecord.moq) > 0)) {
         throw new Error(`${sku}的商品主檔缺少供應商、正數進貨價或MOQ。`);
       }
@@ -3317,7 +3370,7 @@
       ["上林檢視期", "固定28天；另加到貨交期與分級安全緩衝；總部／門市／加總需求保留公式", "已確認"],
       ["Excel編輯", "匯出檔不啟用工作表密碼保護；流程上只填人工欄位，系統欄位如被改動會在回匯時拒絕", "已確認"],
       ["付款認列", "國內預計到貨100%；國外下單30%、預計出貨70%；付款分配合計必須等於核准總額", "已確認"],
-      ["一般自動採購排除", "凱信達一次性、歐必斯客訂型、所有總部贈品均不產生一般自動採購", "已確認"],
+      ["一般自動採購排除", "凱信達一次性、歐必斯客訂型、所有總部贈品及SA／OA／SB／OB開頭的一次性客製／組合品均不產生一般自動採購或寄庫", "已確認"],
       ["寄倉處理", LOCKED_RULES.consignmentRule, "核心鎖定"],
       ["期間調撥單", LOCKED_RULES.transferRule, "核心鎖定"],
       ["售完即停(S)", LOCKED_RULES.sellThroughStopRule, "核心鎖定"],
@@ -3564,6 +3617,8 @@
     CONFIRMED_OVERRIDES,
     CONFIRMED_EXCLUSIONS,
     DEMAND_SALE_TYPES,
+    CUSTOM_SKU_PREFIXES,
+    CONFIRMED_COMBINATION_SKUS,
     PROCUREMENT_POLICY,
     SUPPLIER_RULES,
     DEFAULT_SPRING_FESTIVAL_RULE,
@@ -3571,6 +3626,9 @@
     normalizeText,
     normalizeHeader,
     normalizeSku,
+    isAutomaticProcurementExcludedSku,
+    isCustomerCustomSku,
+    customerCustomExclusionReason,
     normalizeName,
     isSellThroughStopName,
     parseNumber,

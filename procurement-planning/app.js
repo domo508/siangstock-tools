@@ -17,7 +17,7 @@
     googleAuthorized: false, modelWorker: null, modelDraft: null,
     baseAnalysis: null, parsedSources: null, workflowType: "system_recommendation",
     newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], storeShortagePermissions: { canDecide: false }, shortageRunMode: "merge_next",
-    purchaseStatusSummary: null, costSummary: null, draftId: "", draftStage: "", latestDraft: null, forecastCostRate: DEFAULT_COST_RATE
+    purchaseStatusSummary: null, costSummary: null, sharedCostSnapshot: null, draftId: "", draftStage: "", latestDraft: null, forecastCostRate: DEFAULT_COST_RATE
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -41,7 +41,7 @@
     excludedResultPanel: get("#excluded-result-panel"), excludedResultCount: get("#excluded-result-count"), excludedResultRows: get("#excluded-result-rows"),
     forecastRevenue: get("#forecast-revenue"), terminalForecastRevenue: get("#terminal-forecast-revenue"), forecastCost: get("#forecast-cost"), targetEndingCost: get("#target-ending-cost"), openingCost: get("#opening-cost"),
     supplierReturns: get("#supplier-returns"), releasedBudget: get("#released-budget"), purchasedToDate: get("#purchased-to-date"), budgetSourceNote: get("#budget-source-note"),
-    saveBudget: get("#save-budget-button"), budgetPlanStatus: get("#budget-plan-status"), budgetSummary: get("#budget-summary"), ledgerStatus: get("#ledger-status"), costBreakdown: get("#cost-breakdown"),
+    saveBudget: get("#save-budget-button"), budgetPlanStatus: get("#budget-plan-status"), budgetSummary: get("#budget-summary"), ledgerStatus: get("#ledger-status"), costBreakdown: get("#cost-breakdown"), costSnapshotStatus: get("#cost-snapshot-status"),
     channelRows: get("#channel-rows"), kuanchengTotal: get("#kuancheng-total"), kuanmuTotal: get("#kuanmu-total"), addChannel: get("#add-channel-button"),
     reviewFile: get("#review-file"), reviewButton: get("#review-button"), secondReviewFile: get("#second-review-file"), confirmReview: get("#confirm-review-button"),
     submitApproval: get("#submit-approval-button"), approve: get("#approve-button"), retryNotification: get("#retry-notification-button"),
@@ -815,6 +815,68 @@
       renderBudget();
     }
   }
+  function effectiveCostSummary() {
+    return state.costSummary || state.sharedCostSnapshot;
+  }
+  function renderCostSnapshotStatus() {
+    if (!elements.costSnapshotStatus) return;
+    const snapshot = state.sharedCostSnapshot;
+    elements.costSnapshotStatus.textContent = snapshot
+      ? `公司共用成本快照：資料截至${snapshot.dataAsOfDate}・由${snapshot.updatedBy}更新於${String(snapshot.updatedAt || "").replace("T", " ").slice(0, 19)}。`
+      : `${elements.month.value}尚無公司共用成本快照；完成一次正式採購建議運算後才會建立。`;
+  }
+  async function loadCostSnapshot() {
+    if (!state.config || !elements.month.value) return;
+    try {
+      const response = await fetch(`/api/procurement/cost-snapshot?month=${encodeURIComponent(elements.month.value)}`, { headers: { Accept: "application/json" }, cache: "no-store" });
+      const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      state.sharedCostSnapshot = result.snapshot || null;
+      if (!state.costSummary && state.sharedCostSnapshot?.forecastCost >= 0) elements.forecastCost.value = String(state.sharedCostSnapshot.forecastCost);
+      renderCostSnapshotStatus(); renderBudget();
+    } catch (error) {
+      state.sharedCostSnapshot = null;
+      if (elements.costSnapshotStatus) elements.costSnapshotStatus.textContent = `公司共用成本快照同步失敗：${error.message}`;
+      renderBudget();
+    }
+  }
+  async function saveCostSnapshot() {
+    if (!state.config?.permissions?.canApprove || !state.costSummary) {
+      renderCostSnapshotStatus();
+      return;
+    }
+    const summary = state.costSummary;
+    try {
+      const result = await postJson("/api/procurement/cost-snapshot", {
+        analysisMonth: elements.month.value,
+        checkpoint: elements.checkpoint.value,
+        dataAsOfDate: [elements.inventoryDate.value, elements.pendingDate.value, elements.transferDate.value, elements.salesDate.value].filter(Boolean).sort().at(-1),
+        inventoryDate: elements.inventoryDate.value,
+        pendingDate: elements.pendingDate.value,
+        transferDate: elements.transferDate.value,
+        salesDate: elements.salesDate.value,
+        forecastCost: Number(elements.forecastCost.value || 0),
+        managementCostToDate: Number(summary.managementCostToDate || 0),
+        actualReceiptCost: Number(summary.actualReceiptCost || 0),
+        directCost: Number(summary.directCost || 0),
+        kuanmuBaseCost: Number(summary.kuanmuBaseCost || 0),
+        kuanmuIntercompanyRevenue: Number(summary.kuanmuIntercompanyRevenue || 0),
+        currentInventoryCost: Number(summary.currentInventoryCost || 0),
+        inventoryBridgeCost: summary.inventoryBridgeCost == null ? null : Number(summary.inventoryBridgeCost),
+        source: summary.source || "actual_weighted",
+        maxSalesDate: summary.maxSalesDate || elements.salesDate.value,
+        transferReceivedCount: Number(summary.transferReceivedCount || 0),
+        b3MatchedCount: Number(summary.b3MatchedCount || 0),
+        warnings: summary.warnings || [],
+        sourceHashes: state.analysis?.meta?.sourceHashes || {},
+        calculationVersion: "20260918-custom-cost-r1"
+      }, {}, "PUT");
+      state.sharedCostSnapshot = result.snapshot;
+      renderCostSnapshotStatus();
+    } catch (error) {
+      if (elements.costSnapshotStatus) elements.costSnapshotStatus.textContent = `本次採購建議已完成，但公司共用成本快照未更新：${error.message}`;
+    }
+  }
   async function loadConfig() {
     try {
       const response = await fetch("/api/procurement/config", { headers: { Accept: "application/json" }, cache: "no-store" });
@@ -831,6 +893,7 @@
       elements.saveBudget.disabled = !state.config.permissions?.canManageBudget;
       elements.addChannel.disabled = !state.config.permissions?.canManageBudget;
       await Promise.all([loadProcurementRules(), loadLedger(), loadMonthPlan(), loadStoreShortageNeeds()]);
+      await loadCostSnapshot();
     } catch (error) {
       state.config = null; elements.accountBadge.textContent = "公司登入驗證失敗";
       elements.sourceStatus.textContent = error.message; elements.sourceStatus.classList.add("error");
@@ -1191,6 +1254,7 @@
       await syncDetectedCustomOrders(pendingReports, master);
       await savePendingSnapshot(pendingReports);
       await persistWorkflowDraft("analysis");
+      await saveCostSnapshot();
       renderBudget(); updateSpecialWorkflowReady(); elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
       state.analysis = null; elements.resultPanel.hidden = true; setStatus(`無法完成：${error.message || "請確認檔案格式"}`, "error");
@@ -1348,10 +1412,11 @@
   }
   function renderBudget() {
     const result = currentBudget(); const revenue = Number(elements.forecastRevenue.value || 0); const terminalRevenue = Number(elements.terminalForecastRevenue.value || 0); const cost = Number(elements.forecastCost.value || 0);
-    const actualCost = state.costSummary?.managementCostToDate;
+    const summary = effectiveCostSummary();
+    const actualCost = summary?.managementCostToDate;
     const cards = [
-      createSummaryCard("最新預估整月成本耗用", formatCurrency(cost), state.costSummary?.source === "actual_weighted" ? `依${state.costSummary.maxSalesDate}前實際成本日均推估` : "資料不足，暫用核准比率備援", "currency"),
-      createSummaryCard("本月至今成本耗用", actualCost == null ? "待匯入" : formatCurrencyPrecise(actualCost), state.costSummary ? "寬承直接成本＋寬沐供貨原始成本" : state.analysis ? "既有舊草稿未保存成本摘要；本次需重新匯入一次" : "匯入本月銷售後自動計算", "currency"),
+      createSummaryCard("最新預估整月成本耗用", formatCurrency(cost), summary?.source === "actual_weighted" ? `依${summary.maxSalesDate}前實際成本日均推估` : "資料不足，暫用核准比率備援", "currency"),
+      createSummaryCard("本月至今成本耗用", actualCost == null ? "待匯入" : formatCurrencyPrecise(actualCost), summary ? "寬承直接成本＋寬沐供貨原始成本" : state.analysis ? "既有舊草稿未保存成本摘要；本次需重新匯入一次" : "匯入本月銷售後自動計算", "currency"),
       createSummaryCard("目前已釋放可採購額度", formatCurrency(result.releasedBudgetAmount), elements.checkpoint.value === "month-start" ? "月初階段額度" : "月中起自動累計釋放整月額度", "currency"),
       createSummaryCard("截至目前已承諾", formatCurrency(result.purchasedAmountToDate), "正式核准互斥狀態加總", "currency"),
       createSummaryCard("截至目前尚可承諾", formatCurrency(result.remainingBudget), result.remainingBudget < 0 ? "已超出額度" : "尚可核准", `currency ${result.remainingBudget < 0 ? "negative" : ""}`)
@@ -1363,7 +1428,6 @@
     }
     elements.budgetSummary.replaceChildren(...cards);
     if (elements.costBreakdown) {
-      const summary = state.costSummary;
       const releaseDetails = `
         <div><span>月初已釋放額度</span><strong>${formatCurrencyPrecise(result.monthStartReleasedAmount)}</strong><small>月份快照設定的第一階段額度</small></div>
         <div><span>月中新增釋放額度</span><strong>${formatCurrencyPrecise(result.additionalReleasedAmount)}</strong><small>${elements.checkpoint.value === "month-start" ? "月中採購時才自動釋放" : "已隨使用時點自動釋放"}</small></div>
@@ -1622,7 +1686,11 @@
     if (element === elements.checkpoint) renderBudget();
     updateReadyState();
   }));
-  elements.month.addEventListener("change", () => { if (state.analysis) invalidateAnalysis(); renderModelStatus(); updateReadyState(); Promise.all([loadLedger(), loadMonthPlan()]); });
+  elements.month.addEventListener("change", () => {
+    if (state.analysis) invalidateAnalysis();
+    state.sharedCostSnapshot = null; renderCostSnapshotStatus(); renderModelStatus(); updateReadyState();
+    Promise.all([loadLedger(), loadMonthPlan()]).then(loadCostSnapshot);
+  });
   elements.forecastRevenue.addEventListener("input", () => { updateAutomaticForecastCost(); markBudgetDirty(); });
   elements.releasedBudget.addEventListener("input", markBudgetDirty);
   elements.budgetSourceNote.addEventListener("input", () => { elements.budgetPlanStatus.textContent = "額度來源註記尚未儲存。"; });

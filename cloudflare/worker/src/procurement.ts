@@ -70,6 +70,13 @@ function month(value: unknown): string {
   return parsed;
 }
 
+function isoDate(value: unknown, label: string): string {
+  const parsed = string(value, label, 10);
+  const timestamp = /^\d{4}-\d{2}-\d{2}$/.test(parsed) ? Date.parse(`${parsed}T00:00:00Z`) : Number.NaN;
+  if (Number.isNaN(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== parsed) throw new RequestValidationError(`${label}格式錯誤。`);
+  return parsed;
+}
+
 function parseJsonText(value: string): unknown {
   try { return JSON.parse(value); } catch { return null; }
 }
@@ -347,6 +354,89 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
     },
     batches
   });
+}
+
+function serializeCostSnapshot(row: Record<string, unknown>) {
+  return {
+    analysisMonth: String(row.analysis_month),
+    checkpoint: String(row.checkpoint),
+    dataAsOfDate: String(row.data_as_of_date),
+    inventoryDate: String(row.inventory_date),
+    pendingDate: String(row.pending_date),
+    transferDate: String(row.transfer_date),
+    salesDate: String(row.sales_date),
+    forecastCost: Number(row.forecast_cost),
+    managementCostToDate: Number(row.management_cost_to_date),
+    actualReceiptCost: Number(row.actual_receipt_cost),
+    directCost: Number(row.direct_cost),
+    kuanmuBaseCost: Number(row.kuanmu_base_cost),
+    kuanmuIntercompanyRevenue: Number(row.kuanmu_intercompany_revenue),
+    currentInventoryCost: Number(row.current_inventory_cost),
+    inventoryBridgeCost: row.inventory_bridge_cost == null ? null : Number(row.inventory_bridge_cost),
+    source: String(row.source),
+    maxSalesDate: row.max_sales_date == null ? "" : String(row.max_sales_date),
+    transferReceivedCount: Number(row.transfer_received_count),
+    b3MatchedCount: Number(row.b3_matched_count),
+    warnings: parseJsonText(String(row.warnings || "[]")) || [],
+    sourceHashes: parseJsonText(String(row.source_hashes || "{}")) || {},
+    calculationVersion: String(row.calculation_version),
+    updatedAt: String(row.updated_at),
+    updatedBy: String(row.updated_by)
+  };
+}
+
+const COST_SNAPSHOT_COLUMNS = "analysis_month, checkpoint, data_as_of_date, inventory_date, pending_date, transfer_date, sales_date, forecast_cost, management_cost_to_date, actual_receipt_cost, direct_cost, kuanmu_base_cost, kuanmu_intercompany_revenue, current_inventory_cost, inventory_bridge_cost, source, max_sales_date, transfer_received_count, b3_matched_count, warnings, source_hashes, calculation_version, updated_at, updated_by";
+
+async function costSnapshot(request: Request, env: ProcurementEnv): Promise<Response> {
+  await verifyCompanyUser(request, procurementAccess(env));
+  const requestedMonth = month(new URL(request.url).searchParams.get("month"));
+  const row = await env.DB.prepare(`SELECT ${COST_SNAPSHOT_COLUMNS} FROM procurement_cost_snapshots WHERE analysis_month = ?`).bind(requestedMonth).first<Record<string, unknown>>();
+  return json({ month: requestedMonth, snapshot: row ? serializeCostSnapshot(row) : null });
+}
+
+async function saveCostSnapshot(request: Request, env: ProcurementEnv): Promise<Response> {
+  requireSameOrigin(request, env);
+  const { email: actor } = await verifyApprover(request, env);
+  const input = await body(request);
+  const analysisMonth = month(input.analysisMonth);
+  const checkpoint = string(input.checkpoint, "使用時點", 20);
+  if (!["month-start", "mid-month", "month-end"].includes(checkpoint)) throw new RequestValidationError("使用時點格式錯誤。");
+  const inventoryDate = isoDate(input.inventoryDate, "庫存截止日");
+  const pendingDate = isoDate(input.pendingDate, "採購單截止日");
+  const transferDate = isoDate(input.transferDate, "調撥單截止日");
+  const salesDate = isoDate(input.salesDate, "銷售截止日");
+  const dataAsOfDate = isoDate(input.dataAsOfDate, "資料截止日");
+  const warnings = Array.isArray(input.warnings) ? input.warnings.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  if (warnings.length > 30 || warnings.some((item) => item.length > 300)) throw new RequestValidationError("成本摘要警示格式錯誤。");
+  const sourceHashesInput = input.sourceHashes && typeof input.sourceHashes === "object" && !Array.isArray(input.sourceHashes) ? input.sourceHashes as Record<string, unknown> : {};
+  const sourceHashes = Object.fromEntries(Object.entries(sourceHashesInput).map(([key, value]) => [String(key).slice(0, 40), String(value || "").slice(0, 128)]));
+  if (Object.keys(sourceHashes).length > 20) throw new RequestValidationError("來源摘要格式錯誤。");
+  const values = {
+    forecastCost: money(input.forecastCost, "預估整月成本耗用"),
+    managementCostToDate: money(input.managementCostToDate, "本月至今成本耗用"),
+    actualReceiptCost: money(input.actualReceiptCost, "實際收貨成本"),
+    directCost: money(input.directCost, "寬承直接成本"),
+    kuanmuBaseCost: money(input.kuanmuBaseCost, "寬沐供貨原始成本"),
+    kuanmuIntercompanyRevenue: money(input.kuanmuIntercompanyRevenue, "寬承對寬沐計價參考"),
+    currentInventoryCost: money(input.currentInventoryCost, "寬承體系庫存成本"),
+    inventoryBridgeCost: input.inventoryBridgeCost == null ? null : money(input.inventoryBridgeCost, "庫存公式驗證", true),
+    transferReceivedCount: Number(input.transferReceivedCount),
+    b3MatchedCount: Number(input.b3MatchedCount)
+  };
+  if (![values.transferReceivedCount, values.b3MatchedCount].every((value) => Number.isSafeInteger(value) && value >= 0 && value <= 10_000_000)) throw new RequestValidationError("成本摘要筆數格式錯誤。");
+  const source = string(input.source, "成本摘要來源", 40);
+  const maxSalesDate = input.maxSalesDate ? isoDate(input.maxSalesDate, "銷售資料最新日期") : null;
+  const calculationVersion = string(input.calculationVersion, "計算版本", 80);
+  const now = new Date().toISOString();
+  const snapshotJson = JSON.stringify({ analysisMonth, checkpoint, dataAsOfDate, inventoryDate, pendingDate, transferDate, salesDate, ...values, source, maxSalesDate, warnings, sourceHashes, calculationVersion });
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO procurement_cost_snapshot_history (analysis_month, checkpoint, data_as_of_date, snapshot, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)").bind(analysisMonth, checkpoint, dataAsOfDate, snapshotJson, now, actor),
+    env.DB.prepare(`INSERT INTO procurement_cost_snapshots (${COST_SNAPSHOT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month) DO UPDATE SET checkpoint = excluded.checkpoint, data_as_of_date = excluded.data_as_of_date, inventory_date = excluded.inventory_date, pending_date = excluded.pending_date, transfer_date = excluded.transfer_date, sales_date = excluded.sales_date, forecast_cost = excluded.forecast_cost, management_cost_to_date = excluded.management_cost_to_date, actual_receipt_cost = excluded.actual_receipt_cost, direct_cost = excluded.direct_cost, kuanmu_base_cost = excluded.kuanmu_base_cost, kuanmu_intercompany_revenue = excluded.kuanmu_intercompany_revenue, current_inventory_cost = excluded.current_inventory_cost, inventory_bridge_cost = excluded.inventory_bridge_cost, source = excluded.source, max_sales_date = excluded.max_sales_date, transfer_received_count = excluded.transfer_received_count, b3_matched_count = excluded.b3_matched_count, warnings = excluded.warnings, source_hashes = excluded.source_hashes, calculation_version = excluded.calculation_version, updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
+      .bind(analysisMonth, checkpoint, dataAsOfDate, inventoryDate, pendingDate, transferDate, salesDate, values.forecastCost, values.managementCostToDate, values.actualReceiptCost, values.directCost, values.kuanmuBaseCost, values.kuanmuIntercompanyRevenue, values.currentInventoryCost, values.inventoryBridgeCost, source, maxSalesDate, values.transferReceivedCount, values.b3MatchedCount, JSON.stringify(warnings), JSON.stringify(sourceHashes), calculationVersion, now, actor)
+  ]);
+  const row = await env.DB.prepare(`SELECT ${COST_SNAPSHOT_COLUMNS} FROM procurement_cost_snapshots WHERE analysis_month = ?`).bind(analysisMonth).first<Record<string, unknown>>();
+  if (!row) throw new RequestValidationError("公司共用成本快照儲存失敗。", 503);
+  return json({ month: analysisMonth, snapshot: serializeCostSnapshot(row) });
 }
 
 function serializeMonthPlan(row: Record<string, unknown>) {
@@ -688,6 +778,8 @@ export async function procurementRoute(request: Request, env: ProcurementEnv): P
   if (shortageCloseMatch && request.method === "POST") return closeStoreShortageNeed(request, env, decodeURIComponent(shortageCloseMatch[1]), decodeURIComponent(shortageCloseMatch[2]));
   if (url.pathname === "/api/procurement/month-plan" && request.method === "GET") return monthPlan(request, env);
   if (url.pathname === "/api/procurement/month-plan" && request.method === "PUT") return saveMonthPlan(request, env);
+  if (url.pathname === "/api/procurement/cost-snapshot" && request.method === "GET") return costSnapshot(request, env);
+  if (url.pathname === "/api/procurement/cost-snapshot" && request.method === "PUT") return saveCostSnapshot(request, env);
   if (url.pathname === "/api/procurement/batches" && request.method === "POST") return submit(request, env);
   if (url.pathname === "/api/procurement/manual-orders" && request.method === "POST") return importManualOrder(request, env);
   const approveMatch = url.pathname.match(/^\/api\/procurement\/batches\/([^/]+)\/approve$/);

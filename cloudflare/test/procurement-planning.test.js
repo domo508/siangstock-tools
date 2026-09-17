@@ -119,7 +119,7 @@ describe("採購規劃核心鎖定公式", () => {
     expect(core.resolveReleasedBudgetAmount({ checkpoint: "month-end", fullBudgetAmount: 2659538.3, monthStartReleasedAmount: 1329769.15 }).releasedBudgetAmount).toBe(2659538.3);
   });
 
-  it("只以明確客製備註辨識客訂，並排除一般未到貨淨需求", () => {
+  it("以明確客製備註辨識客訂，並排除一般未到貨淨需求", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
       ["單據編碼:", "ERP-CUSTOM-1", "採購日期:", "2026-09-14", "廠商名稱:", "普優瑪", "備註:", "台北/新竹 客製"],
@@ -135,6 +135,63 @@ describe("採購規劃核心鎖定公式", () => {
     const pending = core.aggregatePendingReports([report]);
     expect(pending.bySku.size).toBe(0);
     expect(pending.customRecords).toHaveLength(2);
+  });
+
+  it("SA／OA／SB／OB品號固定排除一般需求，四筆SEMO另列組合品原因", () => {
+    ["SA832", "OA568", "SB1005", "OB129"].forEach((sku) => expect(core.isCustomerCustomSku(sku)).toBe(true));
+    expect(core.isCustomerCustomSku("OA41361")).toBe(false);
+    expect(core.isAutomaticProcurementExcludedSku("OA41361")).toBe(true);
+    expect(core.isCustomerCustomSku("A41361")).toBe(false);
+    expect(core.customerCustomExclusionReason("OA41361")).toContain("組合品號");
+    expect(core.customerCustomExclusionReason("OA568")).toContain("一次性客製");
+
+    const pendingWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(pendingWorkbook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "採購價", "數量", "金額", "備註"],
+      ["OA568", "客製床包", 500, 2, 1000, "台北"]
+    ]), "工作表1");
+    const pendingReport = core.parsePendingPurchaseWorkbook(pendingWorkbook, XLSX, { fileName: "客製前綴採購.xlsx" });
+    expect(pendingReport.records[0]).toMatchObject({ sku: "OA568", isCustomOrder: true, customChannel: "" });
+    expect(core.aggregatePendingReports([pendingReport]).bySku.size).toBe(0);
+
+    const combinationWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(combinationWorkbook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "採購價", "數量", "金額", "備註"],
+      ["OA41361", "SEMO組合品", 600, 1, 600, ""]
+    ]), "工作表1");
+    const combinationReport = core.parsePendingPurchaseWorkbook(combinationWorkbook, XLSX, { fileName: "組合品.xlsx" });
+    expect(combinationReport.records[0]).toMatchObject({ sku: "OA41361", isCustomOrder: false, automaticProcurementExcluded: true });
+    expect(core.aggregatePendingReports([combinationReport]).bySku.size).toBe(0);
+    expect(core.aggregatePendingReports([combinationReport]).customRecords).toHaveLength(0);
+
+    const masterWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(masterWorkbook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "供應商貨號", "供應商簡稱", "進貨價", "最小配貨數", "貨品狀態", "已下架"],
+      ["A1", "一般床包", "V-A1", "普優瑪", 500, 1, "尚可追加", "否"],
+      ["OA568", "90X200X25客製床包", "V-OA568", "普優瑪", 500, 1, "尚可追加", "否"],
+      ["OA41361", "SEMO組合品", "V-OA41361", "家禾", 600, 1, "尚未生產", "否"]
+    ]), "工作表1");
+    const salesWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(salesWorkbook, XLSX.utils.aoa_to_sheet([
+      ["銷別", "結帳時間", "貨號", "品名", "銷售量", "實收金額", "開單倉編號", "開單倉名稱"],
+      ["銷貨", "2026-08-25 12:00:00", "A1", "一般床包", 20, 20000, "R00", "台北門市"],
+      ["銷貨", "2026-08-25 12:00:00", "OA568", "客製床包", 2, 2000, "R00", "台北門市"],
+      ["銷貨", "2026-08-25 12:00:00", "OA41361", "SEMO組合品", 1, 1000, "R00", "台北門市"]
+    ]), "工作表1");
+    const recommendations = core.buildProcurementRecommendations({
+      master: core.parseProductMasterWorkbook(masterWorkbook, XLSX), inventory: makeInventory(), pendingReports: [], consignment: makeConsignment(),
+      salesReports: [core.parseSalesWorkbook(salesWorkbook, XLSX)], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", checkpoint: "mid-month"
+    });
+    expect(recommendations.rows.map((row) => row.sku)).toContain("A1");
+    expect(recommendations.rows.some((row) => core.isCustomerCustomSku(row.sku))).toBe(false);
+    expect(recommendations.productExclusions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sku: "OA568", type: "一次性客製品號排除" }),
+      expect.objectContaining({ sku: "OA41361", type: "組合品號排除" })
+    ]));
+    expect(() => core.buildSpecialProcurementAnalysis({
+      baseAnalysis: recommendations, workflowType: "new_product", rows: [{ sku: "OA568", firstMonthQty: 2 }],
+      master: core.parseProductMasterWorkbook(masterWorkbook, XLSX), inventory: makeInventory(), pendingReports: []
+    })).toThrow(/客製採購流程/);
   });
 
   it("全部狀態採購單會排除新單與已結案未交量，並按實際交貨日計入收貨成本", () => {
@@ -953,6 +1010,15 @@ describe("採購規劃前台與入口", () => {
     const toolApp = readFileSync("../procurement-planning/app.js", "utf8");
     const procurementWorker = readFileSync("worker/src/procurement.ts", "utf8");
     expect(toolApp).toContain("/api/procurement/month-plan");
+    expect(toolApp).toContain("/api/procurement/cost-snapshot");
+    expect(toolHtml).toContain('id="cost-snapshot-status"');
+    expect(toolHtml).toContain("SA、OA、SB、OB開頭品號排除一般採購與寄庫");
+    expect(toolHtml).toContain("20260918-custom-cost-r1");
+    expect(procurementWorker).toContain('/api/procurement/cost-snapshot');
+    const costSnapshotMigration = readFileSync("worker/migrations/0021_procurement_cost_snapshots.sql", "utf8");
+    expect(costSnapshotMigration).toContain("CREATE TABLE procurement_cost_snapshots");
+    expect(costSnapshotMigration).toContain("source_hashes");
+    expect(costSnapshotMigration).not.toMatch(/file_name|excel|raw_rows/i);
     expect(procurementWorker).toContain("VALUES (?, 'neutral', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month)");
     expect(procurementWorker).not.toContain("VALUES (?, 'neutral', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month)");
     expect(toolApp).toContain('setAutomaticSourceBusy(true, "正在取得 4 項最新資料…")');
