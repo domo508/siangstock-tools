@@ -97,6 +97,7 @@ export default {
     } catch (error) {
       if (error instanceof Response) return new Response(error.body, { status: error.status, headers: API_HEADERS });
       if (error instanceof RequestValidationError) return errorResponse(error.message, error.status);
+      console.error("Unhandled Worker error", error);
       return errorResponse("規則服務暫時無法使用。", 503);
     }
   },

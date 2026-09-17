@@ -921,7 +921,10 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("補登已採購單");
     expect(toolHtml).toContain('id="active-ledger-rows"');
     const toolApp = readFileSync("../procurement-planning/app.js", "utf8");
+    const procurementWorker = readFileSync("worker/src/procurement.ts", "utf8");
     expect(toolApp).toContain("/api/procurement/month-plan");
+    expect(procurementWorker).toContain("VALUES (?, 'neutral', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month)");
+    expect(procurementWorker).not.toContain("VALUES (?, 'neutral', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month)");
     expect(toolApp).toContain('setAutomaticSourceBusy(true, "正在取得 4 項最新資料…")');
     expect(toolApp).toContain('completed ? "重新取得最新資料" : "重試取得最新資料"');
     expect(toolApp).toContain("forecastRevenue: Number(elements.forecastRevenue.value || 0)");
