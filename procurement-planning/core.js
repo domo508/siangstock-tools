@@ -1514,6 +1514,19 @@
     };
   }
 
+  function resolveReleasedBudgetAmount(input) {
+    const fullBudgetAmount = Math.max(0, Number(input.fullBudgetAmount || 0));
+    const monthStartReleasedAmount = Math.max(0, Math.min(fullBudgetAmount, Number(input.monthStartReleasedAmount || 0)));
+    const checkpoint = String(input.checkpoint || "month-start");
+    const releasedBudgetAmount = checkpoint === "month-start" ? monthStartReleasedAmount : fullBudgetAmount;
+    return {
+      checkpoint,
+      monthStartReleasedAmount,
+      additionalReleasedAmount: Math.max(0, releasedBudgetAmount - monthStartReleasedAmount),
+      releasedBudgetAmount
+    };
+  }
+
   function inferMaterialCategory(masterRecord, fallbackName = "") {
     const combined = [
       masterRecord?.name,
@@ -3590,6 +3603,7 @@
     calculatePaymentSchedule,
     evaluateConsignmentSupply,
     calculatePurchaseBudget,
+    resolveReleasedBudgetAmount,
     inferMaterialCategory,
     classifyPuyoumaPurchaseTab,
     puyoumaConsignmentGroup,

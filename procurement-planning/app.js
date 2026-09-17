@@ -206,7 +206,7 @@
       version: WORKFLOW_CACHE.version, id: state.draftId, stage, updatedAt: new Date().toISOString(),
       analysis: state.analysis, baseAnalysis: state.baseAnalysis === state.analysis ? null : state.baseAnalysis, workflowType: state.workflowType,
       selectedSuppliers: [...state.selectedSuppliers], returnScope: state.returnScope ? [...state.returnScope] : null,
-      firstReview: state.firstReview, review: state.review, purchaseStatusSummary: state.purchaseStatusSummary,
+      firstReview: state.firstReview, review: state.review, purchaseStatusSummary: state.purchaseStatusSummary, costSummary: state.costSummary,
       consignmentStyleAudit: state.consignmentSource?.styleAudit || { pinkDetected: false, pinkCells: 0 },
       controls: { month: elements.month.value, checkpoint: elements.checkpoint.value, orderDate: elements.orderDate.value, inventoryDate: elements.inventoryDate.value, pendingDate: elements.pendingDate.value, transferDate: elements.transferDate.value, consignmentDate: elements.consignmentDate.value, salesDate: elements.salesDate.value }
     };
@@ -254,8 +254,9 @@
     });
     state.analysis = draft.analysis; state.baseAnalysis = draft.baseAnalysis || draft.analysis; state.workflowType = draft.workflowType || "system_recommendation";
     const restoredSuppliers = new Set(draft.selectedSuppliers || []); state.returnScope = draft.returnScope ? new Set(draft.returnScope) : null;
-    state.firstReview = draft.firstReview || null; state.review = draft.review || null; state.purchaseStatusSummary = draft.purchaseStatusSummary || null; state.consignmentSource = { styleAudit: draft.consignmentStyleAudit || { pinkDetected: false, pinkCells: 0 } };
+    state.firstReview = draft.firstReview || null; state.review = draft.review || null; state.purchaseStatusSummary = draft.purchaseStatusSummary || null; state.costSummary = draft.costSummary || null; state.consignmentSource = { styleAudit: draft.consignmentStyleAudit || { pinkDetected: false, pinkCells: 0 } };
     state.draftId = draft.id; state.draftStage = draft.stage; state.latestDraft = draft;
+    updateAutomaticForecastCost();
     renderSummary(state.analysis, state.consignmentSource); state.selectedSuppliers = restoredSuppliers; updateSupplierChecks(); elements.resultPanel.hidden = false;
     resetReviewWorkflow();
     state.firstReview = draft.firstReview || null; state.review = draft.review || null;
@@ -1338,16 +1339,20 @@
     const calculated = core.calculatePurchaseBudget({ forecastCostOutflow: read(elements.forecastCost), targetEndingInventoryCost: read(elements.targetEndingCost),
       openingInventoryCost: read(elements.openingCost), expectedSupplierReturns: read(elements.supplierReturns), purchasedAmountToDate: read(elements.purchasedToDate) });
     const fullBudgetAmount = calculated.availableBudget;
-    const releasedBudgetAmount = Number(elements.releasedBudget.value || 0);
-    return { ...calculated, fullBudgetAmount, availableBudget: releasedBudgetAmount, releasedBudgetAmount, remainingBudget: releasedBudgetAmount - calculated.purchasedAmountToDate };
+    const release = core.resolveReleasedBudgetAmount({
+      checkpoint: elements.checkpoint.value,
+      fullBudgetAmount,
+      monthStartReleasedAmount: Number(elements.releasedBudget.value || 0)
+    });
+    return { ...calculated, ...release, fullBudgetAmount, availableBudget: release.releasedBudgetAmount, remainingBudget: release.releasedBudgetAmount - calculated.purchasedAmountToDate };
   }
   function renderBudget() {
     const result = currentBudget(); const revenue = Number(elements.forecastRevenue.value || 0); const terminalRevenue = Number(elements.terminalForecastRevenue.value || 0); const cost = Number(elements.forecastCost.value || 0);
     const actualCost = state.costSummary?.managementCostToDate;
     const cards = [
       createSummaryCard("最新預估整月成本耗用", formatCurrency(cost), state.costSummary?.source === "actual_weighted" ? `依${state.costSummary.maxSalesDate}前實際成本日均推估` : "資料不足，暫用核准比率備援", "currency"),
-      createSummaryCard("本月至今成本耗用", actualCost == null ? "待匯入" : formatCurrencyPrecise(actualCost), state.costSummary ? "寬承直接成本＋寬沐供貨原始成本" : "匯入本月銷售後自動計算", "currency"),
-      createSummaryCard("目前已釋放可採購額度", formatCurrency(result.releasedBudgetAmount), state.monthPlan && !state.budgetDirty ? "已核准月份快照" : "最高權限設定", "currency"),
+      createSummaryCard("本月至今成本耗用", actualCost == null ? "待匯入" : formatCurrencyPrecise(actualCost), state.costSummary ? "寬承直接成本＋寬沐供貨原始成本" : state.analysis ? "既有舊草稿未保存成本摘要；本次需重新匯入一次" : "匯入本月銷售後自動計算", "currency"),
+      createSummaryCard("目前已釋放可採購額度", formatCurrency(result.releasedBudgetAmount), elements.checkpoint.value === "month-start" ? "月初階段額度" : "月中起自動累計釋放整月額度", "currency"),
       createSummaryCard("截至目前已承諾", formatCurrency(result.purchasedAmountToDate), "正式核准互斥狀態加總", "currency"),
       createSummaryCard("截至目前尚可承諾", formatCurrency(result.remainingBudget), result.remainingBudget < 0 ? "已超出額度" : "尚可核准", `currency ${result.remainingBudget < 0 ? "negative" : ""}`)
     ];
@@ -1359,13 +1364,17 @@
     elements.budgetSummary.replaceChildren(...cards);
     if (elements.costBreakdown) {
       const summary = state.costSummary;
-      elements.costBreakdown.innerHTML = summary ? `
+      const releaseDetails = `
+        <div><span>月初已釋放額度</span><strong>${formatCurrencyPrecise(result.monthStartReleasedAmount)}</strong><small>月份快照設定的第一階段額度</small></div>
+        <div><span>月中新增釋放額度</span><strong>${formatCurrencyPrecise(result.additionalReleasedAmount)}</strong><small>${elements.checkpoint.value === "month-start" ? "月中採購時才自動釋放" : "已隨使用時點自動釋放"}</small></div>
+        <div><span>累計已釋放額度</span><strong>${formatCurrencyPrecise(result.releasedBudgetAmount)}</strong><small>首頁尚可承諾以此金額扣除正式承諾</small></div>`;
+      elements.costBreakdown.innerHTML = summary ? `${releaseDetails}
         <div><span>寬承直接銷售成本</span><strong>${formatCurrencyPrecise(summary.directCost)}</strong><small>所有線上通路＋R00、R01；依進貨價金額</small></div>
         <div><span>寬沐門市供貨原始成本</span><strong>${formatCurrencyPrecise(summary.kuanmuBaseCost)}</strong><small>調撥收貨${summary.transferReceivedCount}筆＋B3配對${summary.b3MatchedCount}筆</small></div>
         <div><span>寬承對寬沐計價參考</span><strong>${formatCurrencyPrecise(summary.kuanmuIntercompanyRevenue)}</strong><small>原始成本×1.11；合併檢視時抵銷</small></div>
         <div><span>本月實際收貨成本</span><strong>${formatCurrencyPrecise(summary.actualReceiptCost)}</strong><small>依採購單實際交貨日</small></div>
         <div><span>目前寬承體系庫存成本</span><strong>${formatCurrencyPrecise(summary.currentInventoryCost)}</strong><small>總倉＋R00＋R01；不含寬沐門市</small></div>
-        <div><span>庫存公式驗證</span><strong>${summary.inventoryBridgeCost == null ? "待月初快照" : formatCurrencyPrecise(summary.inventoryBridgeCost)}</strong><small>${escapeHtml(summary.warnings.join(" ") || "期初＋收貨－退貨－目前庫存")}</small></div>` : '<p class="budget-note">匯入本月銷售、最新庫存、全部狀態採購單與期間調撥單後，系統會在此拆解成本。</p>';
+        <div><span>庫存公式驗證</span><strong>${summary.inventoryBridgeCost == null ? "待月初快照" : formatCurrencyPrecise(summary.inventoryBridgeCost)}</strong><small>${escapeHtml(summary.warnings.join(" ") || "期初＋收貨－退貨－目前庫存")}</small></div>` : `${releaseDetails}<p class="budget-note">匯入本月銷售、最新庫存、全部狀態採購單與期間調撥單後，系統會在此拆解成本。</p>`;
     }
     if (state.analysis) renderSelectedAnalysis();
   }
@@ -1391,7 +1400,7 @@
         openingInventoryCost: Number(elements.openingCost.value || 0),
         expectedSupplierReturns: Number(elements.supplierReturns.value || 0),
         fullBudgetAmount: budget.fullBudgetAmount,
-        releasedBudgetAmount: budget.releasedBudgetAmount,
+        releasedBudgetAmount: Number(elements.releasedBudget.value || 0),
         sourceNote
       }, {}, "PUT");
       applyMonthPlan(result.plan);
@@ -1610,6 +1619,7 @@
   });
   [elements.checkpoint, elements.orderDate, elements.inventoryDate, elements.pendingDate, elements.transferDate, elements.consignmentDate, elements.salesDate].forEach((element) => element.addEventListener("change", () => {
     if (state.analysis) invalidateAnalysis();
+    if (element === elements.checkpoint) renderBudget();
     updateReadyState();
   }));
   elements.month.addEventListener("change", () => { if (state.analysis) invalidateAnalysis(); renderModelStatus(); updateReadyState(); Promise.all([loadLedger(), loadMonthPlan()]); });

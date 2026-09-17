@@ -109,6 +109,16 @@ function makeForecastModel() {
 }
 
 describe("採購規劃核心鎖定公式", () => {
+  it("月初只釋放第一階段額度，月中與月底自動累計釋放整月額度", () => {
+    expect(core.resolveReleasedBudgetAmount({ checkpoint: "month-start", fullBudgetAmount: 2659538.3, monthStartReleasedAmount: 1329769.15 })).toEqual({
+      checkpoint: "month-start", monthStartReleasedAmount: 1329769.15, additionalReleasedAmount: 0, releasedBudgetAmount: 1329769.15
+    });
+    expect(core.resolveReleasedBudgetAmount({ checkpoint: "mid-month", fullBudgetAmount: 2659538.3, monthStartReleasedAmount: 1329769.15 })).toEqual({
+      checkpoint: "mid-month", monthStartReleasedAmount: 1329769.15, additionalReleasedAmount: 1329769.15, releasedBudgetAmount: 2659538.3
+    });
+    expect(core.resolveReleasedBudgetAmount({ checkpoint: "month-end", fullBudgetAmount: 2659538.3, monthStartReleasedAmount: 1329769.15 }).releasedBudgetAmount).toBe(2659538.3);
+  });
+
   it("只以明確客製備註辨識客訂，並排除一般未到貨淨需求", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
