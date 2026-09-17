@@ -399,6 +399,24 @@
 .budget-details > summary:focus-visible { outline: 3px solid rgba(23, 107, 135, 0.24); outline-offset: -3px; }
 .budget-detail-body { padding: 4px 18px 18px; }
 .budget-note { margin: 14px 0 0; color: var(--muted); line-height: 1.6; font-size: 0.9rem; }
+.resume-draft-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+  margin: 0 0 18px;
+  padding: 16px 18px;
+  border: 1px solid #a8d3c5;
+  border-left: 6px solid #2f725b;
+  border-radius: 16px;
+  background: var(--soft-green);
+}
+.resume-draft-card[hidden] { display: none; }
+.resume-draft-card p { margin: 4px 0 0; color: var(--muted); }
+.resume-draft-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.resume-file-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 18px; color: var(--muted); font-size: .9rem; }
+.file-button-inline { position: relative; overflow: hidden; cursor: pointer; }
+.file-button-inline input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 
 .supplier-filter {
   margin-bottom: 18px;
@@ -611,6 +629,8 @@
   .source-file-link { width: 100%; justify-content: space-between; }
   .budget-grid .budget-source-field { grid-column: auto; }
   .procurement-period p { grid-column: auto; }
+  .resume-draft-card { align-items: stretch; flex-direction: column; }
+  .resume-draft-actions button { flex: 1; }
 }
 .store-shortage-card {
   margin: 24px 0;

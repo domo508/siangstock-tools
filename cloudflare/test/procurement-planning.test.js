@@ -127,6 +127,25 @@ describe("採購規劃核心鎖定公式", () => {
     expect(pending.customRecords).toHaveLength(2);
   });
 
+  it("全部狀態採購單會排除新單與已結案未交量，並按實際交貨日計入收貨成本", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["採購單編碼", "狀態", "單據是否關閉", "收貨單開單日", "貨號", "品名", "採購數量", "交貨數量", "未交數量", "採購價"],
+      ["PR-DRAFT", "新單", "否", "", "A1", "草稿", 2, 0, 2, 500],
+      ["PR-OPEN", "主管審核", "否", "", "A1", "正式未到貨", 3, 0, 3, 500],
+      ["PR-PARTIAL-CLOSED", "部分到貨", "是", "2026-09-11", "A2", "部分到貨已結案", 4, 3, 1, 600],
+      ["PR-PARTIAL-OPEN", "部分到貨", "否", "2026-09-12", "A3", "部分到貨未結案", 5, 2, 3, 700],
+      ["PR-FULL", "已全部到貨", "是", "2026-08-31", "A4", "前月收貨", 1, 1, 0, 800]
+    ]), "工作表1");
+    const report = core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: "全部狀態.xlsx" });
+    const pending = core.aggregatePendingReports([report]);
+    const summary = core.summarizePurchaseReports([report], "2026-09");
+    expect(pending.bySku.get("A1").quantity).toBe(3);
+    expect(pending.bySku.has("A2")).toBe(false);
+    expect(pending.bySku.get("A3").quantity).toBe(3);
+    expect(summary).toMatchObject({ actualReceiptCost: 3200, receiptDocumentCount: 2, pendingQuantity: 6, draftDocumentCount: 1, closedPartialDocumentCount: 1 });
+  });
+
   it("新品首批名單需含上市日、通路與首月預估量", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
@@ -854,7 +873,8 @@ describe("採購規劃前台與入口", () => {
     expect(styleRuntimeIndex).toBeGreaterThan(styleScriptIndex);
     expect(readerScriptIndex).toBeGreaterThan(styleRuntimeIndex);
     expect(toolAppSource).toContain("const outputXlsx = globalThis.ProcurementXlsxWriter || globalThis.XLSX");
-    expect(toolAppSource).toContain("outputXlsx.writeFile(core.buildRecommendationWorkbook(state.analysis, outputXlsx");
+    expect(toolAppSource).toContain("const workbook = core.buildRecommendationWorkbook(state.analysis, outputXlsx");
+    expect(toolAppSource).toContain("appendWorkflowSnapshotSheet(workbook");
     expect(toolAppSource).toContain("XLSX.writeFile(core.buildErpPurchaseWorkbook(state.review, XLSX");
     expect(toolAppSource).toContain("if (state.firstReview.errors.length) renderWorkflowErrors");
     expect(toolHtml).toContain('id="workflow-errors"');

@@ -6,7 +6,7 @@
     releaseRule: "月初依熱銷70%、穩定50%、低銷0%分批釋放；月中與月底依最新缺口重新計算。",
     consignmentRule: "工廠寄倉可拉貨量不得扣減淨採購需求；只用於供貨分配、交期核對與缺貨警示。",
     shortageAction: "寄倉現貨與可按時完成量不足時，顯示缺貨警示並新增寄庫單；不提供改向其他供應商採購。",
-    pendingPurchaseRule: "未到貨採購單每次完整重匯，不沿用上次清單。",
+    pendingPurchaseRule: "採購單每次完整重匯；新單視為草稿不占用，主管審核與未結案部分到貨只扣未交量，已結案或全部到貨不再扣未到貨。",
     transferRule: "期間調撥單依庫存截止日還原在途狀態：提交須保留調出倉並預計入調入倉；發貨審核因ERP已扣調出倉，只預計入調入倉；收貨審核因ERP已入庫，不重複調整。",
     blacklistRule: "一次性代工品由人工以ERP品號或完整品名加入黑名單，不做系統猜測。",
     sellThroughStopRule: "只有品名結尾的獨立括號標記(S)視為已斷貨、售完即停；停止對外採購與新增寄庫，但保留線上銷售及門市由總倉現貨調撥去化。",
@@ -117,14 +117,24 @@
     },
     pending: {
       fields: {
+        documentCode: ["採購單編碼", "單據編碼", "採購單號", "單據號"],
+        status: ["狀態", "單據狀態"],
+        supplier: ["廠商名稱", "供應商名稱", "供應商", "廠商"],
         sku: ["貨號", "ERP品號", "商品編號", "品號", "sku"],
         name: ["品名", "商品名稱", "商品品名"],
-        quantity: ["數量", "採購數量", "未到貨數量"],
+        orderedQuantity: ["採購數量", "訂購數量", "數量"],
+        deliveredQuantity: ["交貨數量", "已交數量", "已到貨數量", "收貨數量"],
+        remainingQuantity: ["未交數量", "待交數量", "未到貨數量"],
         unitCost: ["採購價", "進貨價", "未稅進貨價", "單價"],
-        amount: ["金額", "採購金額", "未稅金額", "合計"],
-        remark: ["備註", "明細備註"]
+        amount: ["採購額", "金額", "採購金額", "未稅金額", "合計"],
+        remark: ["備註", "明細備註"],
+        purchaseDate: ["採購日期", "開單日期", "建立日期"],
+        expectedDeliveryDate: ["預計交貨時間", "預計交貨日期", "預計到貨日期", "交期"],
+        receiptDate: ["收貨單開單日", "實際交貨日期", "到貨日期", "收貨日期", "全都到貨日期"],
+        fullyReceived: ["已全部到貨", "全部到貨"],
+        documentClosed: ["單據是否關閉", "單據已關閉", "已關閉", "結案"]
       },
-      required: ["sku", "quantity"]
+      required: ["sku", "orderedQuantity"]
     },
     transfer: {
       fields: {
@@ -174,6 +184,12 @@
     warehouseCode: "店倉編號",
     warehouseName: "店倉名稱",
     quantity: "數量",
+    orderedQuantity: "採購數量",
+    deliveredQuantity: "交貨數量",
+    remainingQuantity: "未交數量",
+    receiptDate: "實際交貨日期",
+    fullyReceived: "已全部到貨",
+    documentClosed: "單據已關閉",
     inventoryCost: "庫存成本",
     amount: "金額",
     remark: "備註",
@@ -314,7 +330,7 @@
     const inspection = inspectWorkbook(workbook, XLSX, schemaName);
     const selected = inspection.sheets[0];
     if (!selected || !selected.validation.valid) {
-      const sourceLabel = ({ master: "商品主檔", inventory: "庫存檔", pending: "未到貨採購單", transfer: "期間調撥單", sales: "銷售明細" })[schemaName] || schemaName;
+      const sourceLabel = ({ master: "商品主檔", inventory: "庫存檔", pending: "採購單（全部狀態）", transfer: "期間調撥單", sales: "銷售明細" })[schemaName] || schemaName;
       throw new Error(`${sourceLabel}缺少：${selected?.validation.missing.join("、") || "可讀取的工作表"}`);
     }
     return selected;
@@ -447,25 +463,58 @@
       supplier: findLabelValue(headerRows, "廠商名稱"),
       remark: findLabelValue(headerRows, "備註")
     };
+    const hasLifecycleColumns = ["status", "deliveredQuantity", "remainingQuantity", "receiptDate", "fullyReceived", "documentClosed"]
+      .some((field) => selected.mapping[field] != null);
+    const isAffirmative = (value) => /^(?:是|有|true|yes|y|1|已關閉|已完成|完成)$/i.test(String(value == null ? "" : value).normalize("NFKC").trim());
     const records = [];
     for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
       const row = selected.rows[index];
       const sku = normalizeSku(valueAt(row, selected.mapping, "sku"));
-      const quantity = parseNumber(valueAt(row, selected.mapping, "quantity"));
-      if (!sku || quantity == null || quantity === 0) continue;
+      const orderedQuantity = parseNumber(valueAt(row, selected.mapping, "orderedQuantity"));
+      if (!sku || orderedQuantity == null) continue;
+      const deliveredQuantity = Math.max(0, Number(parseNumber(valueAt(row, selected.mapping, "deliveredQuantity")) || 0));
+      const remainingCell = parseNumber(valueAt(row, selected.mapping, "remainingQuantity"));
+      const status = String(valueAt(row, selected.mapping, "status") || "").normalize("NFKC").trim();
+      const statusKey = normalizeText(status);
+      const documentClosed = isAffirmative(valueAt(row, selected.mapping, "documentClosed"));
+      const fullyReceived = isAffirmative(valueAt(row, selected.mapping, "fullyReceived")) || /(?:已)?全部到貨|全數到貨/.test(statusKey);
+      const draft = /^(?:新單|草稿|暫存)$/.test(statusKey);
+      const rawRemainingQuantity = remainingCell == null ? Number(orderedQuantity || 0) - deliveredQuantity : remainingCell;
+      const quantity = hasLifecycleColumns
+        ? ((draft || documentClosed || fullyReceived) ? 0 : Math.max(0, rawRemainingQuantity))
+        : Math.max(0, Number(orderedQuantity || 0));
+      if (quantity === 0 && deliveredQuantity === 0 && Number(orderedQuantity || 0) === 0) continue;
       const unitCost = parseNumber(valueAt(row, selected.mapping, "unitCost"));
-      let amount = parseNumber(valueAt(row, selected.mapping, "amount"));
-      if (amount == null && unitCost != null) amount = quantity * unitCost;
+      const orderedAmount = parseNumber(valueAt(row, selected.mapping, "amount"));
+      let amount = unitCost != null ? quantity * unitCost : null;
+      if (amount == null && orderedAmount != null && orderedQuantity) amount = orderedAmount * quantity / orderedQuantity;
       const remark = String(valueAt(row, selected.mapping, "remark") || "").trim();
       const customText = `${metadata.remark} ${remark}`.trim();
       const isCustomOrder = /客製/.test(customText);
+      const receiptDate = parseDateValue(valueAt(row, selected.mapping, "receiptDate"));
+      const expectedDeliveryDate = parseDateValue(valueAt(row, selected.mapping, "expectedDeliveryDate")) || parseDateValue(metadata.deliveryDate);
       records.push({
         sourceRow: index + 1,
+        documentCode: String(valueAt(row, selected.mapping, "documentCode") || metadata.documentCode || "").trim(),
+        supplier: String(valueAt(row, selected.mapping, "supplier") || metadata.supplier || "").trim(),
+        status,
         sku,
         name: String(valueAt(row, selected.mapping, "name") || "").trim(),
         quantity,
+        orderedQuantity: Math.max(0, Number(orderedQuantity || 0)),
+        deliveredQuantity,
+        remainingQuantity: Math.max(0, rawRemainingQuantity),
         unitCost,
         amount: amount || 0,
+        orderedAmount: orderedAmount == null ? (unitCost == null ? 0 : Number(orderedQuantity || 0) * unitCost) : orderedAmount,
+        actualReceiptCost: unitCost == null ? 0 : deliveredQuantity * unitCost,
+        purchaseDate: parseDateValue(valueAt(row, selected.mapping, "purchaseDate")) || parseDateValue(metadata.purchaseDate),
+        expectedDeliveryDate,
+        receiptDate,
+        draft,
+        fullyReceived,
+        documentClosed,
+        hasLifecycleColumns,
         remark,
         isCustomOrder,
         customChannel: isCustomOrder ? (remark || metadata.remark).replace(/客製/g, "").trim() : "",
@@ -476,7 +525,7 @@
       fileName: options.fileName || "",
       sheetName: selected.name,
       records,
-      metadata: { ...metadata, isCustomOrder: records.some((row) => row.isCustomOrder) }
+      metadata: { ...metadata, hasLifecycleColumns, isCustomOrder: records.some((row) => row.isCustomOrder) }
     };
   }
 
@@ -1159,7 +1208,7 @@
     const bySku = new Map();
     const records = reports.flatMap((report) => report.records);
     for (const row of records) {
-      if (row.isCustomOrder) continue;
+      if (row.isCustomOrder || row.quantity <= 0) continue;
       if (!bySku.has(row.sku)) {
         bySku.set(row.sku, { sku: row.sku, name: row.name, quantity: 0, amount: 0, files: new Set(), sourceRows: [], deliveries: [] });
       }
@@ -1168,12 +1217,31 @@
       aggregated.amount += row.amount;
       aggregated.files.add(row.fileName);
       aggregated.sourceRows.push(`${row.fileName || "採購單"}#${row.sourceRow}`);
-      const report = reports.find((item) => (item.records || []).includes(row));
-      const deliveryDate = parseDateValue(report?.metadata?.deliveryDate);
-      aggregated.deliveries.push({ quantity: row.quantity, deliveryDate });
+      aggregated.deliveries.push({ quantity: row.quantity, deliveryDate: row.expectedDeliveryDate || null });
       if (!aggregated.name && row.name) aggregated.name = row.name;
     }
     return { records, bySku, customRecords: records.filter((row) => row.isCustomOrder) };
+  }
+
+  function summarizePurchaseReports(reports, analysisMonth) {
+    const records = (reports || []).flatMap((report) => report.records || []);
+    const month = String(analysisMonth || "").slice(0, 7);
+    const received = records.filter((row) => row.receiptDate && (!month || row.receiptDate.slice(0, 7) === month) && row.deliveredQuantity > 0);
+    const pending = records.filter((row) => !row.isCustomOrder && row.quantity > 0);
+    const drafts = records.filter((row) => row.draft);
+    const documentCount = (rows) => new Set(rows.map((row) => row.documentCode || `${row.fileName}#${row.sourceRow}`)).size;
+    return {
+      month,
+      actualReceiptCost: received.reduce((sum, row) => sum + Number(row.actualReceiptCost || 0), 0),
+      actualReceiptQuantity: received.reduce((sum, row) => sum + Number(row.deliveredQuantity || 0), 0),
+      receiptDocumentCount: documentCount(received),
+      pendingAmount: pending.reduce((sum, row) => sum + Number(row.amount || 0), 0),
+      pendingQuantity: pending.reduce((sum, row) => sum + Number(row.quantity || 0), 0),
+      pendingDocumentCount: documentCount(pending),
+      draftAmount: drafts.reduce((sum, row) => sum + Number(row.orderedAmount || 0), 0),
+      draftDocumentCount: documentCount(drafts),
+      closedPartialDocumentCount: documentCount(records.filter((row) => row.documentClosed && /部分到貨/.test(normalizeText(row.status))))
+    };
   }
 
   function transferStateAtDate(record, asOfDate) {
@@ -2731,7 +2799,7 @@
       ["月初分批釋放", LOCKED_RULES.releaseRule, "本次確認"],
       ["寄倉處理", LOCKED_RULES.consignmentRule, "核心鎖定"],
       ["缺貨處理", LOCKED_RULES.shortageAction, "核心鎖定"],
-      ["未到貨採購單", LOCKED_RULES.pendingPurchaseRule, "核心鎖定"],
+      ["採購單狀態", LOCKED_RULES.pendingPurchaseRule, "核心鎖定"],
       ["期間調撥單", LOCKED_RULES.transferRule, "核心鎖定"],
       ["一次性代工", LOCKED_RULES.blacklistRule, "核心鎖定"],
       ["售完即停(S)", LOCKED_RULES.sellThroughStopRule, "核心鎖定"],
@@ -3437,6 +3505,7 @@
     blacklistMatch,
     resolveConsignment,
     aggregatePendingReports,
+    summarizePurchaseReports,
     aggregateTransferReports,
     calculateNetProcurementDemand,
     roundSuggestedQuantity,

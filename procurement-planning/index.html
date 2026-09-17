@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="在瀏覽器本機整理庫存、未到貨採購單與工廠寄庫供貨狀態">
+  <meta name="description" content="在瀏覽器本機整理庫存、全部狀態採購單與工廠寄庫供貨狀態">
   <meta name="robots" content="noindex,nofollow">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
@@ -29,7 +29,7 @@
       <div>
         <p class="eyebrow">PROCUREMENT PLANNING</p>
         <h1 id="page-title">先把庫存與供貨，<br>算在正確的位置。</h1>
-        <p class="hero-description">整合近期銷售、公司庫存、未到貨與固定 Google 資料源，產生分供應商採購、寄庫、回匯覆核、付款月份與額度摘要。</p>
+        <p class="hero-description">整合近期銷售、公司庫存、全部狀態採購單與固定 Google 資料源，產生分供應商採購、寄庫、回匯覆核、付款月份與額度摘要。</p>
       </div>
       <aside class="privacy-card" aria-label="資料安全說明">
         <span class="privacy-icon" aria-hidden="true">✓</span>
@@ -55,15 +55,15 @@
       </div>
       <div id="budget-summary" class="summary-grid budget-summary budget-summary-featured" aria-live="polite"></div>
       <details id="budget-details" class="budget-details" open>
-        <summary><span>展開／收合通路預估與額度計算明細</span><small>營收通路、成本耗用、期初期末庫存及已釋放額度</small></summary>
+        <summary><span>展開／收合通路預估與額度計算明細</span><small>營收通路、系統預估成本耗用及已釋放額度</small></summary>
         <div class="budget-detail-body">
           <div class="budget-grid">
             <label><span>寬承預估認列營收</span><input id="forecast-revenue" type="number" min="0" step="1" value="0"><small>寬承外部通路＋預計對寬沐開票收入；成本率使用此欄。</small></label>
             <label><span>寬承＋寬沐終端通路預估營收</span><input id="terminal-forecast-revenue" type="number" min="0" step="1" value="0" readonly></label>
-            <label><span>預估當月成本流出</span><input id="forecast-cost" type="number" min="0" step="1" value="0"></label>
-            <label><span>目標期末庫存成本</span><input id="target-ending-cost" type="number" min="0" step="1" value="0"></label>
-            <label><span>期初庫存成本</span><input id="opening-cost" type="number" min="0" step="1" value="0"></label>
-            <label><span>預計供應商退貨</span><input id="supplier-returns" type="number" step="1" value="0"></label>
+            <label><span>本月預估整月成本耗用（系統自動）</span><input id="forecast-cost" type="number" min="0" step="1" value="0" readonly><small>依本月寬承預估認列營收及目前核准成本率自動計算。</small></label>
+            <input id="target-ending-cost" type="hidden" value="0">
+            <input id="opening-cost" type="hidden" value="0">
+            <input id="supplier-returns" type="hidden" value="0">
             <label><span>目前已釋放可採購額度</span><input id="released-budget" type="number" min="0" step="1" value="0"></label>
             <label><span>截至目前已承諾（台帳自動）</span><input id="purchased-to-date" type="number" min="0" step="1" value="0" readonly></label>
             <label class="budget-source-field"><span>額度來源註記</span><input id="budget-source-note" type="text" maxlength="500" value="" placeholder="例如：9月月初核准快照"></label>
@@ -76,18 +76,18 @@
           <div class="budget-equation">目前已釋放可採購額度 − 截至目前已承諾採購金額 ＝ 截至目前尚可承諾額度；整月額度與已釋放額度分開呈現。</div>
         </div>
       </details>
-      <p id="ledger-status" class="budget-note">正式核准、核准更正與撤銷會即時更新集中台帳；未到貨採購單不再用來反推整月已承諾金額。</p>
+      <p id="ledger-status" class="budget-note">正式核准、核准更正與撤銷會即時更新集中台帳；採購單匯入只判讀未交量與實際收貨成本，不反推台帳已承諾金額。</p>
     </section>
 
     <section class="panel stage-panel stage-two" aria-labelledby="source-title">
       <div class="section-heading">
         <div><p class="eyebrow"><span class="stage-number" aria-hidden="true">2</span> 本次資料・採購建議</p><h2 id="source-title">取得最新資料並產生採購建議</h2></div>
-        <p>固定 Google 來源須先用公司帳號授權；銷售、庫存、未到貨與期間調撥單仍由人員選檔。</p>
+        <p>固定 Google 來源須先用公司帳號授權；銷售、庫存、全部狀態採購單與期間調撥單仍由人員選檔。</p>
       </div>
 
       <div class="period-grid procurement-period source-dates" aria-label="資料截止日設定">
         <label><span>庫存截止日＊</span><input id="inventory-date" type="date" required></label>
-        <label><span>未到貨清單截止日＊</span><input id="pending-date" type="date" required></label>
+        <label><span>採購單資料截止日＊</span><input id="pending-date" type="date" required></label>
         <label><span>期間調撥單截止日＊</span><input id="transfer-date" type="date" required></label>
         <label><span>寄庫表截止日＊</span><input id="consignment-date" type="date" required></label>
         <label><span>銷售資料截止日＊</span><input id="sales-date" type="date" required></label>
@@ -195,7 +195,7 @@
             <div>
               <p class="eyebrow">每次執行</p>
               <h3 id="manual-source-title">本次必要匯入</h3>
-              <p>庫存、未到貨採購單、期間調撥單與近期銷售集中在此區；四類檔案都要選妥，才會開放產生採購建議。</p>
+              <p>庫存、全部狀態採購單、期間調撥單與近期銷售集中在此區；四類檔案都要選妥，才會開放產生採購建議。</p>
             </div>
           </div>
           <div class="upload-grid procurement-sources manual-source-grid">
@@ -207,9 +207,9 @@
             </article>
 
             <article class="upload-card" data-source="pending">
-              <div class="upload-card-header"><h3>未到貨採購單</h3><span class="source-badge required">必要・可多選</span></div>
-              <p class="upload-help">每次重新匯入完整清單；不要沿用上次未到貨資料。</p>
-              <label class="file-button">選擇未到貨採購單<input id="pending-files" type="file" accept=".xlsx,.xls,.csv" multiple></label>
+              <div class="upload-card-header"><h3>採購單（全部狀態）</h3><span class="source-badge required">必要・可多選</span></div>
+              <p class="upload-help">建議從上月15日至本次資料截止日；系統會分辨草稿、主管審核、部分到貨、結案與全部到貨，不會混算。</p>
+              <label class="file-button">選擇全部狀態採購單<input id="pending-files" type="file" accept=".xlsx,.xls,.csv" multiple></label>
               <p id="pending-files-name" class="file-name">尚未選擇</p>
             </article>
 
@@ -348,6 +348,11 @@
 
     <section class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
       <div class="section-heading"><div><p class="eyebrow"><span class="stage-number" aria-hidden="true">3</span> 回匯・核准・ERP</p><h2 id="workflow-title">人工回匯、二次確認與正式核准</h2></div><p>只能回匯本頁本次下載的報表；待核准階段不寄信。</p></div>
+      <aside id="resume-draft-card" class="resume-draft-card" hidden>
+        <div><strong>有一筆未完成採購批次</strong><p id="resume-draft-summary"></p></div>
+        <div class="resume-draft-actions"><button id="resume-draft-button" class="primary-button" type="button">繼續上次進度</button><button id="redownload-draft-button" class="secondary-button" type="button">重新下載本批報表</button><button id="discard-draft-button" class="secondary-button" type="button">放棄並重新開始</button></div>
+      </aside>
+      <div class="resume-file-row"><span>換電腦或已清除瀏覽器資料：</span><label id="restore-report-label" class="secondary-button file-button-inline">選擇先前下載的本批採購建議<input id="restore-report-file" type="file" accept=".xlsx"></label></div>
       <ol class="workflow-progress" aria-label="回匯核准進度">
         <li id="workflow-step-download" data-status="waiting"><span>1</span><strong>下載本批建議</strong><small>先在上方勾選供應商並下載</small></li>
         <li id="workflow-step-first" data-status="locked"><span>2</span><strong>第一次人工回匯</strong><small>工具重新計算並產生二次覆核</small></li>
@@ -383,7 +388,7 @@
       <div class="section-heading compact"><div><p class="eyebrow">規則總覽</p><h2 id="rules-title">內建防呆與可管理規則</h2></div><a class="secondary-button button-link" href="rules-admin/">開啟規則管理</a></div>
       <div class="rule-grid">
         <article><strong>寄倉不扣淨需求</strong><p>寄倉是外部供貨池，不是公司帳上已購入庫存。</p></article>
-        <article><strong>未到貨每次重匯</strong><p>已到貨單據不再出現，不保留舊清單避免重複扣除。</p></article>
+        <article><strong>採購狀態分開判讀</strong><p>新單不占用；主管審核與未結案部分到貨只扣未交量；實際收貨成本依收貨單開單日計入月份。</p></article>
         <article><strong>粉紅底另列排程</strong><p>尚未完成數量不得當成現貨；排程原文保留人工核對。</p></article>
         <article><strong>寄倉不足新增寄庫單</strong><p>缺口不提供改向其他供應商採購的選項。</p></article>
         <article><strong>黑名單只採完全一致</strong><p>避免關鍵字誤傷其他長銷商品。</p></article>
