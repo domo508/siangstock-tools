@@ -161,6 +161,9 @@
         name: ["品名", "商品名稱", "商品品名"],
         salesQuantity: ["銷售量", "數量"],
         actualAmount: ["實收金額", "銷售金額"],
+        purchaseCostAmount: ["進貨價金額", "進貨成本金額"],
+        storeCostAmount: ["店成本金額"],
+        registeredWarehouseCostAmount: ["登錄倉成本金額"],
         warehouseCode: ["開單倉編號", "店倉編號"],
         warehouseName: ["開單倉名稱", "店倉名稱"],
         shipWarehouseCode: ["出貨倉編號"],
@@ -197,6 +200,9 @@
     transactionDate: "結帳時間",
     salesQuantity: "銷售量",
     actualAmount: "實收金額",
+    purchaseCostAmount: "進貨價金額",
+    storeCostAmount: "店成本金額",
+    registeredWarehouseCostAmount: "登錄倉成本金額",
     shipWarehouseCode: "出貨倉編號",
     shipWarehouseName: "出貨倉名稱",
     deductQuantity: "扣庫量",
@@ -217,6 +223,17 @@
 
   function normalizeSku(value) {
     return String(value == null ? "" : value).normalize("NFKC").trim().toUpperCase();
+  }
+
+  const KUANCHENG_STORE_CODES = new Set(["R00", "R01"]);
+  const KUANMU_STORE_CODES = new Set(["R03", "R06", "R07", "R09", "R10"]);
+
+  function warehouseCompany(code, name = "") {
+    const normalizedCode = normalizeSku(code);
+    if (KUANCHENG_STORE_CODES.has(normalizedCode) || normalizedCode === "T00") return "寬承";
+    if (KUANMU_STORE_CODES.has(normalizedCode)) return "寬沐";
+    if (/^R\d{2}$/.test(normalizedCode)) return "寬沐";
+    return /門市|快閃|專櫃/.test(String(name || "")) ? "寬沐" : "寬承";
   }
 
   function normalizeName(value) {
@@ -720,6 +737,10 @@
             shipWarehouseCode: normalizeSku(valueAt(row, selected.mapping, "shipWarehouseCode")),
             shipWarehouseName: String(valueAt(row, selected.mapping, "shipWarehouseName") || "").trim(),
             deductQuantity: parseNumber(valueAt(row, selected.mapping, "deductQuantity")) || 0,
+            actualAmount: parseNumber(valueAt(row, selected.mapping, "actualAmount")) || 0,
+            purchaseCostAmount: parseNumber(valueAt(row, selected.mapping, "purchaseCostAmount")) || 0,
+            storeCostAmount: parseNumber(valueAt(row, selected.mapping, "storeCostAmount")) || 0,
+            registeredWarehouseCostAmount: parseNumber(valueAt(row, selected.mapping, "registeredWarehouseCostAmount")) || 0,
             sourceOrder: String(valueAt(row, selected.mapping, "sourceOrder") || "").trim(),
             pickupOrder: String(valueAt(row, selected.mapping, "pickupOrder") || "").trim()
           });
@@ -750,6 +771,9 @@
         name: String(valueAt(row, selected.mapping, "name") || "").trim(),
         quantity,
         actualAmount: parseNumber(valueAt(row, selected.mapping, "actualAmount")) || 0,
+        purchaseCostAmount: parseNumber(valueAt(row, selected.mapping, "purchaseCostAmount")) || 0,
+        storeCostAmount: parseNumber(valueAt(row, selected.mapping, "storeCostAmount")) || 0,
+        registeredWarehouseCostAmount: parseNumber(valueAt(row, selected.mapping, "registeredWarehouseCostAmount")) || 0,
         warehouseCode: normalizeSku(valueAt(row, selected.mapping, "warehouseCode")),
         warehouseName: String(valueAt(row, selected.mapping, "warehouseName") || "").trim(),
         shipWarehouseCode: normalizeSku(valueAt(row, selected.mapping, "shipWarehouseCode")),
@@ -1241,6 +1265,53 @@
       draftAmount: drafts.reduce((sum, row) => sum + Number(row.orderedAmount || 0), 0),
       draftDocumentCount: documentCount(drafts),
       closedPartialDocumentCount: documentCount(records.filter((row) => row.documentClosed && /部分到貨/.test(normalizeText(row.status))))
+    };
+  }
+
+  function summarizeCompanyCostFlows(input = {}) {
+    const month = String(input.analysisMonth || "").slice(0, 7);
+    const masterBySku = input.master?.bySku || new Map();
+    const salesRecords = (input.salesReports || []).flatMap((report) => report.records || []);
+    const takeRecords = (input.salesReports || []).flatMap((report) => report.takeRecords || []);
+    const inMonth = (row) => !month || String(row.date || "").slice(0, 7) === month;
+    const costOf = (row) => {
+      const explicit = Number(row.purchaseCostAmount || row.storeCostAmount || row.registeredWarehouseCostAmount || 0);
+      if (explicit) return explicit;
+      return Number(masterBySku.get(row.sku)?.unitCost || 0) * Number(row.deductQuantity || row.quantity || 0);
+    };
+    const directRows = salesRecords.filter((row) => inMonth(row) && warehouseCompany(row.warehouseCode, row.warehouseName) === "寬承");
+    const directCost = directRows.reduce((sum, row) => sum + costOf(row), 0);
+    const orderKeys = new Set(salesRecords.filter((row) => inMonth(row) && row.saleType === "訂貨" && row.sourceOrder)
+      .map((row) => compositeKey(row.sourceOrder, row.sku)));
+    const kuanmuB3Rows = takeRecords.filter((row) => inMonth(row) && row.shipWarehouseCode === "T00" && warehouseCompany(row.warehouseCode, row.warehouseName) === "寬沐" && row.sourceOrder && orderKeys.has(compositeKey(row.sourceOrder, row.sku)));
+    const kuanmuB3BaseCost = kuanmuB3Rows.reduce((sum, row) => sum + costOf(row), 0);
+    const transferRows = (input.transferReports || []).flatMap((report) => report.records || []);
+    const kuanmuTransferRows = transferRows.filter((row) => row.status === "收貨審核" && row.sourceWarehouseCode === "T00" && warehouseCompany(row.destinationWarehouseCode, row.destinationWarehouseName) === "寬沐" && (!month || String(row.receivedDate || "").slice(0, 7) === month));
+    const kuanmuTransferBaseCost = kuanmuTransferRows.reduce((sum, row) => sum + Number(masterBySku.get(row.sku)?.unitCost || 0) * Number(row.quantity || 0), 0);
+    const kuanmuBaseCost = kuanmuB3BaseCost + kuanmuTransferBaseCost;
+    const managementCostToDate = directCost + kuanmuBaseCost;
+    const maxSalesDate = [...salesRecords, ...takeRecords].filter(inMonth).reduce((max, row) => row.date > max ? row.date : max, "");
+    let elapsedDays = 0;
+    let daysInMonth = 0;
+    if (month && maxSalesDate) {
+      const [year, monthNumber] = month.split("-").map(Number);
+      daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+      elapsedDays = Math.min(daysInMonth, Math.max(1, Number(maxSalesDate.slice(8, 10))));
+    }
+    const forecastCost = managementCostToDate > 0 && elapsedDays > 0 ? managementCostToDate / elapsedDays * daysInMonth : 0;
+    const currentInventoryCost = (input.inventory?.records || []).filter((row) => warehouseCompany(row.warehouseCode, row.warehouseName) === "寬承")
+      .reduce((sum, row) => sum + Number(row.inventoryCost || 0), 0);
+    const openingInventoryCost = Number(input.openingInventoryCost || 0);
+    const actualReceiptCost = Number(input.purchaseSummary?.actualReceiptCost || 0);
+    const supplierReturns = Number(input.supplierReturns || 0);
+    const inventoryBridgeCost = openingInventoryCost > 0 ? openingInventoryCost + actualReceiptCost - supplierReturns - currentInventoryCost : null;
+    return {
+      month, maxSalesDate, elapsedDays, daysInMonth, directCost, kuanmuB3BaseCost, kuanmuTransferBaseCost, kuanmuBaseCost,
+      kuanmuIntercompanyRevenue: kuanmuBaseCost * 1.11, managementCostToDate, forecastCost, currentInventoryCost,
+      openingInventoryCost, actualReceiptCost, supplierReturns, inventoryBridgeCost,
+      b3MatchedCount: kuanmuB3Rows.length, transferReceivedCount: kuanmuTransferRows.length,
+      source: managementCostToDate > 0 ? "actual_weighted" : "fallback",
+      warnings: openingInventoryCost > 0 ? [] : ["尚缺月初庫存成本快照；本月至今成本先以銷售與寬沐供貨流向作管理暫估。"]
     };
   }
 
@@ -3506,6 +3577,8 @@
     resolveConsignment,
     aggregatePendingReports,
     summarizePurchaseReports,
+    summarizeCompanyCostFlows,
+    warehouseCompany,
     aggregateTransferReports,
     calculateNetProcurementDemand,
     roundSuggestedQuantity,

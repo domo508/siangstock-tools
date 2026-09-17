@@ -1004,4 +1004,32 @@ describe("採購規劃前台與入口", () => {
     ["C41723", "Z00999", "ZS1000", "ZS1005", "ZZ900"].forEach((sku) => expect(serviceExclusions).toContain(sku));
     expect(serviceExclusions).toContain("運費／配送服務");
   });
+
+  it("依門市歸屬拆分寬承成本、寬沐B3與公司間計價", () => {
+    const summary = core.summarizeCompanyCostFlows({
+      analysisMonth: "2026-09",
+      master: { bySku: new Map([["A1", { unitCost: 100 }]]) },
+      inventory: { records: [
+        { warehouseCode: "T00", inventoryCost: 1000 },
+        { warehouseCode: "R00", inventoryCost: 200 },
+        { warehouseCode: "R03", inventoryCost: 300 }
+      ] },
+      salesReports: [{ records: [
+        { date: "2026-09-10", warehouseCode: "R00", sku: "A1", purchaseCostAmount: 200 },
+        { date: "2026-09-10", warehouseCode: "R03", sku: "A1", saleType: "訂貨", sourceOrder: "SO1", purchaseCostAmount: 100 }
+      ], takeRecords: [
+        { date: "2026-09-10", warehouseCode: "R03", shipWarehouseCode: "T00", sku: "A1", sourceOrder: "SO1", purchaseCostAmount: 100 }
+      ] }],
+      transferReports: [{ records: [
+        { status: "收貨審核", sourceWarehouseCode: "T00", destinationWarehouseCode: "R06", receivedDate: "2026-09-08", sku: "A1", quantity: 2 }
+      ] }],
+      purchaseSummary: { actualReceiptCost: 500 }, openingInventoryCost: 2000
+    });
+    expect(summary.directCost).toBe(200);
+    expect(summary.kuanmuBaseCost).toBe(300);
+    expect(summary.kuanmuIntercompanyRevenue).toBeCloseTo(333);
+    expect(summary.managementCostToDate).toBe(500);
+    expect(summary.currentInventoryCost).toBe(1200);
+    expect(summary.inventoryBridgeCost).toBe(1300);
+  });
 });

@@ -8,6 +8,12 @@ beforeAll(async () => {
 });
 
 describe("門市週調撥日期規則", () => {
+  it("門市公司歸屬符合寬承直營與寬沐加盟規則", () => {
+    expect(core.STORE_COMPANY.R00).toBe("寬承");
+    expect(core.STORE_COMPANY.R01).toBe("寬承");
+    expect(core.STORE_COMPANY.R03).toBe("寬沐");
+    expect(core.STORE_COMPANY.R10).toBe("寬沐");
+  });
   it("星期五遇國定假日會提前到前一工作日", () => {
     expect(core.previousWorkingDay("2026-10-09", ["2026-10-09"])).toBe("2026-10-08");
   });

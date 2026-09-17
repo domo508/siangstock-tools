@@ -9,7 +9,7 @@
   <title>門市週補貨與調撥｜翔仔居家</title>
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="../cost-analysis/style.css">
-  <link rel="stylesheet" href="style.css?v=20260916-batch-version-r1">
+  <link rel="stylesheet" href="style.css?v=20260917-company-cost-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -58,6 +58,7 @@
       <div id="calculation-results" class="calculation-results" hidden>
         <div class="section-heading compact"><div><h3>本週建議預覽</h3><p id="calculation-summary"></p></div><button id="publish-button" class="primary-button" type="button">建立門市確認批次</button></div>
         <div id="calculation-store-filter"></div>
+        <p id="company-impact" class="result-alert info"></p>
         <p id="b3-audit" class="result-alert warn" hidden></p>
         <section class="result-section" data-store-section><h4>一般週補貨（必要調撥）</h4><p>依本次實際開單日至下一輪預計到店日、門市現場淨銷售、展示與最低庫存計算；B3只影響分配能力。庫存檔的實際庫存已扣除顧客承諾，不會重複扣減。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>近42天現場銷售</th><th>B3銷售</th><th>目前庫存</th><th>目標／展示</th><th>系統建議</th><th>本批預計到店</th><th>下一輪預計到店</th><th>建議後可售至</th><th>到貨前風險</th><th>說明</th></tr></thead><tbody id="calculation-rows"></tbody></table></div></section>
         <section id="special-stock-results" class="result-section special-stock-section" data-store-section hidden><h4>建議調撥（非必要）</h4><p>單人薄被套／兩用被套依各材質近42天門市現場銷售，列出前2名花色作備貨參考；門市可填0。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>近42天現場銷售</th><th>目前庫存</th><th>系統建議</th><th>建議後可售至</th><th>說明</th></tr></thead><tbody id="special-stock-rows"></tbody></table></div></section>
@@ -96,11 +97,11 @@
   <script src="../procurement-planning/assets/xlsx-js-style.bundle.js"></script>
   <script src="../procurement-planning/xlsx-style-runtime.js"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
-  <script src="../procurement-planning/core.js?v=20260917-shortage-lifecycle-r1"></script>
+  <script src="../procurement-planning/core.js?v=20260917-company-cost-r1"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="../procurement-planning/google-sources.js?v=20260915-google-sources-r1"></script>
-  <script src="core.js?v=20260917-quilt-display-r1"></script>
+  <script src="core.js?v=20260917-company-cost-r1"></script>
   <script src="xlsx-preflight.js?v=20260916-xlsx-reader-r1"></script>
-  <script src="app.js?v=20260917-quilt-display-r1"></script>
+  <script src="app.js?v=20260917-company-cost-r1"></script>
 </body>
 </html>

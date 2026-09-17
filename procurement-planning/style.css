@@ -204,6 +204,27 @@
   background: #f8fbfc;
 }
 
+.cost-breakdown {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.cost-breakdown > div {
+  display: grid;
+  gap: 5px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: #f8fbfc;
+}
+.cost-breakdown span, .cost-breakdown small { color: var(--muted); }
+.cost-breakdown strong { color: var(--navy); font-size: 1.22rem; }
+.budget-control-grid input[readonly] { background: #eef4f5; color: var(--navy); }
+.legacy-calculation-field { display: none !important; }
+@media (max-width: 900px) { .cost-breakdown { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 620px) { .cost-breakdown { grid-template-columns: 1fr; } }
+
 .blacklist-panel .eyebrow { margin-bottom: 6px; }
 .blacklist-panel h3 { margin: 0 0 8px; color: var(--navy); }
 .blacklist-panel p { margin: 0; color: var(--muted); line-height: 1.65; }

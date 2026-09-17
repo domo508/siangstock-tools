@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20260917-shortage-lifecycle-r1">
+  <link rel="stylesheet" href="style.css?v=20260917-company-cost-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -55,21 +55,22 @@
       </div>
       <div id="budget-summary" class="summary-grid budget-summary budget-summary-featured" aria-live="polite"></div>
       <details id="budget-details" class="budget-details" open>
-        <summary><span>展開／收合通路預估與額度計算明細</span><small>營收通路、系統預估成本耗用及已釋放額度</small></summary>
+        <summary><span>展開／收合成本耗用與額度明細</span><small>系統判斷的成本橋接、收貨與寬承／寬沐流向</small></summary>
         <div class="budget-detail-body">
-          <div class="budget-grid">
-            <label><span>寬承預估認列營收</span><input id="forecast-revenue" type="number" min="0" step="1" value="0"><small>寬承外部通路＋預計對寬沐開票收入；成本率使用此欄。</small></label>
-            <label><span>寬承＋寬沐終端通路預估營收</span><input id="terminal-forecast-revenue" type="number" min="0" step="1" value="0" readonly></label>
-            <label><span>本月預估整月成本耗用（系統自動）</span><input id="forecast-cost" type="number" min="0" step="1" value="0" readonly><small>依本月寬承預估認列營收及目前核准成本率自動計算。</small></label>
+          <div id="cost-breakdown" class="cost-breakdown" aria-live="polite"></div>
+          <div class="budget-grid budget-control-grid">
+            <label class="legacy-calculation-field"><span>寬承預估認列營收</span><input id="forecast-revenue" type="number" min="0" step="1" value="0"></label>
+            <label class="legacy-calculation-field"><span>寬承＋寬沐終端通路預估營收</span><input id="terminal-forecast-revenue" type="number" min="0" step="1" value="0" readonly></label>
+            <label class="legacy-calculation-field"><span>本月預估整月成本耗用（系統自動）</span><input id="forecast-cost" type="number" min="0" step="1" value="0" readonly></label>
             <input id="target-ending-cost" type="hidden" value="0">
             <input id="opening-cost" type="hidden" value="0">
             <input id="supplier-returns" type="hidden" value="0">
             <label><span>目前已釋放可採購額度</span><input id="released-budget" type="number" min="0" step="1" value="0"></label>
-            <label><span>截至目前已承諾（台帳自動）</span><input id="purchased-to-date" type="number" min="0" step="1" value="0" readonly></label>
+            <label class="legacy-calculation-field"><span>截至目前已承諾（台帳自動）</span><input id="purchased-to-date" type="number" min="0" step="1" value="0" readonly></label>
             <label class="budget-source-field"><span>額度來源註記</span><input id="budget-source-note" type="text" maxlength="500" value="" placeholder="例如：9月月初核准快照"></label>
           </div>
           <div class="channel-forecast" aria-labelledby="channel-forecast-title">
-            <div class="section-heading compact"><div><h3 id="channel-forecast-title">通路別中性情境預估</h3><p>下列通路加總為終端營運參考；採購成本率改用上方「寬承預估認列營收」，避免把寬沐終端零售全額重複算成寬承收入。</p></div><button id="add-channel-button" class="secondary-button" type="button" disabled>新增通路</button></div>
+            <div class="section-heading compact"><div><h3 id="channel-forecast-title">通路別中性情境預估</h3><p>寬承包含全部線上通路、R00與R01；寬沐包含R03、R06、R07、R10及其他實體門市。B3依開單門市歸屬，不依出貨倉改變。</p></div><button id="add-channel-button" class="secondary-button" type="button" disabled>新增通路</button></div>
             <div class="result-table-wrap"><table class="procurement-table compact-table"><thead><tr><th>公司</th><th>通路／門市</th><th>預估營收</th><th>管理</th></tr></thead><tbody id="channel-rows"></tbody><tfoot><tr><th colspan="2">寬承預估</th><td id="kuancheng-total">$0</td><td></td></tr><tr><th colspan="2">寬沐預估</th><td id="kuanmu-total">$0</td><td></td></tr></tfoot></table></div>
           </div>
           <div class="budget-actions"><button id="save-budget-button" class="secondary-button" type="button" disabled>儲存本月額度</button><span id="budget-plan-status">尚未同步月份額度。</span></div>
@@ -412,9 +413,9 @@
   <script src="xlsx-style-runtime.js?v=20260915-reader-fix-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260917-shortage-lifecycle-r1"></script>
+  <script src="core.js?v=20260917-company-cost-r1"></script>
   <script src="seasonal-model.js?v=20260914-seasonal-wape-r2"></script>
   <script src="google-sources.js?v=20260914-seasonal-auto-r1"></script>
-  <script src="app.js?v=20260917-shortage-lifecycle-r1"></script>
+  <script src="app.js?v=20260917-company-cost-r1"></script>
 </body>
 </html>

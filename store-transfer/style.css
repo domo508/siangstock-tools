@@ -9,6 +9,8 @@
 .store-picker h3 { margin: 0 0 .8rem; }
 .store-options { display: flex; flex-wrap: wrap; gap: .65rem 1.1rem; }
 .store-options label { display: flex; align-items: center; gap: .45rem; font-weight: 700; }
+.store-options label span { display: grid; gap: .15rem; }
+.store-options label small { color: var(--muted); font-size: .78rem; font-weight: 700; }
 .fixed-source-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .8rem 1.25rem; margin-top: 1.25rem; padding: 1.15rem 1.25rem; border: 1px solid #bfd9df; border-radius: 16px; background: linear-gradient(135deg, #f1f8f8, #fbfaf5); }
 .fixed-source-panel h3, .fixed-source-panel p { margin: 0; }
 .fixed-source-panel .eyebrow { margin-bottom: .25rem; }

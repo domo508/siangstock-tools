@@ -17,7 +17,7 @@
     googleAuthorized: false, modelWorker: null, modelDraft: null,
     baseAnalysis: null, parsedSources: null, workflowType: "system_recommendation",
     newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], storeShortagePermissions: { canDecide: false }, shortageRunMode: "merge_next",
-    purchaseStatusSummary: null, draftId: "", draftStage: "", latestDraft: null, forecastCostRate: DEFAULT_COST_RATE
+    purchaseStatusSummary: null, costSummary: null, draftId: "", draftStage: "", latestDraft: null, forecastCostRate: DEFAULT_COST_RATE
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -41,7 +41,7 @@
     excludedResultPanel: get("#excluded-result-panel"), excludedResultCount: get("#excluded-result-count"), excludedResultRows: get("#excluded-result-rows"),
     forecastRevenue: get("#forecast-revenue"), terminalForecastRevenue: get("#terminal-forecast-revenue"), forecastCost: get("#forecast-cost"), targetEndingCost: get("#target-ending-cost"), openingCost: get("#opening-cost"),
     supplierReturns: get("#supplier-returns"), releasedBudget: get("#released-budget"), purchasedToDate: get("#purchased-to-date"), budgetSourceNote: get("#budget-source-note"),
-    saveBudget: get("#save-budget-button"), budgetPlanStatus: get("#budget-plan-status"), budgetSummary: get("#budget-summary"), ledgerStatus: get("#ledger-status"),
+    saveBudget: get("#save-budget-button"), budgetPlanStatus: get("#budget-plan-status"), budgetSummary: get("#budget-summary"), ledgerStatus: get("#ledger-status"), costBreakdown: get("#cost-breakdown"),
     channelRows: get("#channel-rows"), kuanchengTotal: get("#kuancheng-total"), kuanmuTotal: get("#kuanmu-total"), addChannel: get("#add-channel-button"),
     reviewFile: get("#review-file"), reviewButton: get("#review-button"), secondReviewFile: get("#second-review-file"), confirmReview: get("#confirm-review-button"),
     submitApproval: get("#submit-approval-button"), approve: get("#approve-button"), retryNotification: get("#retry-notification-button"),
@@ -564,7 +564,7 @@
     setWorkflowStatus(message);
   }
   function invalidateAnalysis() {
-    state.analysis = null; state.baseAnalysis = null; state.parsedSources = null; state.workflowType = "system_recommendation"; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null; state.purchaseStatusSummary = null; state.draftId = ""; state.draftStage = "";
+    state.analysis = null; state.baseAnalysis = null; state.parsedSources = null; state.workflowType = "system_recommendation"; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null; state.purchaseStatusSummary = null; state.costSummary = null; state.draftId = ""; state.draftStage = "";
     elements.download.disabled = true; elements.resultPanel.hidden = true; elements.supplierFilterList.replaceChildren();
     resetReviewWorkflow("請先在上方產生建議、選擇供應商並下載本批Excel；下載後才會開放第一次人工回匯。");
     renderBudget();
@@ -790,6 +790,10 @@
     elements.terminalForecastRevenue.value = String(kuancheng + kuanmu);
   }
   function updateAutomaticForecastCost() {
+    if (state.costSummary?.forecastCost > 0) {
+      elements.forecastCost.value = String(Math.round(state.costSummary.forecastCost * 100) / 100);
+      return;
+    }
     const revenue = Math.max(0, Number(elements.forecastRevenue.value || 0));
     elements.forecastCost.value = String(Math.round(revenue * state.forecastCostRate * 100) / 100);
   }
@@ -1141,6 +1145,11 @@
       const pendingReports = pendingWorkbooks.map((workbook, index) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: state.pendingFiles[index]?.name || "未到貨採購單" }));
       state.purchaseStatusSummary = core.summarizePurchaseReports(pendingReports, elements.month.value);
       const salesReports = salesWorkbooks.map((workbook, index) => core.parseSalesWorkbook(workbook, XLSX, { fileName: state.salesFiles[index]?.name || "銷售明細" }));
+      state.costSummary = core.summarizeCompanyCostFlows({
+        analysisMonth: elements.month.value, master, inventory, salesReports, transferReports: [transferReport],
+        purchaseSummary: state.purchaseStatusSummary, openingInventoryCost: Number(elements.openingCost.value || 0), supplierReturns: Number(elements.supplierReturns.value || 0)
+      });
+      updateAutomaticForecastCost();
       const model = core.parseForecastModelWorkbook(modelWorkbook, XLSX, { fileName: "季節模型" });
       const validation = core.buildAnalysis({ master, inventory, pendingReports, transferReports: [transferReport], consignment, blacklist: blacklistEntries(), dates: {
         inventory: elements.inventoryDate.value, pending: elements.pendingDate.value, transfer: elements.transferDate.value, consignment: elements.consignmentDate.value, sales: elements.salesDate.value
@@ -1334,12 +1343,10 @@
   }
   function renderBudget() {
     const result = currentBudget(); const revenue = Number(elements.forecastRevenue.value || 0); const terminalRevenue = Number(elements.terminalForecastRevenue.value || 0); const cost = Number(elements.forecastCost.value || 0);
+    const actualCost = state.costSummary?.managementCostToDate;
     const cards = [
-      createSummaryCard("寬承預估認列營收", formatCurrency(revenue), "採購成本率使用此口徑", "currency"),
-      createSummaryCard("寬承＋寬沐終端通路預估", formatCurrency(terminalRevenue), "整體通路營運參考，不作成本率分母", "currency"),
-      createSummaryCard("整月預估成本耗用", formatCurrency(cost), revenue > 0 ? `占寬承認列營收${formatNumber(cost / revenue * 100)}%` : "尚未輸入寬承認列營收", "currency"),
-      createSummaryCard("本月至今實際收貨成本", state.purchaseStatusSummary ? formatCurrencyPrecise(state.purchaseStatusSummary.actualReceiptCost) : "待匯入", state.purchaseStatusSummary ? `依實際交貨日；${state.purchaseStatusSummary.receiptDocumentCount}張採購單` : "匯入全部狀態採購單後自動計算", "currency"),
-      createSummaryCard("中性情境－整月預估可採購額度", formatCurrency(result.fullBudgetAmount), "成本耗用＋目標期末－期初＋退貨", "currency"),
+      createSummaryCard("最新預估整月成本耗用", formatCurrency(cost), state.costSummary?.source === "actual_weighted" ? `依${state.costSummary.maxSalesDate}前實際成本日均推估` : "資料不足，暫用核准比率備援", "currency"),
+      createSummaryCard("本月至今成本耗用", actualCost == null ? "待匯入" : formatCurrencyPrecise(actualCost), state.costSummary ? "寬承直接成本＋寬沐供貨原始成本" : "匯入本月銷售後自動計算", "currency"),
       createSummaryCard("目前已釋放可採購額度", formatCurrency(result.releasedBudgetAmount), state.monthPlan && !state.budgetDirty ? "已核准月份快照" : "最高權限設定", "currency"),
       createSummaryCard("截至目前已承諾", formatCurrency(result.purchasedAmountToDate), "正式核准互斥狀態加總", "currency"),
       createSummaryCard("截至目前尚可承諾", formatCurrency(result.remainingBudget), result.remainingBudget < 0 ? "已超出額度" : "尚可核准", `currency ${result.remainingBudget < 0 ? "negative" : ""}`)
@@ -1350,6 +1357,16 @@
       cards.push(createSummaryCard("本批本月／未來付款", `${formatCurrency(currentPayment)}／${formatCurrency(state.review.totals.approvedAmount - currentPayment)}`, "依供應商付款觸發點", "currency"));
     }
     elements.budgetSummary.replaceChildren(...cards);
+    if (elements.costBreakdown) {
+      const summary = state.costSummary;
+      elements.costBreakdown.innerHTML = summary ? `
+        <div><span>寬承直接銷售成本</span><strong>${formatCurrencyPrecise(summary.directCost)}</strong><small>所有線上通路＋R00、R01；依進貨價金額</small></div>
+        <div><span>寬沐門市供貨原始成本</span><strong>${formatCurrencyPrecise(summary.kuanmuBaseCost)}</strong><small>調撥收貨${summary.transferReceivedCount}筆＋B3配對${summary.b3MatchedCount}筆</small></div>
+        <div><span>寬承對寬沐計價參考</span><strong>${formatCurrencyPrecise(summary.kuanmuIntercompanyRevenue)}</strong><small>原始成本×1.11；合併檢視時抵銷</small></div>
+        <div><span>本月實際收貨成本</span><strong>${formatCurrencyPrecise(summary.actualReceiptCost)}</strong><small>依採購單實際交貨日</small></div>
+        <div><span>目前寬承體系庫存成本</span><strong>${formatCurrencyPrecise(summary.currentInventoryCost)}</strong><small>總倉＋R00＋R01；不含寬沐門市</small></div>
+        <div><span>庫存公式驗證</span><strong>${summary.inventoryBridgeCost == null ? "待月初快照" : formatCurrencyPrecise(summary.inventoryBridgeCost)}</strong><small>${escapeHtml(summary.warnings.join(" ") || "期初＋收貨－退貨－目前庫存")}</small></div>` : '<p class="budget-note">匯入本月銷售、最新庫存、全部狀態採購單與期間調撥單後，系統會在此拆解成本。</p>';
+    }
     if (state.analysis) renderSelectedAnalysis();
   }
   function markBudgetDirty() {

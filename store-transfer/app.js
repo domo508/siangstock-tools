@@ -13,6 +13,10 @@
     return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
   }
 
+  function formatCurrency(value) {
+    return new Intl.NumberFormat("zh-TW", { style: "currency", currency: "TWD", maximumFractionDigits: 0 }).format(Number(value || 0));
+  }
+
   async function api(path, options = {}) {
     const init = { method: options.method || "GET", headers: { Accept: "application/json", ...(options.body ? { "Content-Type": "application/json" } : {}) }, cache: "no-store" };
     if (options.body) init.body = JSON.stringify(options.body);
@@ -64,7 +68,7 @@
     return new Promise((resolve) => requestAnimationFrame(() => resolve()));
   }
   function selectedStores() { return [...document.querySelectorAll('#store-options input:checked')].map((input) => input.value); }
-  function renderStores() { $("store-options").innerHTML = Object.entries(state.config.stores).map(([code, store]) => `<label><input type="checkbox" value="${code}" checked><span>${code} ${escapeHtml(store.name)}</span></label>`).join(""); }
+  function renderStores() { $("store-options").innerHTML = Object.entries(state.config.stores).map(([code, store]) => `<label><input type="checkbox" value="${code}" checked><span>${code} ${escapeHtml(store.name)}<small>${escapeHtml(store.company)}・${escapeHtml(store.relationship)}</small></span></label>`).join(""); }
 
   async function authorizeGoogle() {
     $("google-connect-button").disabled = true;
@@ -268,6 +272,8 @@
       await api("/consumable-snapshots", { method: "POST", body: { snapshots: state.calculation.consumableSnapshots } });
       const ignoredTransferText = transfer.ignoredRows?.length ? `；另略過${transfer.ignoredRows.length}筆與總倉及既有門市皆無關的調撥` : "";
       $("calculation-summary").textContent = `銷售截止${state.calculation.latestSalesDate}；必要補貨${state.calculation.totals.regularItemCount}項、建議備貨${state.calculation.totals.specialStockItemCount}項、活動／贈品${state.calculation.totals.activityItemCount}項、耗材${state.calculation.totals.consumableItemCount}項、缺貨未配${state.calculation.totals.shortageItemCount}項；B3成功配對${state.calculation.b3Audit.matchedCount}筆、待人工確認${state.calculation.b3Audit.pendingCount}筆${ignoredTransferText}；提袋快照已記錄。`;
+      const impact = state.calculation.companyImpact;
+      $("company-impact").innerHTML = `<strong>寬承／寬沐成本流向：</strong>寬沐調撥收貨${impact.kuanmuTransferCount}筆、B3代出${impact.kuanmuB3Count}筆；原始供貨成本${formatCurrency(impact.kuanmuBaseCost)}，寬承對寬沐計價參考${formatCurrency(impact.kuanmuIntercompanyRevenue)}（成本×1.11）。合併檢視時抵銷公司間計價，只保留原始成本。`;
       $("b3-audit").hidden = !state.calculation.b3Audit.pendingCount;
       $("b3-audit").innerHTML = state.calculation.b3Audit.pendingCount ? `<strong>B3待人工確認：</strong>${state.calculation.b3Audit.pendingRows.slice(0, 20).map((row) => `${escapeHtml(row.storeCode)}／${escapeHtml(row.sku)}／來源單${escapeHtml(row.sourceOrder || "未填")}`).join("、")}${state.calculation.b3Audit.pendingCount > 20 ? "…" : ""}。這些資料未納入B3與門市能力。` : "";
       $("calculation-rows").innerHTML = state.calculation.regularRows.length ? state.calculation.regularRows.map((row) => previewRow(row, "regular")).join("") : '<tr><td colspan="13">本週沒有一般必要補貨。</td></tr>';

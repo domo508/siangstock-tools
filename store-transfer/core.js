@@ -6,6 +6,7 @@
   "use strict";
 
   const STORE_ORDER = ["R00", "R01", "R03", "R10", "R07", "R06"];
+  const STORE_COMPANY = Object.freeze({ R00: "寬承", R01: "寬承", R03: "寬沐", R06: "寬沐", R07: "寬沐", R09: "寬沐", R10: "寬沐" });
   const CONSUMABLES = Object.freeze({
     P11041: { name: "紡布提袋 25' [65×45×20][大]", size: "大" },
     P11042: { name: "紡布提袋 25' [48×31×12][中]", size: "中" },
@@ -441,6 +442,12 @@
       if (!matched) b3PendingRows.push({ storeCode: row.warehouseCode, sku: row.sku, sourceOrder: row.sourceOrder || "", pickupOrder: row.pickupOrder || "", quantity: Number(row.deductQuantity || row.quantity || 0), reason: "來源單號＋ERP品號無法配對門市訂貨" });
       return matched;
     });
+    const matchedKuanmuB3 = matchedTakeSales.filter((row) => STORE_COMPANY[row.warehouseCode] === "寬沐");
+    const rowCost = (row) => Number(row.purchaseCostAmount || row.storeCostAmount || row.registeredWarehouseCostAmount || 0)
+      || Number(masterBySku.get(row.sku)?.unitCost || 0) * Number(row.deductQuantity || row.quantity || 0);
+    const kuanmuB3BaseCost = matchedKuanmuB3.reduce((sum, row) => sum + rowCost(row), 0);
+    const kuanmuReceivedTransfers = input.transfer.records.filter((row) => row.sourceWarehouseCode === "T00" && STORE_COMPANY[row.destinationWarehouseCode] === "寬沐" && row.status === "收貨審核");
+    const kuanmuTransferBaseCost = kuanmuReceivedTransfers.reduce((sum, row) => sum + Number(masterBySku.get(row.sku)?.unitCost || 0) * Number(row.quantity || 0), 0);
     const sales = [...primarySales, ...matchedTakeSales];
     const latest = input.sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "");
     if (!latest) throw new Error("銷售明細沒有可辨識的結帳日期。");
@@ -719,6 +726,12 @@
       latestSalesDate: latest, proposalDate, scheduleByStore, rows, regularRows, specialStockRows, activityRows, consumableRows, shortageRows, consumableSnapshots,
       marketingWarnings: input.marketing?.warnings || [],
       b3Audit: { matchedCount: matchedTakeSales.length, pendingCount: b3PendingRows.length, pendingRows: b3PendingRows },
+      companyImpact: {
+        kuanmuB3Count: matchedKuanmuB3.length, kuanmuB3BaseCost,
+        kuanmuTransferCount: kuanmuReceivedTransfers.length, kuanmuTransferBaseCost,
+        kuanmuBaseCost: kuanmuB3BaseCost + kuanmuTransferBaseCost,
+        kuanmuIntercompanyRevenue: (kuanmuB3BaseCost + kuanmuTransferBaseCost) * 1.11
+      },
       totals: {
         itemCount: rows.length, quantity: rows.reduce((sum, row) => sum + row.suggestedQuantity, 0),
         regularItemCount: regularRows.length, specialStockItemCount: specialStockRows.length,
@@ -742,5 +755,5 @@
     return workbook;
   }
 
-  return { STORE_ORDER, CONSUMABLES, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook };
+  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook };
 });
