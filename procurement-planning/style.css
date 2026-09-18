@@ -516,10 +516,16 @@
 .work-unit-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .work-unit-card { display: grid; gap: 7px; padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
 .work-unit-card.is-active { border-color: #398da3; box-shadow: inset 0 0 0 1px #398da3; background: var(--soft-blue); }
+.work-unit-card.is-selected { border-color: #79b9c2; box-shadow: inset 0 0 0 1px #79b9c2; background: #f3fafb; }
+.work-unit-card-heading { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 9px; align-items: start; cursor: pointer; }
+.work-unit-card-heading input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--blue); }
 .work-unit-card strong, .work-unit-card small { display: block; }
 .work-unit-card small { color: var(--muted); line-height: 1.4; }
 .work-unit-status { color: #2f725b; font-weight: 800; }
 .work-unit-card button { width: 100%; margin-top: 2px; }
+.work-unit-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.work-unit-selection-status { margin: 0; color: var(--muted); line-height: 1.5; }
+.work-unit-actions .primary-button { flex: 0 0 auto; }
 .work-unit-note { margin: 12px 0 0; color: var(--muted); line-height: 1.55; }
 
 .seasonal-model-panel {
@@ -686,3 +692,4 @@
 @media (max-width: 760px) { .store-shortage-heading { flex-direction: column; } }
 @media (max-width: 980px) { .work-unit-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .work-unit-list { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .work-unit-actions { align-items: stretch; flex-direction: column; } .work-unit-actions .primary-button { width: 100%; } }

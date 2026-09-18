@@ -3315,7 +3315,9 @@
   function rowMatchesProcurementWorkUnit(row, workUnit) {
     if (!workUnit) return true;
     const rowUnit = procurementWorkUnitForRow(row);
-    return Boolean(rowUnit && rowUnit.id === workUnit.id);
+    if (!rowUnit) return false;
+    const memberIds = Array.isArray(workUnit.memberIds) ? workUnit.memberIds : [];
+    return memberIds.length ? memberIds.includes(rowUnit.id) : rowUnit.id === workUnit.id;
   }
 
   function buildRecommendationWorkbook(recommendations, XLSX, options = {}) {
@@ -3798,7 +3800,8 @@
     if (!options.approved) throw new Error("尚未完成正式核准，禁止產生ERP檔案。");
     if (review.errors.length) throw new Error("回匯仍有阻擋項目，禁止產生ERP檔案。");
     const workbook = XLSX.utils.book_new();
-    const rows = review.rows.filter((row) => Number(row.finalQty || 0) > 0);
+    const supplierFilter = normalizeText(options.supplier || "");
+    const rows = review.rows.filter((row) => Number(row.finalQty || 0) > 0 && (!supplierFilter || normalizeText(row.supplier) === supplierFilter));
     if (!rows.length) throw new Error("本批次沒有核准數量大於0的品項，無法產生ERP檔案。");
     const sheet = XLSX.utils.aoa_to_sheet([
       ["貨號", "品名", "顏色", "尺碼", "數量", "價格", "備註", "倉庫"],

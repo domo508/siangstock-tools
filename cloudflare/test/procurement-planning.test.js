@@ -971,6 +971,15 @@ describe("採購建議第二階段", () => {
     expect(output.SheetNames).not.toContain("03B3_普優瑪_無尺寸");
     const exported = XLSX.utils.sheet_to_json(output.Sheets["03B2_普優瑪_長絨棉"], { defval: "" });
     expect(exported.map((row) => row["ERP品號"])).toEqual(["P-C"]);
+    const groupedUnits = units.filter((unit) => ["測試廠商甲", "測試廠商乙"].includes(unit.supplier));
+    const grouped = {
+      id: `GROUP::${groupedUnits.map((unit) => unit.id).join("||")}`,
+      memberIds: groupedUnits.map((unit) => unit.id),
+      label: groupedUnits.map((unit) => unit.label).join("＋")
+    };
+    const groupedOutput = core.buildRecommendationWorkbook(recommendations, XLSX, { selectedSuppliers: ["測試廠商甲", "測試廠商乙"], workUnit: grouped });
+    const groupedRows = XLSX.utils.sheet_to_json(groupedOutput.Sheets["03D_其它供應商"], { defval: "" });
+    expect(groupedRows.map((row) => row["ERP品號"])).toEqual(["O-1", "O-2"]);
   });
 
   it("人工回匯後產生可售至、AI判斷、付款月份與ERP核准門檻", () => {
@@ -998,6 +1007,11 @@ describe("採購建議第二階段", () => {
     expect(erpRows[1]).toEqual(["A1", "60天絲測試床包", "", "", 20, 500, "", "寬承總倉"]);
     expect(erpRows).toHaveLength(2);
     expect(erp.Sheets["通用貨品數量"]["A1"].s).toBeUndefined();
+    const mixedReview = { ...review, rows: [...review.rows, { ...review.rows[0], sku: "B1", supplier: "另一供應商" }] };
+    const supplierErp = core.buildErpPurchaseWorkbook(mixedReview, XLSX, { approved: true, supplier: review.rows[0].supplier });
+    const supplierErpRows = XLSX.utils.sheet_to_json(supplierErp.Sheets["通用貨品數量"], { header: 1, defval: "" });
+    expect(supplierErpRows).toHaveLength(2);
+    expect(supplierErpRows[1][0]).toBe("A1");
   });
 
   it("二次覆核必須逐列明確確認，且會重算最終核准金額", () => {
@@ -1118,8 +1132,10 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="supplier-filter-list"');
     expect(toolHtml).toContain('href="rules-admin/#supplier-display"');
     expect(toolHtml).toContain("管理顯示供應商");
-    expect(toolHtml).toContain("請先選擇分批審核單位");
+    expect(toolHtml).toContain("勾選後下載本批報表");
     expect(toolHtml).toContain("分批審核與開單");
+    expect(toolHtml).toContain('id="work-unit-selection-status"');
+    expect(toolHtml.indexOf('id="work-unit-list"')).toBeLessThan(toolHtml.indexOf('id="download-button"'));
     expect(toolHtml).toContain("春節加量");
     expect(toolHtml).toContain('id="workflow-step-download"');
     expect(toolHtml).toContain('id="review-file-label" class="file-button is-disabled"');
@@ -1133,7 +1149,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260918-batch-units-r1");
+    expect(toolHtml).toContain("20260918-multi-work-units-r1");
     expect(procurementWorker).toContain('/api/procurement/cost-snapshot');
     const costSnapshotMigration = readFileSync("worker/migrations/0021_procurement_cost_snapshots.sql", "utf8");
     expect(costSnapshotMigration).toContain("CREATE TABLE procurement_cost_snapshots");

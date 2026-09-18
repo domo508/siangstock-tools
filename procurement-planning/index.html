@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20260918-batch-units-r1">
+  <link rel="stylesheet" href="style.css?v=20260918-multi-work-units-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -272,7 +272,6 @@
 
       <div class="action-bar">
         <button id="analyze-button" class="primary-button" type="button" disabled>產生採購建議</button>
-        <button id="download-button" class="secondary-button" type="button" disabled>請先選擇分批審核單位</button>
         <p id="main-status" class="main-status" role="status">請先完成日期與本次必要資料。</p>
       </div>
 
@@ -314,7 +313,7 @@
       </div>
       <div class="supplier-filter" aria-labelledby="supplier-filter-title">
         <div class="supplier-filter-heading">
-          <div><h3 id="supplier-filter-title">本次查看與匯出範圍</h3><p>主要供應商直接顯示；其餘廠商可在「其它供應商」展開選取。畫面與Excel金額會同步更新。</p></div>
+          <div><h3 id="supplier-filter-title">本次畫面查看範圍</h3><p>這裡只篩選畫面預覽；實際要合併下載哪些供應商，請在下方「分批審核與開單」複選。</p></div>
           <div class="supplier-filter-actions"><a class="secondary-button supplier-manage-button" href="rules-admin/#supplier-display">管理顯示供應商</a><button id="select-all-suppliers" class="secondary-button" type="button">勾選有建議</button><button id="clear-suppliers" class="secondary-button" type="button">清除</button></div>
         </div>
         <div class="supplier-group-block" aria-labelledby="primary-suppliers-title">
@@ -329,11 +328,15 @@
       </div>
       <section class="work-unit-panel" aria-labelledby="work-unit-title">
         <div class="section-heading compact">
-          <div><h3 id="work-unit-title">分批審核與開單</h3><p>同一次計算為母批次；每家供應商獨立回匯、核准與產生ERP檔。普優瑪再分為三個類別。</p></div>
+          <div><h3 id="work-unit-title">分批審核與開單</h3><p>可複選多個供應商／普優瑪分類合併檢視與回匯；正式核准後，ERP檔仍依供應商分開下載。</p></div>
           <p id="work-unit-total" class="work-unit-total">產生建議後顯示</p>
         </div>
         <div id="work-unit-list" class="work-unit-list"></div>
-        <p class="work-unit-note">只有正式核准的子批次才會占用採購額度；未送出、待核准與已核准不會重複計算。</p>
+        <div class="work-unit-actions">
+          <p id="work-unit-selection-status" class="work-unit-selection-status" role="status">請勾選一個或多個審核單位。</p>
+          <button id="download-button" class="primary-button" type="button" disabled>勾選後下載本批報表</button>
+        </div>
+        <p class="work-unit-note">同一批可包含多個審核單位；只有正式核准的批次才會占用採購額度，未送出、待核准與已核准不會重複計算。</p>
       </section>
       <div id="summary-cards" class="summary-grid procurement-summary"></div>
       <div id="result-alert" class="result-alert" role="status"></div>
@@ -364,7 +367,7 @@
       </aside>
       <div class="resume-file-row"><span>換電腦或已清除瀏覽器資料：</span><label id="restore-report-label" class="secondary-button file-button-inline">選擇先前下載的本批採購建議<input id="restore-report-file" type="file" accept=".xlsx"></label></div>
       <ol class="workflow-progress" aria-label="回匯核准進度">
-        <li id="workflow-step-download" data-status="waiting"><span>1</span><strong>下載本批建議</strong><small>先在上方勾選供應商並下載</small></li>
+        <li id="workflow-step-download" data-status="waiting"><span>1</span><strong>下載本批建議</strong><small>在分批審核區複選單位並下載</small></li>
         <li id="workflow-step-first" data-status="locked"><span>2</span><strong>第一次人工回匯</strong><small>工具重新計算並產生二次覆核</small></li>
         <li id="workflow-step-second" data-status="locked"><span>3</span><strong>二次確認</strong><small>逐列填量後執行最終檢查</small></li>
         <li id="workflow-step-approval" data-status="locked"><span>4</span><strong>核准與ERP</strong><small>正式核准才寄摘要並占用額度</small></li>
@@ -381,7 +384,7 @@
         <label class="workflow-field"><span>ERP採購單號／確認註記</span><input id="erp-reference" type="text" maxlength="120" disabled></label>
         <button id="erp-created-button" class="secondary-button" type="button" disabled>確認ERP已建立</button>
       </div>
-      <p id="workflow-status" class="main-status" role="status">請先在上方產生建議、選擇供應商並下載本批Excel；下載後才會開放第一次人工回匯。</p>
+      <p id="workflow-status" class="main-status" role="status">請先產生建議，再於分批審核區勾選一個或多個單位並下載本批Excel；下載後才會開放第一次人工回匯。</p>
       <div id="workflow-errors" class="workflow-errors" role="alert" hidden><strong id="workflow-error-title">尚有阻擋</strong><ul id="workflow-error-list"></ul></div>
       <div id="workflow-summary" class="summary-grid budget-summary"></div>
       <div class="approval-queue" aria-labelledby="approval-queue-title">
@@ -423,9 +426,9 @@
   <script src="xlsx-style-runtime.js?v=20260915-reader-fix-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260918-report-hierarchy-r1"></script>
+  <script src="core.js?v=20260918-multi-work-units-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
   <script src="google-sources.js?v=20260914-seasonal-auto-r1"></script>
-  <script src="app.js?v=20260918-batch-units-r1"></script>
+  <script src="app.js?v=20260918-multi-work-units-r1"></script>
 </body>
 </html>

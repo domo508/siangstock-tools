@@ -17,7 +17,7 @@
     googleAuthorized: false, modelWorker: null, modelDraft: null,
     baseAnalysis: null, parsedSources: null, workflowType: "system_recommendation",
     newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], storeShortagePermissions: { canDecide: false }, shortageRunMode: "merge_next",
-    purchaseStatusSummary: null, costSummary: null, sharedCostSnapshot: null, draftId: "", draftStage: "", latestDraft: null, workflowDrafts: [], parentBatchId: "", activeWorkUnit: null, forecastCostRate: DEFAULT_COST_RATE
+    purchaseStatusSummary: null, costSummary: null, sharedCostSnapshot: null, draftId: "", draftStage: "", latestDraft: null, workflowDrafts: [], parentBatchId: "", activeWorkUnit: null, selectedWorkUnitIds: new Set(), forecastCostRate: DEFAULT_COST_RATE
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -37,7 +37,7 @@
     blacklistStatus: get("#blacklist-status"), analyze: get("#analyze-button"), download: get("#download-button"), status: get("#main-status"),
     resultPanel: get("#result-panel"), dateCheck: get("#date-check-message"), summaryCards: get("#summary-cards"), resultAlert: get("#result-alert"), resultRows: get("#result-rows"),
     supplierFilterList: get("#supplier-filter-list"), otherSupplierFilterList: get("#other-supplier-filter-list"), otherSupplierGroup: get("#other-supplier-group"), otherSupplierSummary: get("#other-supplier-summary"),
-    supplierScopeStatus: get("#supplier-scope-status"), selectAllSuppliers: get("#select-all-suppliers"), clearSuppliers: get("#clear-suppliers"), workUnitList: get("#work-unit-list"), workUnitTotal: get("#work-unit-total"),
+    supplierScopeStatus: get("#supplier-scope-status"), selectAllSuppliers: get("#select-all-suppliers"), clearSuppliers: get("#clear-suppliers"), workUnitList: get("#work-unit-list"), workUnitTotal: get("#work-unit-total"), workUnitSelectionStatus: get("#work-unit-selection-status"),
     excludedResultPanel: get("#excluded-result-panel"), excludedResultCount: get("#excluded-result-count"), excludedResultRows: get("#excluded-result-rows"),
     forecastRevenue: get("#forecast-revenue"), terminalForecastRevenue: get("#terminal-forecast-revenue"), forecastCost: get("#forecast-cost"), targetEndingCost: get("#target-ending-cost"), openingCost: get("#opening-cost"),
     supplierReturns: get("#supplier-returns"), releasedBudget: get("#released-budget"), purchasedToDate: get("#purchased-to-date"), budgetSourceNote: get("#budget-source-note"),
@@ -213,7 +213,7 @@
   function workflowSnapshot(stage = state.draftStage || "analysis") {
     state.draftId ||= `LOCAL-${new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)}-${Math.random().toString(36).slice(2, 8)}`;
     return {
-      version: WORKFLOW_CACHE.version, id: state.draftId, stage, updatedAt: new Date().toISOString(), parentBatchId: state.parentBatchId, activeWorkUnit: state.activeWorkUnit, batchId: state.batchId,
+      version: WORKFLOW_CACHE.version, id: state.draftId, stage, updatedAt: new Date().toISOString(), parentBatchId: state.parentBatchId, activeWorkUnit: state.activeWorkUnit, selectedWorkUnitIds: [...state.selectedWorkUnitIds], batchId: state.batchId,
       analysis: state.analysis, baseAnalysis: state.baseAnalysis === state.analysis ? null : state.baseAnalysis, workflowType: state.workflowType,
       selectedSuppliers: [...state.selectedSuppliers], returnScope: state.returnScope ? [...state.returnScope] : null,
       firstReview: state.firstReview, review: state.review, purchaseStatusSummary: state.purchaseStatusSummary, costSummary: state.costSummary,
@@ -268,6 +268,7 @@
     });
     state.analysis = draft.analysis; state.baseAnalysis = draft.baseAnalysis || draft.analysis; state.workflowType = draft.workflowType || "system_recommendation";
     state.parentBatchId = draft.parentBatchId || draft.id; state.activeWorkUnit = draft.activeWorkUnit || null;
+    state.selectedWorkUnitIds = new Set(draft.selectedWorkUnitIds || draft.activeWorkUnit?.memberIds || (draft.activeWorkUnit?.id ? [draft.activeWorkUnit.id] : []));
     const restoredSuppliers = new Set(draft.selectedSuppliers || []); state.returnScope = draft.returnScope ? new Set(draft.returnScope) : null;
     state.firstReview = draft.firstReview || null; state.review = draft.review || null; state.purchaseStatusSummary = draft.purchaseStatusSummary || null; state.costSummary = draft.costSummary || null; state.consignmentSource = { styleAudit: draft.consignmentStyleAudit || { pinkDetected: false, pinkCells: 0 } };
     state.draftId = draft.id; state.draftStage = draft.stage; state.latestDraft = draft;
@@ -578,7 +579,7 @@
     element.dataset.status = status;
     if (note) element.querySelector("small").textContent = note;
   }
-  function resetReviewWorkflow(message = "請先在上方選擇供應商並下載本批Excel；下載後才會開放第一次人工回匯。") {
+  function resetReviewWorkflow(message = "請先在分批審核區勾選一個或多個單位並下載本批Excel；下載後才會開放第一次人工回匯。") {
     state.reviewFile = null; state.firstReview = null; state.secondReviewFile = null; state.review = null; state.approved = false; state.erpDownloaded = false; state.batchId = "";
     elements.reviewFile.value = ""; elements.secondReviewFile.value = "";
     setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, false);
@@ -594,9 +595,9 @@
     setWorkflowStatus(message);
   }
   function invalidateAnalysis() {
-    state.analysis = null; state.baseAnalysis = null; state.parsedSources = null; state.workflowType = "system_recommendation"; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null; state.purchaseStatusSummary = null; state.costSummary = null; state.draftId = ""; state.draftStage = ""; state.parentBatchId = ""; state.activeWorkUnit = null;
+    state.analysis = null; state.baseAnalysis = null; state.parsedSources = null; state.workflowType = "system_recommendation"; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null; state.purchaseStatusSummary = null; state.costSummary = null; state.draftId = ""; state.draftStage = ""; state.parentBatchId = ""; state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set();
     elements.download.disabled = true; elements.resultPanel.hidden = true; elements.supplierFilterList.replaceChildren();
-    resetReviewWorkflow("請先在上方產生建議、選擇供應商並下載本批Excel；下載後才會開放第一次人工回匯。");
+    resetReviewWorkflow("請先產生建議，再於分批審核區勾選一個或多個單位並下載本批Excel；下載後才會開放第一次人工回匯。");
     renderBudget();
   }
   function updateSpecialWorkflowReady() {
@@ -1094,38 +1095,81 @@
   function workUnitRows(unit, rows = state.analysis?.suggestedRows || []) {
     return rows.filter((row) => core.rowMatchesProcurementWorkUnit(row, unit));
   }
+  function workUnitMemberIds(unit) {
+    if (!unit) return [];
+    return Array.isArray(unit.memberIds) && unit.memberIds.length ? unit.memberIds : (unit.id ? [unit.id] : []);
+  }
   function workUnitDraft(unit) {
-    return state.workflowDrafts.find((row) => row.parentBatchId === state.parentBatchId && row.activeWorkUnit?.id === unit.id) || null;
+    return state.workflowDrafts.find((row) => row.parentBatchId === state.parentBatchId && workUnitMemberIds(row.activeWorkUnit).includes(unit.id)) || null;
+  }
+  function combinedWorkUnit(units) {
+    const sorted = [...units].sort((left, right) => left.label.localeCompare(right.label, "zh-Hant"));
+    const memberIds = sorted.map((unit) => unit.id);
+    const suppliers = [...new Set(sorted.map((unit) => canonicalSupplierName(unit.supplier)))];
+    return {
+      id: `GROUP::${memberIds.join("||")}`,
+      memberIds,
+      suppliers,
+      supplier: suppliers[0] || "",
+      label: sorted.map((unit) => unit.label).join("＋"),
+      skuCount: sorted.reduce((sum, unit) => sum + Number(unit.skuCount || 0), 0),
+      quantity: sorted.reduce((sum, unit) => sum + Number(unit.quantity || 0), 0),
+      amount: sorted.reduce((sum, unit) => sum + Number(unit.amount || 0), 0)
+    };
   }
   function renderWorkUnitDashboard() {
     if (!elements.workUnitList || !elements.workUnitTotal) return;
     const units = state.analysis ? core.listProcurementWorkUnits(state.analysis) : [];
     const total = units.reduce((sum, unit) => sum + Number(unit.amount || 0), 0);
     elements.workUnitTotal.textContent = units.length ? `${units.length}個審核單位・${formatCurrency(total)}` : "產生建議後顯示";
+    const activeIds = new Set(workUnitMemberIds(state.activeWorkUnit));
     const fragment = document.createDocumentFragment();
     units.forEach((unit) => {
       const draft = workUnitDraft(unit);
-      const card = document.createElement("article"); card.className = `work-unit-card ${state.activeWorkUnit?.id === unit.id ? "is-active" : ""}`.trim();
+      const selected = state.selectedWorkUnitIds.has(unit.id);
+      const card = document.createElement("article"); card.className = `work-unit-card ${activeIds.has(unit.id) ? "is-active" : ""} ${selected ? "is-selected" : ""}`.trim();
+      const heading = document.createElement("label"); heading.className = "work-unit-card-heading";
+      const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = selected; checkbox.disabled = Boolean(draft);
+      checkbox.setAttribute("aria-label", `選擇${unit.label}`);
       const title = document.createElement("strong"); title.textContent = unit.label;
+      heading.append(checkbox, title);
       const detail = document.createElement("small"); detail.textContent = `${formatNumber(unit.skuCount)}個SKU・${formatNumber(unit.quantity)}件・${formatCurrency(unit.amount)}`;
       const status = document.createElement("span"); status.className = "work-unit-status"; status.textContent = draft ? workflowStageLabel(draft.stage) : "尚未開始";
-      const button = document.createElement("button"); button.type = "button"; button.className = state.activeWorkUnit?.id === unit.id ? "primary-button" : "secondary-button";
-      button.textContent = draft ? "開啟此審核單位" : "開始此審核單位";
-      button.addEventListener("click", () => activateWorkUnit(unit));
-      card.append(title, detail, status, button); fragment.appendChild(card);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) state.selectedWorkUnitIds.add(unit.id); else state.selectedWorkUnitIds.delete(unit.id);
+        state.activeWorkUnit = null; state.returnScope = null; state.draftId = ""; state.draftStage = "";
+        const selectedUnits = units.filter((item) => state.selectedWorkUnitIds.has(item.id));
+        state.selectedSuppliers = new Set(selectedUnits.map((item) => canonicalSupplierName(item.supplier)));
+        updateSupplierChecks(); resetReviewWorkflow("已更新分批範圍；確認勾選後，可直接在此下載本批Excel。"); renderWorkUnitDashboard();
+      });
+      card.append(heading, detail, status);
+      if (draft) {
+        const button = document.createElement("button"); button.type = "button"; button.className = activeIds.has(unit.id) ? "primary-button" : "secondary-button";
+        button.textContent = "開啟此批次";
+        button.addEventListener("click", () => restoreWorkflowDraft(draft));
+        card.append(button);
+      }
+      fragment.appendChild(card);
     });
     elements.workUnitList.replaceChildren(fragment);
+    const selectedUnits = units.filter((unit) => state.selectedWorkUnitIds.has(unit.id));
+    const selectedAmount = selectedUnits.reduce((sum, unit) => sum + Number(unit.amount || 0), 0);
+    elements.workUnitSelectionStatus.textContent = selectedUnits.length
+      ? `已選${selectedUnits.length}個審核單位・${formatNumber(selectedUnits.reduce((sum, unit) => sum + Number(unit.skuCount || 0), 0))}個SKU・${formatCurrency(selectedAmount)}`
+      : "請勾選一個或多個審核單位。";
+    elements.download.disabled = !selectedUnits.length || Boolean(state.activeWorkUnit && state.returnScope);
+    elements.download.textContent = selectedUnits.length ? `下載已選${selectedUnits.length}個單位的本批報表` : "勾選後下載本批報表";
   }
-  async function activateWorkUnit(unit) {
-    const draft = workUnitDraft(unit);
-    if (draft) { restoreWorkflowDraft(draft); return; }
-    state.activeWorkUnit = unit; state.parentBatchId ||= newParentBatchId();
+  async function startSelectedWorkUnits() {
+    const units = core.listProcurementWorkUnits(state.analysis).filter((unit) => state.selectedWorkUnitIds.has(unit.id));
+    if (!units.length) return;
+    state.activeWorkUnit = combinedWorkUnit(units); state.parentBatchId ||= newParentBatchId();
     state.draftId = `${state.parentBatchId}-${Math.random().toString(36).slice(2, 8)}`;
     state.draftStage = "analysis"; state.batchId = ""; state.returnScope = null;
-    state.selectedSuppliers = new Set([canonicalSupplierName(unit.supplier)]); updateSupplierChecks();
-    resetReviewWorkflow(`已選擇「${unit.label}」；請下載這一個審核單位的Excel。`);
-    await persistWorkflowDraft("analysis");
+    state.selectedSuppliers = new Set(state.activeWorkUnit.suppliers); updateSupplierChecks();
+    resetReviewWorkflow(`已選擇${units.length}個審核單位，正在下載合併審核報表。`);
     renderWorkUnitDashboard();
+    await downloadRecommendation();
   }
   function selectedRows() {
     if (!state.analysis) return [];
@@ -1194,16 +1238,14 @@
     const scopeNames = [...state.selectedSuppliers];
     const missingPayment = payments.reviewSuppliers.length ? `；${payments.reviewSuppliers.join("、")}付款規則待確認` : "";
     elements.supplierScopeStatus.textContent = scopeNames.length
-      ? `目前查看：${state.activeWorkUnit?.label || scopeNames.join("、")}；${state.activeWorkUnit ? "下載Excel只包含這一個審核單位" : "請在下方選擇一個分批審核單位後下載"}${statusReviewRows.length ? `；其中${statusReviewRows.length}項貨品狀態空白須明確人工確認` : ""}${missingPayment}。`
+      ? `目前查看：${state.activeWorkUnit?.label || scopeNames.join("、")}；請在下方複選要合併審核的單位並直接下載${statusReviewRows.length ? `；其中${statusReviewRows.length}項貨品狀態空白須明確人工確認` : ""}${missingPayment}。`
       : "尚未選擇供應商；請至少勾選一家後再下載。";
     elements.supplierScopeStatus.className = `supplier-scope-status ${scopeNames.length && !payments.reviewSuppliers.length ? "" : "warn"}`.trim();
-    elements.download.disabled = !state.activeWorkUnit;
-    elements.download.textContent = state.activeWorkUnit ? `下載「${state.activeWorkUnit.label}」Excel` : "請先選擇分批審核單位";
     renderExcludedRows();
   }
   function resetScopeForNewExport() {
-    state.activeWorkUnit = null; state.returnScope = null; state.draftId = ""; state.draftStage = "";
-    resetReviewWorkflow("查看範圍已變更；請在「分批審核與開單」選擇一個單位後下載Excel。");
+    state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set(); state.returnScope = null; state.draftId = ""; state.draftStage = "";
+    resetReviewWorkflow("查看範圍已變更；請在「分批審核與開單」勾選一個或多個單位後直接下載Excel。");
     renderSelectedAnalysis();
     renderWorkUnitDashboard();
   }
@@ -1312,11 +1354,11 @@
         } : {}
       };
       state.analysis = analysis; state.baseAnalysis = analysis; state.workflowType = state.shortageRunMode === "new_order" ? "store_shortage_replenishment" : "system_recommendation";
-      state.parentBatchId = newParentBatchId(); state.activeWorkUnit = null; state.draftId = state.parentBatchId;
+      state.parentBatchId = newParentBatchId(); state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set(); state.draftId = state.parentBatchId;
       state.parsedSources = { master, inventory, pendingReports, transferReports: [transferReport], consignment, lirongConsignment, salesReports, model };
       state.consignmentSource = consignment; state.returnScope = null; renderSummary(analysis, consignment);
       elements.resultPanel.hidden = false;
-      resetReviewWorkflow("採購建議已完成；請在「分批審核與開單」選擇一個供應商／普優瑪分類，再下載Excel。");
+      resetReviewWorkflow("採購建議已完成；請在「分批審核與開單」勾選一個或多個供應商／普優瑪分類，直接下載本批Excel。");
       const springFestivalNote = analysis.totals.springFestivalSkuCount > 0
         ? `其中春節停工備貨${analysis.totals.springFestivalSkuCount}個SKU、加量${formatNumber(analysis.totals.springFestivalExtraQty)}件、增加${formatCurrency(analysis.totals.springFestivalExtraAmount)}。`
         : "本次無春節停工備貨加量。";
@@ -1544,14 +1586,16 @@
   }
   async function downloadRecommendation() {
     if (!state.analysis || !state.activeWorkUnit) return;
-    const selected = [state.activeWorkUnit.supplier];
+    const selected = Array.isArray(state.activeWorkUnit.suppliers) && state.activeWorkUnit.suppliers.length
+      ? state.activeWorkUnit.suppliers
+      : [state.activeWorkUnit.supplier];
     const scopeLabel = state.activeWorkUnit.label.replace(/[\\/:*?"<>|]/g, "-").slice(0, 80);
     const workflowLabel = state.analysis.meta?.workflowLabel || "採購建議";
     state.returnScope = new Set(selected);
     const workbook = core.buildRecommendationWorkbook(state.analysis, outputXlsx, { budget: currentBudget(), selectedSuppliers: selected, workUnit: state.activeWorkUnit });
     appendWorkflowSnapshotSheet(workbook, workflowSnapshot("downloaded"));
     outputXlsx.writeFile(workbook, `${elements.month.value}_${elements.checkpoint.value === "mid-month" ? "月中" : elements.checkpoint.value === "month-end" ? "月底" : "月初"}_${scopeLabel}_${workflowLabel}_人工審核.xlsx`, { compression: true, cellStyles: true });
-    resetReviewWorkflow(`已下載「${state.activeWorkUnit.label}」採購建議；完成Excel人工填量後，請選擇這一份第一次回匯檔。`);
+    resetReviewWorkflow(`已下載${state.activeWorkUnit.memberIds?.length || 1}個審核單位的合併採購建議；完成Excel人工填量後，請選擇這一份第一次回匯檔。`);
     setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, true);
     setWorkflowStep(elements.workflowStepDownload, "done", `已下載${state.activeWorkUnit.label}`);
     setWorkflowStep(elements.workflowStepFirst, "active", "請回匯剛下載並完成填量的Excel");
@@ -1691,8 +1735,12 @@
   function downloadErp() {
     if (!state.review || !state.approved) return;
     try {
-      XLSX.writeFile(core.buildErpPurchaseWorkbook(state.review, XLSX, { approved: true, batchId: state.batchId }), `${state.batchId}_ERP正式採購單.xlsx`, { compression: true });
-      state.erpDownloaded = true; elements.erpCreated.disabled = !elements.erpReference.value.trim(); setWorkflowStatus("ERP採購檔已下載；完成ERP開單後請填採購單號或確認註記，再更新台帳狀態。", "success");
+      const suppliers = [...new Set(state.review.rows.filter((row) => Number(row.finalQty || 0) > 0).map((row) => row.supplier))];
+      suppliers.forEach((supplier) => {
+        const safeSupplier = String(supplier || "供應商").replace(/[\\/:*?"<>|]/g, "-").slice(0, 45);
+        XLSX.writeFile(core.buildErpPurchaseWorkbook(state.review, XLSX, { approved: true, batchId: state.batchId, supplier }), `${state.batchId}_${safeSupplier}_ERP正式採購單.xlsx`, { compression: true });
+      });
+      state.erpDownloaded = true; elements.erpCreated.disabled = !elements.erpReference.value.trim(); setWorkflowStatus(`已依供應商分開下載${suppliers.length}份ERP採購檔；完成ERP開單後請填採購單號或確認註記，再更新台帳狀態。`, "success");
     }
     catch (error) { setWorkflowStatus(error.message, "error"); }
   }
@@ -1769,7 +1817,7 @@
   elements.googleConnect.addEventListener("click", connectGoogle); elements.autoSource.addEventListener("click", loadAutomaticSources);
   elements.storeShortageRows.addEventListener("click", decideStoreShortage);
   elements.runShortageOrder.addEventListener("click", async () => { state.shortageRunMode = "new_order"; try { await analyze(); } finally { state.shortageRunMode = "merge_next"; } });
-  elements.analyze.addEventListener("click", analyze); elements.download.addEventListener("click", downloadRecommendation);
+  elements.analyze.addEventListener("click", analyze); elements.download.addEventListener("click", startSelectedWorkUnits);
   elements.reviewButton.addEventListener("click", reviewReturn); elements.confirmReview.addEventListener("click", confirmSecondReview);
   elements.submitApproval.addEventListener("click", submitForApproval); elements.approve.addEventListener("click", approveBatch);
   elements.retryNotification.addEventListener("click", retryNotification); elements.erp.addEventListener("click", downloadErp);
