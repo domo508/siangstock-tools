@@ -145,6 +145,11 @@ describe("展示與最低庫存管理規則", () => {
     for (const name of ["純棉毛巾", "長絨棉浴巾", "隨身手巾"]) expect(core.stockRule({ name }, managed)).toMatchObject({ name: "無尺寸配件", quantity: 1 });
   });
 
+  it("G10009軟枕及商品大類為枕頭的品項列不可售展示2件", () => {
+    expect(core.stockRule({ sku: "G10009", name: "灰鵝絨軟枕", mainCategory: "枕頭" })).toMatchObject({ name: "枕頭／枕芯", role: "不可售展示", quantity: 2, scope: "R00、R06" });
+    expect(core.stockRule({ sku: "G40025", name: "石墨烯機能寢具", mainCategory: "枕頭" })).toMatchObject({ name: "枕頭／枕芯", quantity: 2 });
+  });
+
   it("棉被與被子只有6×7尺列不可售展示", () => {
     const managed = { rules: [{ name: "有尺寸配件", enabled: true, scope: "R00、R06", inventoryRole: "不可售展示", quantity: 1, priority: 70 }] };
     expect(core.stockRule({ name: "6×7尺法國灰鵝絨夏季被" }, managed)).toMatchObject({ name: "有尺寸配件", role: "不可售展示", quantity: 1 });
@@ -248,6 +253,16 @@ describe("整體行銷策略與活動贈品", () => {
     expect(activity.cumulative).toBe(false);
   });
 
+  it("會分辨指定類別小計與指定類別加全單門檻", () => {
+    const workbook = {
+      SheetNames: ["門市銷售波段"],
+      Sheets: { "門市銷售波段": { rows: [["09/01-09/30 指定類別：天絲 消費滿3,000元贈品 贈品貨號：N00144\n09/01-09/30 購買長絨棉類別且全單滿3,500元贈品 贈品貨號：N00145"]] } }
+    };
+    const activities = core.parseMarketingWorkbook(workbook, fakeXlsx, "2026-09-14").giftActivities;
+    expect(activities[0]).toMatchObject({ scopeType: "category", scopeTargets: ["天絲"], thresholdBasis: "scoped_subtotal" });
+    expect(activities[1]).toMatchObject({ scopeType: "category", scopeTargets: ["長絨棉"], thresholdBasis: "order_total" });
+  });
+
   it("活動贈品獨立估算，不會併入一般補貨", () => {
     const gift = { sku: "N00144", name: "聯名隨身鏡", size: "", style1: "贈品" };
     const result = core.buildSuggestions({
@@ -266,7 +281,7 @@ describe("整體行銷策略與活動贈品", () => {
     expect(result.regularRows).toHaveLength(0);
     expect(result.activityRows).toHaveLength(1);
     expect(result.activityRows[0].itemType).toBe("activity_gift");
-    expect(result.activityRows[0].suggestedQuantity).toBe(3);
+    expect(result.activityRows[0].suggestedQuantity).toBe(2);
   });
 
   it("以門市POS平均客單與實際達標率預估贈品", () => {
@@ -285,7 +300,61 @@ describe("整體行銷策略與活動贈品", () => {
     });
     expect(result.activityRows[0].averageTicket).toBe(2625);
     expect(result.activityRows[0].eligibleRate).toBe(.5);
-    expect(result.activityRows[0].forecastOrders).toBe(4);
-    expect(result.activityRows[0].suggestedQuantity).toBe(2);
+    expect(result.activityRows[0].forecastOrders).toBe(2);
+    expect(result.activityRows[0].suggestedQuantity).toBe(1);
+  });
+
+  it("本批到店日晚於活動結束日時保留稽核列但不建立調撥品項", () => {
+    const result = core.buildSuggestions({
+      proposalDate: "2026-09-13", storeCodes: ["R00"],
+      master: { bySku: new Map([["N00111", { sku: "N00111", name: "活動贈品", style1: "贈品" }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "N00111", quantity: 100 }] }, transfer: { records: [] },
+      sales: [{ maxDate: "2026-09-13", records: [{ warehouseCode: "R00", shipWarehouseCode: "R00", sku: "N00111", date: "2026-09-13", quantity: 14, deductQuantity: 14, saleType: "銷貨" }], takeRecords: [] }],
+      marketing: { giftActivities: [{ startDate: "2026-09-01", endDate: "2026-09-14", giftSkus: ["N00111"], scopeType: "all", scopeLabel: "全館", thresholdBasis: "order_total", thresholdBasisLabel: "整張訂單", thresholdType: "manual", thresholdText: "門檻需人工確認" }], warnings: [] }
+    });
+    expect(result.activityRows[0]).toMatchObject({ currentArrivalDate: "2026-09-16", effectiveDays: 0, suggestedQuantity: 0 });
+    expect(result.rows.some((row) => row.itemType === "activity_gift")).toBe(false);
+  });
+
+  it("前一輪活動贈品只保障到活動結束日", () => {
+    const result = core.buildSuggestions({
+      proposalDate: "2026-09-04", storeCodes: ["R00"],
+      master: { bySku: new Map([["N00111", { sku: "N00111", name: "活動贈品", style1: "贈品" }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "N00111", quantity: 100 }] }, transfer: { records: [] },
+      sales: [{ maxDate: "2026-09-04", records: [{ warehouseCode: "R00", shipWarehouseCode: "R00", sku: "N00111", date: "2026-09-04", quantity: 21, deductQuantity: 21, saleType: "銷貨" }], takeRecords: [] }],
+      marketing: { giftActivities: [{ startDate: "2026-09-01", endDate: "2026-09-14", giftSkus: ["N00111"], scopeType: "all", scopeLabel: "全館", thresholdBasis: "order_total", thresholdBasisLabel: "整張訂單", thresholdType: "manual", thresholdText: "門檻需人工確認" }], warnings: [] }
+    });
+    expect(result.activityRows[0]).toMatchObject({ currentArrivalDate: "2026-09-09", effectiveDays: 6 });
+    expect(result.activityRows[0].ruleSummary).toContain("至2026-09-14");
+  });
+
+  it("指定類別活動只使用命中類別的訂單", () => {
+    const sales = [
+      { warehouseCode: "R00", shipWarehouseCode: "R00", sku: "T001", date: "2026-09-13", quantity: 1, deductQuantity: 1, actualAmount: 4000, posOrder: "A", saleType: "銷貨" },
+      { warehouseCode: "R00", shipWarehouseCode: "R00", sku: "C001", date: "2026-09-13", quantity: 1, deductQuantity: 1, actualAmount: 9000, posOrder: "B", saleType: "銷貨" }
+    ];
+    const result = core.buildSuggestions({
+      proposalDate: "2026-09-13", storeCodes: ["R00"],
+      master: { bySku: new Map([["T001", { sku: "T001", name: "天絲床包", mainCategory: "天絲" }], ["C001", { sku: "C001", name: "純棉床包", mainCategory: "純棉" }], ["N00111", { sku: "N00111", name: "贈品", style1: "贈品" }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "N00111", quantity: 100 }] }, transfer: { records: [] },
+      sales: [{ maxDate: "2026-09-13", records: sales, takeRecords: [] }],
+      marketing: { giftActivities: [{ startDate: "2026-09-01", endDate: "2026-09-30", giftSkus: ["N00111"], scopeType: "category", scopeLabel: "指定類別：天絲", scopeTargets: ["天絲"], thresholdBasis: "scoped_subtotal", thresholdBasisLabel: "只計指定範圍小計", thresholdType: "amount", thresholdValue: 3000, giftQuantity: 1, cumulative: false, thresholdText: "滿3,000元" }], warnings: [] }
+    });
+    expect(result.activityRows[0]).toMatchObject({ matchingOrderCount: 1, averageTicket: 4000, eligibleRate: 1, activityScope: "指定類別：天絲" });
+  });
+
+  it("指定類別且全單滿額時先命中類別再用整張訂單判斷", () => {
+    const sales = [
+      { warehouseCode: "R00", shipWarehouseCode: "R00", sku: "T001", date: "2026-09-13", quantity: 1, deductQuantity: 1, actualAmount: 1000, posOrder: "A", saleType: "銷貨" },
+      { warehouseCode: "R00", shipWarehouseCode: "R00", sku: "C001", date: "2026-09-13", quantity: 1, deductQuantity: 1, actualAmount: 2500, posOrder: "A", saleType: "銷貨" }
+    ];
+    const result = core.buildSuggestions({
+      proposalDate: "2026-09-13", storeCodes: ["R00"],
+      master: { bySku: new Map([["T001", { sku: "T001", name: "天絲床包", mainCategory: "天絲" }], ["C001", { sku: "C001", name: "純棉床包", mainCategory: "純棉" }], ["N00111", { sku: "N00111", name: "贈品", style1: "贈品" }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "N00111", quantity: 100 }] }, transfer: { records: [] },
+      sales: [{ maxDate: "2026-09-13", records: sales, takeRecords: [] }],
+      marketing: { giftActivities: [{ startDate: "2026-09-01", endDate: "2026-09-30", giftSkus: ["N00111"], scopeType: "category", scopeLabel: "指定類別：天絲", scopeTargets: ["天絲"], thresholdBasis: "order_total", thresholdBasisLabel: "訂單含指定範圍後，以整張訂單計算", thresholdType: "amount", thresholdValue: 3000, giftQuantity: 1, cumulative: false, thresholdText: "滿3,000元" }], warnings: [] }
+    });
+    expect(result.activityRows[0]).toMatchObject({ matchingOrderCount: 1, averageTicket: 1000, eligibleRate: 1 });
   });
 });
