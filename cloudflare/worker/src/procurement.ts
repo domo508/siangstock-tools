@@ -6,6 +6,7 @@ type ProcurementEnv = AccessConfig & { DB: D1Database; ALLOWED_ORIGINS: string; 
 
 const ADMIN_EMAIL = "siang01@siangapato.com.tw";
 const MAX_SUMMARY_BYTES = 524288;
+const MAX_COLLABORATION_DRAFT_BYTES = 7 * 1024 * 1024;
 const SUPPLIERS = Object.freeze([
   ["家禾", "domestic", 40], ["上林", "domestic", 5], ["力榮", "domestic", 14],
   ["普優瑪寢具有限公司", "domestic", 5], ["歐必斯", "domestic", 10], ["昭元棉業", "domestic", 50],
@@ -50,6 +51,41 @@ async function body(request: Request): Promise<Record<string, unknown>> {
     return parsed;
   } catch {
     throw new RequestValidationError("JSON 格式錯誤。");
+  }
+}
+
+async function collaborationBody(request: Request): Promise<Record<string, unknown>> {
+  if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get("Content-Type") || "")) {
+    throw new RequestValidationError("Content-Type 必須是 application/json。", 415);
+  }
+  const declared = Number(request.headers.get("Content-Length") || 0);
+  if (declared > MAX_COLLABORATION_DRAFT_BYTES) throw new RequestValidationError("協作草稿超過 7 MB 上限；請重新產生較小的分批審核草稿。", 413);
+  if (!request.body) throw new RequestValidationError("缺少協作草稿內容。");
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_COLLABORATION_DRAFT_BYTES) {
+      await reader.cancel();
+      throw new RequestValidationError("協作草稿超過 7 MB 上限；請重新產生較小的分批審核草稿。", 413);
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  let text: string;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch { throw new RequestValidationError("協作草稿必須使用 UTF-8 編碼。"); }
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+    return parsed;
+  } catch {
+    throw new RequestValidationError("協作草稿 JSON 格式錯誤。");
   }
 }
 
@@ -354,6 +390,105 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
     },
     batches
   });
+}
+
+const COLLABORATION_STAGES = new Set(["analysis", "downloaded", "first_reviewed", "second_reviewed", "pending_approval", "approved", "erp_created"]);
+const COLLABORATION_ENCODINGS = new Set(["gzip-base64", "json"]);
+
+function serializeCollaborationDraft(row: Record<string, unknown>, includePayload = false): Record<string, unknown> {
+  const result: Record<string, unknown> = {
+    id: String(row.id),
+    analysisMonth: String(row.analysis_month),
+    checkpoint: String(row.checkpoint),
+    workflowType: String(row.workflow_type),
+    stage: String(row.stage),
+    workUnitLabel: String(row.work_unit_label || ""),
+    supplierSummary: parseJsonText(String(row.supplier_summary || "[]")) || [],
+    amount: Number(row.amount || 0),
+    revision: Number(row.revision || 1),
+    createdAt: String(row.created_at),
+    createdBy: String(row.created_by),
+    updatedAt: String(row.updated_at),
+    updatedBy: String(row.updated_by)
+  };
+  if (includePayload) {
+    result.payloadEncoding = String(row.payload_encoding);
+    result.payload = String(row.payload);
+    result.payloadSha256 = String(row.payload_sha256);
+  }
+  return result;
+}
+
+async function listCollaborationDrafts(request: Request, env: ProcurementEnv): Promise<Response> {
+  await verifyCompanyUser(request, procurementAccess(env));
+  const requestedMonth = month(new URL(request.url).searchParams.get("month"));
+  const rows = await env.DB.prepare(
+    "SELECT id, analysis_month, checkpoint, workflow_type, stage, work_unit_label, supplier_summary, amount, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE analysis_month = ? AND stage != 'erp_created' ORDER BY updated_at DESC LIMIT 100"
+  ).bind(requestedMonth).all<Record<string, unknown>>();
+  return json({ month: requestedMonth, drafts: rows.results.map((row) => serializeCollaborationDraft(row)) });
+}
+
+async function getCollaborationDraft(request: Request, env: ProcurementEnv, draftId: string): Promise<Response> {
+  await verifyCompanyUser(request, procurementAccess(env));
+  const id = string(draftId, "協作草稿編號", 100);
+  const row = await env.DB.prepare(
+    "SELECT id, analysis_month, checkpoint, workflow_type, stage, work_unit_label, supplier_summary, amount, payload_encoding, payload, payload_sha256, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE id = ?"
+  ).bind(id).first<Record<string, unknown>>();
+  if (!row) throw new RequestValidationError("找不到這筆公司共用協作草稿。", 404);
+  return json({ draft: serializeCollaborationDraft(row, true) });
+}
+
+async function saveCollaborationDraft(request: Request, env: ProcurementEnv, draftId: string): Promise<Response> {
+  requireSameOrigin(request, env);
+  const actor = await verifyCompanyUser(request, procurementAccess(env));
+  const input = await collaborationBody(request);
+  const id = string(draftId, "協作草稿編號", 100);
+  const analysisMonth = month(input.analysisMonth);
+  const checkpoint = string(input.checkpoint, "使用時點", 20);
+  if (!["month-start", "mid-month", "month-end"].includes(checkpoint)) throw new RequestValidationError("使用時點格式錯誤。");
+  const workflowType = string(input.workflowType, "採購流程", 40);
+  const stage = string(input.stage, "草稿階段", 30);
+  if (!COLLABORATION_STAGES.has(stage)) throw new RequestValidationError("草稿階段格式錯誤。");
+  const workUnitLabel = String(input.workUnitLabel || "").normalize("NFKC").trim();
+  if (workUnitLabel.length > 300) throw new RequestValidationError("審核單位名稱過長。");
+  const suppliers = input.supplierSummary == null ? [] : input.supplierSummary;
+  if (!Array.isArray(suppliers) || suppliers.length > 100 || suppliers.some((value) => typeof value !== "string" || !value.trim() || value.trim().length > 120)) {
+    throw new RequestValidationError("供應商摘要格式錯誤。");
+  }
+  const amount = money(input.amount, "草稿採購金額");
+  const payloadEncoding = string(input.payloadEncoding, "草稿壓縮格式", 20);
+  if (!COLLABORATION_ENCODINGS.has(payloadEncoding)) throw new RequestValidationError("草稿壓縮格式錯誤。");
+  const payload = string(input.payload, "協作草稿內容", 6 * 1024 * 1024);
+  if (payloadEncoding === "gzip-base64" && !/^[A-Za-z0-9+/]+={0,2}$/.test(payload)) throw new RequestValidationError("協作草稿壓縮內容格式錯誤。");
+  if (payloadEncoding === "json") {
+    try { JSON.parse(payload); } catch { throw new RequestValidationError("協作草稿內容不是有效 JSON。"); }
+  }
+  const payloadSha256 = string(input.payloadSha256, "草稿雜湊", 64).toLocaleLowerCase("en-US");
+  if (!/^[a-f0-9]{64}$/.test(payloadSha256)) throw new RequestValidationError("草稿雜湊格式錯誤。");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
+  const actualSha256 = [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+  if (actualSha256 !== payloadSha256) throw new RequestValidationError("協作草稿內容檢核失敗，請重新發布。");
+  const expectedRevision = Number(input.expectedRevision);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) throw new RequestValidationError("協作草稿版本格式錯誤。");
+  const supplierSummary = JSON.stringify([...new Set(suppliers.map((value) => value.trim()))]);
+  const now = new Date().toISOString();
+  const existing = await env.DB.prepare("SELECT revision FROM procurement_collaboration_drafts WHERE id = ?").bind(id).first<{ revision: number }>();
+  if (!existing) {
+    if (expectedRevision !== 0) throw new RequestValidationError("協作草稿已不存在或版本已改變，請重新整理。", 409);
+    await env.DB.prepare(
+      "INSERT INTO procurement_collaboration_drafts (id, analysis_month, checkpoint, workflow_type, stage, work_unit_label, supplier_summary, amount, payload_encoding, payload, payload_sha256, revision, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)"
+    ).bind(id, analysisMonth, checkpoint, workflowType, stage, workUnitLabel, supplierSummary, amount, payloadEncoding, payload, payloadSha256, now, actor, now, actor).run();
+  } else {
+    if (Number(existing.revision) !== expectedRevision) throw new RequestValidationError("這筆協作草稿已由其他同事更新，為避免覆蓋，請重新開啟公司共用最新版。", 409);
+    const updated = await env.DB.prepare(
+      "UPDATE procurement_collaboration_drafts SET analysis_month = ?, checkpoint = ?, workflow_type = ?, stage = ?, work_unit_label = ?, supplier_summary = ?, amount = ?, payload_encoding = ?, payload = ?, payload_sha256 = ?, revision = revision + 1, updated_at = ?, updated_by = ? WHERE id = ? AND revision = ?"
+    ).bind(analysisMonth, checkpoint, workflowType, stage, workUnitLabel, supplierSummary, amount, payloadEncoding, payload, payloadSha256, now, actor, id, expectedRevision).run();
+    if (Number(updated.meta.changes || 0) !== 1) throw new RequestValidationError("這筆協作草稿已由其他同事更新，為避免覆蓋，請重新開啟公司共用最新版。", 409);
+  }
+  const saved = await env.DB.prepare(
+    "SELECT id, analysis_month, checkpoint, workflow_type, stage, work_unit_label, supplier_summary, amount, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE id = ?"
+  ).bind(id).first<Record<string, unknown>>();
+  return json({ draft: serializeCollaborationDraft(saved || {}) }, existing ? 200 : 201);
 }
 
 function serializeCostSnapshot(row: Record<string, unknown>) {
@@ -770,6 +905,10 @@ export async function procurementRoute(request: Request, env: ProcurementEnv): P
   if (url.pathname === "/api/procurement/access-settings" && request.method === "GET") return accessSettings(request, env);
   if (url.pathname === "/api/procurement/access-settings" && request.method === "PUT") return saveAccessSettings(request, env);
   if (url.pathname === "/api/procurement/ledger" && request.method === "GET") return ledger(request, env);
+  if (url.pathname === "/api/procurement/collaboration-drafts" && request.method === "GET") return listCollaborationDrafts(request, env);
+  const collaborationDraftMatch = url.pathname.match(/^\/api\/procurement\/collaboration-drafts\/([^/]+)$/);
+  if (collaborationDraftMatch && request.method === "GET") return getCollaborationDraft(request, env, decodeURIComponent(collaborationDraftMatch[1]));
+  if (collaborationDraftMatch && request.method === "PUT") return saveCollaborationDraft(request, env, decodeURIComponent(collaborationDraftMatch[1]));
   if (url.pathname === "/api/procurement/store-shortages" && request.method === "GET") return storeShortageNeeds(request, env);
   if (url.pathname === "/api/procurement/pending-purchase-snapshot" && request.method === "PUT") return savePendingPurchaseSnapshot(request, env);
   const shortageDecisionMatch = url.pathname.match(/^\/api\/procurement\/store-shortages\/([^/]+)\/([^/]+)$/);
@@ -799,4 +938,5 @@ export async function cleanupNotifications(env: ProcurementEnv): Promise<void> {
   const setting = await env.DB.prepare("SELECT notification_retention_months FROM procurement_settings WHERE id = 1").first<{ notification_retention_months: number }>();
   const months = Math.max(1, Math.min(12, Number(setting?.notification_retention_months || 12)));
   await env.DB.prepare("DELETE FROM procurement_notifications WHERE created_at < datetime('now', ?)").bind(`-${months} months`).run();
+  await env.DB.prepare("DELETE FROM procurement_collaboration_drafts WHERE updated_at < datetime('now', '-12 months')").run();
 }

@@ -17,7 +17,7 @@
     googleAuthorized: false, modelWorker: null, modelDraft: null,
     baseAnalysis: null, parsedSources: null, workflowType: "system_recommendation",
     newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], storeShortagePermissions: { canDecide: false }, shortageRunMode: "merge_next",
-    purchaseStatusSummary: null, costSummary: null, sharedCostSnapshot: null, draftId: "", draftStage: "", latestDraft: null, workflowDrafts: [], parentBatchId: "", activeWorkUnit: null, selectedWorkUnitIds: new Set(), forecastCostRate: DEFAULT_COST_RATE
+    purchaseStatusSummary: null, costSummary: null, sharedCostSnapshot: null, draftId: "", draftStage: "", latestDraft: null, workflowDrafts: [], sharedDrafts: [], sharedDraftId: "", sharedDraftRevision: 0, parentBatchId: "", activeWorkUnit: null, selectedWorkUnitIds: new Set(), forecastCostRate: DEFAULT_COST_RATE
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -50,7 +50,7 @@
     approvalQueueRows: get("#approval-queue-rows"), refreshQueue: get("#refresh-queue-button"),
     reviewFileLabel: get("#review-file-label"), secondReviewFileLabel: get("#second-review-file-label"),
     workflowStepDownload: get("#workflow-step-download"), workflowStepFirst: get("#workflow-step-first"), workflowStepSecond: get("#workflow-step-second"), workflowStepApproval: get("#workflow-step-approval"),
-    resumeDraftCard: get("#resume-draft-card"), resumeDraftList: get("#resume-draft-list"), restoreReportFile: get("#restore-report-file"), restoreReportLabel: get("#restore-report-label")
+    resumeDraftCard: get("#resume-draft-card"), resumeDraftList: get("#resume-draft-list"), sharedDraftList: get("#shared-draft-list"), sharedDraftStatus: get("#shared-draft-status"), refreshSharedDrafts: get("#refresh-shared-drafts-button"), restoreReportFile: get("#restore-report-file"), restoreReportLabel: get("#restore-report-label")
     ,newProductFile: get("#new-product-file"), newProductButton: get("#new-product-button"), manualDraftFiles: get("#manual-draft-files"), manualDraftButton: get("#manual-draft-button"),
     postedOrderFiles: get("#posted-order-files"), postedOrderButton: get("#posted-order-button"), specialWorkflowStatus: get("#special-workflow-status"), activeLedgerRows: get("#active-ledger-rows"),
     storeShortageCount: get("#store-shortage-count"), storeShortageEmpty: get("#store-shortage-empty"), storeShortageTableWrap: get("#store-shortage-table-wrap"), storeShortageRows: get("#store-shortage-rows"), storeShortageStatus: get("#store-shortage-status"), runShortageOrder: get("#run-shortage-order-button")
@@ -215,7 +215,7 @@
   function workflowSnapshot(stage = state.draftStage || "analysis") {
     state.draftId ||= `LOCAL-${new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)}-${Math.random().toString(36).slice(2, 8)}`;
     return {
-      version: WORKFLOW_CACHE.version, id: state.draftId, stage, updatedAt: new Date().toISOString(), parentBatchId: state.parentBatchId, activeWorkUnit: state.activeWorkUnit, batchId: state.batchId,
+      version: WORKFLOW_CACHE.version, id: state.draftId, stage, updatedAt: new Date().toISOString(), sharedDraftId: state.sharedDraftId, sharedDraftRevision: state.sharedDraftRevision, parentBatchId: state.parentBatchId, activeWorkUnit: state.activeWorkUnit, batchId: state.batchId,
       analysis: state.analysis, baseAnalysis: state.baseAnalysis === state.analysis ? null : state.baseAnalysis, workflowType: state.workflowType,
       selectedSuppliers: [...state.selectedSuppliers], returnScope: state.returnScope ? [...state.returnScope] : null,
       firstReview: state.firstReview, review: state.review, purchaseStatusSummary: state.purchaseStatusSummary, costSummary: state.costSummary,
@@ -236,6 +236,7 @@
       state.latestDraft = state.workflowDrafts.find(isUnfinishedWorkflowDraft) || null;
       renderResumeDrafts();
       renderWorkUnitDashboard();
+      if (snapshot.sharedDraftId) await syncSharedWorkflowDraft(snapshot);
     } catch (error) { console.warn("未完成採購批次無法保存於本機", error); }
   }
 
@@ -251,7 +252,7 @@
   function renderResumeDrafts() {
     if (!elements.resumeDraftCard || !elements.resumeDraftList) return;
     const drafts = state.workflowDrafts.filter(isUnfinishedWorkflowDraft);
-    elements.resumeDraftCard.hidden = drafts.length === 0;
+    elements.resumeDraftCard.hidden = drafts.length === 0 && state.sharedDrafts.length === 0;
     const fragment = document.createDocumentFragment();
     drafts.forEach((draft) => {
       const checkpoint = ({ "month-start": "月初採購", "mid-month": "月中採購", "month-end": "月底驗證" })[draft.controls?.checkpoint] || "採購";
@@ -264,12 +265,14 @@
       copy.append(title, summary);
       const actions = document.createElement("div"); actions.className = "resume-draft-actions";
       const resume = document.createElement("button"); resume.type = "button"; resume.className = "primary-button"; resume.textContent = "繼續操作";
-      resume.addEventListener("click", () => { try { restoreWorkflowDraft(draft); } catch (error) { setWorkflowStatus(`無法恢復：${error.message}`, "error"); } });
+      resume.addEventListener("click", async () => { try { if (draft.sharedDraftId) await openSharedWorkflowDraft(draft.sharedDraftId); else restoreWorkflowDraft(draft); } catch (error) { setWorkflowStatus(`無法恢復：${error.message}`, "error"); } });
       const redownload = document.createElement("button"); redownload.type = "button"; redownload.className = "secondary-button"; redownload.textContent = "重新下載本批報表";
       redownload.addEventListener("click", async () => { try { restoreWorkflowDraft(draft); await downloadRecommendation(); } catch (error) { setWorkflowStatus(`無法重新下載：${error.message}`, "error"); } });
+      const publish = document.createElement("button"); publish.type = "button"; publish.className = "secondary-button"; publish.textContent = draft.sharedDraftId ? "更新協作草稿" : "發布協作草稿";
+      publish.addEventListener("click", async () => { publish.disabled = true; try { await publishWorkflowDraft(draft); } catch (error) { setWorkflowStatus(`協作草稿發布失敗：${error.message}`, "error"); } finally { publish.disabled = false; } });
       const discard = document.createElement("button"); discard.type = "button"; discard.className = "secondary-button"; discard.textContent = "移除本機紀錄";
       discard.addEventListener("click", async () => { if (globalThis.confirm("只移除這筆瀏覽器本機續作紀錄，不會刪除已下載Excel或公司台帳。確定移除？")) await removeWorkflowDraft(draft.id); });
-      actions.append(resume, redownload, discard); item.append(copy, actions); fragment.append(item);
+      actions.append(resume, redownload, publish, discard); item.append(copy, actions); fragment.append(item);
     });
     elements.resumeDraftList.replaceChildren(fragment);
   }
@@ -286,7 +289,7 @@
       if (target && value) target.value = value;
     });
     state.analysis = draft.analysis; state.baseAnalysis = draft.baseAnalysis || draft.analysis; state.workflowType = draft.workflowType || "system_recommendation";
-    state.parentBatchId = draft.parentBatchId || draft.id; state.activeWorkUnit = draft.activeWorkUnit || null;
+    state.parentBatchId = draft.parentBatchId || draft.id; state.activeWorkUnit = draft.activeWorkUnit || null; state.sharedDraftId = draft.sharedDraftId || ""; state.sharedDraftRevision = Number(draft.sharedDraftRevision || 0);
     state.selectedWorkUnitIds = new Set();
     const restoredSuppliers = new Set(draft.selectedSuppliers || []); state.returnScope = draft.returnScope ? new Set(draft.returnScope) : null;
     state.firstReview = draft.firstReview || null; state.review = draft.review || null; state.purchaseStatusSummary = draft.purchaseStatusSummary || null; state.costSummary = draft.costSummary || null; state.consignmentSource = { styleAudit: draft.consignmentStyleAudit || { pinkDetected: false, pinkCells: 0 } };
@@ -345,6 +348,188 @@
       if (value?.__localType === "Set") return new Set(value.value || []);
       return value;
     });
+  }
+
+  function sharedSnapshotJson(draft) {
+    const clone = JSON.parse(snapshotJson(draft));
+    clone.baseAnalysis = null;
+    if (clone.analysis) {
+      delete clone.analysis.model;
+      delete clone.analysis.pending;
+      delete clone.analysis.transfers;
+    }
+    const stripLocalSourceNames = (value) => {
+      if (Array.isArray(value)) return value.map(stripLocalSourceNames);
+      if (!value || typeof value !== "object") return value;
+      for (const key of Object.keys(value)) {
+        if (["fileName", "sourceFile", "sourceFiles"].includes(key)) delete value[key];
+        else value[key] = stripLocalSourceNames(value[key]);
+      }
+      return value;
+    };
+    return JSON.stringify(stripLocalSourceNames(clone));
+  }
+
+  function bytesToBase64(bytes) {
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 32768) binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+    return btoa(binary);
+  }
+
+  function base64ToBytes(value) {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  }
+
+  async function sha256(value) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function encodeSharedSnapshot(draft) {
+    const json = sharedSnapshotJson(draft);
+    if (typeof CompressionStream === "function") {
+      const stream = new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"));
+      const payload = bytesToBase64(new Uint8Array(await new Response(stream).arrayBuffer()));
+      return { payloadEncoding: "gzip-base64", payload, payloadSha256: await sha256(payload) };
+    }
+    return { payloadEncoding: "json", payload: json, payloadSha256: await sha256(json) };
+  }
+
+  async function decodeSharedSnapshot(draft) {
+    if (await sha256(draft.payload) !== draft.payloadSha256) throw new Error("協作草稿內容檢核失敗，請重新整理後再試。");
+    let json = draft.payload;
+    if (draft.payloadEncoding === "gzip-base64") {
+      if (typeof DecompressionStream !== "function") throw new Error("目前瀏覽器不支援協作草稿解壓縮，請更新 Chrome 後再試。");
+      const stream = new Blob([base64ToBytes(draft.payload)]).stream().pipeThrough(new DecompressionStream("gzip"));
+      json = await new Response(stream).text();
+    }
+    if (draft.payloadEncoding !== "gzip-base64" && draft.payloadEncoding !== "json") throw new Error("協作草稿格式不相容。");
+    const snapshot = snapshotFromJson(json);
+    snapshot.sharedDraftId = draft.id;
+    snapshot.sharedDraftRevision = draft.revision;
+    return snapshot;
+  }
+
+  function sharedDraftSuppliers(draft) {
+    const fromReview = draft.review?.rows?.map((row) => row.supplier) || draft.firstReview?.rows?.map((row) => row.supplier) || [];
+    const fromWorkUnit = draft.activeWorkUnit?.memberLabels || (draft.activeWorkUnit?.label ? [draft.activeWorkUnit.label] : []);
+    return [...new Set([...fromReview, ...fromWorkUnit].map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 100);
+  }
+
+  function sharedDraftAmount(draft) {
+    return Math.max(0, Number(draft.review?.totals?.approvedAmount ?? draft.firstReview?.totals?.manualAmount ?? draft.activeWorkUnit?.amount ?? 0));
+  }
+
+  async function saveLocalDraftSnapshot(snapshot) {
+    const records = (await readWorkflowDrafts()).filter((row) => row.id !== snapshot.id);
+    records.unshift(snapshot);
+    state.workflowDrafts = records.slice(0, WORKFLOW_CACHE.maxRecords);
+    await writeWorkflowDrafts(state.workflowDrafts);
+    state.latestDraft = state.workflowDrafts.find(isUnfinishedWorkflowDraft) || null;
+  }
+
+  async function saveSharedWorkflowDraft(draft, expectedRevision) {
+    const encoded = await encodeSharedSnapshot(draft);
+    const result = await postJson(`/api/procurement/collaboration-drafts/${encodeURIComponent(draft.sharedDraftId || draft.id)}`, {
+      analysisMonth: draft.controls?.month,
+      checkpoint: draft.controls?.checkpoint,
+      workflowType: draft.workflowType || "system_recommendation",
+      stage: draft.stage || "analysis",
+      workUnitLabel: draft.activeWorkUnit?.label || "尚未選擇審核單位",
+      supplierSummary: sharedDraftSuppliers(draft),
+      amount: sharedDraftAmount(draft),
+      ...encoded,
+      expectedRevision
+    }, {}, "PUT");
+    return result.draft;
+  }
+
+  async function updateSharedMetadata(localDraft, shared) {
+    localDraft.sharedDraftId = shared.id;
+    localDraft.sharedDraftRevision = shared.revision;
+    localDraft.updatedAt = shared.updatedAt;
+    await saveLocalDraftSnapshot(localDraft);
+    if (state.draftId === localDraft.id) {
+      state.sharedDraftId = shared.id;
+      state.sharedDraftRevision = shared.revision;
+    }
+    const index = state.sharedDrafts.findIndex((row) => row.id === shared.id);
+    if (shared.stage === "erp_created") {
+      if (index >= 0) state.sharedDrafts.splice(index, 1);
+    } else if (index >= 0) state.sharedDrafts[index] = shared;
+    else state.sharedDrafts.unshift(shared);
+    renderResumeDrafts();
+    renderSharedDrafts();
+  }
+
+  async function publishWorkflowDraft(draft) {
+    const localDraft = { ...draft, sharedDraftId: draft.sharedDraftId || draft.id, sharedDraftRevision: Number(draft.sharedDraftRevision || 0) };
+    setWorkflowStatus("正在發布公司共用協作草稿；原始Excel不會上傳…");
+    const shared = await saveSharedWorkflowDraft(localDraft, localDraft.sharedDraftRevision);
+    await updateSharedMetadata(localDraft, shared);
+    setWorkflowStatus(`協作草稿已發布；${shared.updatedBy}與其他授權同事現在都能查看並接續。`, "success");
+  }
+
+  async function syncSharedWorkflowDraft(snapshot) {
+    try {
+      const shared = await saveSharedWorkflowDraft(snapshot, Number(snapshot.sharedDraftRevision || 0));
+      await updateSharedMetadata(snapshot, shared);
+    } catch (error) {
+      setWorkflowStatus(`本機進度已保存，但公司共用草稿未同步：${error.message}`, "error");
+      throw error;
+    }
+  }
+
+  function renderSharedDrafts() {
+    if (!elements.sharedDraftList || !elements.sharedDraftStatus) return;
+    const fragment = document.createDocumentFragment();
+    state.sharedDrafts.forEach((draft) => {
+      const item = document.createElement("article"); item.className = "resume-draft-item is-shared";
+      const copy = document.createElement("div");
+      const checkpoint = ({ "month-start": "月初採購", "mid-month": "月中採購", "month-end": "月底驗證" })[draft.checkpoint] || "採購";
+      const title = document.createElement("strong"); title.textContent = `${draft.analysisMonth}・${checkpoint}・${draft.workUnitLabel || "尚未選擇審核單位"}`;
+      const summary = document.createElement("p");
+      summary.textContent = `${workflowStageLabel(draft.stage)}・${formatCurrency(draft.amount)}・第${draft.revision}版・${draft.updatedBy}更新於${taipeiDateTime(draft.updatedAt)}`;
+      copy.append(title, summary);
+      const actions = document.createElement("div"); actions.className = "resume-draft-actions";
+      const open = document.createElement("button"); open.type = "button"; open.className = "primary-button"; open.textContent = "接續操作";
+      open.addEventListener("click", async () => { open.disabled = true; try { await openSharedWorkflowDraft(draft.id); } catch (error) { setWorkflowStatus(`無法開啟協作草稿：${error.message}`, "error"); } finally { open.disabled = false; } });
+      actions.append(open); item.append(copy, actions); fragment.append(item);
+    });
+    elements.sharedDraftList.replaceChildren(fragment);
+    elements.sharedDraftStatus.textContent = state.sharedDrafts.length ? `目前有${state.sharedDrafts.length}筆未完成公司共用草稿。` : "本月份目前沒有公司共用協作草稿。";
+    elements.resumeDraftCard.hidden = state.sharedDrafts.length === 0 && state.workflowDrafts.filter(isUnfinishedWorkflowDraft).length === 0;
+  }
+
+  async function loadSharedWorkflowDrafts() {
+    if (!state.config || !elements.month.value) return;
+    elements.sharedDraftStatus.textContent = "正在讀取公司共用草稿…";
+    try {
+      const response = await fetch(`/api/procurement/collaboration-drafts?month=${encodeURIComponent(elements.month.value)}`, { headers: { Accept: "application/json" }, cache: "no-store" });
+      const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      state.sharedDrafts = result.drafts || [];
+      renderSharedDrafts();
+    } catch (error) {
+      state.sharedDrafts = [];
+      elements.sharedDraftStatus.textContent = `公司共用草稿同步失敗：${error.message}`;
+      renderResumeDrafts();
+    }
+  }
+
+  async function openSharedWorkflowDraft(id) {
+    setWorkflowStatus("正在載入公司共用最新版…");
+    const response = await fetch(`/api/procurement/collaboration-drafts/${encodeURIComponent(id)}`, { headers: { Accept: "application/json" }, cache: "no-store" });
+    const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    const snapshot = await decodeSharedSnapshot(result.draft);
+    restoreWorkflowDraft(snapshot);
+    await saveLocalDraftSnapshot(snapshot);
+    renderResumeDrafts();
+    setWorkflowStatus(`已載入公司共用第${result.draft.revision}版；後續回匯與確認會同步給其他協作者。`, "success");
   }
 
   function appendWorkflowSnapshotSheet(workbook, snapshot) {
@@ -614,7 +799,7 @@
     setWorkflowStatus(message);
   }
   function invalidateAnalysis() {
-    state.analysis = null; state.baseAnalysis = null; state.parsedSources = null; state.workflowType = "system_recommendation"; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null; state.purchaseStatusSummary = null; state.costSummary = null; state.draftId = ""; state.draftStage = ""; state.parentBatchId = ""; state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set();
+    state.analysis = null; state.baseAnalysis = null; state.parsedSources = null; state.workflowType = "system_recommendation"; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null; state.purchaseStatusSummary = null; state.costSummary = null; state.draftId = ""; state.draftStage = ""; state.sharedDraftId = ""; state.sharedDraftRevision = 0; state.parentBatchId = ""; state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set();
     elements.download.disabled = true; elements.resultPanel.hidden = true; elements.supplierFilterList.replaceChildren();
     resetReviewWorkflow("請先產生建議，再於分批審核區勾選一個或多個單位並下載本批Excel；下載後才會開放第一次人工回匯。");
     renderBudget();
@@ -941,7 +1126,7 @@
       }
       elements.saveBudget.disabled = !state.config.permissions?.canManageBudget;
       elements.addChannel.disabled = !state.config.permissions?.canManageBudget;
-      await Promise.all([loadProcurementRules(), loadLedger(), loadMonthPlan(), loadStoreShortageNeeds()]);
+      await Promise.all([loadProcurementRules(), loadLedger(), loadMonthPlan(), loadStoreShortageNeeds(), loadSharedWorkflowDrafts()]);
       await loadCostSnapshot();
     } catch (error) {
       state.config = null; elements.accountBadge.textContent = "公司登入驗證失敗";
@@ -1827,13 +2012,13 @@
   elements.month.addEventListener("change", () => {
     if (state.analysis) invalidateAnalysis();
     state.sharedCostSnapshot = null; renderCostSnapshotStatus(); renderModelStatus(); updateReadyState();
-    Promise.all([loadLedger(), loadMonthPlan()]).then(loadCostSnapshot);
+    Promise.all([loadLedger(), loadMonthPlan(), loadSharedWorkflowDrafts()]).then(loadCostSnapshot);
   });
   elements.forecastRevenue.addEventListener("input", () => { updateAutomaticForecastCost(); markBudgetDirty(); });
   elements.releasedBudget.addEventListener("input", markBudgetDirty);
   elements.budgetSourceNote.addEventListener("input", () => { elements.budgetPlanStatus.textContent = "額度來源註記尚未儲存。"; });
   elements.purchasedToDate.addEventListener("input", renderBudget); elements.saveBudget.addEventListener("click", saveMonthPlan);
-  elements.addChannel.addEventListener("click", addRevenueChannel); elements.refreshQueue.addEventListener("click", loadLedger);
+  elements.addChannel.addEventListener("click", addRevenueChannel); elements.refreshQueue.addEventListener("click", loadLedger); elements.refreshSharedDrafts.addEventListener("click", loadSharedWorkflowDrafts);
   elements.googleConnect.addEventListener("click", connectGoogle); elements.autoSource.addEventListener("click", loadAutomaticSources);
   elements.storeShortageRows.addEventListener("click", decideStoreShortage);
   elements.runShortageOrder.addEventListener("click", async () => { state.shortageRunMode = "new_order"; try { await analyze(); } finally { state.shortageRunMode = "merge_next"; } });
