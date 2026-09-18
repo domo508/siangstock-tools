@@ -6,6 +6,7 @@
   const PERIOD_DAYS = 14;
   const PERIOD_MS = PERIOD_DAYS * DAY_MS;
   const ANCHOR_MS = Date.UTC(2024, 0, 1);
+  const SEASONAL_SLOTS = 26;
   const MODELS = ["近期6週", "近期12週", "去年同期", "近期70%＋同期30%", "近期50%＋同期50%", "近期30%＋同期70%"];
   const INVENTORY_TYPES = new Set(["商品", "存貨", "原物料", "半成品", "成品"]);
 
@@ -16,6 +17,7 @@
 
   function periodOf(value) { return Math.floor((dateMs(value) - ANCHOR_MS) / PERIOD_MS); }
   function periodDate(period) { return new Date(ANCHOR_MS + period * PERIOD_MS).toISOString().slice(0, 10); }
+  function seasonalSlot(period) { return ((Number(period) % SEASONAL_SLOTS) + SEASONAL_SLOTS) % SEASONAL_SLOTS; }
   function round(value, digits = 4) {
     if (!Number.isFinite(Number(value))) return null;
     const factor = 10 ** digits;
@@ -116,6 +118,52 @@
     return "低";
   }
 
+  function seasonalProfileReliability(kind, observations, totalActual, activeSlots) {
+    if (kind === "SKU") {
+      if (observations >= 52 && totalActual >= 30 && activeSlots >= 8) return "高";
+      if (observations >= 26 && totalActual >= 12 && activeSlots >= 4) return "中";
+      return "低";
+    }
+    if (observations >= 52 && totalActual >= 100 && activeSlots >= 8) return "高";
+    if (observations >= 26 && totalActual >= 30 && activeSlots >= 4) return "中";
+    return "低";
+  }
+
+  function buildSeasonalProfile(series, firstPeriod, lastPeriod, kind) {
+    const positivePeriods = [...series.entries()].filter(([, quantity]) => Number(quantity || 0) > 0).map(([period]) => Number(period));
+    if (!positivePeriods.length) return null;
+    const startPeriod = Math.max(firstPeriod, Math.min(...positivePeriods));
+    if (startPeriod > lastPeriod) return null;
+    const bySlot = new Map(Array.from({ length: SEASONAL_SLOTS }, (_unused, slot) => [slot, { actual: 0, observations: 0 }]));
+    let totalActual = 0;
+    let observations = 0;
+    for (let period = startPeriod; period <= lastPeriod; period += 1) {
+      const actual = Math.max(0, Number(series.get(period) || 0));
+      const bucket = bySlot.get(seasonalSlot(period));
+      bucket.actual += actual;
+      bucket.observations += 1;
+      totalActual += actual;
+      observations += 1;
+    }
+    if (!observations || totalActual <= 0) return null;
+    const mean = totalActual / observations;
+    const activeSlots = [...bySlot.values()].filter((bucket) => bucket.actual > 0).length;
+    const confidence = seasonalProfileReliability(kind, observations, totalActual, activeSlots);
+    const priorWeight = kind === "SKU" ? 2 : 1;
+    const raw = [...bySlot.entries()].map(([slot, bucket]) => {
+      const smoothedMean = (bucket.actual + priorWeight * mean) / (bucket.observations + priorWeight);
+      return { slot, ...bucket, index: Math.max(0.15, Math.min(5, smoothedMean / mean)) };
+    });
+    const weightedMean = raw.reduce((sum, row) => sum + row.index * Math.max(1, row.observations), 0)
+      / raw.reduce((sum, row) => sum + Math.max(1, row.observations), 0);
+    const rows = raw.map((row) => ({ ...row, index: row.index / (weightedMean || 1) }));
+    const maxIndex = Math.max(...rows.map((row) => row.index));
+    const minIndex = Math.min(...rows.map((row) => row.index));
+    const seasonal = maxIndex >= 1.35 && maxIndex / Math.max(0.15, minIndex) >= 1.5;
+    const peakSlots = rows.filter((row) => row.index >= Math.max(1.25, maxIndex * 0.85)).map((row) => row.slot + 1);
+    return { rows, observations, totalActual, activeSlots, confidence, seasonal, peakSlots };
+  }
+
   function sourceSignature(row) {
     return [row.saleType, row.transactionTimestamp || row.date, row.sku, row.warehouseCode, row.shipWarehouseCode,
       row.posOrder, row.sourceOrder, row.pickupOrder, round(row.quantity, 4), round(row.deductQuantity, 4), round(row.actualAmount, 2)].join("¦");
@@ -183,7 +231,9 @@
         const period = periodOf(row.date);
         if (!Number.isFinite(period)) continue;
         addSeries(skuSeries, row.sku, period, Number(row.quantity || 0));
-        for (const scope of ["全部", ...(/普優[瑪碼]/.test(clean(masterRecord.supplier)) ? ["普優瑪"] : [])]) {
+        const supplierScope = clean(masterRecord.supplier);
+        const scopes = new Set(["全部", supplierScope, ...(/普優[瑪碼]/.test(supplierScope) ? ["普優瑪"] : [])].filter(Boolean));
+        for (const scope of scopes) {
           for (const category of categoryKeys(masterRecord, row.name)) {
             const key = `${scope}¦${category.level}¦${category.name}`;
             addSeries(categorySeries, key, period, Number(row.quantity || 0));
@@ -241,15 +291,17 @@
         if (!masterRecord) continue;
         const metrics = evaluateSeries(series, firstEvaluation, lastPeriod, ["近期6週", "近期12週"]);
         const bestSku = bestMetric(metrics, ["近期6週", "近期12週"]);
-        const isPuyouma = /普優[瑪碼]/.test(clean(masterRecord.supplier));
-        const scope = isPuyouma ? "普優瑪" : "全部";
+        const supplierScope = clean(masterRecord.supplier);
+        const isPuyouma = /普優[瑪碼]/.test(supplierScope);
+        const scope = supplierScope || "全部";
         const categories = categoryKeys(masterRecord, masterRecord.name);
-        for (const metricScope of ["全部", ...(isPuyouma ? ["普優瑪"] : [])]) {
+        for (const metricScope of new Set(["全部", scope, ...(isPuyouma ? ["普優瑪"] : [])])) {
           for (const metric of metrics.values()) addMetricAggregate(skuMaterialMetrics, `${metricScope}¦${categories[0].name}`, metric);
         }
         if (sumRange(series, Math.max(cutoffPeriod, lastPeriod - 25), lastPeriod) <= 0) continue;
         activeSkuCount += 1;
-        const candidates = categories.map((category) => categoryMetrics.get(`${scope}¦${category.level}¦${category.name}`)).filter(Boolean);
+        const candidates = categories.map((category) => categoryMetrics.get(`${scope}¦${category.level}¦${category.name}`)
+          || categoryMetrics.get(`全部¦${category.level}¦${category.name}`)).filter(Boolean);
         const selectedCategory = [...candidates].reverse().find((item) => item.reliability !== "低") || candidates[0];
         const lastYearActual = Math.max(0, Number(series.get(lastPeriod - 26) || 0));
         const recent6 = sumRange(series, lastPeriod - 2, lastPeriod) / 3;
@@ -284,11 +336,32 @@
         }
       }
 
+      const seasonalRows = [];
+      const appendSeasonalRows = (scope, level, name, series, kind) => {
+        const profile = buildSeasonalProfile(series, cutoffPeriod, lastPeriod, kind);
+        if (!profile) return;
+        for (const row of profile.rows) {
+          seasonalRows.push([
+            scope, level, name, row.slot + 1, periodDate(lastPeriod - seasonalSlot(lastPeriod) + row.slot), round(row.index, 4),
+            row.observations, round(row.actual, 2), profile.confidence, profile.seasonal ? "是" : "否",
+            profile.peakSlots.join("、"), profile.observations, round(profile.totalActual, 2)
+          ]);
+        }
+      };
+      for (const [sku, series] of skuSeries) appendSeasonalRows("全部", "SKU", sku, series, "SKU");
+      for (const [key, series] of categorySeries) {
+        const [scope, level, name] = key.split("¦");
+        appendSeasonalRows(scope, level, name, series, "類別");
+      }
+      seasonalRows.sort((left, right) => String(left[0]).localeCompare(String(right[0]), "zh-Hant")
+        || String(left[1]).localeCompare(String(right[1]), "zh-Hant") || String(left[2]).localeCompare(String(right[2]), "zh-Hant")
+        || Number(left[3]) - Number(right[3]));
+
       const generatedAt = metadata.generatedAt || new Date().toISOString();
       return {
         metadata: { ...metadata, generatedAt, minDate, maxDate, cutoffDate: new Date(cutoffMs).toISOString().slice(0, 10), firstEvaluationDate: periodDate(firstEvaluation), lastCompletePeriodStart: periodDate(lastPeriod) },
         summary: { sourceFileCount: sourceFiles.length, sourceBytes: sourceFiles.reduce((sum, file) => sum + file.size, 0), minDate, maxDate, coverageDays, acceptedRows, duplicateRows, conflictRows, excludedRows, activeSkuCount, skuWape: skuActualWeighted > 0 ? skuWapeWeighted / skuActualWeighted : null, categoryCount: categoryMetrics.size },
-        sourceFiles: [...sourceFiles], categoryRows, skuRows, periodRows
+        sourceFiles: [...sourceFiles], categoryRows, skuRows, periodRows, seasonalRows
       };
     }
 
@@ -336,6 +409,11 @@
       ...result.periodRows
     ], "類別期間回測", [12, 16, 24, 14, 24, 14, 14]);
     appendSheet(workbook, XLSX, [
+      ["全品號與全供應商14天季節指數"], [], [],
+      ["範圍", "類別層級", "類別／品號", "14天位置", "參考起日", "季節指數", "該位置觀察期數", "該位置實際量", "可信度", "季節型", "旺季位置", "總觀察期數", "總實際量"],
+      ...result.seasonalRows
+    ], "季節指數", [24, 24, 44, 12, 14, 14, 18, 18, 12, 12, 24, 16, 16]);
+    appendSheet(workbook, XLSX, [
       ["資料品質與規則"], [], [],
       ["規則", "內容"],
       ["需求銷別", "只納入銷貨、訂貨、退貨、退訂；取貨排除"],
@@ -346,6 +424,7 @@
       ["有效歷史", "以最新交易日回推三年；至少需涵蓋730天"],
       ["模型選擇", "SKU層級在近期6週／12週擇優；類別層級再比較去年同期與三種混合權重"],
       ["類別可信度", "高：至少5個SKU、26期、500件；中：至少3個SKU、18期、100件；其餘低"]
+      ,["季節指數", "以每個品號與供應商類別近三年的14天實際需求分布建立26個位置；採購建議會依供應商完整交期、檢視期與安全緩衝整段加權，不只看單一日期"]
     ], "資料品質與規則", [24, 110]);
     appendSheet(workbook, XLSX, [
       ["來源紀錄"], [], [],
@@ -355,5 +434,5 @@
     return workbook;
   }
 
-  global.ProcurementSeasonalModel = { MODELS, createBuilder, buildWorkbook, periodOf, periodDate };
+  global.ProcurementSeasonalModel = { MODELS, SEASONAL_SLOTS, createBuilder, buildWorkbook, periodOf, periodDate };
 })(typeof globalThis !== "undefined" ? globalThis : self);

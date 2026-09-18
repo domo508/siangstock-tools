@@ -924,6 +924,33 @@
         seasonalIndexByMaterial.get(material).set(slot, values.reduce((sum, value) => sum + value, 0) / values.length);
       }
     }
+    const seasonalProfilesBySku = new Map();
+    const seasonalProfilesByKey = new Map();
+    const seasonalTable = findHeaderTable(workbook, XLSX, ["季節指數"], ["範圍", "類別層級", "類別／品號", "14天位置", "季節指數"]);
+    if (seasonalTable) {
+      for (let index = seasonalTable.headerRowIndex + 1; index < seasonalTable.rows.length; index += 1) {
+        const row = seasonalTable.rows[index];
+        const scope = String(tableCell(seasonalTable, row, ["範圍"]) || "全部").trim() || "全部";
+        const level = String(tableCell(seasonalTable, row, ["類別層級"]) || "").trim();
+        const name = String(tableCell(seasonalTable, row, ["類別／品號", "類別名稱"]) || "").trim();
+        const slotNumber = parseNumber(tableCell(seasonalTable, row, ["14天位置"]));
+        const seasonalIndex = parseNumber(tableCell(seasonalTable, row, ["季節指數"]));
+        if (!level || !name || slotNumber == null || seasonalIndex == null || slotNumber < 1 || slotNumber > 26 || seasonalIndex <= 0) continue;
+        const target = level === "SKU"
+          ? seasonalProfilesBySku
+          : seasonalProfilesByKey;
+        const key = level === "SKU" ? normalizeSku(name) : `${normalizeText(scope)}||${normalizeText(level)}||${normalizeText(name)}`;
+        if (!target.has(key)) target.set(key, {
+          scope, level, name, indices: new Map(),
+          reliability: String(tableCell(seasonalTable, row, ["可信度"]) || "低").trim(),
+          seasonal: String(tableCell(seasonalTable, row, ["季節型"]) || "否").trim() === "是",
+          peakSlots: String(tableCell(seasonalTable, row, ["旺季位置"]) || "").trim(),
+          totalObservations: parseNumber(tableCell(seasonalTable, row, ["總觀察期數"])) || 0,
+          totalActual: parseNumber(tableCell(seasonalTable, row, ["總實際量"])) || 0
+        });
+        target.get(key).indices.set(slotNumber - 1, seasonalIndex);
+      }
+    }
     return {
       fileName: options.fileName || "",
       skuSheetName: skuTable.sheetName,
@@ -931,8 +958,10 @@
       bySku,
       byMaterial,
       seasonalIndexByMaterial,
+      seasonalProfilesBySku,
+      seasonalProfilesByKey,
       categoryModelAvailable: Boolean(categoryTable),
-      seasonalIndexAvailable: seasonalIndexByMaterial.size > 0
+      seasonalIndexAvailable: seasonalProfilesBySku.size > 0 || seasonalProfilesByKey.size > 0 || seasonalIndexByMaterial.size > 0
     };
   }
 
@@ -1255,7 +1284,7 @@
     for (const row of records) {
       if (row.isCustomOrder || row.automaticProcurementExcluded || row.quantity <= 0) continue;
       if (!bySku.has(row.sku)) {
-        bySku.set(row.sku, { sku: row.sku, name: row.name, quantity: 0, amount: 0, files: new Set(), sourceRows: [], deliveries: [] });
+        bySku.set(row.sku, { sku: row.sku, name: row.name, quantity: 0, amount: 0, files: new Set(), sourceRows: [], deliveries: [], orders: [] });
       }
       const aggregated = bySku.get(row.sku);
       aggregated.quantity += row.quantity;
@@ -1263,6 +1292,12 @@
       aggregated.files.add(row.fileName);
       aggregated.sourceRows.push(`${row.fileName || "採購單"}#${row.sourceRow}`);
       aggregated.deliveries.push({ quantity: row.quantity, deliveryDate: row.expectedDeliveryDate || null });
+      aggregated.orders.push({
+        quantity: row.quantity,
+        purchaseDate: row.purchaseDate || null,
+        deliveryDate: row.expectedDeliveryDate || null,
+        documentCode: row.documentCode || ""
+      });
       if (!aggregated.name && row.name) aggregated.name = row.name;
     }
     return { records, bySku, customRecords: records.filter((row) => row.isCustomOrder) };
@@ -1764,9 +1799,52 @@
   }
 
   function seasonalSlotFromMs(timestamp) {
-    const date = new Date(timestamp);
-    const start = Date.UTC(date.getUTCFullYear(), 0, 1);
-    return Math.max(0, Math.min(26, Math.floor((timestamp - start) / 86400000 / 14)));
+    const anchor = Date.UTC(2024, 0, 1);
+    return ((Math.floor((timestamp - anchor) / 86400000 / 14) % 26) + 26) % 26;
+  }
+
+  function averageSeasonalIndex(indices, fromMs, days, direction = 1) {
+    const horizon = Math.max(1, Math.round(Number(days) || 1));
+    let total = 0;
+    let count = 0;
+    for (let day = 0; day < horizon; day += 1) {
+      const timestamp = fromMs + direction * day * 86400000;
+      const value = Number(indices?.get(seasonalSlotFromMs(timestamp)));
+      if (!Number.isFinite(value) || value <= 0) continue;
+      total += value;
+      count += 1;
+    }
+    return count ? total / count : null;
+  }
+
+  function seasonalProfileForRow(model, row) {
+    if (!model) return null;
+    const accepted = (profile) => profile && profile.seasonal && ["高", "中"].includes(profile.reliability) && profile.indices?.size >= 20;
+    const skuProfile = model.seasonalProfilesBySku?.get(row.demand.sku);
+    if (accepted(skuProfile)) return { ...skuProfile, source: `SKU：${row.demand.sku}` };
+    const supplierScopes = [row.masterRecord?.supplier, row.modelRow?.supplier, "全部"].map(normalizeText).filter(Boolean);
+    const categories = [
+      [row.modelRow?.categoryLevel, row.modelRow?.categoryName],
+      ["材質", row.materialCategory]
+    ];
+    for (const scope of supplierScopes) {
+      for (const [level, name] of categories) {
+        if (!level || !name) continue;
+        const profile = model.seasonalProfilesByKey?.get(`${scope}||${normalizeText(level)}||${normalizeText(name)}`);
+        if (accepted(profile)) return { ...profile, source: `${profile.scope}／${profile.level}：${profile.name}` };
+      }
+    }
+    return null;
+  }
+
+  function horizonSeasonalAdjustment(profile, asOfMs, targetCoverageDays) {
+    if (!profile?.indices?.size) return { factor: 1, futureIndex: null, recentIndex: null };
+    const recentIndex = averageSeasonalIndex(profile.indices, asOfMs, 42, -1);
+    const futureIndex = averageSeasonalIndex(profile.indices, asOfMs, targetCoverageDays, 1);
+    if (!recentIndex || !futureIndex) return { factor: 1, futureIndex, recentIndex };
+    const rawFactor = futureIndex / recentIndex;
+    const limits = profile.reliability === "高" ? [0.5, 4] : [0.65, 3];
+    return { factor: Math.max(limits[0], Math.min(limits[1], rawFactor)), futureIndex, recentIndex };
   }
 
   const STORE_CHANNEL_CODES = Object.freeze({
@@ -2127,7 +2205,16 @@
     const factoryTargetDays = Number(input.factoryTargetDays || 90);
     const rows = preliminary.map((row) => {
       const pool = categoryPools.get(`${row.categoryKey}||${row.categoryModel}`);
-      const adjustedDaily = row.skuForecastDaily * (pool?.factor || 1);
+      const supplier = row.masterRecord?.supplier || "未辨識供應商";
+      const supplierRule = findSupplierRule(supplier, input.supplierRules || []);
+      const supplyProfile = resolveSupplyProfile(supplier, input.supplierRules || [], row.tier);
+      const supplierLeadDays = supplyProfile.leadDays;
+      const reviewDays = supplyProfile.reviewDays;
+      const safetyBufferDays = supplyProfile.safetyBufferDays[row.tier];
+      const targetCoverageDays = reviewDays + supplierLeadDays + safetyBufferDays;
+      const seasonalProfile = seasonalProfileForRow(input.model, row);
+      const seasonalAdjustment = horizonSeasonalAdjustment(seasonalProfile, asOfMs, targetCoverageDays);
+      const adjustedDaily = row.skuForecastDaily * (pool?.factor || 1) * seasonalAdjustment.factor;
       const channelKeys = new Set([...channelTotals42.keys(), ...plannedRevenueByChannel.keys()]);
       const shares42 = [...channelKeys].map((key) => [key, Math.max(0, skuChannel42.get(compositeKey(row.demand.sku, key)) || 0)]).filter(([, quantity]) => quantity > 0);
       const shares84 = [...channelKeys].map((key) => [key, Math.max(0, skuChannel84.get(compositeKey(row.demand.sku, key)) || 0)]).filter(([, quantity]) => quantity > 0);
@@ -2155,13 +2242,6 @@
       }
       const storeDailyQty = Object.values(storeDailyByCode).reduce((sum, quantity) => sum + Number(quantity || 0), 0);
       const channelAdjustedDaily = hqDailyQty + storeDailyQty;
-      const supplier = row.masterRecord?.supplier || "未辨識供應商";
-      const supplierRule = findSupplierRule(supplier, input.supplierRules || []);
-      const supplyProfile = resolveSupplyProfile(supplier, input.supplierRules || [], row.tier);
-      const supplierLeadDays = supplyProfile.leadDays;
-      const reviewDays = supplyProfile.reviewDays;
-      const safetyBufferDays = supplyProfile.safetyBufferDays[row.tier];
-      const targetCoverageDays = reviewDays + supplierLeadDays + safetyBufferDays;
       const horizonDays = reviewDays + supplierLeadDays;
       const springFestival = resolveSpringFestivalAdjustment({
         asOfDate,
@@ -2248,7 +2328,16 @@
           factoryConsignmentQty: resolvedConsignment.bySku.get(row.demand.sku)?.currentQty || 0
         })
         : rawPurchaseQty;
-      const springFestivalExtraRawQty = Math.max(springFestivalAdjustedRawPurchaseQty - rawPurchaseQty, 0);
+      const springFestivalUncoveredRawQty = Math.max(springFestivalAdjustedRawPurchaseQty - rawPurchaseQty, 0);
+      const springFestivalCycleStart = springFestival.closureStart ? addDays(springFestival.closureStart, -horizonDays) : "";
+      const priorSpringFestivalPendingQty = springFestival.active
+        ? Math.min(effectivePendingQty, (row.purchase?.orders || []).reduce((sum, order) => {
+          const purchaseDate = parseDateValue(order.purchaseDate);
+          if (!purchaseDate || purchaseDate < springFestivalCycleStart || purchaseDate > asOfDate) return sum;
+          return sum + Math.max(0, Number(order.quantity || 0));
+        }, 0))
+        : 0;
+      const springFestivalExtraRawQty = Math.max(springFestivalUncoveredRawQty - priorSpringFestivalPendingQty, 0);
       const score = recommendationScore(row.tier, row.xyzClass, row.activeWeeks6);
       const sellThroughStop = Boolean(row.masterRecord?.sellThroughStop || isSellThroughStopName(row.masterRecord?.name || row.demand.name));
       const isGift = /贈品/.test(`${row.masterRecord?.name || row.demand.name} ${row.masterRecord?.stockType || ""}`);
@@ -2323,6 +2412,8 @@
       }
       if (springFestival.active && springFestivalExtraSuggestedQty > 0) {
         supplyStatus = `${supplyStatus}；春節停工備貨加量${springFestivalExtraSuggestedQty}件`;
+      } else if (springFestival.active && priorSpringFestivalPendingQty > 0 && springFestivalUncoveredRawQty > 0) {
+        supplyStatus = `${supplyStatus}；前次春節備貨未交${priorSpringFestivalPendingQty}件，本次不重複加量`;
       }
       return {
         sku: row.demand.sku,
@@ -2359,9 +2450,15 @@
         skuModel: row.skuUsedModel,
         categoryModel: pool?.usedModel || row.categoryModel,
         categorySeasonFactor: pool?.factor || 1,
+        seasonalProfileSource: seasonalProfile?.source || "無可用季節曲線",
+        seasonalProfileReliability: seasonalProfile?.reliability || "無",
+        seasonalPeakSlots: seasonalProfile?.peakSlots || "",
+        horizonSeasonFactor: seasonalAdjustment.factor,
+        horizonSeasonFutureIndex: seasonalAdjustment.futureIndex,
+        horizonSeasonRecentIndex: seasonalAdjustment.recentIndex,
         categoryReliability: row.categoryReliability,
         categoryWape: row.categoryWape,
-        seasonalDataReady: row.skuSeasonalDataReady && (pool?.seasonalDataReady ?? true),
+        seasonalDataReady: Boolean(seasonalProfile) || (row.skuSeasonalDataReady && (pool?.seasonalDataReady ?? true)),
         forecastDailyQty: channelAdjustedDaily,
         baseForecastDailyQty: adjustedDaily,
         hqDailyQty,
@@ -2405,6 +2502,9 @@
         springFestivalClosureStart: springFestival.closureStart,
         springFestivalRecoveryDate: springFestival.recoveryDate,
         springFestivalExtraDays: springFestival.active ? springFestival.extraDays : 0,
+        springFestivalCycleStart,
+        priorSpringFestivalPendingQty,
+        springFestivalUncoveredRawQty,
         springFestivalExtraRawQty,
         springFestivalExtraSuggestedQty,
         springFestivalExtraAmount: springFestivalExtraSuggestedQty * unitCost,
@@ -2766,7 +2866,7 @@
     const decisionHeaders = new Set(options.decisionHeaders || [
       "人工確認要求", "加總需求（公式）", "建議採購量", "系統建議採購後可售至", "目前實際可採購量",
       "人工確認後可售至", "AI判斷", "最終可核准量", "最終可核准金額", "檢核結果", "回匯檢核狀態",
-      "春節備貨規則", "春節額外備貨天數", "春節額外建議量", "調整前建議採購量"
+      "春節備貨規則", "春節額外備貨天數", "前次春節備貨未交量", "春節額外建議量", "調整前建議採購量"
     ]);
     const longTextHeaders = new Set(["商品品名", "人工確認要求", "人工調整原因", "AI判斷理由", "規則阻擋原因", "阻擋原因", "供貨狀態", "缺貨／供貨狀態", "二次確認原因", "銷售來源"]);
     const amountHeaders = new Set(["進貨價", "建議採購金額", "春節額外採購金額", "人工回匯金額", "規則阻擋金額", "最終可核准金額", "預計付款金額"]);
@@ -2977,6 +3077,10 @@
       "SKU模型": row.skuModel,
       "類別模型": row.categoryModel,
       "類別季節係數": row.categorySeasonFactor,
+      "季節模型來源": row.seasonalProfileSource || "無可用季節曲線",
+      "季節曲線可信度": row.seasonalProfileReliability || "無",
+      "旺季14天位置": row.seasonalPeakSlots || "",
+      "保護期季節係數": row.horizonSeasonFactor || 1,
       "預估日需求": row.forecastDailyQty,
       "供應交期類型": row.supplyProfileLabel,
       "到貨交期天數": row.supplierLeadDays,
@@ -3008,6 +3112,7 @@
       "春節停工開始日": row.springFestivalClosureStart || "",
       "春節恢復出貨日": row.springFestivalRecoveryDate || "",
       "春節額外備貨天數": row.springFestivalExtraDays || 0,
+      "前次春節備貨未交量": row.priorSpringFestivalPendingQty || 0,
       "春節額外建議量": row.springFestivalExtraSuggestedQty || 0,
       "春節額外採購金額": row.springFestivalExtraAmount || 0,
       "箱入／採購單位": row.packSize,

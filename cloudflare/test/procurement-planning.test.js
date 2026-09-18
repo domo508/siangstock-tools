@@ -609,6 +609,32 @@ describe("採購建議第二階段", () => {
     expect(recommendations.totals.suggestedPurchaseAmount).toBe(row.suggestedPurchaseQty * 500);
   });
 
+  it("季節曲線依完整保護期加權，而非只看單一未來日期", () => {
+    const baseModel = makeForecastModel();
+    const indices = new Map(Array.from({ length: 26 }, (_unused, slot) => [slot, 1]));
+    const slotOf = (date) => {
+      const timestamp = Date.parse(`${date}T00:00:00Z`);
+      return ((Math.floor((timestamp - Date.UTC(2024, 0, 1)) / 86400000 / 14) % 26) + 26) % 26;
+    };
+    const asOfMs = Date.parse("2026-08-28T00:00:00Z");
+    for (let day = -41; day <= 0; day += 1) indices.set(slotOf(new Date(asOfMs + day * 86400000).toISOString().slice(0, 10)), 0.5);
+    for (let day = 1; day <= 23; day += 1) indices.set(slotOf(new Date(asOfMs + day * 86400000).toISOString().slice(0, 10)), 2.5);
+    const seasonalModel = {
+      ...baseModel,
+      seasonalProfilesBySku: new Map([["A1", { indices, reliability: "高", seasonal: true, peakSlots: "18、19" }]]),
+      seasonalProfilesByKey: new Map()
+    };
+    const source = {
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], blacklist: [], asOfDate: "2026-08-28", checkpoint: "mid-month"
+    };
+    const withoutSeason = core.buildProcurementRecommendations({ ...source, model: baseModel }).rows.find((row) => row.sku === "A1");
+    const withSeason = core.buildProcurementRecommendations({ ...source, model: seasonalModel }).rows.find((row) => row.sku === "A1");
+    expect(withSeason.horizonSeasonFactor).toBeGreaterThan(1);
+    expect(withSeason.seasonalProfileSource).toBe("SKU：A1");
+    expect(withSeason.suggestedPurchaseQty).toBeGreaterThan(withoutSeason.suggestedPurchaseQty);
+  });
+
   it("月初依70／50／0分批釋放，月中則依最新缺口完整重算", () => {
     const source = {
       master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
@@ -672,6 +698,53 @@ describe("採購建議第二階段", () => {
     expect(summary).toContainEqual(["春節額外採購金額", row.springFestivalExtraAmount, "已包含在建議採購金額與額度影響內"]);
     const report = XLSX.utils.sheet_to_json(output.Sheets["03D_其它供應商"], { defval: "" })[0];
     expect(report).toMatchObject({ "春節備貨規則": "是", "春節額外備貨天數": 53, "春節額外建議量": row.springFestivalExtraSuggestedQty, "調整前建議採購量": row.standardSuggestedPurchaseQty });
+  });
+
+  it("同一春節週期較早建立的正式未到貨量會抵扣春節缺口，重跑不重複加量", () => {
+    const master = makeMaster();
+    master.records.find((row) => row.sku === "A1").supplier = "潤泰羽絨";
+    const inventoryWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(inventoryWorkbook, XLSX.utils.aoa_to_sheet([
+      ["店倉編號", "店倉名稱", "貨號", "品名", "實際庫存", "實際庫存成本額"],
+      ["T00", "寬承總倉", "A1", "60天絲測試床包", 100, 50000],
+      ["R00", "台北門市", "A1", "60天絲測試床包", 49, 24500]
+    ]), "乾淨商品");
+    const pendingWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(pendingWorkbook, XLSX.utils.aoa_to_sheet([
+      ["單據編碼:", "PR-SPRING", "採購日期:", "2026-09-14", "交貨日期:", "2026-10-31"],
+      [],
+      ["貨號", "品名", "採購價", "數量", "金額", "備註"],
+      ["A1", "60天絲測試床包", 500, 350, 175000, "前次春節備貨"]
+    ]), "Sheet1");
+    const salesWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(salesWorkbook, XLSX.utils.aoa_to_sheet([
+      ["銷別", "結帳時間", "貨號", "品名", "銷售量", "實收金額", "開單倉編號", "開單倉名稱"],
+      ["銷貨", "2026-09-10 12:00:00", "A1", "60天絲測試床包", 104, 104000, "R00", "台北門市"]
+    ]), "工作表1");
+    const adjusted = core.buildProcurementRecommendations({
+      master,
+      inventory: core.parseInventoryWorkbook(inventoryWorkbook, XLSX),
+      pendingReports: [core.parsePendingPurchaseWorkbook(pendingWorkbook, XLSX)],
+      consignment: makeConsignment(),
+      salesReports: [core.parseSalesWorkbook(salesWorkbook, XLSX)],
+      model: makeForecastModel(),
+      blacklist: [],
+      asOfDate: "2026-09-17",
+      checkpoint: "mid-month",
+      supplierRules: core.SUPPLIER_RULES,
+      springFestivalRule: { enabled: true, closureStart: "2027-01-16", recoveryDate: "2027-02-28", extraDays: 53 }
+    });
+    const row = adjusted.rows.find((item) => item.sku === "A1");
+    expect(row.rawPurchaseQty).toBe(0);
+    expect(row.springFestivalUncoveredRawQty).toBeGreaterThan(0);
+    expect(row.priorSpringFestivalPendingQty).toBe(350);
+    expect(row.springFestivalExtraSuggestedQty).toBe(0);
+    expect(row.suggestedPurchaseQty).toBe(0);
+    expect(row.supplyStatus).toContain("本次不重複加量");
+
+    const output = core.buildRecommendationWorkbook({ ...adjusted, suggestedRows: [row] }, XLSX);
+    const report = XLSX.utils.sheet_to_json(output.Sheets["03D_其它供應商"], { defval: "" })[0];
+    expect(report["前次春節備貨未交量"]).toBe(350);
   });
 
   it("貨品狀態空白仍顯示試算建議，但第一次回匯必須明確填量與原因", () => {
