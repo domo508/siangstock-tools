@@ -50,7 +50,7 @@
     approvalQueueRows: get("#approval-queue-rows"), refreshQueue: get("#refresh-queue-button"),
     reviewFileLabel: get("#review-file-label"), secondReviewFileLabel: get("#second-review-file-label"),
     workflowStepDownload: get("#workflow-step-download"), workflowStepFirst: get("#workflow-step-first"), workflowStepSecond: get("#workflow-step-second"), workflowStepApproval: get("#workflow-step-approval"),
-    resumeDraftCard: get("#resume-draft-card"), resumeDraftSummary: get("#resume-draft-summary"), resumeDraftButton: get("#resume-draft-button"), redownloadDraftButton: get("#redownload-draft-button"), discardDraftButton: get("#discard-draft-button"), restoreReportFile: get("#restore-report-file"), restoreReportLabel: get("#restore-report-label")
+    resumeDraftCard: get("#resume-draft-card"), resumeDraftList: get("#resume-draft-list"), restoreReportFile: get("#restore-report-file"), restoreReportLabel: get("#restore-report-label")
     ,newProductFile: get("#new-product-file"), newProductButton: get("#new-product-button"), manualDraftFiles: get("#manual-draft-files"), manualDraftButton: get("#manual-draft-button"),
     postedOrderFiles: get("#posted-order-files"), postedOrderButton: get("#posted-order-button"), specialWorkflowStatus: get("#special-workflow-status"), activeLedgerRows: get("#active-ledger-rows"),
     storeShortageCount: get("#store-shortage-count"), storeShortageEmpty: get("#store-shortage-empty"), storeShortageTableWrap: get("#store-shortage-table-wrap"), storeShortageRows: get("#store-shortage-rows"), storeShortageStatus: get("#store-shortage-status"), runShortageOrder: get("#run-shortage-order-button")
@@ -200,6 +200,8 @@
     return ({ analysis: "已產生採購建議", downloaded: "等待第一次人工回匯", first_reviewed: "等待二次確認回匯", second_reviewed: "可送出待核准", pending_approval: "等待正式核准", approved: "已核准，待建立ERP", erp_created: "ERP已建立" })[stage] || "未完成批次";
   }
 
+  function isUnfinishedWorkflowDraft(draft) { return draft && draft.stage !== "erp_created"; }
+
   function taipeiDateTime(value) {
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? "時間未記錄" : new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(date);
@@ -213,7 +215,7 @@
   function workflowSnapshot(stage = state.draftStage || "analysis") {
     state.draftId ||= `LOCAL-${new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)}-${Math.random().toString(36).slice(2, 8)}`;
     return {
-      version: WORKFLOW_CACHE.version, id: state.draftId, stage, updatedAt: new Date().toISOString(), parentBatchId: state.parentBatchId, activeWorkUnit: state.activeWorkUnit, selectedWorkUnitIds: [...state.selectedWorkUnitIds], batchId: state.batchId,
+      version: WORKFLOW_CACHE.version, id: state.draftId, stage, updatedAt: new Date().toISOString(), parentBatchId: state.parentBatchId, activeWorkUnit: state.activeWorkUnit, batchId: state.batchId,
       analysis: state.analysis, baseAnalysis: state.baseAnalysis === state.analysis ? null : state.baseAnalysis, workflowType: state.workflowType,
       selectedSuppliers: [...state.selectedSuppliers], returnScope: state.returnScope ? [...state.returnScope] : null,
       firstReview: state.firstReview, review: state.review, purchaseStatusSummary: state.purchaseStatusSummary, costSummary: state.costSummary,
@@ -231,8 +233,8 @@
       records.unshift(snapshot);
       state.workflowDrafts = records.slice(0, WORKFLOW_CACHE.maxRecords);
       await writeWorkflowDrafts(state.workflowDrafts);
-      state.latestDraft = state.workflowDrafts.find((row) => !["pending_approval", "approved", "erp_created"].includes(row.stage)) || null;
-      renderResumeDraft(state.latestDraft);
+      state.latestDraft = state.workflowDrafts.find(isUnfinishedWorkflowDraft) || null;
+      renderResumeDrafts();
       renderWorkUnitDashboard();
     } catch (error) { console.warn("未完成採購批次無法保存於本機", error); }
   }
@@ -241,18 +243,35 @@
     const records = (await readWorkflowDrafts()).filter((row) => row.id !== id);
     await writeWorkflowDrafts(records);
     state.workflowDrafts = records;
-    if (state.latestDraft?.id === id) state.latestDraft = records.find((row) => !["pending_approval", "approved", "erp_created"].includes(row.stage)) || null;
-    renderResumeDraft(state.latestDraft);
+    if (state.latestDraft?.id === id) state.latestDraft = records.find(isUnfinishedWorkflowDraft) || null;
+    renderResumeDrafts();
     renderWorkUnitDashboard();
   }
 
-  function renderResumeDraft(draft) {
-    if (!elements.resumeDraftCard) return;
-    elements.resumeDraftCard.hidden = !draft;
-    if (!draft) return;
-    const checkpoint = ({ "month-start": "月初採購", "mid-month": "月中採購", "month-end": "月底驗證" })[draft.controls?.checkpoint] || "採購";
-    elements.resumeDraftButton.textContent = `繼續上次${checkpoint}`;
-    elements.resumeDraftSummary.textContent = `${draft.controls?.month || "月份未標示"}・${draft.activeWorkUnit?.label ? `${draft.activeWorkUnit.label}・` : ""}${workflowStageLabel(draft.stage)}・最後保存${taipeiDateTime(draft.updatedAt)}`;
+  function renderResumeDrafts() {
+    if (!elements.resumeDraftCard || !elements.resumeDraftList) return;
+    const drafts = state.workflowDrafts.filter(isUnfinishedWorkflowDraft);
+    elements.resumeDraftCard.hidden = drafts.length === 0;
+    const fragment = document.createDocumentFragment();
+    drafts.forEach((draft) => {
+      const checkpoint = ({ "month-start": "月初採購", "mid-month": "月中採購", "month-end": "月底驗證" })[draft.controls?.checkpoint] || "採購";
+      const item = document.createElement("article"); item.className = "resume-draft-item";
+      const copy = document.createElement("div");
+      const title = document.createElement("strong"); title.textContent = `${draft.controls?.month || "月份未標示"}・${checkpoint}`;
+      const summary = document.createElement("p");
+      const amount = Number(draft.activeWorkUnit?.amount || 0);
+      summary.textContent = `${draft.activeWorkUnit?.label || "尚未選擇審核單位"}・${workflowStageLabel(draft.stage)}${amount > 0 ? `・${formatCurrency(amount)}` : ""}・最後保存${taipeiDateTime(draft.updatedAt)}`;
+      copy.append(title, summary);
+      const actions = document.createElement("div"); actions.className = "resume-draft-actions";
+      const resume = document.createElement("button"); resume.type = "button"; resume.className = "primary-button"; resume.textContent = "繼續操作";
+      resume.addEventListener("click", () => { try { restoreWorkflowDraft(draft); } catch (error) { setWorkflowStatus(`無法恢復：${error.message}`, "error"); } });
+      const redownload = document.createElement("button"); redownload.type = "button"; redownload.className = "secondary-button"; redownload.textContent = "重新下載本批報表";
+      redownload.addEventListener("click", async () => { try { restoreWorkflowDraft(draft); await downloadRecommendation(); } catch (error) { setWorkflowStatus(`無法重新下載：${error.message}`, "error"); } });
+      const discard = document.createElement("button"); discard.type = "button"; discard.className = "secondary-button"; discard.textContent = "移除本機紀錄";
+      discard.addEventListener("click", async () => { if (globalThis.confirm("只移除這筆瀏覽器本機續作紀錄，不會刪除已下載Excel或公司台帳。確定移除？")) await removeWorkflowDraft(draft.id); });
+      actions.append(resume, redownload, discard); item.append(copy, actions); fragment.append(item);
+    });
+    elements.resumeDraftList.replaceChildren(fragment);
   }
 
   function updateSupplierChecks() {
@@ -268,7 +287,7 @@
     });
     state.analysis = draft.analysis; state.baseAnalysis = draft.baseAnalysis || draft.analysis; state.workflowType = draft.workflowType || "system_recommendation";
     state.parentBatchId = draft.parentBatchId || draft.id; state.activeWorkUnit = draft.activeWorkUnit || null;
-    state.selectedWorkUnitIds = new Set(draft.selectedWorkUnitIds || draft.activeWorkUnit?.memberIds || (draft.activeWorkUnit?.id ? [draft.activeWorkUnit.id] : []));
+    state.selectedWorkUnitIds = new Set();
     const restoredSuppliers = new Set(draft.selectedSuppliers || []); state.returnScope = draft.returnScope ? new Set(draft.returnScope) : null;
     state.firstReview = draft.firstReview || null; state.review = draft.review || null; state.purchaseStatusSummary = draft.purchaseStatusSummary || null; state.costSummary = draft.costSummary || null; state.consignmentSource = { styleAudit: draft.consignmentStyleAudit || { pinkDetected: false, pinkCells: 0 } };
     state.draftId = draft.id; state.draftStage = draft.stage; state.latestDraft = draft;
@@ -306,8 +325,8 @@
   async function hydrateWorkflowDrafts() {
     try {
       state.workflowDrafts = await readWorkflowDrafts();
-      state.latestDraft = state.workflowDrafts.find((row) => !["pending_approval", "approved", "erp_created"].includes(row.stage)) || null;
-      renderResumeDraft(state.latestDraft);
+      state.latestDraft = state.workflowDrafts.find(isUnfinishedWorkflowDraft) || null;
+      renderResumeDrafts();
     }
     catch (error) { console.warn("無法讀取未完成採購批次", error); }
   }
@@ -1156,7 +1175,7 @@
     const selectedAmount = selectedUnits.reduce((sum, unit) => sum + Number(unit.amount || 0), 0);
     elements.workUnitSelectionStatus.textContent = selectedUnits.length
       ? `已選${selectedUnits.length}個審核單位・${formatNumber(selectedUnits.reduce((sum, unit) => sum + Number(unit.skuCount || 0), 0))}個SKU・${formatCurrency(selectedAmount)}`
-      : "請勾選一個或多個審核單位。";
+      : "請勾選一個或多個審核單位；下載完成後會自動清空，避免帶入下一批。";
     elements.download.disabled = !selectedUnits.length || Boolean(state.activeWorkUnit && state.returnScope);
     elements.download.textContent = selectedUnits.length ? `下載已選${selectedUnits.length}個單位的本批報表` : "勾選後下載本批報表";
   }
@@ -1595,6 +1614,7 @@
     const workbook = core.buildRecommendationWorkbook(state.analysis, outputXlsx, { budget: currentBudget(), selectedSuppliers: selected, workUnit: state.activeWorkUnit });
     appendWorkflowSnapshotSheet(workbook, workflowSnapshot("downloaded"));
     outputXlsx.writeFile(workbook, `${elements.month.value}_${elements.checkpoint.value === "mid-month" ? "月中" : elements.checkpoint.value === "month-end" ? "月底" : "月初"}_${scopeLabel}_${workflowLabel}_人工審核.xlsx`, { compression: true, cellStyles: true });
+    state.selectedWorkUnitIds = new Set();
     resetReviewWorkflow(`已下載${state.activeWorkUnit.memberIds?.length || 1}個審核單位的合併採購建議；完成Excel人工填量後，請選擇這一份第一次回匯檔。`);
     setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, true);
     setWorkflowStep(elements.workflowStepDownload, "done", `已下載${state.activeWorkUnit.label}`);
@@ -1823,18 +1843,6 @@
   elements.retryNotification.addEventListener("click", retryNotification); elements.erp.addEventListener("click", downloadErp);
   elements.erpReference.addEventListener("input", () => { elements.erpCreated.disabled = !(state.erpDownloaded && elements.erpReference.value.trim()); });
   elements.erpCreated.addEventListener("click", confirmErpCreated);
-  elements.resumeDraftButton.addEventListener("click", () => {
-    try { restoreWorkflowDraft(state.latestDraft); }
-    catch (error) { setWorkflowStatus(`無法恢復：${error.message}`, "error"); }
-  });
-  elements.redownloadDraftButton.addEventListener("click", async () => {
-    try { restoreWorkflowDraft(state.latestDraft); await downloadRecommendation(); }
-    catch (error) { setWorkflowStatus(`無法重新下載：${error.message}`, "error"); }
-  });
-  elements.discardDraftButton.addEventListener("click", async () => {
-    if (!state.latestDraft || !globalThis.confirm("只移除這筆瀏覽器本機續作紀錄，不會刪除已下載Excel或公司台帳。確定移除？")) return;
-    await removeWorkflowDraft(state.latestDraft.id);
-  });
   elements.restoreReportFile.addEventListener("change", async () => {
     const file = elements.restoreReportFile.files[0];
     if (!file) return;

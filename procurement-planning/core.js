@@ -857,7 +857,8 @@
         categoryName: String(tableCell(skuTable, row, ["輔助類別名稱", "材質類別", "商品群"]) || "其他").trim(),
         categoryModel: String(tableCell(skuTable, row, ["類別建議模型"]) || "").trim(),
         categoryWape: parseNumber(tableCell(skuTable, row, ["類別WAPE"])),
-        categoryReliability: String(tableCell(skuTable, row, ["類別可信度"]) || "").trim()
+        categoryReliability: String(tableCell(skuTable, row, ["類別可信度"]) || "").trim(),
+        season: String(tableCell(skuTable, row, ["季節"]) || "").trim()
       });
     }
 
@@ -942,13 +943,18 @@
         const key = level === "SKU" ? normalizeSku(name) : `${normalizeText(scope)}||${normalizeText(level)}||${normalizeText(name)}`;
         if (!target.has(key)) target.set(key, {
           scope, level, name, indices: new Map(),
+          actualBySlot: new Map(),
+          observationsBySlot: new Map(),
           reliability: String(tableCell(seasonalTable, row, ["可信度"]) || "低").trim(),
           seasonal: String(tableCell(seasonalTable, row, ["季節型"]) || "否").trim() === "是",
           peakSlots: String(tableCell(seasonalTable, row, ["旺季位置"]) || "").trim(),
           totalObservations: parseNumber(tableCell(seasonalTable, row, ["總觀察期數"])) || 0,
           totalActual: parseNumber(tableCell(seasonalTable, row, ["總實際量"])) || 0
         });
-        target.get(key).indices.set(slotNumber - 1, seasonalIndex);
+        const profile = target.get(key);
+        profile.indices.set(slotNumber - 1, seasonalIndex);
+        profile.actualBySlot.set(slotNumber - 1, Math.max(0, parseNumber(tableCell(seasonalTable, row, ["該位置實際量"])) || 0));
+        profile.observationsBySlot.set(slotNumber - 1, Math.max(0, parseNumber(tableCell(seasonalTable, row, ["該位置觀察期數"])) || 0));
       }
     }
     return {
@@ -1849,6 +1855,51 @@
     return { factor: Math.max(limits[0], Math.min(limits[1], rawFactor)), futureIndex, recentIndex };
   }
 
+  function historicalSeasonalAverageDaily(profile, fromMs, days) {
+    if (profile?.level !== "SKU" || !profile.actualBySlot?.size || !profile.observationsBySlot?.size) return null;
+    const horizon = Math.max(1, Math.round(Number(days) || 1));
+    let total = 0;
+    let observedDays = 0;
+    for (let day = 0; day < horizon; day += 1) {
+      const slot = seasonalSlotFromMs(fromMs + day * 86400000);
+      const actual = Number(profile.actualBySlot.get(slot));
+      const observations = Number(profile.observationsBySlot.get(slot));
+      if (!Number.isFinite(actual) || !Number.isFinite(observations) || observations <= 0) continue;
+      total += Math.max(0, actual) / observations / 14;
+      observedDays += 1;
+    }
+    return observedDays ? total / observedDays : null;
+  }
+
+  function seasonalDemandMode(row) {
+    const name = normalizeText(row.masterRecord?.name || row.demand?.name || "");
+    const material = normalizeText(row.materialCategory || row.modelRow?.materialCategory || "");
+    const productType = normalizeText(row.masterRecord?.productType || row.modelRow?.productType || "");
+    const season = normalizeText(row.modelRow?.season || row.masterRecord?.season || "");
+    const combined = `${name} ${material} ${productType}`;
+    if (/(涼被|夏季被|熊冷|涼墊|冷感|冰涼)/.test(combined)) return "強夏季";
+    if (/(冬被|羊毛|羽絨|法蘭絨|暖暖|熊暖|羊羔絨|保暖|厚被|麻糬被)/.test(combined)) return "強冬季";
+    if (/(地墊|華夫格披毯)/.test(combined)) return "四季穩定";
+    const ordinaryBedding = /(床包|被套|寢具)/.test(combined);
+    if (ordinaryBedding && /天絲/.test(material || name)) return "四季－夏季偏旺";
+    if (ordinaryBedding && /(純棉|精梳棉|精梳純棉|長絨棉)/.test(material || name)) return "四季－冬季偏旺";
+    if (/夏/.test(season)) return "強夏季";
+    if (/冬/.test(season)) return "強冬季";
+    return "四季穩定";
+  }
+
+  function effectiveSeasonalFactor(rawFactor, mode) {
+    const factor = Number(rawFactor);
+    if (!Number.isFinite(factor) || factor <= 0) return 1;
+    if (/^四季－/.test(mode)) return Math.max(0.8, Math.min(1.3, 1 + (factor - 1) * 0.4));
+    return factor;
+  }
+
+  function hasRepeatedSeasonalPeak(profile) {
+    const peakSlots = String(profile?.peakSlots || "").split(/[^0-9]+/).map(Number).filter((slot) => slot >= 1 && slot <= 26);
+    return peakSlots.some((slot) => Number(profile?.observationsBySlot?.get(slot - 1) || 0) >= 2);
+  }
+
   const STORE_CHANNEL_CODES = Object.freeze({
     "台北中山門市": "R00",
     "中山門市": "R00",
@@ -2216,7 +2267,20 @@
       const targetCoverageDays = reviewDays + supplierLeadDays + safetyBufferDays;
       const seasonalProfile = seasonalProfileForRow(input.model, row);
       const seasonalAdjustment = horizonSeasonalAdjustment(seasonalProfile, asOfMs, targetCoverageDays);
-      const adjustedDaily = row.skuForecastDaily * (pool?.factor || 1) * seasonalAdjustment.factor;
+      const seasonalMode = seasonalDemandMode(row);
+      const adoptedSeasonalFactor = effectiveSeasonalFactor(seasonalAdjustment.factor, seasonalMode);
+      const ratioAdjustedDaily = row.skuForecastDaily * (pool?.factor || 1) * adoptedSeasonalFactor;
+      const strongSeasonalSku = /^強(夏|冬)季$/.test(seasonalMode);
+      const seasonalHistoryRepeated = strongSeasonalSku && hasRepeatedSeasonalPeak(seasonalProfile);
+      const seasonalHistoricalDailyQty = seasonalHistoryRepeated
+        ? historicalSeasonalAverageDaily(seasonalProfile, asOfMs, targetCoverageDays)
+        : null;
+      const adjustedDaily = seasonalHistoricalDailyQty == null
+        ? ratioAdjustedDaily
+        : Math.max(ratioAdjustedDaily, seasonalHistoricalDailyQty);
+      const seasonalDemandBasis = seasonalHistoricalDailyQty != null && seasonalHistoricalDailyQty > ratioAdjustedDaily
+        ? "SKU同季歷史絕對量"
+        : (seasonalProfile ? (/^四季－/.test(seasonalMode) ? "近期速度×溫和季節曲線" : "近期速度×季節曲線") : "近期速度");
       const channelKeys = new Set([...channelTotals42.keys(), ...plannedRevenueByChannel.keys()]);
       const shares42 = [...channelKeys].map((key) => [key, Math.max(0, skuChannel42.get(compositeKey(row.demand.sku, key)) || 0)]).filter(([, quantity]) => quantity > 0);
       const shares84 = [...channelKeys].map((key) => [key, Math.max(0, skuChannel84.get(compositeKey(row.demand.sku, key)) || 0)]).filter(([, quantity]) => quantity > 0);
@@ -2251,6 +2315,25 @@
         horizonDays,
         rule: input.springFestivalRule
       });
+      let springFestivalExtraDailyQty = channelAdjustedDaily;
+      let springFestivalHistoricalDailyQty = null;
+      if (springFestival.active && springFestival.extraDays > 0 && seasonalProfile) {
+        const extraStartMs = asOfMs + horizonDays * 86400000;
+        const extraFutureIndex = averageSeasonalIndex(seasonalProfile.indices, extraStartMs, springFestival.extraDays, 1);
+        const recentIndex = seasonalAdjustment.recentIndex;
+        const rawExtraFactor = recentIndex && extraFutureIndex ? extraFutureIndex / recentIndex : seasonalAdjustment.factor;
+        const limits = seasonalProfile.reliability === "高" ? [0.5, 4] : [0.65, 3];
+        const extraFactor = effectiveSeasonalFactor(Math.max(limits[0], Math.min(limits[1], rawExtraFactor || 1)), seasonalMode);
+        const ratioExtraDaily = row.skuForecastDaily * (pool?.factor || 1) * extraFactor;
+        springFestivalHistoricalDailyQty = seasonalHistoryRepeated
+          ? historicalSeasonalAverageDaily(seasonalProfile, extraStartMs, springFestival.extraDays)
+          : null;
+        const extraBaseDaily = springFestivalHistoricalDailyQty == null
+          ? ratioExtraDaily
+          : Math.max(ratioExtraDaily, springFestivalHistoricalDailyQty);
+        const channelMultiplier = adjustedDaily > 0 ? channelAdjustedDaily / adjustedDaily : 1;
+        springFestivalExtraDailyQty = extraBaseDaily * channelMultiplier;
+      }
       const forecastFutureQty = channelAdjustedDaily * horizonDays;
       const hqSafetyStockQty = hqDailyQty * safetyBufferDays;
       let storeDemandQty = 0;
@@ -2323,7 +2406,7 @@
       });
       const springFestivalAdjustedRawPurchaseQty = springFestival.active
         ? calculateNetProcurementDemand({
-          forecastDemandQty: hqDemandQty + storeDemandQty + channelAdjustedDaily * springFestival.extraDays,
+          forecastDemandQty: hqDemandQty + storeDemandQty + springFestivalExtraDailyQty * springFestival.extraDays,
           safetyStockQty: 0,
           availableInventoryQty: inventoryQty,
           pendingPurchaseQty: effectivePendingQty,
@@ -2455,9 +2538,14 @@
         seasonalProfileSource: seasonalProfile?.source || "無可用季節曲線",
         seasonalProfileReliability: seasonalProfile?.reliability || "無",
         seasonalPeakSlots: seasonalProfile?.peakSlots || "",
-        horizonSeasonFactor: seasonalAdjustment.factor,
+        seasonalDemandMode: seasonalMode,
+        seasonalHistoryRepeated,
+        horizonRawSeasonFactor: seasonalAdjustment.factor,
+        horizonSeasonFactor: adoptedSeasonalFactor,
         horizonSeasonFutureIndex: seasonalAdjustment.futureIndex,
         horizonSeasonRecentIndex: seasonalAdjustment.recentIndex,
+        seasonalHistoricalDailyQty,
+        seasonalDemandBasis,
         categoryReliability: row.categoryReliability,
         categoryWape: row.categoryWape,
         seasonalDataReady: Boolean(seasonalProfile) || (row.skuSeasonalDataReady && (pool?.seasonalDataReady ?? true)),
@@ -2504,6 +2592,8 @@
         springFestivalClosureStart: springFestival.closureStart,
         springFestivalRecoveryDate: springFestival.recoveryDate,
         springFestivalExtraDays: springFestival.active ? springFestival.extraDays : 0,
+        springFestivalExtraDailyQty: springFestival.active ? springFestivalExtraDailyQty : 0,
+        springFestivalHistoricalDailyQty: springFestival.active ? springFestivalHistoricalDailyQty : null,
         springFestivalCycleStart,
         priorSpringFestivalPendingQty,
         springFestivalUncoveredRawQty,
@@ -2866,7 +2956,7 @@
     const headerValues = XLSX.utils.sheet_to_json(sheet, { header: 1, range: headerRow, defval: "" })[0] || [];
     const inputHeaders = new Set(options.inputHeaders || ["人工確認採購量", "人工調整原因", "二次確認採購量", "二次確認原因"]);
     const decisionHeaders = new Set(options.decisionHeaders || [
-      "人工確認要求", "加總需求（公式）", "建議採購量", "系統建議採購後可售至", "目前實際可採購量",
+      "人工確認要求", "加總需求（公式）", "建議採購量", "目前庫存可售至", "系統建議採購後可售至", "目前實際可採購量",
       "人工確認後可售至", "AI判斷", "最終可核准量", "最終可核准金額", "檢核結果", "回匯檢核狀態",
       "春節備貨規則", "春節額外備貨天數", "前次春節備貨未交量", "春節額外建議量", "調整前建議採購量"
     ]);
@@ -3056,6 +3146,12 @@
     const reportRows = rows.map((row) => {
       const storeInventoryQty = Object.values(row.storeInventoryByCode || {})
         .reduce((sum, quantity) => sum + Math.max(0, Number(quantity || 0)), 0);
+      const currentInventoryAvailableDays = row.forecastDailyQty > 0
+        ? (Math.max(0, Number(row.inventoryQty || 0)) + storeInventoryQty) / row.forecastDailyQty
+        : null;
+      const currentInventoryAvailableTo = currentInventoryAvailableDays == null
+        ? "需求為0"
+        : addDays(asOfDate || new Date().toISOString().slice(0, 10), Math.floor(currentInventoryAvailableDays));
       const systemAvailableDays = row.forecastDailyQty > 0
         ? (Number(row.inventoryQty || 0) + storeInventoryQty + Number((row.effectivePendingQty ?? row.pendingQty) || 0) + Number(row.suggestedPurchaseQty || 0)) / row.forecastDailyQty
         : null;
@@ -3086,7 +3182,12 @@
       "季節模型來源": row.seasonalProfileSource || "無可用季節曲線",
       "季節曲線可信度": row.seasonalProfileReliability || "無",
       "旺季14天位置": row.seasonalPeakSlots || "",
+      "季節需求模式": row.seasonalDemandMode || "四季穩定",
+      "同季高峰跨年重複": row.seasonalHistoryRepeated ? "是" : "否",
+      "原始季節係數": row.horizonRawSeasonFactor || 1,
       "保護期季節係數": row.horizonSeasonFactor || 1,
+      "季節需求基準": row.seasonalDemandBasis || "近期速度",
+      "同季歷史日均需求": row.seasonalHistoricalDailyQty ?? "",
       "預估日需求": row.forecastDailyQty,
       "供應交期類型": row.supplyProfileLabel,
       "到貨交期天數": row.supplierLeadDays,
@@ -3128,6 +3229,7 @@
       "調整前建議採購量": row.standardSuggestedPurchaseQty,
       "建議採購量": row.suggestedPurchaseQty,
       "本次新增採購量": row.suggestedPurchaseQty,
+      "目前庫存可售至": currentInventoryAvailableTo,
       "系統建議採購後可售至": systemAvailableTo,
       "寄倉現貨": row.consignmentCurrentQty,
       "粉紅排程": row.consignmentScheduledQty,
@@ -3564,6 +3666,7 @@
       ["規則", "公式／定義", "狀態"],
       ["銷售需求口徑", "銷貨＋訂貨＋退貨＋退訂；排除取貨，避免總倉代出重複計算", "核心鎖定"],
       ["SKU模型", "依回測檔在近期6週與12週間選擇；類別模型只做季節需求池校正", "核心鎖定"],
+      ["冬夏季模型", "強夏季／強冬季且SKU曲線可信度為中／高時，以至少兩個年度同一14天位置的歷史絕對量與近期速度季節化結果取高者；天絲寢具為四季夏偏旺、純棉寢具為四季冬偏旺，只採40%季節變化並限制於0.8～1.3倍；春節追加期間另按該段季節曲線計算", "核心鎖定"],
       ["ABC／XYZ", "12週成本貢獻做ABC；有銷售週數與變異係數做XYZ", "第一版"],
       ["淨採購需求", LOCKED_RULES.netDemandFormula, "核心鎖定"],
       ["公司備貨", "目標覆蓋＝供應商檢視期＋到貨交期＋商品分級安全緩衝；90～120天依熱銷90／穩定105／低銷120；0轉人工判斷", "第三版"],

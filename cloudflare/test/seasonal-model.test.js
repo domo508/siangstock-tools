@@ -82,13 +82,15 @@ describe("季節模型自動回測", () => {
     expect(parsed.categoryModelAvailable).toBe(true);
     expect(parsed.seasonalIndexAvailable).toBe(true);
     expect(parsed.seasonalProfilesBySku.get("A1")?.indices.size).toBe(26);
+    expect(parsed.seasonalProfilesBySku.get("A1")?.actualBySlot.size).toBe(26);
+    expect(parsed.seasonalProfilesBySku.get("A1")?.observationsBySlot.size).toBe(26);
   });
 
   it("非普優瑪冬季品也建立SKU與供應商類別季節曲線", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
-      ["貨號", "品名", "供應商簡稱", "主類別", "2級款式", "尺碼", "存貨種類"],
-      ["F13005", "冬季暖被", "潤泰羽絨", "被類", "冬被", "6x7尺", "商品"]
+      ["貨號", "品名", "供應商簡稱", "主類別", "2級款式", "尺碼", "存貨種類", "季節"],
+      ["F13005", "冬季暖被", "潤泰羽絨", "被類", "冬被", "6x7尺", "商品", "冬季"]
     ]), "商品主檔");
     const master = core.parseProductMasterWorkbook(workbook, XLSX);
     const records = historicalRows().map((row, index) => ({
@@ -104,7 +106,8 @@ describe("季節模型自動回測", () => {
     expect(result.seasonalRows.some((row) => row[0] === "全部" && row[1] === "SKU" && row[2] === "F13005" && row[8] !== "低")).toBe(true);
     expect(result.seasonalRows.some((row) => row[0] === "潤泰羽絨" && row[1] === "材質" && row[9] === "是")).toBe(true);
     const parsed = core.parseForecastModelWorkbook(seasonal.buildWorkbook(result, XLSX), XLSX);
-    expect(parsed.seasonalProfilesBySku.get("F13005")).toMatchObject({ seasonal: true });
+    expect(parsed.bySku.get("F13005")?.season).toBe("冬季");
+    expect(parsed.seasonalProfilesBySku.get("F13005")).toMatchObject({ seasonal: true, level: "SKU" });
   });
 
   it("同一交易識別在跨檔出現不同數量時禁止發布", () => {

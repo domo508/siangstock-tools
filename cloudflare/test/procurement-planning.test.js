@@ -619,20 +619,57 @@ describe("採購建議第二階段", () => {
     const asOfMs = Date.parse("2026-08-28T00:00:00Z");
     for (let day = -41; day <= 0; day += 1) indices.set(slotOf(new Date(asOfMs + day * 86400000).toISOString().slice(0, 10)), 0.5);
     for (let day = 1; day <= 23; day += 1) indices.set(slotOf(new Date(asOfMs + day * 86400000).toISOString().slice(0, 10)), 2.5);
+    const actualBySlot = new Map(Array.from({ length: 26 }, (_unused, slot) => [slot, 280]));
+    const observationsBySlot = new Map(Array.from({ length: 26 }, (_unused, slot) => [slot, 2]));
+    const winterMaster = makeMaster();
+    winterMaster.records.find((record) => record.sku === "A1").name = "冬季羽絨被";
     const seasonalModel = {
       ...baseModel,
-      seasonalProfilesBySku: new Map([["A1", { indices, reliability: "高", seasonal: true, peakSlots: "18、19" }]]),
+      bySku: new Map([["A1", { ...baseModel.bySku.get("A1"), name: "冬季羽絨被", materialCategory: "冬季保暖其他", season: "冬季" }]]),
+      seasonalProfilesBySku: new Map([["A1", { level: "SKU", indices, actualBySlot, observationsBySlot, reliability: "高", seasonal: true, peakSlots: "18、19" }]]),
       seasonalProfilesByKey: new Map()
     };
     const source = {
-      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      master: winterMaster, inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
       salesReports: [makeSales()], blacklist: [], asOfDate: "2026-08-28", checkpoint: "mid-month"
     };
     const withoutSeason = core.buildProcurementRecommendations({ ...source, model: baseModel }).rows.find((row) => row.sku === "A1");
     const withSeason = core.buildProcurementRecommendations({ ...source, model: seasonalModel }).rows.find((row) => row.sku === "A1");
     expect(withSeason.horizonSeasonFactor).toBeGreaterThan(1);
+    expect(withSeason.seasonalDemandMode).toBe("強冬季");
     expect(withSeason.seasonalProfileSource).toBe("SKU：A1");
+    expect(withSeason.seasonalHistoricalDailyQty).toBe(10);
+    expect(withSeason.seasonalDemandBasis).toBe("SKU同季歷史絕對量");
     expect(withSeason.suggestedPurchaseQty).toBeGreaterThan(withoutSeason.suggestedPurchaseQty);
+  });
+
+  it("天絲寢具維持四季品，只採用40%季節變化且不套歷史絕對量下限", () => {
+    const baseModel = makeForecastModel();
+    const indices = new Map(Array.from({ length: 26 }, (_unused, slot) => [slot, 1]));
+    const slotOf = (timestamp) => ((Math.floor((timestamp - Date.UTC(2024, 0, 1)) / 86400000 / 14) % 26) + 26) % 26;
+    const asOfMs = Date.parse("2026-08-28T00:00:00Z");
+    for (let day = -41; day <= 0; day += 1) indices.set(slotOf(asOfMs + day * 86400000), 0.5);
+    for (let day = 1; day <= 23; day += 1) indices.set(slotOf(asOfMs + day * 86400000), 2.5);
+    const seasonalModel = {
+      ...baseModel,
+      bySku: new Map([["A1", { ...baseModel.bySku.get("A1"), season: "夏季" }]]),
+      seasonalProfilesBySku: new Map([["A1", {
+        level: "SKU", indices,
+        actualBySlot: new Map(Array.from({ length: 26 }, (_unused, slot) => [slot, 2800])),
+        observationsBySlot: new Map(Array.from({ length: 26 }, (_unused, slot) => [slot, 2])),
+        reliability: "高", seasonal: true, peakSlots: "18、19"
+      }]]),
+      seasonalProfilesByKey: new Map()
+    };
+    const row = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: seasonalModel, blacklist: [], asOfDate: "2026-08-28", checkpoint: "mid-month"
+    }).rows.find((item) => item.sku === "A1");
+    expect(row.seasonalDemandMode).toBe("四季－夏季偏旺");
+    expect(row.horizonRawSeasonFactor).toBeGreaterThan(row.horizonSeasonFactor);
+    expect(row.horizonSeasonFactor).toBeLessThanOrEqual(1.3);
+    expect(row.seasonalHistoricalDailyQty).toBeNull();
+    expect(row.seasonalDemandBasis).toBe("近期速度×溫和季節曲線");
   });
 
   it("月初依70／50／0分批釋放，月中則依最新缺口完整重算", () => {
@@ -830,6 +867,11 @@ describe("採購建議第二階段", () => {
     ]);
     const rows = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { defval: "" });
     expect(rows[0]["建議採購量"]).toBeGreaterThan(0);
+    const expectedCurrentAvailableDays = Math.floor(
+      (Number(rows[0]["可用公司庫存"] || 0) + Number(rows[0]["門市可售庫存"] || 0)) / Number(rows[0]["預估日需求"])
+    );
+    const expectedCurrentAvailableTo = new Date(Date.UTC(2026, 7, 28 + expectedCurrentAvailableDays)).toISOString().slice(0, 10);
+    expect(rows[0]["目前庫存可售至"]).toBe(expectedCurrentAvailableTo);
     expect(rows[0]["系統建議採購後可售至"]).toMatch(/^2026-/);
     expect(rows[0]["人工確認採購量"]).toBe("");
     expect(rows[0]["人工確認後可售至"]).toBe("");
@@ -838,6 +880,7 @@ describe("採購建議第二階段", () => {
     expect(rows[0]).toMatchObject({ "供應交期類型": "寄倉快速補貨", "到貨交期天數": 5, "目標覆蓋天數": 23 });
     expect(output.SheetNames.every((sheetName) => !output.Sheets[sheetName]["!protect"])).toBe(true);
     const editableHeaders = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { header: 1, defval: "" })[0];
+    expect(editableHeaders.indexOf("目前庫存可售至") + 1).toBe(editableHeaders.indexOf("系統建議採購後可售至"));
     const totalCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("加總需求（公式）") })];
     const hqCell = XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("總部需求（系統）") });
     const storeCell = XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("門市需求（系統）") });
@@ -845,7 +888,9 @@ describe("採購建議第二階段", () => {
     expect(totalCell.s?.protection).toBeUndefined();
     const manualCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("人工確認採購量") })];
     const decisionCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("系統建議採購後可售至") })];
+    const currentInventoryAvailableToCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("目前庫存可售至") })];
     expect(manualCell.s?.fill?.fgColor?.rgb).toBe("FFFFF2CC");
+    expect(currentInventoryAvailableToCell.s?.fill?.fgColor?.rgb).toBe("FFE8F2F5");
     expect(decisionCell.s?.fill?.fgColor?.rgb).toBe("FFE8F2F5");
     expect(output.Sheets["03B1_普優瑪_天絲"]["!margins"]).toMatchObject({ left: 0.35, right: 0.35, top: 0.5, bottom: 0.5 });
     const styledRoundTrip = XLSX.read(XLSX.write(output, { type: "array", bookType: "xlsx", cellStyles: true }), { type: "array", cellStyles: true });
@@ -1149,7 +1194,10 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260918-multi-work-units-r1");
+    expect(toolHtml).toContain("20260918-workflow-drafts-r1");
+    expect(toolHtml).toContain("20260918-seasonal-demand-modes-r1");
+    expect(toolHtml).toContain("所有未完成採購批次");
+    expect(toolApp).toContain("function renderResumeDrafts()");
     expect(procurementWorker).toContain('/api/procurement/cost-snapshot');
     const costSnapshotMigration = readFileSync("worker/migrations/0021_procurement_cost_snapshots.sql", "utf8");
     expect(costSnapshotMigration).toContain("CREATE TABLE procurement_cost_snapshots");
@@ -1159,6 +1207,8 @@ describe("採購規劃前台與入口", () => {
     expect(procurementWorker).not.toContain("VALUES (?, 'neutral', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month)");
     expect(toolApp).toContain('setAutomaticSourceBusy(true, "正在取得 4 項最新資料…")');
     expect(toolApp).toContain('completed ? "重新取得最新資料" : "重試取得最新資料"');
+    expect(toolApp).toMatch(/async function downloadRecommendation\(\)[\s\S]*state\.selectedWorkUnitIds = new Set\(\);[\s\S]*persistWorkflowDraft\("downloaded"\)/);
+    expect(toolApp).toContain("state.selectedWorkUnitIds = new Set();\n    const restoredSuppliers");
     expect(toolApp).toContain("forecastRevenue: Number(elements.forecastRevenue.value || 0)");
     expect(toolApp).toContain('refreshMonths: 6');
     expect(toolApp).toContain('indexedDB.open(MODEL_CACHE.database, 1)');
