@@ -861,15 +861,15 @@ describe("採購建議第二階段", () => {
     expect(summary.some((row) => row[0] === "使用限制" && String(row[1]).includes("不可直接下單"))).toBe(true);
   });
 
-  it("普優瑪寄庫報表維持單一頁籤並依大類、花色與小類排列及顯示小計", () => {
+  it("普優瑪寄庫報表以花色為大類、品項為中類、尺寸為小類", () => {
     expect(core.puyoumaConsignmentGroup({ name: "5尺60天絲床包 [晨曦]", purchaseTab: "天絲＋天絲棉", mainCategory: "床包", size: "5尺床包" }))
-      .toEqual({ majorCategory: "天絲", mediumCategory: "晨曦", smallCategory: "床包", size: "5尺床包" });
+      .toEqual({ materialCategory: "天絲／天絲棉", majorCategory: "晨曦", mediumCategory: "床包", smallCategory: "5尺床包", size: "5尺床包" });
     expect(core.puyoumaConsignmentGroup({ name: "60天絲枕套 [晨曦]", purchaseTab: "天絲＋天絲棉", mainCategory: "枕套", size: "48×75公分" }))
-      .toEqual({ majorCategory: "天絲", mediumCategory: "晨曦", smallCategory: "枕套", size: "48×75公分" });
+      .toEqual({ materialCategory: "天絲／天絲棉", majorCategory: "晨曦", mediumCategory: "枕套", smallCategory: "48×75公分", size: "48×75公分" });
     expect(core.puyoumaConsignmentGroup({ name: "走走多功能收納盒S", purchaseTab: "無尺寸品項", mainCategory: "收納" }))
-      .toEqual({ majorCategory: "無尺寸", mediumCategory: "走走多功能收納盒S", smallCategory: "其它品項", size: "無尺寸" });
+      .toEqual({ materialCategory: "無尺寸", majorCategory: "走走多功能收納盒S", mediumCategory: "收納", smallCategory: "無尺寸", size: "無尺寸" });
     expect(core.puyoumaConsignmentGroup({ name: "天絲刺繡抱枕-綠霧森林", purchaseTab: "天絲＋天絲棉", mainCategory: "抱枕" }))
-      .toEqual({ majorCategory: "無尺寸", mediumCategory: "天絲刺繡抱枕-綠霧森林", smallCategory: "其它品項", size: "無尺寸" });
+      .toEqual({ materialCategory: "天絲／天絲棉", majorCategory: "綠霧森林", mediumCategory: "抱枕", smallCategory: "無尺寸", size: "無尺寸" });
 
     const recommendations = core.buildProcurementRecommendations({
       master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
@@ -885,17 +885,24 @@ describe("採購建議第二階段", () => {
     const output = core.buildRecommendationWorkbook(recommendations, XLSX);
     expect(output.SheetNames.filter((name) => name === "04A_普優瑪寄庫建議")).toHaveLength(1);
     const rows = XLSX.utils.sheet_to_json(output.Sheets["04A_普優瑪寄庫建議"], { header: 1, defval: "" });
-    expect(rows[0][0]).toBe("普優瑪寄庫建議（依大類、花色與品項分類）");
+    expect(rows[0][0]).toBe("普優瑪寄庫建議（依花色、品項與尺寸分類）");
     const headers = rows[3];
-    expect(headers.slice(0, 7)).toEqual(["大類", "花色／同品項", "小類", "尺寸", "ERP品號", "供應商貨號", "商品品名"]);
-    const majorSummary = rows.find((row) => row[0] === "大類小計：天絲");
-    const mediumSummary = rows.find((row) => row[1] === "花色小計：晨曦");
+    expect(headers.slice(0, 7)).toEqual(["材質／分頁", "大類（花色／同品項）", "中類（品項）", "小類（尺寸）", "ERP品號", "供應商貨號", "商品品名"]);
+    const materialSummary = rows.find((row) => row[0] === "材質區段：天絲／天絲棉");
+    const majorSummary = rows.find((row) => row[1] === "大類小計：晨曦");
+    expect(materialSummary[headers.indexOf("建議新增寄庫量")]).toBe(20);
+    expect(majorSummary[headers.indexOf("寄倉現貨缺口")]).toBe(6);
     expect(majorSummary[headers.indexOf("建議新增寄庫量")]).toBe(20);
-    expect(mediumSummary[headers.indexOf("寄倉現貨缺口")]).toBe(6);
-    expect(mediumSummary[headers.indexOf("建議新增寄庫量")]).toBe(20);
-    const details = rows.filter((row) => row[0] === "天絲" && row[1] === "晨曦");
+    const details = rows.filter((row) => row[0] === "天絲／天絲棉" && row[1] === "晨曦");
     expect(details.map((row) => row[2])).toEqual(["床包", "枕套"]);
     expect(details.map((row) => row[3])).toEqual(["5尺床包", "48×75公分"]);
+
+    const purchaseRows = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { defval: "" });
+    expect(purchaseRows[0]).toMatchObject({
+      "大類（花色／同品項）": "晨曦",
+      "中類（品項）": "床包",
+      "小類（尺寸）": "5尺床包"
+    });
   });
 
   it("可只輸出勾選供應商，摘要金額與採購分頁同步縮小且保留稽核頁", () => {
@@ -925,6 +932,18 @@ describe("採購建議第二階段", () => {
     const lirongOutput = core.buildRecommendationWorkbook(recommendations, XLSX, { selectedSuppliers: ["力榮"] });
     expect(lirongOutput.SheetNames).toEqual(expect.arrayContaining(["03A_力榮採購", "04B_力榮寄庫建議"]));
     expect(lirongOutput.SheetNames).not.toContain("03B1_普優瑪_天絲");
+    const lirongPurchase = XLSX.utils.sheet_to_json(lirongOutput.Sheets["03A_力榮採購"], { defval: "" });
+    expect(lirongPurchase[0]).toEqual(expect.objectContaining({
+      "大類（花色／同品項）": expect.any(String),
+      "中類（品項）": expect.any(String),
+      "小類（尺寸）": expect.any(String)
+    }));
+    const lirongConsignment = XLSX.utils.sheet_to_json(lirongOutput.Sheets["04B_力榮寄庫建議"], { defval: "" });
+    expect(lirongConsignment[0]).toEqual(expect.objectContaining({
+      "大類（花色／同品項）": expect.any(String),
+      "中類（品項）": expect.any(String),
+      "小類（尺寸）": expect.any(String)
+    }));
   });
 
   it("同一母批次依實際供應商拆單，普優瑪再拆成三個獨立審核單位", () => {

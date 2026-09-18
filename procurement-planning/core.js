@@ -1620,20 +1620,27 @@
     return "無尺寸品項";
   }
 
-  function puyoumaConsignmentGroup(row) {
+  function reportProductHierarchy(row) {
     const sourceName = String(row?.name || "").normalize("NFKC").replace(/\s+/g, " ").trim();
     const purchaseTab = row?.purchaseTab || classifyPuyoumaPurchaseTab(row, sourceName);
     const mainCategory = normalizeText(row?.mainCategory || "");
-    let smallCategory = "其它品項";
-    if (/床包/.test(mainCategory) || /床包/.test(sourceName)) smallCategory = "床包";
-    else if (/被套/.test(mainCategory) || /被套/.test(sourceName)) smallCategory = "被套";
-    else if (/枕套|枕頭套|枕巾/.test(mainCategory) || /枕套|枕頭套|枕巾/.test(sourceName)) smallCategory = "枕套";
-    const materialMajor = purchaseTab === "天絲＋天絲棉" ? "天絲" : (purchaseTab === "長絨棉" ? "長絨棉" : "無尺寸");
-    const majorCategory = smallCategory === "其它品項" ? "無尺寸" : materialMajor;
+    let mediumCategory = "其它品項";
+    if (/床包/.test(mainCategory) || /床包/.test(sourceName)) mediumCategory = "床包";
+    else if (/被套/.test(mainCategory) || /被套/.test(sourceName)) mediumCategory = "被套";
+    else if (/枕套|枕頭套|枕巾/.test(mainCategory) || /枕套|枕頭套|枕巾/.test(sourceName)) mediumCategory = "枕套";
+    else if (/枕頭|枕芯/.test(mainCategory) || /枕頭|枕芯/.test(sourceName)) mediumCategory = "枕芯";
+    else if (mainCategory) mediumCategory = row?.mainCategory || "其它品項";
+    const materialCategory = purchaseTab === "天絲＋天絲棉" ? "天絲／天絲棉" : (purchaseTab === "長絨棉" ? "長絨棉" : "無尺寸");
 
     const withoutStop = sourceName.replace(/\s*[（(]\s*S\s*[)）]\s*$/i, "").trim();
-    let mediumCategory = withoutStop || String(row?.sku || "未命名品項");
-    if (majorCategory !== "無尺寸") {
+    let size = "無尺寸";
+    const sizeCandidates = [row?.size, row?.sizeGroup].map((value) => String(value || "").normalize("NFKC").trim()).filter(Boolean);
+    const explicitSize = sizeCandidates.find((value) => !/^(均碼|無尺寸|不分尺寸)$/.test(value));
+    const nameSize = withoutStop.match(/\d+(?:\.\d+)?\s*(?:[xX×＊*]\s*\d+(?:\.\d+)?\s*){0,2}(?:尺|公分|cm)/i)?.[0];
+    if (explicitSize || nameSize) size = explicitSize || nameSize.replace(/\s+/g, "");
+
+    let majorCategory = withoutStop || String(row?.sku || "未命名品項");
+    if (mediumCategory !== "其它品項" || size !== "無尺寸") {
       const bracketed = withoutStop.match(/[\[［]([^\]］]+)[\]］]/)?.[1]?.trim();
       const quoted = withoutStop.match(/[「『]([^」』]+)[」』]/)?.[1]?.trim();
       const parenthetical = [...withoutStop.matchAll(/[（(]([^()（）]+)[)）]/g)]
@@ -1654,18 +1661,13 @@
           .replace(/\s+/g, " ")
           .trim();
       }
-      mediumCategory = candidate || bracketed || quoted || parenthetical || withoutStop || String(row?.sku || "未辨識花色");
+      majorCategory = candidate || bracketed || quoted || parenthetical || withoutStop || String(row?.sku || "未辨識花色");
     }
-
-    let size = "無尺寸";
-    if (majorCategory !== "無尺寸") {
-      const sizeCandidates = [row?.size, row?.sizeGroup].map((value) => String(value || "").normalize("NFKC").trim()).filter(Boolean);
-      const explicitSize = sizeCandidates.find((value) => !/^(均碼|無尺寸|不分尺寸)$/.test(value));
-      const nameSize = withoutStop.match(/\d+(?:\.\d+)?\s*(?:[xX×＊*]\s*\d+(?:\.\d+)?\s*){0,2}(?:尺|公分|cm)/i)?.[0];
-      size = explicitSize || (nameSize ? nameSize.replace(/\s+/g, "") : "") || sizeCandidates[0] || "未辨識尺寸";
-    }
-    return { majorCategory, mediumCategory, smallCategory, size };
+    const smallCategory = size;
+    return { materialCategory, majorCategory, mediumCategory, smallCategory, size };
   }
+
+  const puyoumaConsignmentGroup = reportProductHierarchy;
 
   function applyDemandModel(modelName, recent6Daily, recent12Daily, lastYearDaily) {
     const name = String(modelName || "近期6週");
@@ -3051,7 +3053,7 @@
   }
 
   function recommendationSheetRows(rows, asOfDate) {
-    return rows.map((row) => {
+    const reportRows = rows.map((row) => {
       const storeInventoryQty = Object.values(row.storeInventoryByCode || {})
         .reduce((sum, quantity) => sum + Math.max(0, Number(quantity || 0)), 0);
       const systemAvailableDays = row.forecastDailyQty > 0
@@ -3060,9 +3062,13 @@
       const systemAvailableTo = systemAvailableDays == null
         ? "需求為0"
         : addDays(asOfDate || new Date().toISOString().slice(0, 10), Math.floor(systemAvailableDays));
+      const hierarchy = reportProductHierarchy(row);
       return {
       "供應商": row.supplier,
       "採購分頁": row.purchaseTab,
+      "大類（花色／同品項）": hierarchy.majorCategory,
+      "中類（品項）": hierarchy.mediumCategory,
+      "小類（尺寸）": hierarchy.smallCategory,
       "ERP品號": row.sku,
       "供應商貨號": row.supplierSku,
       "商品品名": row.name,
@@ -3142,6 +3148,12 @@
       "銷售來源": row.sourceFiles.join("｜")
       };
     });
+    return reportRows.sort((left, right) => (
+      String(left["大類（花色／同品項）"] || "").localeCompare(String(right["大類（花色／同品項）"] || ""), "zh-Hant", { numeric: true })
+      || String(left["中類（品項）"] || "").localeCompare(String(right["中類（品項）"] || ""), "zh-Hant", { numeric: true })
+      || String(left["小類（尺寸）"] || "").localeCompare(String(right["小類（尺寸）"] || ""), "zh-Hant", { numeric: true })
+      || String(left["ERP品號"] || "").localeCompare(String(right["ERP品號"] || ""), "zh-Hant", { numeric: true })
+    ));
   }
 
   function appendJsonSheet(workbook, XLSX, sheetName, rows, widths) {
@@ -3170,56 +3182,66 @@
 
   function appendPuyoumaConsignmentSheet(workbook, XLSX, rows) {
     const headers = [
-      "大類", "花色／同品項", "小類", "尺寸", "ERP品號", "供應商貨號", "商品品名", "商品狀態", "預估日需求",
+      "材質／分頁", "大類（花色／同品項）", "中類（品項）", "小類（尺寸）", "ERP品號", "供應商貨號", "商品品名", "商品狀態", "預估日需求",
       "已採購未到貨", "本次建議採購量", "寄倉現貨", "粉紅底未完成量", "寄倉現貨缺口", "工廠目標天數", "工廠目標量",
       "建議新增寄庫量", "缺貨／供貨狀態", "排程欄首原文"
     ];
     const quantityKeys = ["預估日需求", "已採購未到貨", "本次建議採購量", "寄倉現貨", "粉紅底未完成量", "寄倉現貨缺口", "工廠目標量", "建議新增寄庫量"];
-    const majorOrder = new Map(["天絲", "長絨棉", "無尺寸"].map((value, index) => [value, index]));
-    const smallOrder = new Map(["床包", "被套", "枕套", "其它品項"].map((value, index) => [value, index]));
+    const materialOrder = new Map(["天絲／天絲棉", "長絨棉", "無尺寸"].map((value, index) => [value, index]));
+    const mediumOrder = new Map(["床包", "被套", "枕套", "枕芯", "其它品項"].map((value, index) => [value, index]));
     const groupedRows = rows.map((row) => ({ ...row, ...puyoumaConsignmentGroup(row) })).sort((left, right) => (
-      (majorOrder.get(left.majorCategory) ?? 99) - (majorOrder.get(right.majorCategory) ?? 99)
-      || left.mediumCategory.localeCompare(right.mediumCategory, "zh-Hant")
-      || (smallOrder.get(left.smallCategory) ?? 99) - (smallOrder.get(right.smallCategory) ?? 99)
-      || left.size.localeCompare(right.size, "zh-Hant", { numeric: true })
+      (materialOrder.get(left.materialCategory) ?? 99) - (materialOrder.get(right.materialCategory) ?? 99)
+      || left.majorCategory.localeCompare(right.majorCategory, "zh-Hant")
+      || (mediumOrder.get(left.mediumCategory) ?? 99) - (mediumOrder.get(right.mediumCategory) ?? 99)
+      || left.smallCategory.localeCompare(right.smallCategory, "zh-Hant", { numeric: true })
       || String(left["ERP品號"] || "").localeCompare(String(right["ERP品號"] || ""), "zh-Hant", { numeric: true })
     ));
     const sumRows = (items, key) => items.reduce((sum, item) => sum + Number(item[key] || 0), 0);
     const data = [
-      ["普優瑪寄庫建議（依大類、花色與品項分類）"],
-      ["排列方式", "大類：天絲／長絨棉／無尺寸；中類：花色名稱或同品項；小類：床包／被套／枕套。小計不重複計入明細。"],
+      ["普優瑪寄庫建議（依花色、品項與尺寸分類）"],
+      ["排列方式", "材質保留為分頁／區段；大類：花色名稱，無法辨識花色時使用同品項名稱；中類：床包／被套／枕套／其它品項；小類：尺寸。小計不重複計入明細。"],
       [],
       headers
     ];
     const rowKinds = new Map([[0, "title"], [1, "note"], [3, "header"]]);
-    let appendedMajorCount = 0;
-    for (const majorCategory of ["天絲", "長絨棉", "無尺寸"]) {
-      const majorRows = groupedRows.filter((row) => row.majorCategory === majorCategory);
-      if (!majorRows.length) continue;
-      if (appendedMajorCount > 0) data.push([]);
-      appendedMajorCount += 1;
-      const majorSummary = Array(headers.length).fill("");
-      majorSummary[0] = `大類小計：${majorCategory}`;
-      majorSummary[2] = `${majorRows.length}個SKU`;
-      quantityKeys.forEach((key) => { majorSummary[headers.indexOf(key)] = sumRows(majorRows, key); });
-      rowKinds.set(data.length, "major");
-      data.push(majorSummary);
-      const mediumCategories = [...new Set(majorRows.map((row) => row.mediumCategory))];
-      for (const mediumCategory of mediumCategories) {
-        const mediumRows = majorRows.filter((row) => row.mediumCategory === mediumCategory);
-        const mediumSummary = Array(headers.length).fill("");
-        mediumSummary[1] = `${majorCategory === "無尺寸" ? "同品項" : "花色"}小計：${mediumCategory}`;
-        mediumSummary[2] = `${mediumRows.length}個SKU`;
-        quantityKeys.forEach((key) => { mediumSummary[headers.indexOf(key)] = sumRows(mediumRows, key); });
-        rowKinds.set(data.length, "medium");
-        data.push(mediumSummary);
-        for (const row of mediumRows) {
-          rowKinds.set(data.length, "detail");
-          data.push([
-            row.majorCategory, row.mediumCategory, row.smallCategory, row.size, row["ERP品號"], row["供應商貨號"], row["商品品名"], row["商品狀態"],
-            row["預估日需求"], row["已採購未到貨"], row["本次建議採購量"], row["寄倉現貨"], row["粉紅底未完成量"], row["寄倉現貨缺口"],
-            row["工廠目標天數"], row["工廠目標量"], row["建議新增寄庫量"], row["缺貨／供貨狀態"], row["排程欄首原文"]
-          ]);
+    let appendedMaterialCount = 0;
+    for (const materialCategory of ["天絲／天絲棉", "長絨棉", "無尺寸"]) {
+      const materialRows = groupedRows.filter((row) => row.materialCategory === materialCategory);
+      if (!materialRows.length) continue;
+      if (appendedMaterialCount > 0) data.push([]);
+      appendedMaterialCount += 1;
+      const materialSummary = Array(headers.length).fill("");
+      materialSummary[0] = `材質區段：${materialCategory}`;
+      materialSummary[2] = `${materialRows.length}個SKU`;
+      quantityKeys.forEach((key) => { materialSummary[headers.indexOf(key)] = sumRows(materialRows, key); });
+      rowKinds.set(data.length, "material");
+      data.push(materialSummary);
+      const majorCategories = [...new Set(materialRows.map((row) => row.majorCategory))];
+      for (const majorCategory of majorCategories) {
+        const majorRows = materialRows.filter((row) => row.majorCategory === majorCategory);
+        const majorSummary = Array(headers.length).fill("");
+        majorSummary[1] = `大類小計：${majorCategory}`;
+        majorSummary[2] = `${majorRows.length}個SKU`;
+        quantityKeys.forEach((key) => { majorSummary[headers.indexOf(key)] = sumRows(majorRows, key); });
+        rowKinds.set(data.length, "major");
+        data.push(majorSummary);
+        const mediumCategories = [...new Set(majorRows.map((row) => row.mediumCategory))];
+        for (const mediumCategory of mediumCategories) {
+          const mediumRows = majorRows.filter((row) => row.mediumCategory === mediumCategory);
+          const mediumSummary = Array(headers.length).fill("");
+          mediumSummary[2] = `中類小計：${mediumCategory}`;
+          mediumSummary[3] = `${mediumRows.length}個SKU`;
+          quantityKeys.forEach((key) => { mediumSummary[headers.indexOf(key)] = sumRows(mediumRows, key); });
+          rowKinds.set(data.length, "medium");
+          data.push(mediumSummary);
+          for (const row of mediumRows) {
+            rowKinds.set(data.length, "detail");
+            data.push([
+              row.materialCategory, row.majorCategory, row.mediumCategory, row.smallCategory, row["ERP品號"], row["供應商貨號"], row["商品品名"], row["商品狀態"],
+              row["預估日需求"], row["已採購未到貨"], row["本次建議採購量"], row["寄倉現貨"], row["粉紅底未完成量"], row["寄倉現貨缺口"],
+              row["工廠目標天數"], row["工廠目標量"], row["建議新增寄庫量"], row["缺貨／供貨狀態"], row["排程欄首原文"]
+            ]);
+          }
         }
       }
     }
@@ -3232,7 +3254,8 @@
       title: { fill: excelFill(EXCEL_CIS.white), font: { bold: true, sz: 14, color: { rgb: "FF153F63" } }, alignment: { vertical: "center" } },
       note: { fill: excelFill(EXCEL_CIS.white), font: { italic: true, color: { rgb: "FF64778A" } }, alignment: { vertical: "center", wrapText: true } },
       header: { fill: { patternType: "solid", fgColor: { rgb: "FF176B87" } }, font: { bold: true, color: { rgb: "FFFFFFFF" } }, alignment: { horizontal: "center", vertical: "center", wrapText: true } },
-      major: { fill: { patternType: "solid", fgColor: { rgb: "FF153F63" } }, font: { bold: true, color: { rgb: "FFFFFFFF" } }, alignment: { vertical: "center" } },
+      material: { fill: { patternType: "solid", fgColor: { rgb: "FF153F63" } }, font: { bold: true, color: { rgb: "FFFFFFFF" } }, alignment: { vertical: "center" } },
+      major: { fill: { patternType: "solid", fgColor: { rgb: "FF176B87" } }, font: { bold: true, color: { rgb: "FFFFFFFF" } }, alignment: { vertical: "center" } },
       medium: { fill: { patternType: "solid", fgColor: { rgb: "FFDCECF0" } }, font: { bold: true, color: { rgb: "FF17324D" } }, alignment: { vertical: "center" } },
       detail: { fill: excelFill(EXCEL_CIS.white), font: { name: "Arial", sz: 10, color: { rgb: EXCEL_CIS.ink } }, alignment: { vertical: "center" }, border: excelBottomBorder() },
       empty: { fill: excelFill(EXCEL_CIS.white), font: { name: "Arial", sz: 10, color: { rgb: EXCEL_CIS.ink } } }
@@ -3248,14 +3271,14 @@
     }
     const numericHeaders = new Set([...quantityKeys, "工廠目標天數"]);
     data.forEach((_row, rowIndex) => {
-      if (!["detail", "major", "medium"].includes(rowKinds.get(rowIndex))) return;
+      if (!["detail", "material", "major", "medium"].includes(rowKinds.get(rowIndex))) return;
       headers.forEach((header, columnIndex) => {
         if (!numericHeaders.has(header)) return;
         const address = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
         if (sheet[address]) sheet[address].z = header === "預估日需求" ? "#,##0.00" : "#,##0";
       });
     });
-    setColumnWidths(sheet, [12, 24, 12, 16, 16, 28, 48, 12, 14, 16, 18, 14, 20, 16, 16, 16, 20, 42, 58]);
+    setColumnWidths(sheet, [18, 26, 16, 16, 16, 28, 48, 12, 14, 16, 18, 14, 20, 16, 16, 16, 20, 42, 58]);
     sheet["!rows"] = data.map((_row, index) => ({ hpt: rowKinds.get(index) === "title" ? 24 : (rowKinds.get(index) === "header" ? 34 : 21) }));
     applySheetSpacing(sheet);
     XLSX.utils.book_append_sheet(workbook, sheet, "04A_普優瑪寄庫建議");
@@ -3389,7 +3412,7 @@
     applySummaryCis(summarySheet, XLSX);
     XLSX.utils.book_append_sheet(workbook, summarySheet, "01_採購摘要");
 
-    const recommendationWidths = [20, 18, 16, 28, 48, 12, 8, 8, 16, 16, 16, 24, 24, 16, 16, 20, 16, 16, 16, 16, 22, 18, 16, 18, 18, 18, 20, 16, 18, 28, 14, 18, 12, 16, 36];
+    const recommendationWidths = [20, 18, 26, 16, 16, 16, 28, 48, 12, 8, 8, 16, 16, 16, 24, 24, 16, 16, 20, 16, 16, 16, 16, 22, 18, 16, 18, 18, 18, 20, 16, 18, 28, 14, 18, 12, 16, 36];
 
     const puyoumaRows = selectedSuggestedRows.filter((row) => /普優[瑪碼]/.test(row.supplier));
     const lirongRows = selectedSuggestedRows.filter((row) => /力榮/.test(row.supplier));
@@ -3439,25 +3462,61 @@
         };
       });
     if (!requestedSet || puyoumaConsignmentRows.length) appendPuyoumaConsignmentSheet(workbook, XLSX, puyoumaConsignmentRows);
-    appendIfRows("04B_力榮寄庫建議", consignmentRows.filter((row) => /力榮/.test(recommendations.rows.find((item) => item.sku === row["ERP品號"])?.supplier || "")), [18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
+    const withReportHierarchy = (row) => {
+      const source = sourceBySku.get(row["ERP品號"]) || {};
+      const hierarchy = reportProductHierarchy({ ...source, name: row["商品品名"] || source.name, sku: row["ERP品號"] });
+      return {
+        "大類（花色／同品項）": hierarchy.majorCategory,
+        "中類（品項）": hierarchy.mediumCategory,
+        "小類（尺寸）": hierarchy.smallCategory,
+        ...row
+      };
+    };
+    const hierarchySort = (left, right) => (
+      String(left["大類（花色／同品項）"] || "").localeCompare(String(right["大類（花色／同品項）"] || ""), "zh-Hant", { numeric: true })
+      || String(left["中類（品項）"] || "").localeCompare(String(right["中類（品項）"] || ""), "zh-Hant", { numeric: true })
+      || String(left["小類（尺寸）"] || "").localeCompare(String(right["小類（尺寸）"] || ""), "zh-Hant", { numeric: true })
+      || String(left["ERP品號"] || "").localeCompare(String(right["ERP品號"] || ""), "zh-Hant", { numeric: true })
+    );
+    const lirongFallbackRows = consignmentRows
+      .filter((row) => /力榮/.test(sourceBySku.get(row["ERP品號"])?.supplier || ""))
+      .map(withReportHierarchy)
+      .sort(hierarchySort);
+    appendIfRows("04B_力榮寄庫建議", lirongFallbackRows, [26, 16, 16, 18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
     if (recommendations.lirongConsignmentRows?.length && selectedRows.some((row) => /力榮/.test(row.supplier))) {
-      const replacement = XLSX.utils.json_to_sheet(recommendations.lirongConsignmentRows.map((row) => ({
-        "ERP品號": row.sku, "供應商貨號": row.supplierSku, "來源品名": row.sourceName, "最新主檔品名": row.masterName,
-        "商品狀態": row.tier, "預估日需求": row.forecastDailyQty, "現貨拉貨交期": row.pullLeadDays, "製作期": row.productionDays,
-        "製作後最早到貨": row.earliestDeliveryDays, "目標低標": row.targetLowDays, "目標高標": row.targetHighDays, "本次採用目標": row.targetDays,
-        "工廠現貨": row.currentQty, "已確認製作中": row.scheduledQty, "已核准本次拉貨": row.approvedPullQty,
-        "預計製作完成日": row.productionCompleteDate, "預計到貨日": row.expectedArrivalDate, "未取整需求": row.rawQty,
-        "10件向下量": row.downQty, "10件向上量": row.upQty, "系統建議量": row.suggestedQty, "人工確認量": "", "人工調整原因": "",
-        "寄庫後可售天數": row.availableDaysAfter, "現貨到貨前風險": row.beforePullRisk ? "有" : "無", "製作完成前風險": row.beforeProductionRisk ? "有" : "無",
-        "製作後送達前風險": row.beforeDeliveryRisk ? "有" : "無", "例外狀態": row.status, "未來可能成本": row.futureCost,
-        "排程欄首原文": row.scheduleNotes.join("｜")
-      })));
-      setColumnWidths(replacement, Array(30).fill(18));
+      const lirongReportRows = recommendations.lirongConsignmentRows.map((row) => {
+        const source = sourceBySku.get(row.sku) || {};
+        const hierarchy = reportProductHierarchy({
+          ...source,
+          name: row.masterName || row.sourceName || source.name,
+          sku: row.sku,
+          purchaseTab: source.purchaseTab || ""
+        });
+        return {
+          "大類（花色／同品項）": hierarchy.majorCategory, "中類（品項）": hierarchy.mediumCategory, "小類（尺寸）": hierarchy.smallCategory,
+          "ERP品號": row.sku, "供應商貨號": row.supplierSku, "來源品名": row.sourceName, "最新主檔品名": row.masterName,
+          "商品狀態": row.tier, "預估日需求": row.forecastDailyQty, "現貨拉貨交期": row.pullLeadDays, "製作期": row.productionDays,
+          "製作後最早到貨": row.earliestDeliveryDays, "目標低標": row.targetLowDays, "目標高標": row.targetHighDays, "本次採用目標": row.targetDays,
+          "工廠現貨": row.currentQty, "已確認製作中": row.scheduledQty, "已核准本次拉貨": row.approvedPullQty,
+          "預計製作完成日": row.productionCompleteDate, "預計到貨日": row.expectedArrivalDate, "未取整需求": row.rawQty,
+          "10件向下量": row.downQty, "10件向上量": row.upQty, "系統建議量": row.suggestedQty, "人工確認量": "", "人工調整原因": "",
+          "寄庫後可售天數": row.availableDaysAfter, "現貨到貨前風險": row.beforePullRisk ? "有" : "無", "製作完成前風險": row.beforeProductionRisk ? "有" : "無",
+          "製作後送達前風險": row.beforeDeliveryRisk ? "有" : "無", "例外狀態": row.status, "未來可能成本": row.futureCost,
+          "排程欄首原文": row.scheduleNotes.join("｜")
+        };
+      }).sort(hierarchySort);
+      const replacement = XLSX.utils.json_to_sheet(lirongReportRows);
+      setColumnWidths(replacement, [26, 16, 16, ...Array(30).fill(18)]);
+      addAutoFilter(replacement);
+      applyTableCis(replacement, XLSX);
       if (workbook.Sheets["04B_力榮寄庫建議"]) workbook.Sheets["04B_力榮寄庫建議"] = replacement;
       else XLSX.utils.book_append_sheet(workbook, replacement, "04B_力榮寄庫建議");
     }
     appendIfRows("05_新品採購建議", recommendationSheetRows(selectedRows.filter((row) => row.isNewProduct), recommendations.asOfDate), recommendationWidths);
-    appendIfRows("06_普優瑪新品寄庫", consignmentRows.filter((row) => recommendations.rows.find((item) => item.sku === row["ERP品號"])?.isNewProduct && /普優[瑪碼]/.test(recommendations.rows.find((item) => item.sku === row["ERP品號"])?.supplier || "")), [18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
+    appendIfRows("06_普優瑪新品寄庫", consignmentRows
+      .filter((row) => sourceBySku.get(row["ERP品號"])?.isNewProduct && /普優[瑪碼]/.test(sourceBySku.get(row["ERP品號"])?.supplier || ""))
+      .map(withReportHierarchy)
+      .sort(hierarchySort), [26, 16, 16, 18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
 
     const exceptionRows = [
       ...(recommendations.productExclusions || []).filter((row) => supplierIncluded(row.supplier)).map((row) => ({
@@ -3517,7 +3576,7 @@
       ["售完即停(S)", LOCKED_RULES.sellThroughStopRule, "核心鎖定"],
       ["(S)門市調撥", LOCKED_RULES.sellThroughTransferRule, "核心鎖定"],
       ["寄庫建議", `工廠目標${recommendations.factoryTargetDays}天；寄倉現貨不足採購需求時必列缺貨警示`, "核心鎖定"],
-      ["普優瑪寄庫報表", "04A維持單一頁籤；依天絲／長絨棉／無尺寸、花色或同品項、床包／被套／枕套三級排列，顯示中類及大類小計", "已確認"],
+      ["採購與寄庫報表分類", "材質保留為分頁／區段；大類為花色或同品項、中類為品項、小類為尺寸。普優瑪與力榮採購及寄庫報表皆依此排列", "已確認"],
       ["普優瑪工廠製作交期", `${recommendations.appliedRules?.puyouma?.productionDays ?? PROCUREMENT_POLICY.puyoumaFactoryLeadDays}天`, "集中規則"],
       ["A42359-A", `只保留供應商貨號${CONFIRMED_OVERRIDES["A42359-A"]}`, "已確認"],
       ["A43359-A", CONFIRMED_EXCLUSIONS["A43359-A"], "已確認固定排除"]
