@@ -194,6 +194,50 @@ describe("採購規劃核心鎖定公式", () => {
     })).toThrow(/客製採購流程/);
   });
 
+  it("8×7尺商品視為一次性客製尺寸，不列一般採購與寄庫", () => {
+    expect(core.isEightBySevenCustomItem("8x7尺羽絨被")).toBe(true);
+    expect(core.isEightBySevenCustomItem("8X7呎兩用被套")).toBe(true);
+    expect(core.isEightBySevenCustomItem("8×7 尺薄被套")).toBe(true);
+    expect(core.isEightBySevenCustomItem("6x7尺兩用被套")).toBe(false);
+    expect(core.isAutomaticProcurementExcludedItem("F14008", "8x7尺羽絨被")).toBe(true);
+    expect(core.isCustomerCustomItem("F14008", "8×7尺羽絨被")).toBe(true);
+    expect(core.customerCustomExclusionReason("F14008", "8×7尺羽絨被")).toContain("客製尺寸");
+
+    const pendingWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(pendingWorkbook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "採購價", "數量", "金額", "備註"],
+      ["F14008", "8x7尺羽絨被", 3000, 1, 3000, "台北"]
+    ]), "工作表1");
+    const pendingReport = core.parsePendingPurchaseWorkbook(pendingWorkbook, XLSX, { fileName: "8x7客製採購.xlsx" });
+    expect(pendingReport.records[0]).toMatchObject({ automaticProcurementExcluded: true, isCustomOrder: true });
+    expect(core.aggregatePendingReports([pendingReport]).bySku.size).toBe(0);
+    expect(core.aggregatePendingReports([pendingReport]).customRecords).toHaveLength(1);
+
+    const masterWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(masterWorkbook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "供應商貨號", "供應商簡稱", "進貨價", "最小配貨數", "貨品狀態", "已下架"],
+      ["A1", "一般床包", "V-A1", "普優瑪", 500, 1, "尚可追加", "否"],
+      ["F14008", "8×7尺羽絨被", "V-F14008", "潤泰羽絨", 3000, 1, "尚可追加", "否"]
+    ]), "工作表1");
+    const salesWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(salesWorkbook, XLSX.utils.aoa_to_sheet([
+      ["銷別", "結帳時間", "貨號", "品名", "銷售量", "實收金額", "開單倉編號", "開單倉名稱"],
+      ["銷貨", "2026-08-25 12:00:00", "A1", "一般床包", 20, 20000, "R00", "台北門市"],
+      ["銷貨", "2026-08-25 12:00:00", "F14008", "8×7尺羽絨被", 3, 15000, "R00", "台北門市"]
+    ]), "工作表1");
+    const master = core.parseProductMasterWorkbook(masterWorkbook, XLSX);
+    const recommendations = core.buildProcurementRecommendations({
+      master, inventory: makeInventory(), pendingReports: [], consignment: makeConsignment(),
+      salesReports: [core.parseSalesWorkbook(salesWorkbook, XLSX)], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", checkpoint: "mid-month"
+    });
+    expect(recommendations.rows.map((row) => row.sku)).not.toContain("F14008");
+    expect(recommendations.productExclusions).toContainEqual(expect.objectContaining({ sku: "F14008", type: "8×7尺客製尺寸排除" }));
+    expect(() => core.buildSpecialProcurementAnalysis({
+      baseAnalysis: recommendations, workflowType: "new_product", rows: [{ sku: "F14008", firstMonthQty: 1 }],
+      master, inventory: makeInventory(), pendingReports: []
+    })).toThrow(/8×7尺客製尺寸/);
+  });
+
   it("全部狀態採購單會排除新單與已結案未交量，並按實際交貨日計入收貨成本", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
@@ -1193,9 +1237,9 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/month-plan");
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
-    expect(toolHtml).toContain("SA、OA、SB、OB開頭品號排除一般採購與寄庫");
+    expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
     expect(toolHtml).toContain("20260918-workflow-drafts-r1");
-    expect(toolHtml).toContain("20260918-seasonal-demand-modes-r1");
+    expect(toolHtml).toContain("20260918-custom-8x7-r1");
     expect(toolHtml).toContain("所有未完成採購批次");
     expect(toolApp).toContain("function renderResumeDrafts()");
     expect(procurementWorker).toContain('/api/procurement/cost-snapshot');

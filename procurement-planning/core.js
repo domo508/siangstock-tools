@@ -8,7 +8,7 @@
     shortageAction: "寄倉現貨與可按時完成量不足時，顯示缺貨警示並新增寄庫單；不提供改向其他供應商採購。",
     pendingPurchaseRule: "採購單每次完整重匯；新單視為草稿不占用，主管審核與未結案部分到貨只扣未交量，已結案或全部到貨不再扣未到貨。",
     transferRule: "期間調撥單依庫存截止日還原在途狀態：提交須保留調出倉並預計入調入倉；發貨審核因ERP已扣調出倉，只預計入調入倉；收貨審核因ERP已入庫，不重複調整。",
-    blacklistRule: "一次性代工品由人工以ERP品號或完整品名加入黑名單；SA／OA／SB／OB開頭品號固定視為一次性客製或組合品，不進一般採購與寄庫。",
+    blacklistRule: "一次性代工品由人工以ERP品號或完整品名加入黑名單；SA／OA／SB／OB開頭品號及8×7尺商品固定視為一次性客製或組合品，不進一般採購與寄庫。",
     sellThroughStopRule: "只有品名結尾的獨立括號標記(S)視為已斷貨、售完即停；停止對外採購與新增寄庫，但保留線上銷售及門市由總倉現貨調撥去化。",
     sellThroughTransferRule: "(S)商品先保留總倉已知訂單及必要安全庫存，再以剩餘可調撥現貨供門市去化；不足只顯示缺貨，不得轉成供應商採購或寄庫需求。"
   });
@@ -30,15 +30,31 @@
     return CUSTOM_SKU_PREFIXES.some((prefix) => sku.startsWith(prefix));
   }
 
+  function isEightBySevenCustomItem(...values) {
+    return values.some((value) => /(?:^|[^0-9])8\s*[xX×＊*]\s*7\s*[尺呎](?:[^0-9]|$)/.test(String(value == null ? "" : value).normalize("NFKC")));
+  }
+
+  function isAutomaticProcurementExcludedItem(sku, ...descriptors) {
+    return isAutomaticProcurementExcludedSku(sku) || isEightBySevenCustomItem(...descriptors);
+  }
+
   function isCustomerCustomSku(value) {
     const sku = normalizeSku(value);
     return isAutomaticProcurementExcludedSku(sku) && !CONFIRMED_COMBINATION_SKUS.has(sku);
   }
 
-  function customerCustomExclusionReason(value) {
+  function isCustomerCustomItem(sku, ...descriptors) {
+    const normalizedSku = normalizeSku(sku);
+    return !CONFIRMED_COMBINATION_SKUS.has(normalizedSku)
+      && (isCustomerCustomSku(normalizedSku) || isEightBySevenCustomItem(...descriptors));
+  }
+
+  function customerCustomExclusionReason(value, ...descriptors) {
     const sku = normalizeSku(value);
     return CONFIRMED_COMBINATION_SKUS.has(sku)
       ? "組合品號且掛(S)，不採購組合成品"
+      : isEightBySevenCustomItem(...descriptors)
+        ? "8×7尺客製尺寸，不列一般採購與寄庫"
       : "一次性客製品號，不列一般採購與寄庫";
   }
 
@@ -525,9 +541,10 @@
       let amount = unitCost != null ? quantity * unitCost : null;
       if (amount == null && orderedAmount != null && orderedQuantity) amount = orderedAmount * quantity / orderedQuantity;
       const remark = String(valueAt(row, selected.mapping, "remark") || "").trim();
+      const name = String(valueAt(row, selected.mapping, "name") || "").trim();
       const customText = `${metadata.remark} ${remark}`.trim();
-      const automaticProcurementExcluded = isAutomaticProcurementExcludedSku(sku);
-      const isCustomOrder = !CONFIRMED_COMBINATION_SKUS.has(sku) && (/客製/.test(customText) || isCustomerCustomSku(sku));
+      const automaticProcurementExcluded = isAutomaticProcurementExcludedItem(sku, name);
+      const isCustomOrder = /客製/.test(customText) || isCustomerCustomItem(sku, name);
       const receiptDate = parseDateValue(valueAt(row, selected.mapping, "receiptDate"));
       const expectedDeliveryDate = parseDateValue(valueAt(row, selected.mapping, "expectedDeliveryDate")) || parseDateValue(metadata.deliveryDate);
       records.push({
@@ -536,7 +553,7 @@
         supplier: String(valueAt(row, selected.mapping, "supplier") || metadata.supplier || "").trim(),
         status,
         sku,
-        name: String(valueAt(row, selected.mapping, "name") || "").trim(),
+        name,
         quantity,
         orderedQuantity: Math.max(0, Number(orderedQuantity || 0)),
         deliveredQuantity,
@@ -1975,7 +1992,10 @@
     const resolvedConsignment = resolveConsignment(input.consignment, input.master, input.blacklist || []);
     const blacklist = normalizeBlacklist(input.blacklist || []);
     const salesRecords = (input.salesReports || []).flatMap((report) => report.records || []);
-    const procurementSalesRecords = salesRecords.filter((row) => !isAutomaticProcurementExcludedSku(row.sku));
+    const procurementSalesRecords = salesRecords.filter((row) => {
+      const masterRecord = input.master.bySku.get(row.sku);
+      return !isAutomaticProcurementExcludedItem(row.sku, masterRecord?.name, row.name);
+    });
     const maxSalesDate = salesRecords.reduce((max, row) => (!max || row.date > max ? row.date : max), "");
     const asOfDate = parseDateValue(input.asOfDate) || maxSalesDate;
     const asOfMs = dateToUtcMs(asOfDate);
@@ -2107,17 +2127,18 @@
     const productExclusions = [];
     const customSalesSkus = new Set();
     for (const sale of salesRecords) {
-      if (!isAutomaticProcurementExcludedSku(sale.sku) || customSalesSkus.has(sale.sku)) continue;
-      customSalesSkus.add(sale.sku);
       const masterRecord = input.master.bySku.get(sale.sku);
+      const effectiveName = masterRecord?.name || sale.name;
+      if (!isAutomaticProcurementExcludedItem(sale.sku, effectiveName) || customSalesSkus.has(sale.sku)) continue;
+      customSalesSkus.add(sale.sku);
       productExclusions.push({
-        type: CONFIRMED_COMBINATION_SKUS.has(sale.sku) ? "組合品號排除" : "一次性客製品號排除",
+        type: CONFIRMED_COMBINATION_SKUS.has(sale.sku) ? "組合品號排除" : isEightBySevenCustomItem(effectiveName) ? "8×7尺客製尺寸排除" : "一次性客製品號排除",
         sourceRow: masterRecord?.sourceRow || sale.sourceRow || "",
         sku: sale.sku,
         supplierSku: masterRecord?.supplierSku || "",
         supplier: masterRecord?.supplier || "未辨識供應商",
-        name: masterRecord?.name || sale.name,
-        action: customerCustomExclusionReason(sale.sku)
+        name: effectiveName,
+        action: customerCustomExclusionReason(sale.sku, effectiveName)
       });
     }
     for (const demand of demandBySku.values()) {
@@ -2128,15 +2149,15 @@
       if (input.onlyStoreTransferNeedSkus && !hasStoreTransferNeed) continue;
       if (Math.max(0, demand.recent12Qty) <= 0 && !purchase && !hasStoreTransferNeed) continue;
       const effectiveName = masterRecord?.name || demand.name;
-      if (isAutomaticProcurementExcludedSku(demand.sku)) {
+      if (isAutomaticProcurementExcludedItem(demand.sku, effectiveName)) {
         if (!customSalesSkus.has(demand.sku)) productExclusions.push({
-            type: CONFIRMED_COMBINATION_SKUS.has(demand.sku) ? "組合品號排除" : "一次性客製品號排除",
+            type: CONFIRMED_COMBINATION_SKUS.has(demand.sku) ? "組合品號排除" : isEightBySevenCustomItem(effectiveName) ? "8×7尺客製尺寸排除" : "一次性客製品號排除",
             sourceRow: masterRecord?.sourceRow || "",
             sku: demand.sku,
             supplierSku: masterRecord?.supplierSku || "",
             supplier: masterRecord?.supplier || "未辨識供應商",
             name: effectiveName,
-            action: customerCustomExclusionReason(demand.sku)
+            action: customerCustomExclusionReason(demand.sku, effectiveName)
           });
         continue;
       }
@@ -2703,9 +2724,9 @@
       const sku = normalizeSku(source.sku);
       const masterRecord = input.master.bySku.get(sku);
       if (!masterRecord) throw new Error(`${sku}不在最新商品主檔；請先更新商品主檔再繼續。`);
-      if (isAutomaticProcurementExcludedSku(sku)) {
+      if (isAutomaticProcurementExcludedItem(sku, masterRecord.name)) {
         const nextStep = CONFIRMED_COMBINATION_SKUS.has(sku) ? "不得建立組合成品採購。" : "請改由客製採購流程處理。";
-        throw new Error(`${sku}為${customerCustomExclusionReason(sku)}；${nextStep}`);
+        throw new Error(`${sku}為${customerCustomExclusionReason(sku, masterRecord.name)}；${nextStep}`);
       }
       if (!masterRecord.supplier || !(Number(masterRecord.unitCost) > 0) || !(Number(masterRecord.moq) > 0)) {
         throw new Error(`${sku}的商品主檔缺少供應商、正數進貨價或MOQ。`);
@@ -3675,7 +3696,7 @@
       ["上林檢視期", "固定28天；另加到貨交期與分級安全緩衝；總部／門市／加總需求保留公式", "已確認"],
       ["Excel編輯", "匯出檔不啟用工作表密碼保護；流程上只填人工欄位，系統欄位如被改動會在回匯時拒絕", "已確認"],
       ["付款認列", "國內預計到貨100%；國外下單30%、預計出貨70%；付款分配合計必須等於核准總額", "已確認"],
-      ["一般自動採購排除", "凱信達一次性、歐必斯客訂型、所有總部贈品及SA／OA／SB／OB開頭的一次性客製／組合品均不產生一般自動採購或寄庫", "已確認"],
+      ["一般自動採購排除", "凱信達一次性、歐必斯客訂型、所有總部贈品、SA／OA／SB／OB開頭及8×7尺的一次性客製／組合品均不產生一般自動採購或寄庫", "已確認"],
       ["寄倉處理", LOCKED_RULES.consignmentRule, "核心鎖定"],
       ["期間調撥單", LOCKED_RULES.transferRule, "核心鎖定"],
       ["售完即停(S)", LOCKED_RULES.sellThroughStopRule, "核心鎖定"],
@@ -3933,7 +3954,10 @@
     normalizeHeader,
     normalizeSku,
     isAutomaticProcurementExcludedSku,
+    isEightBySevenCustomItem,
+    isAutomaticProcurementExcludedItem,
     isCustomerCustomSku,
+    isCustomerCustomItem,
     customerCustomExclusionReason,
     normalizeName,
     isSellThroughStopName,
