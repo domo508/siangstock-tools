@@ -434,6 +434,7 @@
 }
 .resume-draft-card[hidden] { display: none; }
 .resume-draft-card p { margin: 4px 0 0; color: var(--muted); }
+.resume-draft-card small { display: block; margin-top: 5px; color: var(--muted); line-height: 1.45; }
 .resume-draft-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .resume-file-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 18px; color: var(--muted); font-size: .9rem; }
 .file-button-inline { position: relative; overflow: hidden; cursor: pointer; }
@@ -509,6 +510,17 @@
 .excluded-result-panel .result-table-wrap { margin: 0 14px 14px; }
 .supplier-scope-status { margin: 12px 0 0; color: var(--muted); line-height: 1.55; }
 .supplier-scope-status.warn { color: #8a681d; }
+.work-unit-panel { margin: 0 0 18px; padding: 18px; border: 1px solid #b9d2da; border-radius: 16px; background: linear-gradient(135deg, #f7fbfc, #fffdf8); }
+.work-unit-panel .section-heading { margin-bottom: 12px; }
+.work-unit-total { margin: 0; color: var(--navy); font-weight: 800; }
+.work-unit-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.work-unit-card { display: grid; gap: 7px; padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
+.work-unit-card.is-active { border-color: #398da3; box-shadow: inset 0 0 0 1px #398da3; background: var(--soft-blue); }
+.work-unit-card strong, .work-unit-card small { display: block; }
+.work-unit-card small { color: var(--muted); line-height: 1.4; }
+.work-unit-status { color: #2f725b; font-weight: 800; }
+.work-unit-card button { width: 100%; margin-top: 2px; }
+.work-unit-note { margin: 12px 0 0; color: var(--muted); line-height: 1.55; }
 
 .seasonal-model-panel {
   margin-top: 22px;
@@ -672,3 +684,5 @@
 .shortage-actions button.is-selected { background: #164f65; color: #fff; }
 .shortage-run-actions { margin-top: 16px; justify-content: flex-start; }
 @media (max-width: 760px) { .store-shortage-heading { flex-direction: column; } }
+@media (max-width: 980px) { .work-unit-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .work-unit-list { grid-template-columns: 1fr; } }

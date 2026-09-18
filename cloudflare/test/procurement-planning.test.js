@@ -927,6 +927,33 @@ describe("採購建議第二階段", () => {
     expect(lirongOutput.SheetNames).not.toContain("03B1_普優瑪_天絲");
   });
 
+  it("同一母批次依實際供應商拆單，普優瑪再拆成三個獨立審核單位", () => {
+    const base = { supplier: "普優瑪", suggestedPurchaseQty: 2, suggestedPurchaseAmount: 1000, unitCost: 500, sourceFiles: [] };
+    const rows = [
+      { ...base, sku: "P-T", purchaseTab: "天絲＋天絲棉" },
+      { ...base, sku: "P-C", purchaseTab: "長絨棉" },
+      { ...base, sku: "P-N", purchaseTab: "無尺寸品項" },
+      { ...base, sku: "O-1", supplier: "測試廠商甲", purchaseTab: "其它" },
+      { ...base, sku: "O-2", supplier: "測試廠商乙", purchaseTab: "其它" }
+    ];
+    const recommendations = {
+      rows, suggestedRows: rows, consignmentRows: [], lirongConsignmentRows: [], productExclusions: [],
+      consignment: { confirmedExclusions: [], exceptions: [], excluded: [] }, totals: {}, validation: {}, meta: {}, asOfDate: "2026-09-18"
+    };
+    const units = core.listProcurementWorkUnits(recommendations);
+    expect(units.map((unit) => unit.label)).toEqual(expect.arrayContaining([
+      "普優瑪寢具有限公司－天絲／天絲棉", "普優瑪寢具有限公司－長絨棉", "普優瑪寢具有限公司－無尺寸", "測試廠商甲", "測試廠商乙"
+    ]));
+    expect(units).toHaveLength(5);
+    const cotton = units.find((unit) => unit.purchaseTab === "長絨棉");
+    const output = core.buildRecommendationWorkbook(recommendations, XLSX, { selectedSuppliers: ["普優瑪"], workUnit: cotton });
+    expect(output.SheetNames).toContain("03B2_普優瑪_長絨棉");
+    expect(output.SheetNames).not.toContain("03B1_普優瑪_天絲");
+    expect(output.SheetNames).not.toContain("03B3_普優瑪_無尺寸");
+    const exported = XLSX.utils.sheet_to_json(output.Sheets["03B2_普優瑪_長絨棉"], { defval: "" });
+    expect(exported.map((row) => row["ERP品號"])).toEqual(["P-C"]);
+  });
+
   it("人工回匯後產生可售至、AI判斷、付款月份與ERP核准門檻", () => {
     const recommendations = core.buildProcurementRecommendations({
       master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
@@ -1048,7 +1075,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("查看普優瑪寄庫表");
     expect(toolHtml).toContain("查看力榮寄庫表");
     expect(toolHtml).toContain("查看正式季節模型資料夾");
-    expect(toolHtml).toContain("drive.google.com/drive/folders/1uQVKi42veJfq-taIcSd0aKp3oETLeaey");
+    expect(toolHtml).toContain("drive.google.com/drive/folders/1wzVoxLUXb9CEJK-cWrH8AMPxO5NVpTeC");
     expect(toolHtml).toContain("docs.google.com/spreadsheets/d/1l-3gd0gmx-nX6Je5XeWBRxZ1bFzZeGY0");
     expect(toolHtml).toContain("docs.google.com/spreadsheets/d/1MPG0mSYQZ_ITp79eTHZ71z3ra9pq6pNhmHLlWDS0Ec4");
     expect(toolHtml).toContain("docs.google.com/spreadsheets/d/1uEc8DBg50lB4uqM8UrTYYEuZz8blPLJgP8JCm1IUzWI");
@@ -1072,7 +1099,8 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="supplier-filter-list"');
     expect(toolHtml).toContain('href="rules-admin/#supplier-display"');
     expect(toolHtml).toContain("管理顯示供應商");
-    expect(toolHtml).toContain("下載所選供應商Excel");
+    expect(toolHtml).toContain("請先選擇分批審核單位");
+    expect(toolHtml).toContain("分批審核與開單");
     expect(toolHtml).toContain("春節加量");
     expect(toolHtml).toContain('id="workflow-step-download"');
     expect(toolHtml).toContain('id="review-file-label" class="file-button is-disabled"');
@@ -1086,7 +1114,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260918-custom-cost-r1");
+    expect(toolHtml).toContain("20260918-batch-units-r1");
     expect(procurementWorker).toContain('/api/procurement/cost-snapshot');
     const costSnapshotMigration = readFileSync("worker/migrations/0021_procurement_cost_snapshots.sql", "utf8");
     expect(costSnapshotMigration).toContain("CREATE TABLE procurement_cost_snapshots");

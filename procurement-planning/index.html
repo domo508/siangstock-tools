@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20260917-company-cost-r1">
+  <link rel="stylesheet" href="style.css?v=20260918-batch-units-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -152,7 +152,7 @@
             <article class="upload-card" data-source="master">
               <div class="upload-card-header"><h3>商品主檔</h3><span class="source-badge recommended">自動取得・建議</span></div>
               <p class="upload-help">自動選取白名單資料夾內修改時間最新且唯一有效的.xlsx；無新品或異動可沿用最近有效版本。</p>
-              <a class="source-file-link" href="https://drive.google.com/drive/folders/1uQVKi42veJfq-taIcSd0aKp3oETLeaey" target="_blank" rel="noopener noreferrer">開啟商品主檔資料夾 <span aria-hidden="true">↗</span></a>
+              <a class="source-file-link" href="https://drive.google.com/drive/folders/1wzVoxLUXb9CEJK-cWrH8AMPxO5NVpTeC?usp=drive_link" target="_blank" rel="noopener noreferrer">開啟商品主檔資料夾 <span aria-hidden="true">↗</span></a>
               <label class="file-button">手動備援<input id="master-file" type="file" accept=".xlsx"></label>
               <p id="master-file-name" class="file-name">尚未取得</p>
             </article>
@@ -272,7 +272,7 @@
 
       <div class="action-bar">
         <button id="analyze-button" class="primary-button" type="button" disabled>產生採購建議</button>
-        <button id="download-button" class="secondary-button" type="button" disabled>下載所選供應商Excel</button>
+        <button id="download-button" class="secondary-button" type="button" disabled>請先選擇分批審核單位</button>
         <p id="main-status" class="main-status" role="status">請先完成日期與本次必要資料。</p>
       </div>
 
@@ -327,6 +327,14 @@
         </details>
         <p id="supplier-scope-status" class="supplier-scope-status" role="status">產生建議後可選擇供應商。</p>
       </div>
+      <section class="work-unit-panel" aria-labelledby="work-unit-title">
+        <div class="section-heading compact">
+          <div><h3 id="work-unit-title">分批審核與開單</h3><p>同一次計算為母批次；每家供應商獨立回匯、核准與產生ERP檔。普優瑪再分為三個類別。</p></div>
+          <p id="work-unit-total" class="work-unit-total">產生建議後顯示</p>
+        </div>
+        <div id="work-unit-list" class="work-unit-list"></div>
+        <p class="work-unit-note">只有正式核准的子批次才會占用採購額度；未送出、待核准與已核准不會重複計算。</p>
+      </section>
       <div id="summary-cards" class="summary-grid procurement-summary"></div>
       <div id="result-alert" class="result-alert" role="status"></div>
       <details id="excluded-result-panel" class="excluded-result-panel" hidden>
@@ -351,7 +359,7 @@
     <section class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
       <div class="section-heading"><div><p class="eyebrow"><span class="stage-number" aria-hidden="true">3</span> 回匯・核准・ERP</p><h2 id="workflow-title">人工回匯、二次確認與正式核准</h2></div><p>只能回匯本頁本次下載的報表；待核准階段不寄信。</p></div>
       <aside id="resume-draft-card" class="resume-draft-card" hidden>
-        <div><strong>有一筆未完成採購批次</strong><p id="resume-draft-summary"></p></div>
+        <div><strong>最新未完成採購批次</strong><p id="resume-draft-summary"></p><small>續作紀錄只保存在目前這台電腦的這個瀏覽器；換電腦或清除瀏覽器資料時，請使用先前下載的Excel恢復。</small></div>
         <div class="resume-draft-actions"><button id="resume-draft-button" class="primary-button" type="button">繼續上次進度</button><button id="redownload-draft-button" class="secondary-button" type="button">重新下載本批報表</button><button id="discard-draft-button" class="secondary-button" type="button">放棄並重新開始</button></div>
       </aside>
       <div class="resume-file-row"><span>換電腦或已清除瀏覽器資料：</span><label id="restore-report-label" class="secondary-button file-button-inline">選擇先前下載的本批採購建議<input id="restore-report-file" type="file" accept=".xlsx"></label></div>
@@ -415,9 +423,9 @@
   <script src="xlsx-style-runtime.js?v=20260915-reader-fix-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260918-seasonal-spring-r1"></script>
+  <script src="core.js?v=20260918-batch-units-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
   <script src="google-sources.js?v=20260914-seasonal-auto-r1"></script>
-  <script src="app.js?v=20260918-custom-cost-r1"></script>
+  <script src="app.js?v=20260918-batch-units-r1"></script>
 </body>
 </html>

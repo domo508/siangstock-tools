@@ -1,6 +1,6 @@
 export const FIXED_SOURCES = Object.freeze({
   marketingDriveFileId: "1l-3gd0gmx-nX6Je5XeWBRxZ1bFzZeGY0",
-  productMasterFolderId: "1uQVKi42veJfq-taIcSd0aKp3oETLeaey",
+  productMasterFolderId: "1wzVoxLUXb9CEJK-cWrH8AMPxO5NVpTeC",
   puyoumaSpreadsheetId: "1MPG0mSYQZ_ITp79eTHZ71z3ra9pq6pNhmHLlWDS0Ec4",
   puyoumaSheets: ["庫存+下單", "庫存布"],
   lirongSpreadsheetId: "1uEc8DBg50lB4uqM8UrTYYEuZz8blPLJgP8JCm1IUzWI",

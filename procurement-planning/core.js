@@ -3261,6 +3261,40 @@
     XLSX.utils.book_append_sheet(workbook, sheet, "04A_普優瑪寄庫建議");
   }
 
+  function procurementWorkUnitForRow(row) {
+    const supplier = String(row?.supplier || "").trim();
+    if (!supplier) return null;
+    const purchaseTab = /普優[瑪碼]/.test(supplier) ? String(row?.purchaseTab || "無尺寸品項").trim() : "";
+    const categoryLabel = purchaseTab === "天絲＋天絲棉" ? "天絲／天絲棉" : purchaseTab === "長絨棉" ? "長絨棉" : purchaseTab ? "無尺寸" : "";
+    const supplierLabel = findSupplierRule(supplier, SUPPLIER_RULES)?.name || supplier;
+    return {
+      id: `${normalizeText(supplier)}::${normalizeText(purchaseTab)}`,
+      supplier,
+      purchaseTab,
+      label: categoryLabel ? `${supplierLabel}－${categoryLabel}` : supplierLabel
+    };
+  }
+
+  function listProcurementWorkUnits(recommendations) {
+    const units = new Map();
+    for (const row of recommendations?.suggestedRows || []) {
+      const unit = procurementWorkUnitForRow(row);
+      if (!unit) continue;
+      const current = units.get(unit.id) || { ...unit, skuCount: 0, quantity: 0, amount: 0 };
+      current.skuCount += 1;
+      current.quantity += Number(row.suggestedPurchaseQty || 0);
+      current.amount += Number(row.suggestedPurchaseAmount || 0);
+      units.set(unit.id, current);
+    }
+    return [...units.values()].sort((left, right) => left.supplier.localeCompare(right.supplier, "zh-Hant") || left.purchaseTab.localeCompare(right.purchaseTab, "zh-Hant"));
+  }
+
+  function rowMatchesProcurementWorkUnit(row, workUnit) {
+    if (!workUnit) return true;
+    const rowUnit = procurementWorkUnitForRow(row);
+    return Boolean(rowUnit && rowUnit.id === workUnit.id);
+  }
+
   function buildRecommendationWorkbook(recommendations, XLSX, options = {}) {
     const workbook = XLSX.utils.book_new();
     const budget = options.budget || null;
@@ -3269,9 +3303,11 @@
     const requestedSet = requestedSuppliers ? new Set(requestedSuppliers.map(normalizeText)) : null;
     const allSupplierSet = new Set(recommendations.suggestedRows.map((row) => normalizeText(row.supplier)).filter(Boolean));
     const isFullScope = !requestedSet || (requestedSet.size === allSupplierSet.size && [...allSupplierSet].every((supplier) => requestedSet.has(supplier)));
+    const workUnit = options.workUnit || null;
     const supplierIncluded = (supplier) => !requestedSet || requestedSet.has(normalizeText(supplier));
-    const selectedSuggestedRows = recommendations.suggestedRows.filter((row) => supplierIncluded(row.supplier));
-    const selectedRows = recommendations.rows.filter((row) => supplierIncluded(row.supplier));
+    const rowIncluded = (row) => supplierIncluded(row.supplier) && rowMatchesProcurementWorkUnit(row, workUnit);
+    const selectedSuggestedRows = recommendations.suggestedRows.filter(rowIncluded);
+    const selectedRows = recommendations.rows.filter(rowIncluded);
     const selectedSkuSet = new Set(selectedRows.map((row) => row.sku));
     const selectedTotals = {
       analyzedSkuCount: selectedRows.length,
@@ -3291,7 +3327,7 @@
     };
     selectedTotals.productStatusPendingCount = selectedSuggestedRows.filter((row) => row.productStatusPendingReview).length;
     selectedTotals.productStatusPendingAmount = selectedSuggestedRows.filter((row) => row.productStatusPendingReview).reduce((sum, row) => sum + Number(row.suggestedPurchaseAmount || 0), 0);
-    const outputScope = isFullScope ? "全部供應商" : requestedSuppliers.join("、");
+    const outputScope = workUnit?.label || (isFullScope ? "全部供應商" : requestedSuppliers.join("、"));
     const summaryRows = [
       ["庫存採購與寄庫建議"],
       ["資料安全", "本檔由瀏覽器本機產生；不修改或上傳原始Excel。"],
@@ -3779,6 +3815,9 @@
     validateSourceDates,
     buildAnalysis,
     buildOutputWorkbook,
+    procurementWorkUnitForRow,
+    listProcurementWorkUnits,
+    rowMatchesProcurementWorkUnit,
     buildRecommendationWorkbook,
     reviewReturnedWorkbook,
     buildSecondReviewWorkbook,
