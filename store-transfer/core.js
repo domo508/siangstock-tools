@@ -118,9 +118,10 @@
     const value = normalizeName(`${record?.name || ""} ${record?.size || ""}`);
     const categoryValue = normalizeName(`${record?.mainCategory || ""} ${record?.style1 || ""} ${record?.style2 || ""}`);
     const isQuilt = !/被套/.test(value) && /被胎|棉被|被子|夏季被|四季被|涼被|羽絨被|羊毛被|蠶絲被|機能被|舒眠被|冷被|暖被/.test(value);
+    const isNonStandardAccessoryBlanket = /熊冷被|涼毯|蓋毯/.test(value);
     if (isQuilt) {
       if (/6x7尺/.test(value)) return configuredRule({ name: "有尺寸配件", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "6×7尺棉被／被子展示1件" }, storeInventory);
-      return null;
+      if (!isNonStandardAccessoryBlanket) return null;
     }
     const standalone = [["3.5尺", /(?<![\dx*.])3\.5尺/], ["5尺", /(?<![\dx*.])5尺/], ["6尺", /(?<![\dx*.])6尺/], ["7尺", /(?<![\dx*.])7尺/]].find(([, pattern]) => pattern.test(value));
     if (standalone) return configuredRule(standalone[0] === "5尺"
@@ -153,14 +154,17 @@
     const itemSource = `${categorySource}${fields.name}${fields.sizeGroup}${fields.size}`;
     const isKnownNoSize = /枕套|枕頭套|枕頭|枕芯|乳膠枕|羽絨枕|鵝絨枕|記憶枕|水洗枕|舒眠枕|柔眠枕|軟枕|硬枕|午安枕|午睡枕|體驗枕|頸枕|好眠枕|忘憂枕|抗菌枕|抱枕|靠枕|毛巾|浴巾|手巾|方巾/.test(itemSource);
     const hasBedDimension = /(?<![\dx*.])(?:3\.5|5|6|7)尺|6x7尺|\d+(?:\.\d+)?(?:cm|公分)|\d+(?:\.\d+)?x\d+(?:\.\d+)?/i.test(`${fields.sizeGroup}${fields.size}${fields.name}`);
+    const hasAccessorySize = /熊冷被|涼毯|蓋毯|單人|沙發|(?:M|L|XL|XXL)號|(?:大|小)(?:號|款|尺寸|[\]】)）]|$)/i.test(`${fields.sizeGroup}${fields.size}${fields.name}`);
+    const isGeneralAccessory = /圍裙|坐墊|眼罩|萬年曆|束口袋|抓板|票卡|零錢包|室內鞋|室內拖鞋|拖鞋|鞋袋|香氛|空氣噴霧|熊冷被|涼毯|蓋毯/.test(itemSource);
+    const isProtectedStandardQuilt = !/被套/.test(itemSource) && /被胎|棉被|被子|夏季被|四季被|涼被|羽絨被|羊毛被|蠶絲被|機能被|舒眠被|冷被|暖被/.test(itemSource) && /(?:4\.5x6\.5|8x7)尺/.test(itemSource) && !/熊冷被|涼毯|蓋毯/.test(itemSource);
     let productCategory = "";
-    if (/配件/.test(categorySource) || isKnownNoSize || /保潔墊/.test(itemSource)) productCategory = "配件";
+    if (!isProtectedStandardQuilt && (/配件/.test(categorySource) || isKnownNoSize || isGeneralAccessory || /保潔墊/.test(itemSource))) productCategory = "配件";
     else if (/床包/.test(itemSource)) productCategory = "床包";
     else if (/被套/.test(itemSource)) productCategory = "被套";
     else productCategory = String(record?.mainCategory || record?.style1 || "").trim();
     let sizeAttribute = "";
     if (/無尺寸/.test(`${fields.sizeGroup}${fields.size}`) || isKnownNoSize) sizeAttribute = "無尺寸";
-    else if (/有尺寸/.test(`${fields.sizeGroup}${fields.size}`) || hasBedDimension) sizeAttribute = "有尺寸";
+    else if (/有尺寸/.test(`${fields.sizeGroup}${fields.size}`) || hasBedDimension || hasAccessorySize) sizeAttribute = "有尺寸";
     else if (productCategory === "配件") sizeAttribute = "無尺寸";
     return { productCategory, sizeAttribute, itemSource };
   }

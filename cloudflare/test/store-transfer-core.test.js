@@ -145,6 +145,38 @@ describe("展示與最低庫存管理規則", () => {
     for (const name of ["純棉毛巾", "長絨棉浴巾", "隨身手巾"]) expect(core.stockRule({ name }, managed)).toMatchObject({ name: "無尺寸配件", quantity: 1 });
   });
 
+  it("家飾配件可依實際尺寸差異命中有尺寸或無尺寸展示規則", () => {
+    const managed = { rules: [
+      { name: "有尺寸配件", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "有尺寸", itemTypeKeywords: "", scope: "R00、R06", inventoryRole: "不可售展示", quantity: 1, priority: 70 },
+      { name: "無尺寸配件", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "", scope: "R00、R06", inventoryRole: "不可售展示", quantity: 1, priority: 60 }
+    ] };
+    for (const record of [
+      { sku: "F13053", name: "PINGU™ x 熊冷被(大) [Let’s Go Fishing]", mainCategory: "家飾品", size: "均碼" },
+      { sku: "F13058", name: "26ss 熊冷被 [Soft Beige]", mainCategory: "家飾品", size: "均碼" },
+      { sku: "F13059", name: "春浪 x 熊冷涼毯", mainCategory: "家飾品", size: "均碼" },
+      { sku: "L67010", name: "四層紗四季蓋毯 [縱谷]", mainCategory: "家飾品", size: "均碼" },
+      { sku: "S22094", name: "足底紓壓室內鞋 [米色M號]", mainCategory: "家飾品", size: "均碼" }
+    ]) expect(core.stockRule(record, managed)).toMatchObject({ name: "有尺寸配件", quantity: 1 });
+
+    for (const record of [
+      { sku: "L63001-1", name: "聯名品牌眼罩 [夏日蔚藍]", mainCategory: "家飾品", size: "均碼" },
+      { sku: "L63004", name: "聯名品牌束口袋 [夏日蔚藍]", mainCategory: "家飾品", size: "均碼" },
+      { sku: "L67003", name: "可水洗鞋袋 [野花草]", mainCategory: "家飾品", size: "均碼" },
+      { sku: "L66004", name: "伸縮票卡零錢包", mainCategory: "家飾品", size: "均碼" },
+      { sku: "N43003", name: "香氛空氣噴霧 100ml", mainCategory: "家飾品", size: "均碼" }
+    ]) expect(core.stockRule(record, managed)).toMatchObject({ name: "無尺寸配件", quantity: 1 });
+  });
+
+  it("特殊展示與單店地墊不會被一般配件規則擴大套用", () => {
+    const managed = { rules: [
+      { name: "有尺寸配件", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "有尺寸", itemTypeKeywords: "", scope: "R00、R06", inventoryRole: "不可售展示", quantity: 1, priority: 70 },
+      { name: "無尺寸配件", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "", scope: "R00、R06", inventoryRole: "不可售展示", quantity: 1, priority: 60 }
+    ] };
+    expect(core.stockRule({ sku: "C41384", name: "拍照樣品 [熊冷枕頭套]", mainCategory: "家飾品" }, managed)).toBeNull();
+    expect(core.stockRule({ sku: "SPL50037", name: "熊冷墊-單人 展示品", mainCategory: "家飾品" }, managed)).toBeNull();
+    expect(core.stockRule({ sku: "T20003", name: "印度手工編織門口地墊 [黑色]", mainCategory: "家飾品", size: "均碼" }, managed)).toBeNull();
+  });
+
   it("G10009軟枕及商品大類為枕頭的品項列不可售展示2件", () => {
     expect(core.stockRule({ sku: "G10009", name: "灰鵝絨軟枕", mainCategory: "枕頭" })).toMatchObject({ name: "枕頭／枕芯", role: "不可售展示", quantity: 2, scope: "R00、R06" });
     expect(core.stockRule({ sku: "G40025", name: "石墨烯機能寢具", mainCategory: "枕頭" })).toMatchObject({ name: "枕頭／枕芯", quantity: 2 });
