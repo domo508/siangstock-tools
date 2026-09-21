@@ -71,6 +71,21 @@
   function calculationMode() { return document.querySelector('input[name="calculation-mode"]:checked')?.value === "comparison" ? "comparison" : "formal"; }
   function renderStores() { $("store-options").innerHTML = Object.entries(state.config.stores).map(([code, store]) => `<label><input type="checkbox" value="${code}" checked><span>${code} ${escapeHtml(store.name)}<small>${escapeHtml(store.company)}・${escapeHtml(store.relationship)}</small></span></label>`).join(""); }
 
+  function renderComparisonDownloads(stores, mode) {
+    const panel = $("comparison-downloads");
+    panel.hidden = mode !== "comparison";
+    $("comparison-download-buttons").innerHTML = mode === "comparison" ? stores.map((code) => `<button class="secondary-button compact" type="button" data-download-comparison="${escapeHtml(code)}">下載 ${escapeHtml(state.config.stores[code]?.name || code)}差異表</button>`).join("") : "";
+  }
+
+  function downloadComparison(storeCode) {
+    if (!state.calculation || state.calculation.calculationMode !== "comparison") throw new Error("請先以A/B測試比對模式產生建議。");
+    const storeName = state.config.stores[storeCode]?.name || storeCode;
+    const workbook = transferCore.buildComparisonWorkbook(state.calculation, outputXlsx, storeCode, storeName);
+    const safeName = String(storeName).replace(/[\\/:*?"<>|]/g, "-");
+    outputXlsx.writeFile(workbook, `${state.calculation.proposalDate}_${safeName}_調撥建議差異分析.xlsx`, { compression: true });
+    $("hq-status").textContent = `${storeName}的A/B調撥建議差異分析表已下載；未建立正式批次。`;
+  }
+
   async function authorizeGoogle() {
     $("google-connect-button").disabled = true;
     $("source-status").textContent = "正在開啟公司 Google 授權…";
@@ -277,6 +292,7 @@
       $("calculation-summary").textContent = `銷售截止${state.calculation.latestSalesDate}；必要補貨${state.calculation.totals.regularItemCount}項、建議備貨${state.calculation.totals.specialStockItemCount}項、活動／贈品${state.calculation.totals.activityItemCount}項、耗材${state.calculation.totals.consumableItemCount}項、缺貨未配${state.calculation.totals.shortageItemCount}項；待發貨${state.calculation.totals.pendingSubmittedQuantity}件、發貨在途${state.calculation.totals.inTransitQuantity}件；B3成功配對${state.calculation.b3Audit.matchedCount}筆、待人工確認${state.calculation.b3Audit.pendingCount}筆${ignoredTransferText}；${mode === "formal" ? "提袋快照已記錄" : "A/B模式未寫入提袋快照"}。`;
       $("calculation-mode-alert").hidden = mode !== "comparison";
       $("calculation-mode-alert").innerHTML = mode === "comparison" ? `<strong>A/B測試比對：</strong>已排除${state.calculation.totals.excludedSubmittedDocumentCount}張提交單、共${state.calculation.totals.excludedSubmittedQuantity}件；本結果只能預覽，不能建立正式批次。發貨審核仍按在途量計算。` : "";
+      renderComparisonDownloads(stores, mode);
       const impact = state.calculation.companyImpact;
       $("company-impact").innerHTML = `<strong>寬承／寬沐成本流向：</strong>寬沐調撥收貨${impact.kuanmuTransferCount}筆、B3代出${impact.kuanmuB3Count}筆；原始供貨成本${formatCurrency(impact.kuanmuBaseCost)}，寬承對寬沐計價參考${formatCurrency(impact.kuanmuIntercompanyRevenue)}（成本×1.11）。合併檢視時抵銷公司間計價，只保留原始成本。`;
       $("b3-audit").hidden = !state.calculation.b3Audit.pendingCount;
@@ -473,6 +489,7 @@
     if (!state.calculation) return;
     state.calculation = null;
     $("calculation-results").hidden = true;
+    $("comparison-downloads").hidden = true;
     $("publish-button").textContent = "建立門市確認批次";
     $("hq-status").textContent = "計算模式已變更，請重新產生建議。";
   }));
@@ -488,6 +505,14 @@
   $("batch-detail").addEventListener("click", handleDialog);
   $("batch-detail").addEventListener("input", updateDialogProjection);
   $("calculation-results").addEventListener("click", (event) => {
+    const downloadButton = event.target.closest("[data-download-comparison]");
+    if (downloadButton) {
+      downloadButton.disabled = true;
+      try { downloadComparison(downloadButton.dataset.downloadComparison); }
+      catch (error) { $("hq-status").textContent = error.message; }
+      finally { downloadButton.disabled = false; }
+      return;
+    }
     const filterButton = event.target.closest('[data-store-filter-scope="calculation"]');
     if (filterButton) applyStoreFilter("calculation", filterButton.dataset.storeFilter);
   });

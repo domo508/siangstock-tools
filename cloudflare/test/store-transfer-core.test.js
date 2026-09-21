@@ -129,6 +129,24 @@ describe("待發貨與A/B測試比對", () => {
     expect(result.pendingTransferRows[0].includedInCalculation).toBe(true);
     expect(result.totals).toMatchObject({ inTransitQuantity: 1, excludedSubmittedQuantity: 0 });
   });
+
+  it("A/B差異分析依單一門市彙總提交量，並保留僅B品項的實際庫存", () => {
+    const input = transferModeInput("comparison");
+    input.master.bySku.set("B001", { sku: "B001", name: "人工測試品" });
+    input.inventory.records.push(
+      { warehouseCode: "T00", sku: "B001", quantity: 8 },
+      { warehouseCode: "R00", sku: "B001", quantity: 5 }
+    );
+    input.transfer.records.push({
+      documentCode: "AT2609000456", status: "提交", sourceWarehouseCode: "T00", destinationWarehouseCode: "R00",
+      sku: "B001", name: "人工測試品", quantity: 2, openedDate: "2026-09-20", shippedDate: ""
+    });
+    const result = core.buildSuggestions(input);
+    const report = core.buildComparisonReport(result, "R00", "台北中山門市");
+    expect(report.summary).toMatchObject({ both: 1, onlyA: 0, onlyB: 1, totalA: 3, totalB: 3 });
+    expect(report.rows.find((row) => row.sku === "A102061")).toMatchObject({ section: "A、B都有", aQuantity: 3, bQuantity: 1 });
+    expect(report.rows.find((row) => row.sku === "B001")).toMatchObject({ section: "僅B", physicalInventory: 5, hqInventory: 8, aQuantity: 0, bQuantity: 2, pendingQuantity: 0 });
+  });
 });
 
 describe("S品、建議備貨與可售至", () => {

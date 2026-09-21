@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20260922-transfer-mode-r1");
+    const appIndex = html.indexOf("app.js?v=20260922-ab-export-r1");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -231,6 +231,18 @@ describe("前台導覽", () => {
     expect(app).toContain('state.calculation.calculationMode === "comparison"');
     expect(app).toContain("A/B測試比對只能預覽");
     expect(app).toContain('if (mode === "formal") await api("/consumable-snapshots"');
+  });
+
+  it("A/B模式可依本次選取門市分別下載差異分析表", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const core = readFileSync("../store-transfer/core.js", "utf8");
+    expect(html).toContain('id="comparison-downloads"');
+    expect(html).toContain('id="comparison-download-buttons"');
+    expect(app).toContain('data-download-comparison');
+    expect(app).toContain('buildComparisonWorkbook');
+    expect(core).toContain('"調撥差異分析"');
+    expect(core).toContain('buildComparisonReport');
   });
 
   it("資料整理工具與規則頁都有清楚的名稱和上一層路徑", () => {

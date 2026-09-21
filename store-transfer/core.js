@@ -857,8 +857,43 @@
     const rows = [...regularRows, ...specialStockRows, ...actionableActivityRows, ...consumableRows];
     const submittedRows = pendingTransferRows.filter((row) => row.status === "提交");
     const inTransitRows = pendingTransferRows.filter((row) => row.status === "發貨審核");
+    const comparisonKeys = new Set([
+      ...rows.map((row) => `${row.storeCode}|${row.sku}`),
+      ...submittedRows.map((row) => `${row.storeCode}|${row.sku}`)
+    ]);
+    const comparisonFacts = [...comparisonKeys].map((compoundKey) => {
+      const [storeCode, sku] = compoundKey.split("|");
+      const systemRow = rows.find((row) => row.storeCode === storeCode && row.sku === sku);
+      const master = masterBySku.get(sku) || {};
+      const localSales42 = Math.max(0, local.get(compoundKey) || 0);
+      const b3Sales42 = Math.max(0, b3.get(compoundKey) || 0);
+      const schedule = scheduleByStore[storeCode];
+      const rule = stockRule(master, input.storeInventory);
+      const ruleApplies = rule && appliesToStore(rule, storeCode, localSales42);
+      const displayQuantity = ruleApplies && rule.role === "不可售展示" ? Number(rule.quantity || 0) : 0;
+      const physicalInventory = Math.max(0, inventory.get(compoundKey) || 0);
+      const inTransitQuantity = Math.max(0, inTransitInbound.get(compoundKey) || 0);
+      const baseSellableQuantity = Math.max(0, physicalInventory + inTransitQuantity - displayQuantity - (localSales42 / 42) * (schedule?.preArrivalDays || 0));
+      return {
+        storeCode, sku,
+        productName: systemRow?.productName || master.name || submittedRows.find((row) => row.storeCode === storeCode && row.sku === sku)?.productName || "",
+        physicalInventory: systemRow?.physicalInventory ?? physicalInventory,
+        hqInventory: Math.max(0, inventory.get(`T00|${sku}`) || 0),
+        displayQuantity: systemRow?.displayQuantity ?? displayQuantity,
+        inTransitQuantity: systemRow?.inTransitQuantity ?? inTransitQuantity,
+        localSales42: systemRow?.localSales42 ?? localSales42,
+        b3Sales42: systemRow?.b3Sales42 ?? b3Sales42,
+        dailySales: systemRow?.dailySales ?? localSales42 / 42,
+        baseSellableQuantity: systemRow?.baseSellableQuantity ?? baseSellableQuantity,
+        calculationDate: systemRow?.calculationDate || schedule?.currentArrivalDate || latest,
+        suggestedQuantity: Number(systemRow?.suggestedQuantity || 0),
+        systemSellThroughDate: systemRow?.systemSellThroughDate || projectedSellThroughDate(schedule?.currentArrivalDate || latest, baseSellableQuantity, 0, localSales42 / 42),
+        itemType: systemRow?.itemType || "regular",
+        ruleSummary: systemRow?.ruleSummary || [rule?.name, rule?.role, ruleApplies ? `適用${rule.quantity || 0}件` : ""].filter(Boolean).join("；")
+      };
+    });
     return {
-      latestSalesDate: latest, proposalDate, scheduleByStore, calculationMode, rows, regularRows, specialStockRows, activityRows, consumableRows, shortageRows, consumableSnapshots, pendingTransferRows,
+      latestSalesDate: latest, proposalDate, scheduleByStore, calculationMode, rows, regularRows, specialStockRows, activityRows, consumableRows, shortageRows, consumableSnapshots, pendingTransferRows, comparisonFacts,
       marketingWarnings,
       b3Audit: { matchedCount: matchedTakeSales.length, pendingCount: b3PendingRows.length, pendingRows: b3PendingRows },
       companyImpact: {
@@ -895,5 +930,94 @@
     return workbook;
   }
 
-  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook };
+  const COMPARISON_COLUMNS = ["比較區塊", "ERP品號", "品名", "當時門市實際庫存", "當時總倉庫存", "列為展示品數量", "未完成調入量", "近42天門市銷售", "系統建議量(A)", "人工調撥量(B)", "差異(B-A)", "系統建議後可售至", "人工調撥數量可售至", "品項分類", "判斷分析"];
+
+  function comparisonTypeLabel(type) {
+    return ({ regular: "一般必要補貨", special_stock: "建議備貨", activity_gift: "活動／贈品", consumable: "門市耗材" })[type] || "一般必要補貨";
+  }
+
+  function buildComparisonReport(calculation, storeCode, storeName) {
+    if (calculation?.calculationMode !== "comparison") throw new Error("只有A/B測試比對結果可以下載差異分析表。");
+    const manualBySku = new Map();
+    calculation.pendingTransferRows.filter((row) => row.storeCode === storeCode && row.status === "提交").forEach((row) => {
+      const current = manualBySku.get(row.sku) || { quantity: 0, documents: new Set() };
+      current.quantity += Number(row.quantity || 0);
+      if (row.documentCode) current.documents.add(row.documentCode);
+      manualBySku.set(row.sku, current);
+    });
+    const facts = new Map((calculation.comparisonFacts || []).filter((row) => row.storeCode === storeCode).map((row) => [row.sku, row]));
+    const rows = [...new Set([...facts.keys(), ...manualBySku.keys()])].map((sku) => {
+      const fact = facts.get(sku) || { sku, storeCode, productName: "", itemType: "regular", suggestedQuantity: 0, physicalInventory: 0, hqInventory: 0, displayQuantity: 0, inTransitQuantity: 0, localSales42: 0, dailySales: 0, baseSellableQuantity: 0, calculationDate: calculation.latestSalesDate };
+      const aQuantity = Number(fact.suggestedQuantity || 0), bQuantity = Number(manualBySku.get(sku)?.quantity || 0);
+      const section = aQuantity > 0 && bQuantity > 0 ? "A、B都有" : aQuantity > 0 ? "僅A" : "僅B";
+      const difference = bQuantity - aQuantity;
+      const documentText = [...(manualBySku.get(sku)?.documents || [])].join("、");
+      const analysis = section === "A、B都有"
+        ? `人工量${difference === 0 ? "與系統相同" : difference > 0 ? `比系統多${difference}件` : `比系統少${Math.abs(difference)}件`}。${fact.ruleSummary || ""}`
+        : section === "僅A" ? `系統判定仍有補貨缺口，人工未開立。${fact.ruleSummary || ""}`
+          : `人工已開立${documentText ? `（${documentText}）` : ""}，系統依現況未提出新增建議。${fact.ruleSummary || ""}`;
+      return {
+        section, sku, productName: fact.productName, physicalInventory: fact.physicalInventory, hqInventory: fact.hqInventory,
+        displayQuantity: fact.displayQuantity, pendingQuantity: fact.inTransitQuantity, localSales42: fact.localSales42,
+        aQuantity, bQuantity, difference,
+        aProjection: fact.systemSellThroughDate,
+        bProjection: projectedSellThroughDate(fact.calculationDate, fact.baseSellableQuantity, bQuantity, fact.dailySales),
+        itemType: comparisonTypeLabel(fact.itemType), analysis
+      };
+    }).sort((left, right) => ["A、B都有", "僅A", "僅B"].indexOf(left.section) - ["A、B都有", "僅A", "僅B"].indexOf(right.section) || left.sku.localeCompare(right.sku));
+    return {
+      storeCode, storeName: storeName || storeCode, proposalDate: calculation.proposalDate, latestSalesDate: calculation.latestSalesDate,
+      rows,
+      summary: {
+        both: rows.filter((row) => row.section === "A、B都有").length,
+        onlyA: rows.filter((row) => row.section === "僅A").length,
+        onlyB: rows.filter((row) => row.section === "僅B").length,
+        totalA: rows.reduce((sum, row) => sum + row.aQuantity, 0),
+        totalB: rows.reduce((sum, row) => sum + row.bQuantity, 0)
+      }
+    };
+  }
+
+  function buildComparisonWorkbook(calculation, XLSX, storeCode, storeName) {
+    const report = buildComparisonReport(calculation, storeCode, storeName);
+    const workbook = XLSX.utils.book_new();
+    const worksheet = {};
+    const merges = [];
+    const set = (address, value, style) => { worksheet[address] = { v: value, t: typeof value === "number" ? "n" : "s", ...(style ? { s: style } : {}) }; };
+    const merge = (range) => merges.push(XLSX.utils.decode_range(range));
+    const titleStyle = { fill: { fgColor: { rgb: "15344A" } }, font: { name: "Arial", bold: true, color: { rgb: "FFFFFF" }, sz: 18 }, alignment: { vertical: "center" } };
+    const infoStyle = { fill: { fgColor: { rgb: "EEF3F6" } }, font: { name: "Arial", color: { rgb: "36566C" }, sz: 10 }, alignment: { vertical: "center" } };
+    const kpiStyle = { fill: { fgColor: { rgb: "B58B2A" } }, font: { name: "Arial", bold: true, color: { rgb: "FFFFFF" }, sz: 11 }, alignment: { horizontal: "center", vertical: "center" } };
+    const kpiNoteStyle = { fill: { fgColor: { rgb: "FFF6D9" } }, font: { name: "Arial", color: { rgb: "6D5720" }, sz: 9 }, alignment: { horizontal: "center", vertical: "center" } };
+    merge("A1:O2"); set("A1", `${report.storeName}｜本週調撥建議差異分析`, titleStyle);
+    merge("A3:O3"); set("A3", `A＝本次A/B模式系統獨立建議（建議日 ${report.proposalDate}）　｜　B＝匯入調撥單中狀態為「提交」的人工調撥`, infoStyle);
+    [["A","C",`A、B都有｜${report.summary.both} 項`,"共同品項，重點看數量差"],["D","F",`僅A｜${report.summary.onlyA} 項`,"系統有建議、人工未開"],["G","I",`僅B｜${report.summary.onlyB} 項`,"人工有開、系統未建議"],["J","L",`A建議總量｜${report.summary.totalA} 件`,"系統獨立建議量"],["M","O",`B手動總量｜${report.summary.totalB} 件`,"提交狀態人工調撥量"]].forEach(([left,right,label,note]) => { merge(`${left}5:${right}5`); merge(`${left}6:${right}6`); set(`${left}5`, label, kpiStyle); set(`${left}6`, note, kpiNoteStyle); });
+    merge("A8:O8"); set("A8", `口徑：A/B模式完全排除「提交」調撥對門市需求與總倉可用量的影響；未完成調入量僅包含「發貨審核」在途量。近42天門市銷售截止 ${report.latestSalesDate}；B為匯入檔內提交狀態人工調撥量。`, { fill: { fgColor: { rgb: "F7F1E5" } }, font: { name: "Arial", color: { rgb: "5C5140" }, sz: 9 }, alignment: { wrapText: true, vertical: "center" } });
+    let nextRow = 10;
+    const sections = [["A、B都有","第一區：A、B都有品項","237A76"],["僅A","第二區：僅A有的品項","B07A1A"],["僅B","第三區：僅B有的品項","A64B5A"]];
+    for (const [section, label, color] of sections) {
+      const sectionRows = report.rows.filter((row) => row.section === section);
+      merge(`A${nextRow}:O${nextRow}`); set(`A${nextRow}`, `${label}｜${sectionRows.length} 項`, { fill: { fgColor: { rgb: color } }, font: { name: "Arial", bold: true, color: { rgb: "FFFFFF" }, sz: 12 }, alignment: { vertical: "center" } });
+      nextRow += 1;
+      COMPARISON_COLUMNS.forEach((column, index) => set(XLSX.utils.encode_cell({ r: nextRow - 1, c: index }), column, { fill: { fgColor: { rgb: "E7EFF3" } }, font: { name: "Arial", bold: true, color: { rgb: "15344A" }, sz: 10 }, alignment: { wrapText: true, horizontal: "center", vertical: "center" } }));
+      nextRow += 1;
+      if (!sectionRows.length) { merge(`A${nextRow}:O${nextRow}`); set(`A${nextRow}`, "本區無品項", { font: { name: "Arial", italic: true, color: { rgb: "6B7F8E" } } }); nextRow += 2; continue; }
+      for (const row of sectionRows) {
+        const values = [row.section,row.sku,row.productName,row.physicalInventory,row.hqInventory,row.displayQuantity,row.pendingQuantity,row.localSales42,row.aQuantity,row.bQuantity,row.difference,row.aProjection,row.bProjection,row.itemType,row.analysis];
+        values.forEach((value, index) => set(XLSX.utils.encode_cell({ r: nextRow - 1, c: index }), value, { font: { name: "Arial", sz: 10, color: { rgb: "243746" } }, alignment: { wrapText: true, vertical: "top", horizontal: index >= 3 && index <= 12 ? "center" : "left" }, fill: index >= 3 && index <= 7 ? { fgColor: { rgb: "EAF4F7" } } : index >= 11 && index <= 12 ? { fgColor: { rgb: "FFF5D9" } } : index === 14 ? { fgColor: { rgb: "F2F7F9" } } : undefined }));
+        worksheet[`K${nextRow}`] = { f: `J${nextRow}-I${nextRow}`, t: "n", v: row.difference, s: worksheet[`K${nextRow}`].s };
+        nextRow += 1;
+      }
+      nextRow += 1;
+    }
+    worksheet["!ref"] = `A1:O${Math.max(1, nextRow - 1)}`;
+    worksheet["!merges"] = merges;
+    worksheet["!cols"] = [14,15,38,13,13,13,13,13,13,13,13,20,20,16,50].map((wch) => ({ wch }));
+    worksheet["!rows"] = Array.from({ length: nextRow }, (_, index) => ({ hpt: index < 2 ? 27 : index === 7 ? 58 : 25 }));
+    worksheet["!freeze"] = { xSplit: 0, ySplit: 3, topLeftCell: "A4", activePane: "bottomLeft", state: "frozen" };
+    XLSX.utils.book_append_sheet(workbook, worksheet, "調撥差異分析");
+    return workbook;
+  }
+
+  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook };
 });
