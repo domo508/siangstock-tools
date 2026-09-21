@@ -102,7 +102,8 @@
 
   function configuredRule(base, storeInventory) {
     if (!base || !storeInventory || !Array.isArray(storeInventory.rules)) return base;
-    const managed = storeInventory.rules.find((rule) => String(rule?.name || "") === base.name);
+    const managedNames = [base.name, ...(Array.isArray(base.legacyNames) ? base.legacyNames : [])];
+    const managed = storeInventory.rules.find((rule) => managedNames.includes(String(rule?.name || "")));
     if (!managed || managed.enabled === false) return null;
     const quantity = Number(managed.quantity);
     return {
@@ -127,8 +128,8 @@
     if (standalone) return configuredRule(standalone[0] === "5尺"
       ? { name: "獨立5尺商品", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "5尺不可售展示1件" }
       : { name: "獨立3.5尺、6尺、7尺商品", role: "可售最低庫存", quantity: 1, scope: "全部有銷售資料的營運門市", note: `${standalone[0]}可售最低庫存1件` }, storeInventory);
-    if (/6x7尺.*薄被套/.test(value)) return configuredRule(/天絲|華爾紗/.test(value)
-      ? { name: "6×7尺雙人薄被套天絲／華爾紗", role: "可售最低庫存", quantity: 1, scope: "全部有銷售資料的營運門市", note: "天絲／華爾紗雙人薄被套最低1件" }
+    if (/6x7尺.*薄被套/.test(value)) return configuredRule(/天絲|華爾紗|純棉|精梳棉|精梳純/.test(`${value}${categoryValue}`)
+      ? { name: "6×7尺雙人薄被套天絲／華爾紗／純棉／精梳純棉", legacyNames: ["6×7尺雙人薄被套天絲／華爾紗"], role: "可售最低庫存", quantity: 1, scope: "全部有銷售資料的營運門市", note: "天絲／華爾紗／純棉／精梳純棉雙人薄被套最低1件" }
       : { name: "6×7尺雙人薄被套一般材質", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "雙人薄被套展示1件" }, storeInventory);
     if (/6x7尺.*兩用被套/.test(value)) return configuredRule({ name: "6×7尺雙人兩用被套", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "雙人兩用被套展示1件" }, storeInventory);
     if (/床包|被套/.test(value)) return null;
@@ -554,13 +555,31 @@
       }
     }
 
-    const pendingInbound = new Map(), pendingOutbound = new Map();
+    const calculationMode = input.calculationMode === "comparison" ? "comparison" : "formal";
+    const submittedInbound = new Map(), inTransitInbound = new Map(), pendingOutbound = new Map();
+    const pendingTransferRows = [];
     for (const row of input.transfer.records) {
       if (!["提交", "發貨審核"].includes(row.status)) continue;
       const outKey = `${row.sourceWarehouseCode}|${row.sku}`, inKey = `${row.destinationWarehouseCode}|${row.sku}`;
-      if (row.status === "提交") pendingOutbound.set(outKey, (pendingOutbound.get(outKey) || 0) + row.quantity);
-      pendingInbound.set(inKey, (pendingInbound.get(inKey) || 0) + row.quantity);
+      if (row.status === "提交") {
+        submittedInbound.set(inKey, (submittedInbound.get(inKey) || 0) + row.quantity);
+        if (calculationMode === "formal") pendingOutbound.set(outKey, (pendingOutbound.get(outKey) || 0) + row.quantity);
+      } else {
+        inTransitInbound.set(inKey, (inTransitInbound.get(inKey) || 0) + row.quantity);
+      }
+      if (stores.includes(row.destinationWarehouseCode)) pendingTransferRows.push({
+        storeCode: row.destinationWarehouseCode,
+        sku: row.sku,
+        productName: row.name || masterBySku.get(row.sku)?.name || "",
+        documentCode: row.documentCode || "",
+        status: row.status,
+        quantity: Number(row.quantity || 0),
+        openedDate: row.openedDate || "",
+        shippedDate: row.shippedDate || "",
+        includedInCalculation: row.status === "發貨審核" || calculationMode === "formal"
+      });
     }
+    const includedInbound = (key) => (inTransitInbound.get(key) || 0) + (calculationMode === "formal" ? (submittedInbound.get(key) || 0) : 0);
 
     const specialTopTwo = new Map();
     const specialRule = managedRuleByName(input.storeInventory, "單人薄被套／單人兩用被套材質前2名", { role: "可售特殊備貨", quantity: 1, scope: "R00、R06" });
@@ -597,7 +616,10 @@
         const appliesDisplay = ruleApplies && rule?.role === "不可售展示";
         const minimum = ruleApplies && rule?.role === "可售最低庫存" ? rule.quantity : 0;
         const display = appliesDisplay ? rule.quantity : 0;
-        const current = Math.max(0, (inventory.get(key) || 0) + (pendingInbound.get(key) || 0));
+        const physicalInventory = Math.max(0, inventory.get(key) || 0);
+        const pendingSubmittedQuantity = Math.max(0, submittedInbound.get(key) || 0);
+        const inTransitQuantity = Math.max(0, inTransitInbound.get(key) || 0);
+        const current = Math.max(0, physicalInventory + includedInbound(key));
         const displayGap = Math.max(0, display - current);
         const sellable = Math.max(0, current - display);
         const sellableNeed = Math.max(0, Math.ceil(Math.max(target, minimum) - sellable - 1e-9));
@@ -608,14 +630,15 @@
         if (!need) continue;
         const row = {
           storeCode: store, sku, productName: master.name, localSales42: local42, b3Sales42: b342,
-          currentInventory: current, tier, targetQuantity: Math.max(target, minimum, specialNeed), displayQuantity: display,
+          currentInventory: current, physicalInventory, pendingSubmittedQuantity, inTransitQuantity,
+          tier, targetQuantity: Math.max(target, minimum, specialNeed), displayQuantity: display,
           displayGap, sellableNeed, rawNeed: need, itemType,
           baseSellableQuantity: Math.max(0, sellable - daily * schedule.preArrivalDays), dailySales: daily, calculationDate: schedule.currentArrivalDate,
           currentArrivalDate: schedule.currentArrivalDate, nextArrivalDate: schedule.nextArrivalDate, coverageDays: schedule.coverageDays,
           preArrivalStockoutRisk: daily > 0 && sellable < daily * schedule.preArrivalDays,
           systemSellThroughDate: projectedSellThroughDate(schedule.currentArrivalDate, Math.max(0, sellable - daily * schedule.preArrivalDays), Math.max(0, need - displayGap), daily),
           isSellThroughStop: Boolean(master.sellThroughStop),
-          ruleSummary: [itemType === "special_stock" ? `${singleDuvetType(master)}／${materialName(master)}前2名花色；建議維持1件，非必要調撥` : `${tier}；保護${schedule.coverageDays}天至${schedule.nextArrivalDate}`, displayGap ? `展示缺口${displayGap}件另補` : "", rule?.note, pendingInbound.get(key) ? `在途${pendingInbound.get(key)}件` : "", daily > 0 && sellable < daily * schedule.preArrivalDays ? `本批${schedule.currentArrivalDate}到店前有缺貨風險` : ""].filter(Boolean).join("；")
+          ruleSummary: [itemType === "special_stock" ? `${singleDuvetType(master)}／${materialName(master)}前2名花色；建議維持1件，非必要調撥` : `${tier}；保護${schedule.coverageDays}天至${schedule.nextArrivalDate}`, displayGap ? `展示缺口${displayGap}件另補` : "", rule?.note, pendingSubmittedQuantity ? `${calculationMode === "comparison" ? "A/B測試排除待發貨" : "待發貨"}${pendingSubmittedQuantity}件` : "", inTransitQuantity ? `發貨在途${inTransitQuantity}件` : "", daily > 0 && sellable < daily * schedule.preArrivalDays ? `本批${schedule.currentArrivalDate}到店前有缺貨風險` : ""].filter(Boolean).join("；")
         };
         if (!needsBySku.has(sku)) needsBySku.set(sku, []); needsBySku.get(sku).push(row);
       }
@@ -705,7 +728,10 @@
             const age = daysBetween(row.date, latest);
             return age >= 0 && age < 21 ? sum + Math.max(0, Number(row.deductQuantity || row.quantity || 0)) : sum;
           }, 0);
-          const current = Math.max(0, (inventory.get(key) || 0) + (pendingInbound.get(key) || 0));
+          const physicalInventory = Math.max(0, inventory.get(key) || 0);
+          const pendingSubmittedQuantity = Math.max(0, submittedInbound.get(key) || 0);
+          const inTransitQuantity = Math.max(0, inTransitInbound.get(key) || 0);
+          const current = Math.max(0, physicalInventory + includedInbound(key));
           const dailyUsage = recentUsage / 21;
           const usageForecast = recentUsage > 0 ? Math.ceil(dailyUsage * effectiveDays) : 0;
           const stats = scopedStoreOrderStats(activity, storeOrderStats.get(storeCode), masterBySku);
@@ -715,7 +741,7 @@
           const preArrivalQualification = forecastQualifiedGifts(activity, stats, preArrivalDays);
           const preArrivalUse = Math.max(Math.ceil(dailyUsage * preArrivalDays), preArrivalQualification.forecastGifts || 0);
           const projectedAtArrival = Math.max(0, current - preArrivalUse);
-          return { storeCode, current, projectedAtArrival, preArrivalUse, recentUsage, rawNeed: effectiveDays > 0 ? Math.max(0, target - projectedAtArrival) : 0, target, usageForecast, qualification, stats, effectiveDays, currentArrivalDate: schedule.currentArrivalDate, protectionEnd };
+          return { storeCode, current, physicalInventory, pendingSubmittedQuantity, inTransitQuantity, projectedAtArrival, preArrivalUse, recentUsage, rawNeed: effectiveDays > 0 ? Math.max(0, target - projectedAtArrival) : 0, target, usageForecast, qualification, stats, effectiveDays, currentArrivalDate: schedule.currentArrivalDate, protectionEnd };
         });
         const totalNeed = candidates.reduce((sum, row) => sum + row.rawNeed, 0);
         const openCandidates = candidates.filter((row) => row.rawNeed > 0);
@@ -734,6 +760,7 @@
           activityRows.push({
             storeCode: candidate.storeCode, sku, productName: master?.name || `活動贈品 ${sku}`,
             localSales42: candidate.recentUsage, b3Sales42: 0, currentInventory: candidate.current,
+            physicalInventory: candidate.physicalInventory, pendingSubmittedQuantity: candidate.pendingSubmittedQuantity, inTransitQuantity: candidate.inTransitQuantity,
             tier: "活動／贈品", targetQuantity: candidate.target, displayQuantity: 0, rawNeed: candidate.rawNeed,
             suggestedQuantity: suggested, hqAvailable, itemType: "activity_gift",
             calculationDate: latest, baseSellableQuantity: candidate.current, dailySales: 0,
@@ -779,7 +806,10 @@
         if (trusted) historicalConsumption.unshift(weeklyConsumption);
         const samples = historicalConsumption.slice(0, 6);
         const averageWeeklyUsage = samples.length >= 4 ? samples.reduce((sum, value) => sum + value, 0) / samples.length : null;
-        const projectedCurrent = currentQuantity + Math.max(0, pendingInbound.get(`${storeCode}|${sku}`) || 0);
+        const transferKey = `${storeCode}|${sku}`;
+        const pendingSubmittedQuantity = Math.max(0, submittedInbound.get(transferKey) || 0);
+        const inTransitQuantity = Math.max(0, inTransitInbound.get(transferKey) || 0);
+        const projectedCurrent = currentQuantity + includedInbound(transferKey);
         consumableSnapshots.push({ storeCode, sku, snapshotDate: latest, currentQuantity, inboundQuantity: inbound, outboundQuantity: outbound, weeklyConsumption, trusted });
         if (averageWeeklyUsage == null) continue;
         let triggerWeeks, targetWeeks, requiresManual = false;
@@ -791,7 +821,8 @@
         const suggested = Math.max(100, Math.ceil(rawGap / 100) * 100);
         const row = {
           storeCode, sku, productName: definition.name, consumableSize: definition.size,
-          currentInventory: projectedCurrent, averageWeeklyUsage, targetQuantity: averageWeeklyUsage * targetWeeks,
+          currentInventory: projectedCurrent, physicalInventory: currentQuantity, pendingSubmittedQuantity, inTransitQuantity,
+          averageWeeklyUsage, targetQuantity: averageWeeklyUsage * targetWeeks,
           rawNeed: suggested, itemType: "consumable", calculationDate: latest,
           baseSellableQuantity: projectedCurrent, dailySales: averageWeeklyUsage / 7,
           systemSellThroughDate: `約${((projectedCurrent + suggested) / Math.max(averageWeeklyUsage, .01)).toFixed(1)}週`,
@@ -820,11 +851,14 @@
     }
     consumableRows.sort((a, b) => STORE_ORDER.indexOf(a.storeCode) - STORE_ORDER.indexOf(b.storeCode) || a.sku.localeCompare(b.sku));
     shortageRows.sort((a, b) => STORE_ORDER.indexOf(a.storeCode) - STORE_ORDER.indexOf(b.storeCode) || a.sku.localeCompare(b.sku));
+    pendingTransferRows.sort((a, b) => STORE_ORDER.indexOf(a.storeCode) - STORE_ORDER.indexOf(b.storeCode) || a.sku.localeCompare(b.sku) || a.documentCode.localeCompare(b.documentCode));
 
     const actionableActivityRows = activityRows.filter((row) => Number(row.suggestedQuantity) > 0);
     const rows = [...regularRows, ...specialStockRows, ...actionableActivityRows, ...consumableRows];
+    const submittedRows = pendingTransferRows.filter((row) => row.status === "提交");
+    const inTransitRows = pendingTransferRows.filter((row) => row.status === "發貨審核");
     return {
-      latestSalesDate: latest, proposalDate, scheduleByStore, rows, regularRows, specialStockRows, activityRows, consumableRows, shortageRows, consumableSnapshots,
+      latestSalesDate: latest, proposalDate, scheduleByStore, calculationMode, rows, regularRows, specialStockRows, activityRows, consumableRows, shortageRows, consumableSnapshots, pendingTransferRows,
       marketingWarnings,
       b3Audit: { matchedCount: matchedTakeSales.length, pendingCount: b3PendingRows.length, pendingRows: b3PendingRows },
       companyImpact: {
@@ -837,7 +871,12 @@
         itemCount: rows.length, quantity: rows.reduce((sum, row) => sum + row.suggestedQuantity, 0),
         regularItemCount: regularRows.length, specialStockItemCount: specialStockRows.length,
         activityItemCount: actionableActivityRows.length, consumableItemCount: consumableRows.length,
-        shortageItemCount: shortageRows.length
+        shortageItemCount: shortageRows.length,
+        pendingTransferItemCount: pendingTransferRows.length,
+        pendingSubmittedQuantity: submittedRows.reduce((sum, row) => sum + row.quantity, 0),
+        inTransitQuantity: inTransitRows.reduce((sum, row) => sum + row.quantity, 0),
+        excludedSubmittedQuantity: calculationMode === "comparison" ? submittedRows.reduce((sum, row) => sum + row.quantity, 0) : 0,
+        excludedSubmittedDocumentCount: calculationMode === "comparison" ? new Set(submittedRows.map((row) => row.documentCode)).size : 0
       }
     };
   }

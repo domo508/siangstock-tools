@@ -72,6 +72,65 @@ describe("總倉不足分配", () => {
   });
 });
 
+describe("待發貨與A/B測試比對", () => {
+  function transferModeInput(mode, storeInventory = 0) {
+    return {
+      calculationMode: mode,
+      proposalDate: "2026-09-13",
+      storeCodes: ["R00"],
+      master: { bySku: new Map([["A102061", { sku: "A102061", name: "5尺床包 [水洗棉-淺灰](S)" }]]) },
+      inventory: { records: [
+        { warehouseCode: "T00", sku: "A102061", quantity: 20 },
+        { warehouseCode: "R00", sku: "A102061", quantity: storeInventory }
+      ] },
+      transfer: { records: [{
+        documentCode: "AT2609000123", status: "提交", sourceWarehouseCode: "T00", destinationWarehouseCode: "R00",
+        sku: "A102061", name: "5尺床包 [水洗棉-淺灰](S)", quantity: 1, openedDate: "2026-09-20", shippedDate: ""
+      }] },
+      sales: [{ maxDate: "2026-09-13", records: [
+        { warehouseCode: "R00", shipWarehouseCode: "R00", sku: "A102061", date: "2026-09-13", quantity: 6, deductQuantity: 6, saleType: "銷貨" }
+      ], takeRecords: [] }]
+    };
+  }
+
+  it("正式模式把提交量獨立列示並只建議扣除後的新增缺口", () => {
+    const result = core.buildSuggestions(transferModeInput("formal"));
+    expect(result.regularRows[0]).toMatchObject({
+      physicalInventory: 0, pendingSubmittedQuantity: 1, inTransitQuantity: 0,
+      currentInventory: 1, suggestedQuantity: 2
+    });
+    expect(result.pendingTransferRows[0]).toMatchObject({ documentCode: "AT2609000123", status: "提交", quantity: 1, includedInCalculation: true });
+  });
+
+  it("正式模式由既有提交量涵蓋需求時不列主要建議，但保留唯讀明細", () => {
+    const result = core.buildSuggestions(transferModeInput("formal", 2));
+    expect(result.regularRows).toHaveLength(0);
+    expect(result.pendingTransferRows).toHaveLength(1);
+    expect(result.totals.pendingSubmittedQuantity).toBe(1);
+  });
+
+  it("A/B模式完整排除提交單對門市需求及總倉保留的影響", () => {
+    const formal = core.buildSuggestions(transferModeInput("formal"));
+    const comparison = core.buildSuggestions(transferModeInput("comparison"));
+    expect(formal.regularRows[0].suggestedQuantity).toBe(2);
+    expect(formal.regularRows[0].hqAvailable).toBe(19);
+    expect(comparison.regularRows[0]).toMatchObject({ physicalInventory: 0, pendingSubmittedQuantity: 1, currentInventory: 0, suggestedQuantity: 3 });
+    expect(comparison.regularRows[0].hqAvailable).toBe(20);
+    expect(comparison.pendingTransferRows[0].includedInCalculation).toBe(false);
+    expect(comparison.totals).toMatchObject({ excludedSubmittedDocumentCount: 1, excludedSubmittedQuantity: 1 });
+  });
+
+  it("A/B模式仍把發貨審核列為在途量", () => {
+    const input = transferModeInput("comparison");
+    input.transfer.records[0].status = "發貨審核";
+    input.transfer.records[0].shippedDate = "2026-09-20";
+    const result = core.buildSuggestions(input);
+    expect(result.regularRows[0]).toMatchObject({ physicalInventory: 0, pendingSubmittedQuantity: 0, inTransitQuantity: 1, currentInventory: 1, suggestedQuantity: 2 });
+    expect(result.pendingTransferRows[0].includedInCalculation).toBe(true);
+    expect(result.totals).toMatchObject({ inTransitQuantity: 1, excludedSubmittedQuantity: 0 });
+  });
+});
+
 describe("S品、建議備貨與可售至", () => {
   it("S品總倉5件內會先依周轉保留，無可釋出時不反覆列出", () => {
     expect(core.sStockProtection(2, 1, 2, 2)).toMatchObject({ level: "高周轉", reserve: 2, releasable: 0 });
@@ -120,6 +179,24 @@ describe("ERP調撥輸出", () => {
 });
 
 describe("展示與最低庫存管理規則", () => {
+  it("6×7尺天絲、華爾紗、純棉及精梳純棉薄被套採可售最低庫存1件", () => {
+    for (const record of [
+      { name: "6×7尺天絲薄被套 [夏夜]" },
+      { name: "6×7尺薄被套華爾紗 [禾隅]" },
+      { name: "6×7尺薄被套 [野花草] 純棉" },
+      { name: "6×7尺薄被套 [橡實]", mainCategory: "寢具_精梳純棉" }
+    ]) expect(core.stockRule(record)).toMatchObject({ role: "可售最低庫存", quantity: 1, scope: "全部有銷售資料的營運門市" });
+  });
+
+  it("6×7尺雙層紗或長絨棉薄被套仍為不可售展示1件", () => {
+    expect(core.stockRule({ sku: "B103100-1", name: "6×7尺薄被套 [雙層紗-櫻染 A](S)", mainCategory: "寢具_長絨棉" })).toMatchObject({ role: "不可售展示", quantity: 1, scope: "R00、R06" });
+  });
+
+  it("新版薄被套規則仍沿用集中規則中的舊名稱設定", () => {
+    const managed = { rules: [{ name: "6×7尺雙人薄被套天絲／華爾紗", enabled: true, scope: "R01", inventoryRole: "可售最低庫存", quantity: 2, priority: 110 }] };
+    expect(core.stockRule({ name: "6×7尺薄被套 [橡實]", mainCategory: "寢具_精梳純棉" }, managed)).toMatchObject({ quantity: 2, scope: "R01" });
+  });
+
   it("管理前台設定會取代程式預設量與適用門市", () => {
     const managed = { rules: [{ name: "獨立5尺商品", enabled: true, scope: "R01", inventoryRole: "不可售展示", quantity: 2, priority: 120 }] };
     expect(core.stockRule({ name: "天絲床包 獨立5尺" }, managed)).toMatchObject({ role: "不可售展示", quantity: 2, scope: "R01" });

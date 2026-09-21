@@ -68,6 +68,7 @@
     return new Promise((resolve) => requestAnimationFrame(() => resolve()));
   }
   function selectedStores() { return [...document.querySelectorAll('#store-options input:checked')].map((input) => input.value); }
+  function calculationMode() { return document.querySelector('input[name="calculation-mode"]:checked')?.value === "comparison" ? "comparison" : "formal"; }
   function renderStores() { $("store-options").innerHTML = Object.entries(state.config.stores).map(([code, store]) => `<label><input type="checkbox" value="${code}" checked><span>${code} ${escapeHtml(store.name)}<small>${escapeHtml(store.company)}・${escapeHtml(store.relationship)}</small></span></label>`).join(""); }
 
   async function authorizeGoogle() {
@@ -215,10 +216,10 @@
 
   function previewRow(row, kind) {
     const start = `<tr data-store-row data-store="${escapeHtml(row.storeCode)}"><td>${row.storeCode}</td>`;
-    if (kind === "special") return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.currentInventory}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
-    if (kind === "consumable") return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.currentInventory}</td><td>${row.averageWeeklyUsage.toFixed(1)}</td><td>${row.suggestedQuantity / 100}箱／${row.suggestedQuantity}個</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td><details><summary>查看判斷</summary>${escapeHtml(row.ruleSummary)}</details></td></tr>`;
+    if (kind === "special") return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.physicalInventory}</td><td>${row.pendingSubmittedQuantity}</td><td>${row.inTransitQuantity}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
+    if (kind === "consumable") return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.physicalInventory}</td><td>${row.pendingSubmittedQuantity}</td><td>${row.inTransitQuantity}</td><td>${row.averageWeeklyUsage.toFixed(1)}</td><td>${row.suggestedQuantity / 100}箱／${row.suggestedQuantity}個</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td><details><summary>查看判斷</summary>${escapeHtml(row.ruleSummary)}</details></td></tr>`;
     if (kind === "shortage") return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.demandQuantity}</td><td>${row.allocatedQuantity}</td><td>${row.unfilledQuantity}</td><td>${escapeHtml(row.reason)}</td><td>${escapeHtml(row.followUpStatus || "待回拋主採購")}</td></tr>`;
-    return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.b3Sales42}</td><td>${row.currentInventory}</td><td>${Number(row.targetQuantity).toFixed(1)}／${row.displayQuantity}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.currentArrivalDate)}</td><td>${escapeHtml(row.nextArrivalDate)}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${row.preArrivalStockoutRisk ? "有缺貨空窗，需加急" : "可支撐至本批到店"}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
+    return `${start}<td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.localSales42}</td><td>${row.b3Sales42}</td><td>${row.physicalInventory}</td><td>${row.pendingSubmittedQuantity}</td><td>${row.inTransitQuantity}</td><td>${Number(row.targetQuantity).toFixed(1)}／${row.displayQuantity}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.currentArrivalDate)}</td><td>${escapeHtml(row.nextArrivalDate)}</td><td>${escapeHtml(row.systemSellThroughDate)}</td><td>${row.preArrivalStockoutRisk ? "有缺貨空窗，需加急" : "可支撐至本批到店"}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`;
   }
 
   async function calculate() {
@@ -256,6 +257,7 @@
       const historyPayload = await api("/consumable-snapshots");
       const latestSalesDate = sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "") || $("proposal-date").value;
       $("hq-status").textContent = "資料讀取完成，正在計算各門市建議量…";
+      const mode = calculationMode();
       state.calculation = transferCore.buildSuggestions({
         storeCodes: stores,
         master,
@@ -265,37 +267,44 @@
         marketing: transferCore.parseMarketingWorkbook(marketingBook, inputXlsx, latestSalesDate),
         consumableHistory: historyPayload.snapshots || [],
         proposalDate: $("proposal-date").value,
+        calculationMode: mode,
         storeInventory: state.config.storeInventoryRules?.config || {}
       });
       state.calculationStore = "all";
       $("calculation-store-filter").innerHTML = storeFilterBar("calculation", stores, state.calculationStore);
-      await api("/consumable-snapshots", { method: "POST", body: { snapshots: state.calculation.consumableSnapshots } });
+      if (mode === "formal") await api("/consumable-snapshots", { method: "POST", body: { snapshots: state.calculation.consumableSnapshots } });
       const ignoredTransferText = transfer.ignoredRows?.length ? `；另略過${transfer.ignoredRows.length}筆與總倉及既有門市皆無關的調撥` : "";
-      $("calculation-summary").textContent = `銷售截止${state.calculation.latestSalesDate}；必要補貨${state.calculation.totals.regularItemCount}項、建議備貨${state.calculation.totals.specialStockItemCount}項、活動／贈品${state.calculation.totals.activityItemCount}項、耗材${state.calculation.totals.consumableItemCount}項、缺貨未配${state.calculation.totals.shortageItemCount}項；B3成功配對${state.calculation.b3Audit.matchedCount}筆、待人工確認${state.calculation.b3Audit.pendingCount}筆${ignoredTransferText}；提袋快照已記錄。`;
+      $("calculation-summary").textContent = `銷售截止${state.calculation.latestSalesDate}；必要補貨${state.calculation.totals.regularItemCount}項、建議備貨${state.calculation.totals.specialStockItemCount}項、活動／贈品${state.calculation.totals.activityItemCount}項、耗材${state.calculation.totals.consumableItemCount}項、缺貨未配${state.calculation.totals.shortageItemCount}項；待發貨${state.calculation.totals.pendingSubmittedQuantity}件、發貨在途${state.calculation.totals.inTransitQuantity}件；B3成功配對${state.calculation.b3Audit.matchedCount}筆、待人工確認${state.calculation.b3Audit.pendingCount}筆${ignoredTransferText}；${mode === "formal" ? "提袋快照已記錄" : "A/B模式未寫入提袋快照"}。`;
+      $("calculation-mode-alert").hidden = mode !== "comparison";
+      $("calculation-mode-alert").innerHTML = mode === "comparison" ? `<strong>A/B測試比對：</strong>已排除${state.calculation.totals.excludedSubmittedDocumentCount}張提交單、共${state.calculation.totals.excludedSubmittedQuantity}件；本結果只能預覽，不能建立正式批次。發貨審核仍按在途量計算。` : "";
       const impact = state.calculation.companyImpact;
       $("company-impact").innerHTML = `<strong>寬承／寬沐成本流向：</strong>寬沐調撥收貨${impact.kuanmuTransferCount}筆、B3代出${impact.kuanmuB3Count}筆；原始供貨成本${formatCurrency(impact.kuanmuBaseCost)}，寬承對寬沐計價參考${formatCurrency(impact.kuanmuIntercompanyRevenue)}（成本×1.11）。合併檢視時抵銷公司間計價，只保留原始成本。`;
       $("b3-audit").hidden = !state.calculation.b3Audit.pendingCount;
       $("b3-audit").innerHTML = state.calculation.b3Audit.pendingCount ? `<strong>B3待人工確認：</strong>${state.calculation.b3Audit.pendingRows.slice(0, 20).map((row) => `${escapeHtml(row.storeCode)}／${escapeHtml(row.sku)}／來源單${escapeHtml(row.sourceOrder || "未填")}`).join("、")}${state.calculation.b3Audit.pendingCount > 20 ? "…" : ""}。這些資料未納入B3與門市能力。` : "";
-      $("calculation-rows").innerHTML = state.calculation.regularRows.length ? state.calculation.regularRows.map((row) => previewRow(row, "regular")).join("") : '<tr><td colspan="13">本週沒有一般必要補貨。</td></tr>';
+      $("calculation-rows").innerHTML = state.calculation.regularRows.length ? state.calculation.regularRows.map((row) => previewRow(row, "regular")).join("") : '<tr><td colspan="15">本週沒有一般必要補貨。</td></tr>';
       $("special-stock-results").hidden = !state.calculation.specialStockRows.length;
       $("special-stock-rows").innerHTML = state.calculation.specialStockRows.map((row) => previewRow(row, "special")).join("");
       $("activity-results").hidden = !state.calculation.activityRows.length && !state.calculation.marketingWarnings.length;
-      $("activity-rows").innerHTML = state.calculation.activityRows.length ? state.calculation.activityRows.map((row) => `<tr data-store-row data-store="${escapeHtml(row.storeCode)}"><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${escapeHtml(row.thresholdText)}<br><small>${escapeHtml(row.activityPeriod)}</small></td><td>${escapeHtml(row.activityScope || "待確認")}</td><td>${escapeHtml(row.thresholdBasis || "待確認")}</td><td>${escapeHtml(row.currentArrivalDate || "待確認")}</td><td>${Number(row.effectiveDays || 0)}天</td><td>${row.matchingOrderCount == null ? "待確認" : `${row.matchingOrderCount}筆`}</td><td>${row.averageTicket == null ? "待確認" : `${Math.round(row.averageTicket).toLocaleString("zh-TW")}元`}</td><td>${row.eligibleRate == null ? "待確認" : `${(row.eligibleRate * 100).toFixed(1)}%`}</td><td>${row.forecastOrders == null ? "待確認" : `${row.forecastOrders}筆／${row.forecastGiftQuantity}件`}</td><td>${row.localSales42}</td><td>${row.currentInventory}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`).join("") : '<tr><td colspan="16">目前沒有可直接配對贈品貨號的活動。</td></tr>';
+      $("activity-rows").innerHTML = state.calculation.activityRows.length ? state.calculation.activityRows.map((row) => `<tr data-store-row data-store="${escapeHtml(row.storeCode)}"><td>${row.storeCode}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${escapeHtml(row.thresholdText)}<br><small>${escapeHtml(row.activityPeriod)}</small></td><td>${escapeHtml(row.activityScope || "待確認")}</td><td>${escapeHtml(row.thresholdBasis || "待確認")}</td><td>${escapeHtml(row.currentArrivalDate || "待確認")}</td><td>${Number(row.effectiveDays || 0)}天</td><td>${row.matchingOrderCount == null ? "待確認" : `${row.matchingOrderCount}筆`}</td><td>${row.averageTicket == null ? "待確認" : `${Math.round(row.averageTicket).toLocaleString("zh-TW")}元`}</td><td>${row.eligibleRate == null ? "待確認" : `${(row.eligibleRate * 100).toFixed(1)}%`}</td><td>${row.forecastOrders == null ? "待確認" : `${row.forecastOrders}筆／${row.forecastGiftQuantity}件`}</td><td>${row.localSales42}</td><td>${row.physicalInventory}</td><td>${row.pendingSubmittedQuantity}</td><td>${row.inTransitQuantity}</td><td>${row.suggestedQuantity}</td><td>${escapeHtml(row.ruleSummary)}</td></tr>`).join("") : '<tr><td colspan="18">目前沒有可直接配對贈品貨號的活動。</td></tr>';
       $("marketing-warnings").textContent = state.calculation.marketingWarnings.join(" ");
       $("consumable-results").hidden = !state.calculation.consumableRows.length;
       $("consumable-rows").innerHTML = state.calculation.consumableRows.map((row) => previewRow(row, "consumable")).join("");
       $("shortage-results").hidden = !state.calculation.shortageRows.length;
       $("shortage-rows").innerHTML = state.calculation.shortageRows.map((row) => previewRow(row, "shortage")).join("");
-      $("publish-button").disabled = !state.calculation.rows.length && !state.calculation.shortageRows.length;
+      $("pending-transfer-results").hidden = !state.calculation.pendingTransferRows.length;
+      $("pending-transfer-rows").innerHTML = state.calculation.pendingTransferRows.map((row) => `<tr data-store-row data-store="${escapeHtml(row.storeCode)}"><td>${escapeHtml(row.storeCode)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${escapeHtml(row.documentCode)}</td><td>${escapeHtml(row.status)}</td><td>${row.quantity}</td><td>${escapeHtml(row.openedDate || "—")}</td><td>${escapeHtml(row.shippedDate || "—")}</td><td>${row.includedInCalculation ? "已納入抵扣" : "A/B模式已排除"}</td></tr>`).join("");
+      $("publish-button").disabled = mode === "comparison" || (!state.calculation.rows.length && !state.calculation.shortageRows.length);
+      $("publish-button").textContent = mode === "comparison" ? "A/B模式不可建立批次" : "建立門市確認批次";
       $("calculation-results").hidden = false;
       applyStoreFilter("calculation", state.calculationStore);
       const ignoredNotice = transfer.ignoredRows?.length ? ` 已略過${transfer.ignoredRows.length}筆兩端皆不屬於總倉或既有門市的資料。` : "";
-      $("hq-status").textContent = (state.calculation.rows.length ? "計算完成，請先檢查四類結果，再建立門市確認批次。" : "本週沒有可建立批次的調撥項目；缺貨與提袋快照仍已完成記錄。") + ignoredNotice;
+      $("hq-status").textContent = (mode === "comparison" ? "A/B測試比對完成；本結果僅供預覽，不會建立批次或寫入提袋快照。" : state.calculation.rows.length ? "計算完成，請先檢查四類結果，再建立門市確認批次。" : "本週沒有可建立批次的調撥項目；缺貨與提袋快照仍已完成記錄。") + ignoredNotice;
     } finally { $("calculate-button").disabled = false; }
   }
 
   async function publish() {
     if (!state.calculation) return;
+    if (state.calculation.calculationMode === "comparison") throw new Error("A/B測試比對只能預覽，請切回正式補貨並重新計算後再建立批次。");
     const weekKey = $("week-key").value, proposalDate = $("proposal-date").value, localLock = $("lock-at").value;
     if (!weekKey || !proposalDate || !localLock) throw new Error("請填妥週次、建議產生日與鎖定時間。");
     $("publish-button").disabled = true;
@@ -460,6 +469,13 @@
   $("google-connect-button").addEventListener("click", () => authorizeGoogle().catch((error) => { $("source-status").textContent = error.message; }));
   $("auto-source-button").addEventListener("click", () => loadGoogleSources().catch((error) => { $("source-status").textContent = `自動取得失敗：${error.message}；可改用手動備援。`; }));
   $("week-key").addEventListener("change", () => applyScheduleForWeek($("week-key").value));
+  document.querySelectorAll('input[name="calculation-mode"]').forEach((input) => input.addEventListener("change", () => {
+    if (!state.calculation) return;
+    state.calculation = null;
+    $("calculation-results").hidden = true;
+    $("publish-button").textContent = "建立門市確認批次";
+    $("hq-status").textContent = "計算模式已變更，請重新產生建議。";
+  }));
   document.addEventListener("click", (event) => {
     const deleteButton = event.target.closest("[data-delete-batch]");
     if (deleteButton) {
