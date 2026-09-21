@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex,nofollow">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'">
   <title>A、B庫存成本稽核分析｜翔仔居家</title>
-  <link rel="stylesheet" href="style.css?v=20260828-manual-r1">
+  <link rel="stylesheet" href="style.css?v=20260921-warehouse-scope-r2">
 </head>
 <body>
   <main class="page-shell">
@@ -45,7 +45,7 @@
     <section class="steps" aria-label="使用步驟">
       <div><span>1</span><strong>選擇八類報表</strong><small>本月沒有資料的選填報表可以略過。</small></div>
       <div><span>2</span><strong>確認欄位對應</strong><small>系統會自動辨識，也可以人工修正。</small></div>
-      <div><span>3</span><strong>分析並下載</strong><small>產生同一份Excel的六個頁籤。</small></div>
+      <div><span>3</span><strong>選範圍並下載</strong><small>可切換總部整體、總倉、單一店倉或全部店倉。</small></div>
     </section>
 
     <section class="panel manual-panel" aria-labelledby="manual-title">
@@ -60,8 +60,8 @@
       <p class="manual-intro">本工具用來核對庫存推算耗用與商品成本，找出需要人工排查的商品、數量及金額；分析結果只供勾稽，不會自動修改庫存或會計資料。</p>
 
       <div class="manual-formula-grid" aria-label="A B C D計算說明">
-        <article><strong>A 庫存推算</strong><span>期初＋進貨－退廠－期末</span></article>
-        <article><strong>B 商品成本</strong><span>淨銷售＋加盟調撥＋總倉代出＋加盟退回</span></article>
+        <article><strong>A 庫存推算</strong><span>整體：期初＋進貨－退廠－期末；單倉另含調入／調出</span></article>
+        <article><strong>B 商品成本</strong><span>整體：四類來源；單倉：實際由本倉扣庫的銷售成本</span></article>
         <article><strong>C 非銷售調整</strong><span>盤盈虧、報廢、贈品與其他出入庫</span></article>
         <article><strong>D 時點調整</strong><span>跨月、在途或尚未月結差異</span></article>
       </div>
@@ -72,7 +72,7 @@
         <li><strong>依序選檔</strong><span>正常月份建議匯入8類報表；確定沒有資料的選填報表才可略過。</span></li>
         <li><strong>確認欄位</strong><span>每份報表都要顯示「欄位檢查通過」；錯誤時再人工調整。</span></li>
         <li><strong>開始分析</strong><span>確認已取得公司最新版商品規則，再按「開始分析」。</span></li>
-        <li><strong>下載結果</strong><span>先看摘要與差異，再下載含6個頁籤的完整Excel。</span></li>
+        <li><strong>切換並下載</strong><span>分析後選擇總部整體、寬承總倉、單一店倉或全部店倉，再下載對應Excel。</span></li>
       </ol>
 
       <div class="manual-sections">
@@ -101,14 +101,28 @@
         <details>
           <summary>期初、期末應包含哪些倉別？</summary>
           <div class="manual-detail-body">
-            <p>應包含：寬承總倉、台中北屯門市、台北中山門市、退貨倉、瑕疵倉、報廢倉、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物，以及名稱含「快閃」的倉別。</p>
-            <p><strong>請排除其餘加盟店倉，且期初與期末必須使用完全相同的倉別範圍。</strong></p>
+            <p><strong>請直接匯出全部店倉</strong>，包含寬承總倉、兩間直營門市、加盟店倉、公司內專用倉、寄賣倉與快閃倉；期初與期末必須使用相同的全部倉別範圍。</p>
+            <p>選「總部體系整體」時，程式仍依原規則排除加盟店倉，結果不因匯入範圍擴大而改變；選單一倉別時，才依該倉的實體調入、調出與扣庫計算。</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>四種分析範圍怎麼選？</summary>
+          <div class="manual-detail-body">
+            <ul>
+              <li><strong>總部體系整體：</strong>沿用現行A／B規則，程式會排除加盟店倉，適合每月正式庫存成本稽核。</li>
+              <li><strong>寬承總倉單倉：</strong>只看總倉本身的期初、進貨、調撥收發、實際銷售扣庫與期末。</li>
+              <li><strong>單一店倉：</strong>分析所選店倉的實體庫存；內部調撥分開列為調入與調出，避免和直接進貨重複。</li>
+              <li><strong>全部店倉總覽：</strong>每倉一列，先找出未解釋差異較大的倉別，再切回單一店倉查看商品。</li>
+            </ul>
+            <p><strong>單倉報表不是門市損益表：</strong>總倉代出只算在實際扣庫的總倉，不會轉列為營收門市的實體庫存耗用。</p>
           </div>
         </details>
 
         <details>
           <summary>下載後，6個頁籤怎麼看？</summary>
           <div class="manual-detail-body">
+            <p>以下6頁籤適用「總部體系整體」。單倉報表為5頁籤；全部店倉總覽為2頁籤。</p>
             <div class="manual-table-wrap">
               <table class="manual-table sheet-guide-table">
                 <thead><tr><th>頁籤</th><th>用途</th></tr></thead>
@@ -172,8 +186,8 @@
       </div>
 
       <div class="warehouse-note" role="note">
-        <strong>期初、期末請使用相同倉別範圍</strong>
-        <small>應包含：寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物，以及名稱含「快閃」的倉別。請排除其餘加盟店倉。</small>
+        <strong>期初、期末請匯出全部店倉，且範圍完全相同</strong>
+        <small>包含總倉、直營、加盟、快閃及公司內各專用倉。選「總部體系整體」時仍由程式自動排除加盟店倉；單倉與全部店倉模式則依實際倉別分開計算。</small>
       </div>
 
       <div class="warehouse-note" role="note">
@@ -187,6 +201,24 @@
       </div>
 
       <div id="upload-grid" class="upload-grid"></div>
+
+      <div class="scope-panel" aria-labelledby="scope-title">
+        <div>
+          <strong id="scope-title">分析範圍</strong>
+          <small>一次整理資料後可切換結果；總部體系整體沿用原本A／B規則。</small>
+        </div>
+        <label>報表模式
+          <select id="analysis-scope">
+            <option value="company">總部體系整體（現行A／B）</option>
+            <option value="headquarters">寬承總倉單倉</option>
+            <option value="single">單一店倉</option>
+            <option value="all">全部店倉總覽</option>
+          </select>
+        </label>
+        <label id="warehouse-picker" hidden>選擇店倉
+          <select id="warehouse-select"></select>
+        </label>
+      </div>
 
       <div class="action-bar">
         <button id="analyze-button" class="primary-button" type="button" disabled>開始分析</button>
@@ -206,11 +238,11 @@
       <div id="summary-cards" class="summary-grid"></div>
       <div class="result-table-wrap">
         <table>
-          <thead><tr><th>商品編號</th><th>品名</th><th>A數量</th><th>B合計</th><th>B1淨銷售</th><th>B2加盟調撥</th><th>B3總倉代出</th><th>B4加盟退回</th><th>C數量</th><th>D時點數量</th><th>未解釋數量</th><th>未解釋金額</th><th>狀態</th><th>建議排查方法</th></tr></thead>
+          <thead id="result-head"><tr><th>商品編號</th><th>品名</th><th>A數量</th><th>B合計</th><th>B1淨銷售</th><th>B2加盟調撥</th><th>B3總倉代出</th><th>B4加盟退回</th><th>C數量</th><th>D時點數量</th><th>未解釋數量</th><th>未解釋金額</th><th>狀態</th><th>建議排查方法</th></tr></thead>
           <tbody id="result-rows"></tbody>
         </table>
       </div>
-      <p class="result-note">畫面與02頁籤只顯示非通過商品；包含通過品項的完整底稿請見06_全部商品勾稽明細。</p>
+      <p id="result-note" class="result-note">畫面與02頁籤只顯示非通過商品；包含通過品項的完整底稿請見06_全部商品勾稽明細。</p>
     </section>
 
     <section class="panel rules-panel" aria-labelledby="rules-title">
@@ -246,7 +278,7 @@
   <script src="assets/jszip.min.js"></script>
   <script src="../inventory/core.js?v=20260816-shared-rules"></script>
   <script src="../inventory/rules-client.js?v=20260816-shared-rules"></script>
-  <script src="core.js?v=20260828-manual-r1"></script>
-  <script src="app.js?v=20260828-manual-r1"></script>
+  <script src="core.js?v=20260921-warehouse-scope-r2"></script>
+  <script src="app.js?v=20260921-warehouse-scope-r2"></script>
 </body>
 </html>

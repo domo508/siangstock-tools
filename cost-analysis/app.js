@@ -7,8 +7,8 @@
   const rulesClient = globalThis.InventoryRulesClient;
   const requiredTypes = new Set(["opening", "closing", "purchases", "sales"]);
   const descriptions = {
-    opening: "含總倉、直營、名稱含「快閃」及公司內各專用倉；排除其餘加盟店倉。",
-    closing: "倉別範圍必須與期初完全一致。",
+    opening: "請匯出全部店倉；總部體系模式會自動排除加盟店倉，單倉模式才依所選倉別計算。",
+    closing: "請匯出全部店倉，且倉別範圍必須與期初完全一致。",
     purchases: "本報表中的「成本價」例外視為供應商進貨價，並作為分析月份鎖定主報表。",
     sales: "可同時選擇本月及前月，不可包含更早或未來月份；加盟總倉代出的R／T只作正式成本、扣庫與跨月稽核。客戶退貨已用負值呈現，不需另傳客退報表。",
     storeMonthly: "B2加盟調撥、B3總倉代出與B4加盟退回的主要認列來源，並與當月進貨共同鎖定分析月份。",
@@ -20,6 +20,12 @@
   const state = {
     sources: {},
     analysis: null,
+    reports: null,
+    companyAnalysis: null,
+    warehouseBundle: null,
+    warehouseScopes: [],
+    warehouseCache: new Map(),
+    analysisOptions: null,
     outputWorkbook: null,
     rules: null,
     rulesVersion: null,
@@ -34,6 +40,12 @@
   const resultPanel = document.getElementById("result-panel");
   const summaryCards = document.getElementById("summary-cards");
   const resultRows = document.getElementById("result-rows");
+  const resultHead = document.getElementById("result-head");
+  const resultTitle = document.getElementById("result-title");
+  const resultNote = document.getElementById("result-note");
+  const analysisScope = document.getElementById("analysis-scope");
+  const warehousePicker = document.getElementById("warehouse-picker");
+  const warehouseSelect = document.getElementById("warehouse-select");
   const productRulesTitle = document.getElementById("product-rules-title");
   const productRulesDetail = document.getElementById("product-rules-detail");
 
@@ -50,8 +62,18 @@
     return new Intl.NumberFormat("zh-TW", { maximumFractionDigits }).format(Number(value || 0));
   }
 
+  function warehouseClassificationLabel(value) {
+    return ({ included: "總部體系", direct: "直營門市", franchise: "加盟門市", unknown: "未分類" })[value] || value;
+  }
+
   function resetResults(message) {
     state.analysis = null;
+    state.reports = null;
+    state.companyAnalysis = null;
+    state.warehouseBundle = null;
+    state.warehouseScopes = [];
+    state.warehouseCache = new Map();
+    state.analysisOptions = null;
     state.outputWorkbook = null;
     resultPanel.hidden = true;
     downloadButton.disabled = true;
@@ -241,8 +263,11 @@
     else mainStatus.textContent = "必要來源與欄位已就緒，可以開始分析。";
   }
 
-  function renderResults(analysis) {
+  function renderCompanyResults(analysis) {
     const t = analysis.totals;
+    resultTitle.textContent = "總部體系整體・本月勾稽摘要";
+    resultNote.textContent = "畫面與02頁籤只顯示非通過商品；包含通過品項的完整底稿請見06_全部商品勾稽明細。";
+    resultHead.innerHTML = "<tr><th>商品編號</th><th>品名</th><th>A數量</th><th>B合計</th><th>B1淨銷售</th><th>B2加盟調撥</th><th>B3總倉代出</th><th>B4加盟退回</th><th>C數量</th><th>D時點數量</th><th>未解釋數量</th><th>未解釋金額</th><th>狀態</th><th>建議排查方法</th></tr>";
     const cards = [
       ["A 庫存推算耗用", formatNumber(t.aQty), `$${formatNumber(t.aAmount)}`, false],
       ["B 四類來源合計", formatNumber(t.salesQty), `$${formatNumber(t.salesAmount)}`, false],
@@ -261,6 +286,87 @@
       : '<tr><td colspan="14" class="status-pass">本月所有商品皆通過，沒有需要列入差異明細的品項。</td></tr>';
     resultPanel.hidden = false;
     resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function renderWarehouseResults(analysis) {
+    const t = analysis.totals;
+    resultTitle.textContent = `${analysis.warehouse}・單倉實體庫存勾稽`;
+    resultNote.textContent = "單倉報表只看實體庫存流向；總倉代出只列在實際扣庫的總倉，不等同門市完整銷售成本或門市損益。";
+    resultHead.innerHTML = "<tr><th>商品編號</th><th>品名</th><th>A數量</th><th>B本倉扣庫</th><th>調入</th><th>調出</th><th>直接進貨</th><th>退廠</th><th>C數量</th><th>D時點數量</th><th>未解釋數量</th><th>未解釋金額</th><th>狀態</th><th>建議排查方法</th></tr>";
+    const cards = [
+      ["A 單倉庫存推算", formatNumber(t.aQty), `$${formatNumber(t.aAmount)}`, false],
+      ["B 本倉實際銷售扣庫", formatNumber(t.salesQty), `$${formatNumber(t.salesAmount)}`, false],
+      ["調撥入庫", formatNumber(t.transferInQty), `$${formatNumber(t.transferInAmount)}`, false],
+      ["調撥出庫", formatNumber(t.transferOutQty), `$${formatNumber(t.transferOutAmount)}`, false],
+      ["直接進貨", formatNumber(t.purchaseQty), `$${formatNumber(t.purchaseAmount)}`, false],
+      ["退廠", formatNumber(t.supplierReturnQty), `$${formatNumber(t.supplierReturnAmount)}`, false],
+      ["C 非銷售調整", formatNumber(t.adjustmentQty), `$${formatNumber(t.adjustmentAmount)}`, false],
+      ["D 時點調整", formatNumber(t.timingQty), `$${formatNumber(t.timingAmount)}`, false],
+      ["最終未解釋差異", formatNumber(t.quantityDifference), `$${formatNumber(t.rawAmountDifference)}`, Math.abs(t.quantityDifference) > 0.000001 || Math.abs(t.rawAmountDifference) >= 1]
+    ];
+    summaryCards.innerHTML = cards.map(([label, value, sub, warn]) => `<div class="summary-card ${warn ? "warn" : ""}"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong><span>${escapeHtml(sub)}</span></div>`).join("");
+    const differenceItems = analysis.details.filter((item) => item.status !== "通過").slice(0, 20);
+    resultRows.innerHTML = differenceItems.length
+      ? differenceItems.map((item) => `<tr><td>${escapeHtml(item.sku)}</td><td>${escapeHtml(item.name)}</td><td>${formatNumber(item.aQty)}</td><td>${formatNumber(item.salesQty)}</td><td>${formatNumber(item.transferInQty)}</td><td>${formatNumber(item.transferOutQty)}</td><td>${formatNumber(item.purchaseQty)}</td><td>${formatNumber(item.supplierReturnQty)}</td><td>${formatNumber(item.adjustmentQty)}</td><td>${formatNumber(item.timingQty)}</td><td>${formatNumber(item.quantityDifference)}</td><td>${formatNumber(item.rawAmountDifference)}</td><td class="status-warn">${escapeHtml(item.status)}</td><td class="advice-cell">${escapeHtml(item.advice)}</td></tr>`).join("")
+      : '<tr><td colspan="14" class="status-pass">本倉所有商品皆通過，沒有需要列入差異明細的品項。</td></tr>';
+    resultPanel.hidden = false;
+    resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function renderWarehouseOverview(bundle) {
+    resultTitle.textContent = "全部店倉・實體庫存勾稽總覽";
+    resultNote.textContent = "總覽用來找出優先排查倉別；下載Excel後可依未解釋金額、異常商品或來源提醒排序。";
+    resultHead.innerHTML = "<tr><th>倉別</th><th>分類</th><th>A數量</th><th>B本倉扣庫</th><th>調入</th><th>調出</th><th>C數量</th><th>D數量</th><th>未解釋數量</th><th>未解釋金額</th><th>異常商品</th><th>來源提醒</th><th>期初期末</th><th>建議</th></tr>";
+    const aggregate = bundle.analyses.reduce((acc, entry) => {
+      const t = entry.analysis.totals;
+      acc.a += t.aQty; acc.b += t.salesQty; acc.c += t.adjustmentQty; acc.diffQty += t.quantityDifference; acc.diffAmount += t.rawAmountDifference; acc.issues += t.issueCount;
+      return acc;
+    }, { a: 0, b: 0, c: 0, diffQty: 0, diffAmount: 0, issues: 0 });
+    summaryCards.innerHTML = [
+      ["偵測店倉", bundle.analyses.length, "期初／期末自動辨識"],
+      ["各倉A合計", formatNumber(aggregate.a), "含各倉調入／調出"],
+      ["各倉B合計", formatNumber(aggregate.b), "依實際扣庫倉"],
+      ["各倉C合計", formatNumber(aggregate.c), "非銷售出入庫"],
+      ["未解釋數量合計", formatNumber(aggregate.diffQty), `$${formatNumber(aggregate.diffAmount)}`],
+      ["來源提醒", formatNumber(aggregate.issues, 0), "不含info"]
+    ].map(([label, value, sub]) => `<div class="summary-card"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong><span>${escapeHtml(sub)}</span></div>`).join("");
+    resultRows.innerHTML = bundle.analyses.map((entry) => {
+      const t = entry.analysis.totals;
+      const complete = entry.opening && entry.closing;
+      return `<tr><td>${escapeHtml(entry.name)}</td><td>${escapeHtml(warehouseClassificationLabel(entry.classification))}</td><td>${formatNumber(t.aQty)}</td><td>${formatNumber(t.salesQty)}</td><td>${formatNumber(t.transferInQty)}</td><td>${formatNumber(t.transferOutQty)}</td><td>${formatNumber(t.adjustmentQty)}</td><td>${formatNumber(t.timingQty)}</td><td>${formatNumber(t.quantityDifference)}</td><td>${formatNumber(t.rawAmountDifference)}</td><td>${formatNumber(t.itemCount - t.passCount, 0)}</td><td>${formatNumber(t.issueCount, 0)}</td><td class="${complete ? "status-pass" : "status-warn"}">${complete ? "完整" : "不完整"}</td><td class="advice-cell">${complete ? "依未解釋金額由大到小排查。" : "先補齊期初或期末倉別範圍。"}</td></tr>`;
+    }).join("");
+    resultPanel.hidden = false;
+    resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function selectCurrentAnalysis(scroll = true) {
+    if (!state.companyAnalysis || !state.reports || !state.analysisOptions) return;
+    const mode = analysisScope.value;
+    warehousePicker.hidden = mode !== "single";
+    if (mode === "company") {
+      state.analysis = state.companyAnalysis;
+      state.outputWorkbook = core.buildOutputWorkbook(state.analysis, XLSX);
+      renderCompanyResults(state.analysis);
+    } else if (mode === "all") {
+      if (!state.warehouseBundle) {
+        state.warehouseBundle = core.analyzeAllWarehouses(state.reports, state.analysisOptions);
+        state.warehouseCache = new Map(state.warehouseBundle.analyses.map((entry) => [core.canonicalWarehouseName(entry.name), entry.analysis]));
+      }
+      state.analysis = state.warehouseBundle;
+      state.outputWorkbook = core.buildWarehouseOverviewWorkbook(state.warehouseBundle, XLSX);
+      renderWarehouseOverview(state.warehouseBundle);
+    } else {
+      const target = mode === "headquarters" ? "寬承總倉" : warehouseSelect.value;
+      const scope = state.warehouseScopes.find((candidate) => core.canonicalWarehouseName(candidate.name) === core.canonicalWarehouseName(target));
+      if (!scope) throw new Error(`找不到「${target || "所選店倉"}」的期初／期末資料。`);
+      const key = core.canonicalWarehouseName(scope.name);
+      if (!state.warehouseCache.has(key)) state.warehouseCache.set(key, core.analyzeWarehouse(state.reports, scope.name, state.analysisOptions));
+      state.analysis = state.warehouseCache.get(key);
+      state.outputWorkbook = core.buildWarehouseOutputWorkbook(state.analysis, XLSX);
+      renderWarehouseResults(state.analysis);
+    }
+    downloadButton.disabled = false;
+    if (!scroll) resultPanel.scrollIntoView({ behavior: "auto", block: "start" });
   }
 
   analyzeButton.addEventListener("click", async () => {
@@ -287,22 +393,54 @@
         reports[type] = core.mergeReportParts(type, parts);
       }
       const monthContext = core.resolveAnalysisMonth(reports);
-      state.analysis = core.analyzeReports(reports, {
+      const options = {
         rules: state.rules,
         rulesVersion: state.rulesVersion,
         rulesUpdatedAt: state.rulesUpdatedAt,
         analysisMonth: monthContext.analysisMonth,
         sourceMonthChecks: monthContext.sourceMonthChecks
-      });
-      state.outputWorkbook = core.buildOutputWorkbook(state.analysis, XLSX);
-      renderResults(state.analysis);
-      mainStatus.textContent = `分析完成：使用公司集中規則 v${state.rulesVersion}，共${formatNumber(state.analysis.totals.itemCount, 0)}項商品，排除${formatNumber(state.analysis.exclusions.length, 0)}列，另有${formatNumber(state.analysis.totals.issueCount, 0)}項來源或配對問題。`;
-      downloadButton.disabled = false;
+      };
+      state.reports = reports;
+      state.analysisOptions = options;
+      state.companyAnalysis = core.analyzeReports(reports, options);
+      state.warehouseBundle = null;
+      state.warehouseCache = new Map();
+      state.warehouseScopes = core.discoverWarehouseScopes(reports);
+      const currentWarehouse = warehouseSelect.value;
+      warehouseSelect.innerHTML = state.warehouseScopes.map((entry) => `<option value="${escapeHtml(entry.name)}" ${entry.name === currentWarehouse ? "selected" : ""}>${escapeHtml(entry.name)}${entry.opening && entry.closing ? "" : "（期初／期末不完整）"}</option>`).join("");
+      if (!warehouseSelect.value && state.warehouseScopes[0]) warehouseSelect.value = state.warehouseScopes[0].name;
+      selectCurrentAnalysis();
+      mainStatus.textContent = `分析完成：沿用現行總部體系結果，另偵測${formatNumber(state.warehouseScopes.length, 0)}個店倉；切換單倉或總覽時會在目前瀏覽器依需要計算。`;
     } catch (error) {
       mainStatus.textContent = `分析失敗：${error.message}`;
       resultPanel.hidden = true;
     }
     updateAnalyzeAvailability(true);
+  });
+
+  analysisScope.addEventListener("change", async () => {
+    warehousePicker.hidden = analysisScope.value !== "single";
+    if (!state.companyAnalysis) return;
+    try {
+      mainStatus.textContent = analysisScope.value === "all" ? "正在計算全部店倉總覽……" : "正在切換分析範圍……";
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      selectCurrentAnalysis(false);
+      mainStatus.textContent = "已切換分析範圍；不需重新讀取Excel。";
+    } catch (error) {
+      mainStatus.textContent = `無法切換：${error.message}`;
+    }
+  });
+
+  warehouseSelect.addEventListener("change", async () => {
+    if (!state.companyAnalysis || analysisScope.value !== "single") return;
+    try {
+      mainStatus.textContent = `正在計算${warehouseSelect.value}……`;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      selectCurrentAnalysis(false);
+      mainStatus.textContent = `已切換至${warehouseSelect.value}；不需重新讀取Excel。`;
+    } catch (error) {
+      mainStatus.textContent = `無法切換：${error.message}`;
+    }
   });
 
   downloadButton.addEventListener("click", async () => {
@@ -317,7 +455,10 @@
       const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
       const link = document.createElement("a");
       link.href = url;
-      link.download = `庫存成本分析_${stamp}.xlsx`;
+      const scopeLabel = state.analysis && state.analysis.mode === "warehouse"
+        ? state.analysis.warehouse
+        : (state.analysis && state.analysis.mode === "warehouse-overview" ? "全部店倉總覽" : "總部體系整體");
+      link.download = `庫存成本分析_${scopeLabel}_${stamp}.xlsx`;
       document.body.appendChild(link);
       link.click();
       link.remove();

@@ -826,6 +826,96 @@ describe("庫存成本分析核心規則", () => {
     };
     expect(() => core.resolveAnalysisMonth(reports)).toThrow("銷售品項成本明細未包含分析月份2026年5月");
   });
+
+  it("可從期初期末自動辨識全部店倉，快閃仍屬總部體系、一般漢神本館屬加盟", () => {
+    const reports = {
+      opening: report("opening", [
+        { warehouse: "寬承總倉", sku: "P1", name: "商品P1", qty: 1, purchasePrice: 10 },
+        { warehouse: "台中誠品480專櫃", sku: "P1", name: "商品P1", qty: 1, purchasePrice: 10 },
+        { warehouse: "[快閃]高雄漢神本館", sku: "P1", name: "商品P1", qty: 1, purchasePrice: 10 }
+      ]),
+      closing: report("closing", [
+        { warehouse: "寬承總倉", sku: "P1", name: "商品P1", qty: 1, purchasePrice: 10 },
+        { warehouse: "台中誠品480專櫃", sku: "P1", name: "商品P1", qty: 1, purchasePrice: 10 },
+        { warehouse: "[快閃]高雄漢神本館", sku: "P1", name: "商品P1", qty: 1, purchasePrice: 10 }
+      ])
+    };
+    const scopes = core.discoverWarehouseScopes(reports);
+    expect(scopes.map((entry) => entry.name)).toEqual(["寬承總倉", "[快閃]高雄漢神本館", "台中誠品480專櫃"]);
+    expect(core.classifyWarehouse("高雄漢神本館")).toBe("franchise");
+    expect(core.classifyWarehouse("[快閃]高雄漢神本館")).toBe("included");
+  });
+
+  it("單倉A納入調入調出且不重複計入直接進貨，B只取實際扣庫倉", () => {
+    const month = 2026 * 12 + 6;
+    const reports = {
+      opening: report("opening", [
+        { warehouse: "寬承總倉", sku: "P1", name: "商品P1", qty: 10, purchasePrice: 10 },
+        { warehouse: "台中誠品480專櫃", sku: "P1", name: "商品P1", qty: 2, purchasePrice: 10 }
+      ]),
+      closing: report("closing", [
+        { warehouse: "寬承總倉", sku: "P1", name: "商品P1", qty: 7, purchasePrice: 10 },
+        { warehouse: "台中誠品480專櫃", sku: "P1", name: "商品P1", qty: 4, purchasePrice: 10 }
+      ]),
+      purchases: report("purchases", [{ date: "2026-06-02", warehouse: "台中誠品480專櫃", sku: "P1", name: "商品P1", qty: 1, purchasePrice: 10, untaxedAmount: 10 }]),
+      transfers: report("transfers", [{ date: "2026-06-05", dispatchDate: "2026-06-05", receiptDate: "2026-06-06", doc: "AT26060001", sourceWarehouse: "寬承總倉", destinationWarehouse: "台中誠品480專櫃", sku: "P1", name: "商品P1", qty: 3, purchasePrice: 10 }]),
+      sales: report("sales", [{ date: "2026-06-10", doc: "R0600002606100001", store: "台中誠品480專櫃", outboundWarehouse: "台中誠品480專櫃", sku: "P1", name: "商品P1", qty: 2, purchasePrice: 10 }]),
+      movements: report("movements", []),
+      supplierReturns: report("supplierReturns", []),
+      storeMonthly: report("storeMonthly", [])
+    };
+    const store = core.analyzeWarehouse(reports, "台中誠品480專櫃", { analysisMonth: month, rules: core.DEFAULT_PRODUCT_RULES });
+    expect(store.totals.purchaseQty).toBe(1);
+    expect(store.totals.transferInQty).toBe(3);
+    expect(store.totals.aQty).toBe(2);
+    expect(store.totals.salesQty).toBe(2);
+    expect(store.totals.quantityDifference).toBe(0);
+    const headquarters = core.analyzeWarehouse(reports, "寬承總倉", { analysisMonth: month, rules: core.DEFAULT_PRODUCT_RULES });
+    expect(headquarters.totals.transferOutQty).toBe(3);
+    expect(headquarters.totals.salesQty).toBe(0);
+  });
+
+  it("總倉代出只列在T單的實際出貨倉，不列為營收門市的實體B", () => {
+    const month = 2026 * 12 + 6;
+    const reports = {
+      opening: report("opening", [
+        { warehouse: "寬承總倉", sku: "P2", name: "商品P2", qty: 5, purchasePrice: 20 },
+        { warehouse: "台中誠品480專櫃", sku: "P2", name: "商品P2", qty: 0, purchasePrice: 20 }
+      ]),
+      closing: report("closing", [
+        { warehouse: "寬承總倉", sku: "P2", name: "商品P2", qty: 4, purchasePrice: 20 },
+        { warehouse: "台中誠品480專櫃", sku: "P2", name: "商品P2", qty: 0, purchasePrice: 20 }
+      ]),
+      sales: report("sales", [
+        { date: "2026-06-02", doc: "R0600002606020001", pickupDoc: "T0000002606030001", store: "台中誠品480專櫃", pickupWarehouse: "寬承總倉", sku: "P2", name: "商品P2", salesQty: 1, qty: 0, purchaseCostAmount: 20 },
+        { date: "2026-06-03", doc: "T0000002606030001", sourceDoc: "R0600002606020001", store: "台中誠品480專櫃", outboundWarehouse: "寬承總倉", sku: "P2", name: "商品P2", qty: 1, purchaseCostAmount: 0 }
+      ]),
+      purchases: report("purchases", []), movements: report("movements", []), supplierReturns: report("supplierReturns", []), transfers: report("transfers", []), storeMonthly: report("storeMonthly", [])
+    };
+    const headquarters = core.analyzeWarehouse(reports, "寬承總倉", { analysisMonth: month, rules: core.DEFAULT_PRODUCT_RULES });
+    const store = core.analyzeWarehouse(reports, "台中誠品480專櫃", { analysisMonth: month, rules: core.DEFAULT_PRODUCT_RULES });
+    expect(headquarters.totals.salesQty).toBe(1);
+    expect(headquarters.totals.salesAmount).toBe(20);
+    expect(store.totals.salesQty).toBe(0);
+  });
+
+  it("可匯出單倉與全部店倉Excel，明細具表頭篩選且可凍結第一列", async () => {
+    const month = 2026 * 12 + 6;
+    const reports = {
+      opening: report("opening", [{ warehouse: "寬承總倉", sku: "P3", name: "商品P3", qty: 2, purchasePrice: 30 }]),
+      closing: report("closing", [{ warehouse: "寬承總倉", sku: "P3", name: "商品P3", qty: 1, purchasePrice: 30 }]),
+      purchases: report("purchases", []), sales: report("sales", [{ date: "2026-06-02", doc: "R1", store: "寬承總倉", outboundWarehouse: "寬承總倉", sku: "P3", name: "商品P3", qty: 1, purchasePrice: 30 }]),
+      storeMonthly: report("storeMonthly", []), movements: report("movements", []), supplierReturns: report("supplierReturns", []), transfers: report("transfers", [])
+    };
+    const analysis = core.analyzeWarehouse(reports, "寬承總倉", { analysisMonth: month, rules: core.DEFAULT_PRODUCT_RULES });
+    const workbook = core.buildWarehouseOutputWorkbook(analysis, XLSX);
+    expect(workbook.SheetNames).toEqual(["01_單倉摘要", "02_商品差異", "03_來源提醒", "04_C組調整", "05_全部商品"]);
+    expect(workbook.Sheets["02_商品差異"]["!autofilter"].ref).toContain("A1:Z");
+    const bytes = await core.buildFrozenWorkbookBytes(workbook, XLSX, JSZip);
+    expect(bytes.byteLength).toBeGreaterThan(1000);
+    const overview = core.buildWarehouseOverviewWorkbook(core.analyzeAllWarehouses(reports, { analysisMonth: month, rules: core.DEFAULT_PRODUCT_RULES }), XLSX);
+    expect(overview.SheetNames).toEqual(["01_全部店倉總覽", "02_使用說明"]);
+  });
 });
 
 describe("庫存成本分析前台", () => {
@@ -838,9 +928,9 @@ describe("庫存成本分析前台", () => {
     expect(html).toContain("<title>A、B庫存成本稽核分析｜翔仔居家</title>");
     expect(html).toContain("翔仔居家・A、B庫存成本稽核分析");
     expect(html).toContain('<li aria-current="page">A、B庫存成本稽核分析</li>');
-    expect(html).toContain("期初、期末請使用相同倉別範圍");
-    expect(html).toContain("名稱含「快閃」的倉別");
-    expect(html).toContain("請排除其餘加盟店倉");
+    expect(html).toContain("期初、期末請匯出全部店倉");
+    expect(html).toContain("總部體系整體（現行A／B）");
+    expect(html).toContain("全部店倉總覽");
     expect(html).toContain("選擇八類報表");
     expect(html).toContain("不會傳到網站、Cloudflare或其他伺服器");
     expect(html).toContain("公司最新版商品規則");

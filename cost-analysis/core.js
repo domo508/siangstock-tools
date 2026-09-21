@@ -191,6 +191,7 @@
     "台中文心秀泰專櫃",
     "台中誠品480專櫃",
     "高雄夢時代專櫃",
+    "高雄漢神本館",
     "新竹東區門市",
     "新莊門巾",
     "新莊門市"
@@ -1249,14 +1250,20 @@
     const getRecords = (type) => filteredRecords[type] || [];
 
     for (const type of ["opening", "closing"]) {
+      let franchiseExcludedRows = 0;
+      let firstFranchiseRecord = null;
+      let unknownRows = 0;
+      let firstUnknownRecord = null;
       for (const record of getRecords(type)) {
         const scope = classifyWarehouse(record.warehouse);
         if (scope === "franchise") {
-          addIssue(issues, "info", "排除加盟店倉", record, `${record.warehouse}不屬總公司庫存範圍，未納入${REPORT_SCHEMAS[type].label}。`);
+          franchiseExcludedRows += 1;
+          if (!firstFranchiseRecord) firstFranchiseRecord = record;
           continue;
         }
         if (scope === "unknown") {
-          addIssue(issues, "error", "未知倉別", record, `無法判斷「${record.warehouse || "空白"}」是否屬總公司，該列暫不納入。`);
+          unknownRows += 1;
+          if (!firstUnknownRecord) firstUnknownRecord = record;
           continue;
         }
         const item = getOrCreateItem(items, record);
@@ -1271,6 +1278,8 @@
         }
         addPrice(item, record.purchasePrice != null ? record.purchasePrice : (qty ? amount / qty : null), REPORT_SCHEMAS[type].label, record.date);
       }
+      if (franchiseExcludedRows) addIssue(issues, "info", "總部體系已排除加盟店倉", firstFranchiseRecord, `${REPORT_SCHEMAS[type].label}共有${displayNumber(franchiseExcludedRows, 0)}列加盟店倉；已依總部體系整體規則排除，不逐列列出。`);
+      if (unknownRows) addIssue(issues, "error", "未知倉別", firstUnknownRecord, `${REPORT_SCHEMAS[type].label}共有${displayNumber(unknownRows, 0)}列倉別無法分類；已暫不納入總部體系整體，請到全部店倉總覽確認倉名。`);
     }
 
     for (const record of getRecords("purchases")) {
@@ -1949,6 +1958,268 @@
     return { details, issues, sourceChecks, sourceMonthChecks, exclusions, adjustmentDetails, timingDetails, salesCancellationDetails, ruleContext, totals, analysisMonth, analysisMonthLabel: displayMonth(analysisMonth), generatedAt: new Date().toISOString() };
   }
 
+  function canonicalWarehouseName(value) {
+    const raw = String(value == null ? "" : value).trim();
+    const text = normalizeText(raw);
+    if (!text) return "";
+    const known = [...DIRECT_STORES, ...FRANCHISE_STORES, ...INCLUDED_WAREHOUSES]
+      .sort((left, right) => normalizeText(right).length - normalizeText(left).length);
+    const match = known.find((name) => text.includes(normalizeText(name)));
+    if (match && !text.includes("快閃")) return match;
+    return raw;
+  }
+
+  function warehouseMatches(value, selectedWarehouse) {
+    const left = normalizeText(canonicalWarehouseName(value));
+    const right = normalizeText(canonicalWarehouseName(selectedWarehouse));
+    return Boolean(left && right && left === right);
+  }
+
+  function discoverWarehouseScopes(reports) {
+    const scopes = new Map();
+    const add = (value, snapshot) => {
+      const name = canonicalWarehouseName(value);
+      const key = normalizeText(name);
+      if (!key) return;
+      if (!scopes.has(key)) scopes.set(key, { key, name, classification: classifyWarehouse(name), opening: false, closing: false });
+      scopes.get(key)[snapshot] = true;
+    };
+    for (const record of reports.opening && reports.opening.records || []) add(record.warehouse, "opening");
+    for (const record of reports.closing && reports.closing.records || []) add(record.warehouse, "closing");
+    const order = { included: 1, direct: 2, franchise: 3, unknown: 4 };
+    return Array.from(scopes.values()).sort((left, right) => {
+      if (left.name === "寬承總倉") return -1;
+      if (right.name === "寬承總倉") return 1;
+      return (order[left.classification] - order[right.classification]) || left.name.localeCompare(right.name, "zh-Hant");
+    });
+  }
+
+  function filterWarehouseRecords(reports, productRules) {
+    const filtered = {};
+    for (const type of REPORT_ORDER) {
+      const records = reports[type] && Array.isArray(reports[type].records) ? reports[type].records : [];
+      filtered[type] = records.filter((record) => productRuleResult(record.name, productRules).category !== "excluded");
+    }
+    return filtered;
+  }
+
+  function warehouseAnalysisItem(items, record) {
+    const item = getOrCreateItem(items, record);
+    for (const key of ["transferInQty", "transferInAmount", "transferOutQty", "transferOutAmount"]) {
+      if (item[key] == null) item[key] = 0;
+    }
+    return item;
+  }
+
+  function signedCostForQuantity(record, qty, fallbackPrice) {
+    const direct = recordCost(record);
+    const magnitude = direct != null && Math.abs(direct) >= EPSILON
+      ? Math.abs(direct)
+      : Math.abs(qty || 0) * Math.abs(fallbackPrice || 0);
+    return Number(qty || 0) < 0 ? -magnitude : magnitude;
+  }
+
+  function prepareWarehouseAnalysisContext(reports, productRules) {
+    const records = filterWarehouseRecords(reports, productRules);
+    const sales = records.sales.map((record) => ({ ...record, _recordMonth: recordMonthIndex(record) }));
+    const cancelledSales = new Set();
+    for (const pair of findStrictSalesCancellationPairs(sales)) {
+      cancelledSales.add(pair.original);
+      cancelledSales.add(pair.reversal);
+    }
+    const rCandidates = sales.filter((record) => !cancelledSales.has(record) && isRDocument(record));
+    return { records, sales, cancelledSales, rCandidates, scopes: discoverWarehouseScopes(reports) };
+  }
+
+  function analyzeWarehouse(reports, selectedWarehouse, options) {
+    const productRules = options && options.rules ? options.rules : DEFAULT_PRODUCT_RULES;
+    const context = options && options.warehouseContext
+      ? options.warehouseContext
+      : prepareWarehouseAnalysisContext(reports, productRules);
+    const { records, sales, cancelledSales, rCandidates } = context;
+    const analysisMonth = options && Number.isInteger(options.analysisMonth) ? options.analysisMonth : null;
+    const items = new Map();
+    const issues = [];
+    const adjustmentDetails = [];
+    const addWarehouseIssue = (level, type, record, detail) => addIssue(issues, level, type, record, detail);
+    const selected = canonicalWarehouseName(selectedWarehouse);
+    const scope = context.scopes.find((entry) => warehouseMatches(entry.name, selected));
+
+    if (!scope || !scope.opening || !scope.closing) {
+      issues.push({
+        level: "error",
+        type: "期初期末倉別範圍不一致",
+        source: "期初／期末庫存",
+        row: "",
+        doc: "",
+        sku: "",
+        name: "",
+        detail: `${selected || "所選倉別"}未同時出現在期初與期末庫存；本次仍列出可計算資料，但不可視為完整勾稽。`
+      });
+    }
+
+    for (const type of ["opening", "closing"]) {
+      for (const record of records[type]) {
+        if (!warehouseMatches(record.warehouse, selected)) continue;
+        const item = warehouseAnalysisItem(items, record);
+        const qty = Number(record.qty || 0);
+        const amount = recordCost(record);
+        if (type === "opening") {
+          item.openingQty += qty;
+          item.openingAmount += Number(amount || 0);
+        } else {
+          item.closingQty += qty;
+          item.closingAmount += Number(amount || 0);
+        }
+        addPrice(item, record.purchasePrice != null ? record.purchasePrice : (qty && amount != null ? amount / qty : null), REPORT_SCHEMAS[type].label, record.date);
+      }
+    }
+
+    for (const record of records.purchases) {
+      if (!warehouseMatches(record.warehouse, selected)) continue;
+      const item = warehouseAnalysisItem(items, record);
+      const qty = Math.abs(record.qty || 0);
+      const amount = record.untaxedAmount != null ? Math.abs(record.untaxedAmount) : Math.abs(recordCost(record) || 0);
+      item.purchaseQty += qty;
+      item.purchaseAmount += amount;
+      addPrice(item, record.purchasePrice != null ? record.purchasePrice : (qty ? amount / qty : null), "當月進貨明細", record.date);
+    }
+    if (records.purchases.some((record) => !canonicalWarehouseName(record.warehouse))) {
+      issues.push({ level: "warning", type: "進貨缺少收貨倉", source: REPORT_SCHEMAS.purchases.label, row: "", doc: "", sku: "", name: "", detail: "部分進貨列沒有收貨倉，無法分配至單一店倉；總部體系整體分析不受此單倉分配限制。" });
+    }
+
+    const supplierReturnQtyByItem = new Map();
+    for (const record of records.supplierReturns) {
+      if (!warehouseMatches(record.warehouse, selected)) continue;
+      const item = warehouseAnalysisItem(items, record);
+      const qty = Math.abs(record.qty || 0);
+      const amount = record.untaxedAmount != null ? Math.abs(record.untaxedAmount) : Math.abs(recordCost(record) || 0);
+      item.supplierReturnQty += qty;
+      item.supplierReturnAmount += amount;
+      supplierReturnQtyByItem.set(itemKey(record), (supplierReturnQtyByItem.get(itemKey(record)) || 0) + qty);
+    }
+    if (records.supplierReturns.some((record) => !canonicalWarehouseName(record.warehouse))) {
+      issues.push({ level: "warning", type: "退廠缺少來源倉", source: REPORT_SCHEMAS.supplierReturns.label, row: "", doc: "", sku: "", name: "", detail: "部分退廠列沒有來源倉，無法分配至單一店倉。" });
+    }
+
+    for (const transfer of records.transfers) {
+      const sourceSelected = warehouseMatches(transfer.sourceWarehouse, selected);
+      const destinationSelected = warehouseMatches(transfer.destinationWarehouse, selected);
+      if (!sourceSelected && !destinationSelected) continue;
+      const sourceMonth = monthIndexFromDate(transfer.dispatchDate) ?? recordMonthIndex(transfer);
+      const destinationMonth = monthIndexFromDate(transfer.receiptDate) ?? recordMonthIndex(transfer);
+      const item = warehouseAnalysisItem(items, transfer);
+      const qty = Math.abs(transfer.qty || 0);
+      if (sourceSelected && (analysisMonth == null || sourceMonth === analysisMonth)) {
+        const direct = recordCost(transfer) != null ? Math.abs(recordCost(transfer)) : sideCostAmount(transfer, "source");
+        const amount = direct != null ? direct : Math.abs(recordCost(transfer) || qty * referencePrice(item));
+        item.transferOutQty += qty;
+        item.transferOutAmount += amount;
+        if (!amount && qty) addWarehouseIssue("error", "調出缺少進貨價成本", transfer, `${selected}調出數量已納入A，但找不到調出方進貨價成本。`);
+      }
+      if (destinationSelected && (analysisMonth == null || destinationMonth === analysisMonth)) {
+        const direct = recordCost(transfer) != null ? Math.abs(recordCost(transfer)) : sideCostAmount(transfer, "destination");
+        const amount = direct != null ? direct : Math.abs(recordCost(transfer) || qty * referencePrice(item));
+        item.transferInQty += qty;
+        item.transferInAmount += amount;
+        if (!transfer.receiptDate) addWarehouseIssue("warning", "調入缺少收貨日期", transfer, `${selected}的調入暫依開單日期認列；請確認是否實際於本月收貨。`);
+        if (!amount && qty) addWarehouseIssue("error", "調入缺少進貨價成本", transfer, `${selected}調入數量已納入A，但找不到調入方進貨價成本。`);
+      }
+    }
+
+    const duplicateSales = new Map();
+    for (const sale of sales) {
+      if (cancelledSales.has(sale) || (analysisMonth != null && sale._recordMonth !== analysisMonth)) continue;
+      const physicalWarehouse = sale.outboundWarehouse || (isTDocument(sale) ? "" : sale.store);
+      if (!physicalWarehouse && isTDocument(sale)) {
+        addWarehouseIssue("warning", "T單缺少實際出貨倉", sale, "無法把本筆T單安全分配至單一店倉；請在銷售報表對應「出貨倉名稱」欄位。" );
+        continue;
+      }
+      if (!warehouseMatches(physicalWarehouse, selected) || Math.abs(sale.qty || 0) < EPSILON) continue;
+      const signature = JSON.stringify([normalizeText(sale.doc), itemKey(sale), Number(sale.qty || 0), sale.purchaseCostAmount, normalizeText(physicalWarehouse)]);
+      if (duplicateSales.has(signature)) addWarehouseIssue("error", "銷售明細疑似重複", sale, `與第${duplicateSales.get(signature).sourceRow}列相同；兩列均保留，請確認是否為系統重複資料。`);
+      else duplicateSales.set(signature, sale);
+      const item = warehouseAnalysisItem(items, sale);
+      const qty = Number(sale.qty || 0);
+      let costRecord = sale;
+      if (isTDocument(sale) && Math.abs(recordCost(sale) || 0) < EPSILON) {
+        const linked = rCandidates.filter((record) => sameItem(record, sale)
+          && quantityMagnitudeMatches(salesRecognitionQty(record), qty)
+          && (pickupTDocuments(record.pickupDoc).has(normalizeText(sale.doc))
+            || (sale.sourceDoc && normalizeText(sale.sourceDoc) === normalizeText(record.doc))));
+        if (linked.length === 1) costRecord = linked[0];
+        else addWarehouseIssue(linked.length ? "error" : "warning", linked.length ? "T單成本來源不唯一" : "T單缺少正式R成本", sale, linked.length ? `找到${linked.length}筆可連結R列，無法安全決定成本。` : "本筆已扣庫，但沒有可依完整單號連結的R單成本；B金額暫依商品參考進貨價。" );
+      }
+      const amount = signedCostForQuantity(costRecord, qty, referencePrice(item));
+      addBComponent(item, "b1", qty, amount);
+      addPrice(item, costRecord.purchasePrice != null ? costRecord.purchasePrice : (qty ? amount / qty : null), "銷售品項成本明細", costRecord.date);
+    }
+
+    for (const movement of records.movements) {
+      if (!warehouseMatches(movement.warehouse, selected)) continue;
+      if (analysisMonth != null && recordMonthIndex(movement) !== analysisMonth) continue;
+      const rule = adjustmentRule(movement);
+      if (!rule) continue;
+      if (rule.label === "採購退貨補列" && (supplierReturnQtyByItem.get(itemKey(movement)) || 0) > EPSILON) continue;
+      const item = warehouseAnalysisItem(items, movement);
+      const qty = Math.abs(movement.qty || 0) * rule.sign;
+      const amount = signedCostForQuantity(movement, qty, referencePrice(item));
+      item.adjustmentQty += qty;
+      item.adjustmentAmount += amount;
+      item.reasons.add(rule.label);
+      adjustmentDetails.push({
+        sourceRow: movement.sourceRow || "", date: movement.date || "", doc: movement.doc || "", relatedDoc: movement.relatedDoc || "",
+        warehouse: movement.warehouse || "", sku: movement.sku || "", name: movement.name || "", sourceDirection: movementMode(movement) === "out" ? "出庫" : "入庫",
+        sourceReason: movement.reason || "", category: rule.label, sourceQty: movement.qty || 0, adjustmentQty: qty,
+        sourceCostAmount: recordCost(movement) == null ? "" : Math.abs(recordCost(movement)), adoptedPrice: Math.abs(qty) > EPSILON ? Math.abs(amount / qty) : 0,
+        adjustmentAmount: amount, costBasis: recordCost(movement) != null ? "出入庫明細進貨價" : "商品參考進貨價",
+        explanation: rule.sign > 0 ? "非銷售出庫，C列正數。" : "非銷售入庫，C列負數。", notice: rule.uncertain ? "原因未命中既定規則，請人工確認。" : ""
+      });
+    }
+
+    const details = Array.from(items.values()).map((item) => {
+      const aQty = item.openingQty + item.purchaseQty + item.transferInQty - item.transferOutQty - item.supplierReturnQty - item.closingQty;
+      const aAmount = item.openingAmount + item.purchaseAmount + item.transferInAmount - item.transferOutAmount - item.supplierReturnAmount - item.closingAmount;
+      const quantityDifference = aQty - item.salesQty - item.adjustmentQty - item.timingQty;
+      const rawAmountDifference = aAmount - item.salesAmount - item.adjustmentAmount - item.timingAmount;
+      const refPrice = referencePrice(item);
+      const standardizedDifference = quantityDifference * refPrice;
+      const priceBasisEffect = rawAmountDifference - standardizedDifference;
+      const status = differenceStatus(quantityDifference, rawAmountDifference);
+      return {
+        ...item, reasons: Array.from(item.reasons).join("、"), aQty, aAmount, quantityDifference, rawAmountDifference,
+        refPrice, standardizedDifference, priceBasisEffect, status,
+        advice: status === "通過" ? "數量與金額皆在容許值內，原則上無需排查。" : "先核對本倉期初／期末範圍、調撥收發日期、銷售扣庫倉及C組出入庫，再核對進貨價成本。"
+      };
+    }).sort((left, right) => Math.abs(right.rawAmountDifference) - Math.abs(left.rawAmountDifference));
+
+    const totalKeys = ["openingQty", "openingAmount", "purchaseQty", "purchaseAmount", "transferInQty", "transferInAmount", "transferOutQty", "transferOutAmount", "supplierReturnQty", "supplierReturnAmount", "closingQty", "closingAmount", "aQty", "aAmount", "salesQty", "salesAmount", "adjustmentQty", "adjustmentAmount", "timingQty", "timingAmount", "quantityDifference", "rawAmountDifference", "standardizedDifference", "priceBasisEffect"];
+    const totals = details.reduce((acc, item) => {
+      for (const key of totalKeys) acc[key] += Number(item[key] || 0);
+      return acc;
+    }, Object.fromEntries(totalKeys.map((key) => [key, 0])));
+    totals.itemCount = details.length;
+    totals.issueCount = issues.filter((issue) => issue.level !== "info").length;
+    totals.passCount = details.filter((item) => item.status === "通過").length;
+    totals.quantityOnlyIssueCount = details.filter((item) => item.status === "僅數量差異").length;
+    totals.amountOnlyIssueCount = details.filter((item) => item.status === "僅金額差異").length;
+    totals.quantityAmountIssueCount = details.filter((item) => item.status === "數量＆金額差異").length;
+
+    return {
+      mode: "warehouse", warehouse: selected, warehouseClassification: scope ? scope.classification : classifyWarehouse(selected),
+      details, issues, adjustmentDetails, totals, analysisMonth, analysisMonthLabel: displayMonth(analysisMonth), generatedAt: new Date().toISOString()
+    };
+  }
+
+  function analyzeAllWarehouses(reports, options) {
+    const scopes = discoverWarehouseScopes(reports);
+    const productRules = options && options.rules ? options.rules : DEFAULT_PRODUCT_RULES;
+    const warehouseContext = prepareWarehouseAnalysisContext(reports, productRules);
+    const sharedOptions = { ...(options || {}), warehouseContext };
+    const analyses = scopes.map((scope) => ({ ...scope, analysis: analyzeWarehouse(reports, scope.name, sharedOptions) }));
+    return { mode: "warehouse-overview", analyses, analysisMonth: options && options.analysisMonth, analysisMonthLabel: displayMonth(options && options.analysisMonth), generatedAt: new Date().toISOString() };
+  }
+
   function setSheetLayout(sheet, widths, filterRange) {
     sheet["!cols"] = widths.map((wch) => ({ wch }));
     if (filterRange) sheet["!autofilter"] = { ref: filterRange };
@@ -2131,8 +2402,8 @@
         ? analysis.sourceMonthChecks.map((row) => [row.source, row.role, row.monthLabels.join("、") || "不適用", row.unknownRows || 0, row.result, row.fileName])
         : [["本次未執行來源月份檢查"]]),
       [],
-      ["期初／期末應納入倉別"],
-      ["寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物，以及名稱含「快閃」的倉別。排除其餘加盟店倉。"],
+      ["期初／期末輸入與本報表納入範圍"],
+      ["輸入檔請包含全部店倉且期初、期末範圍一致；本『總部體系整體』報表只納入寬承總倉、兩間直營門市、公司內專用倉及名稱含『快閃』的倉別，加盟店倉由程式自動排除。"],
       [],
       ["報表專用成本規則"],
       ["當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C／D成本優先採進貨價相關欄位。"],
@@ -2174,7 +2445,7 @@
     setNumberFormats(XLSX, sourceSheet, [`B${cancellationStartRow}:B${cancellationEndRow}`, `D${cancellationStartRow}:D${cancellationEndRow}`], "#,##0");
     setNumberFormats(XLSX, sourceSheet, [`M${cancellationStartRow}:P${cancellationEndRow}`], "#,##0");
     setNumberFormats(XLSX, sourceSheet, [`Q${cancellationStartRow}:T${cancellationEndRow}`], "#,##0.00");
-    const sourceMergeLabels = new Set(["來源月份檢查", "本次未執行來源月份檢查", "期初／期末應納入倉別", "寬承總倉、台中北屯門市、台北中山門市、退貨倉（尚未退廠）、瑕疵倉、報廢倉（系統仍有帳面庫存者）、員購倉、客服倉、行銷－活動＆商品拍攝倉、行銷－公關品倉、行銷－寄賣倉、行銷－市集特賣倉、寄倉 momo 購物，以及名稱含「快閃」的倉別。排除其餘加盟店倉。", "報表專用成本規則", "當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C／D成本優先採進貨價相關欄位。", "公司集中商品規則", "集中規則排除明細", "銷售流水嚴格沖銷明細"]);
+    const sourceMergeLabels = new Set(["來源月份檢查", "本次未執行來源月份檢查", "期初／期末輸入與本報表納入範圍", "輸入檔請包含全部店倉且期初、期末範圍一致；本『總部體系整體』報表只納入寬承總倉、兩間直營門市、公司內專用倉及名稱含『快閃』的倉別，加盟店倉由程式自動排除。", "報表專用成本規則", "當月進貨明細中的「成本價」是供應商進貨價；其它報表中的「成本價」是平均成本。所有A／B／C／D成本優先採進貨價相關欄位。", "公司集中商品規則", "集中規則排除明細", "銷售流水嚴格沖銷明細"]);
     sourceSheet["!merges"] = sourceRows
       .map((row, index) => sourceMergeLabels.has(row[0]) ? { s: { r: index, c: 0 }, e: { r: index, c: 20 } } : null)
       .filter(Boolean);
@@ -2201,6 +2472,78 @@
     return workbook;
   }
 
+  function buildWarehouseOutputWorkbook(analysis, XLSX) {
+    const workbook = XLSX.utils.book_new();
+    const t = analysis.totals;
+    const summaryRows = [
+      [`單倉實體庫存成本稽核：${analysis.warehouse}`],
+      ["產生時間", analysis.generatedAt],
+      ["分析月份", analysis.analysisMonthLabel],
+      ["計算項目", "數量", "進貨價成本金額"],
+      ["期初庫存", t.openingQty, t.openingAmount],
+      ["直接進貨", t.purchaseQty, t.purchaseAmount],
+      ["調撥入庫", t.transferInQty, t.transferInAmount],
+      ["調撥出庫", -t.transferOutQty, -t.transferOutAmount],
+      ["退廠／供應商退貨", -t.supplierReturnQty, -t.supplierReturnAmount],
+      ["期末庫存", -t.closingQty, -t.closingAmount],
+      ["A：單倉庫存推算耗用", t.aQty, t.aAmount],
+      ["B：本倉實際銷售扣庫", t.salesQty, t.salesAmount],
+      ["C：本倉非銷售出入庫", t.adjustmentQty, t.adjustmentAmount],
+      ["D：本倉時點調整", t.timingQty, t.timingAmount],
+      ["最終未解釋差異", t.quantityDifference, t.rawAmountDifference],
+      [],
+      ["使用限制"],
+      ["本報表只檢查所選倉別的實體庫存流向。總倉代出只列在實際扣庫的總倉，不會列為銷售門市本身的庫存耗用。"],
+      ["A＝期初＋直接進貨＋調撥入－調撥出－退廠－期末；B＝銷售報表中實際由本倉扣庫的品項成本；C＝本倉非銷售出入庫；D第一階段保留為時點欄位。"],
+      ["本報表不是門市完整損益表；若要把總倉代出成本歸屬營收門市，應使用後續門市損益／責任歸屬分析。"]
+    ];
+    const summarySheet = makeSheet(XLSX, summaryRows, [34, 20, 22]);
+    setNumberFormats(XLSX, summarySheet, ["B5:B15"], "#,##0");
+    setNumberFormats(XLSX, summarySheet, ["C5:C15"], "#,##0.00");
+    summarySheet["!merges"] = [0, 16, 17, 18, 19].map((row) => ({ s: { r: row, c: 0 }, e: { r: row, c: 2 } }));
+    XLSX.utils.book_append_sheet(workbook, summarySheet, "01_單倉摘要");
+
+    const headers = ["商品編號", "品名", "期初數量", "期初成本", "直接進貨數量", "直接進貨成本", "調入數量", "調入成本", "調出數量", "調出成本", "退廠數量", "退廠成本", "期末數量", "期末成本", "A數量", "A金額", "B本倉扣庫數量", "B本倉扣庫金額", "C數量", "C金額", "D數量", "D金額", "未解釋數量", "未解釋金額", "狀態", "建議排查方法"];
+    const row = (item) => [item.sku, item.name, item.openingQty, item.openingAmount, item.purchaseQty, item.purchaseAmount, item.transferInQty, item.transferInAmount, item.transferOutQty, item.transferOutAmount, item.supplierReturnQty, item.supplierReturnAmount, item.closingQty, item.closingAmount, item.aQty, item.aAmount, item.salesQty, item.salesAmount, item.adjustmentQty, item.adjustmentAmount, item.timingQty, item.timingAmount, item.quantityDifference, item.rawAmountDifference, item.status, item.advice];
+    const differenceRows = [headers, ...analysis.details.filter((item) => item.status !== "通過").map(row)];
+    const differenceSheet = makeSheet(XLSX, differenceRows, [16, 30, 12, 16, 14, 18, 12, 16, 12, 16, 12, 16, 12, 16, 12, 16, 16, 18, 12, 16, 12, 16, 14, 18, 18, 58], `A1:Z${differenceRows.length}`);
+    const differenceEndRow = Math.max(2, differenceRows.length);
+    setNumberFormats(XLSX, differenceSheet, ["C", "E", "G", "I", "K", "M", "O", "Q", "S", "U", "W"].map((column) => `${column}2:${column}${differenceEndRow}`), "#,##0");
+    setNumberFormats(XLSX, differenceSheet, ["D", "F", "H", "J", "L", "N", "P", "R", "T", "V", "X"].map((column) => `${column}2:${column}${differenceEndRow}`), "#,##0.00");
+    XLSX.utils.book_append_sheet(workbook, differenceSheet, "02_商品差異");
+
+    const issueRows = [["層級", "問題類型", "來源報表", "來源列", "單據編號", "商品編號", "品名", "說明"], ...analysis.issues.map((issue) => [issue.level, issue.type, issue.source, issue.row, issue.doc, issue.sku, issue.name, issue.detail])];
+    if (issueRows.length === 1) issueRows.push(["info", "沒有來源提醒", "", "", "", "", "", "本倉來源檢查通過。"]);
+    XLSX.utils.book_append_sheet(workbook, makeSheet(XLSX, issueRows, [12, 28, 22, 12, 26, 16, 28, 72], `A1:H${issueRows.length}`), "03_來源提醒");
+
+    const adjustmentRows = [["來源列", "日期", "單據編號", "關聯單號", "倉別", "商品編號", "品名", "方向", "原因", "C分類", "來源數量", "C數量", "C金額", "成本依據", "說明", "注意事項"], ...analysis.adjustmentDetails.map((entry) => [entry.sourceRow, entry.date, entry.doc, entry.relatedDoc, entry.warehouse, entry.sku, entry.name, entry.sourceDirection, entry.sourceReason, entry.category, entry.sourceQty, entry.adjustmentQty, entry.adjustmentAmount, entry.costBasis, entry.explanation, entry.notice])];
+    if (adjustmentRows.length === 1) adjustmentRows.push(["", "", "", "", analysis.warehouse, "", "", "", "", "", "", "", "", "", "本倉沒有C組調整。", ""]);
+    XLSX.utils.book_append_sheet(workbook, makeSheet(XLSX, adjustmentRows, [10, 16, 22, 20, 22, 16, 30, 12, 28, 20, 12, 12, 18, 28, 42, 42], `A1:P${adjustmentRows.length}`), "04_C組調整");
+
+    const allRows = [headers, ...analysis.details.map(row)];
+    XLSX.utils.book_append_sheet(workbook, makeSheet(XLSX, allRows, [16, 30, 12, 16, 14, 18, 12, 16, 12, 16, 12, 16, 12, 16, 12, 16, 16, 18, 12, 16, 12, 16, 14, 18, 18, 58], `A1:Z${allRows.length}`), "05_全部商品");
+    return workbook;
+  }
+
+  function buildWarehouseOverviewWorkbook(bundle, XLSX) {
+    const workbook = XLSX.utils.book_new();
+    const rows = [["倉別", "分類", "期初", "直接進貨", "調入", "調出", "退廠", "期末", "A數量", "B本倉扣庫", "C數量", "D數量", "未解釋數量", "未解釋金額", "異常商品", "來源提醒", "期初期末完整"]];
+    for (const entry of bundle.analyses) {
+      const t = entry.analysis.totals;
+      const classification = ({ included: "總部體系", direct: "直營門市", franchise: "加盟門市", unknown: "未分類" })[entry.classification] || entry.classification;
+      rows.push([entry.name, classification, t.openingQty, t.purchaseQty, t.transferInQty, t.transferOutQty, t.supplierReturnQty, t.closingQty, t.aQty, t.salesQty, t.adjustmentQty, t.timingQty, t.quantityDifference, t.rawAmountDifference, t.itemCount - t.passCount, t.issueCount, entry.opening && entry.closing ? "是" : "否"]);
+    }
+    const sheet = makeSheet(XLSX, rows, [26, 14, 12, 14, 12, 12, 12, 12, 12, 16, 12, 12, 16, 18, 14, 14, 18], `A1:Q${rows.length}`);
+    const endRow = Math.max(2, rows.length);
+    setNumberFormats(XLSX, sheet, [`C2:M${endRow}`, `O2:P${endRow}`], "#,##0");
+    setNumberFormats(XLSX, sheet, [`N2:N${endRow}`], "#,##0.00");
+    XLSX.utils.book_append_sheet(workbook, sheet, "01_全部店倉總覽");
+    const noteRows = [["全部店倉總覽說明"], ["各倉以實體庫存角度計算；內部調撥會在調出倉列調出、調入倉列調入。"], ["總倉代出只列在實際扣庫的總倉；本表不把該成本重分配到營收門市，也不等同門市損益。"], ["分類為unknown或期初期末不完整的倉別，請先確認倉名與匯出範圍。"]];
+    const noteSheet = makeSheet(XLSX, noteRows, [100]);
+    XLSX.utils.book_append_sheet(workbook, noteSheet, "02_使用說明");
+    return workbook;
+  }
+
   global.InventoryCostCore = {
     REPORT_ORDER,
     REPORT_SCHEMAS,
@@ -2222,7 +2565,13 @@
     mergeReportParts,
     resolveAnalysisMonth,
     analyzeReports,
+    canonicalWarehouseName,
+    discoverWarehouseScopes,
+    analyzeWarehouse,
+    analyzeAllWarehouses,
     buildOutputWorkbook,
+    buildWarehouseOutputWorkbook,
+    buildWarehouseOverviewWorkbook,
     buildFrozenWorkbookBytes,
     normalizeReconcileType,
     monthlyDirection
