@@ -72,13 +72,17 @@
 
     <section id="access-panel" class="panel" aria-labelledby="access-title" hidden>
       <div class="section-heading compact"><div><p class="eyebrow">最高權限限定</p><h2 id="access-title">權限與通知</h2><p>本區只有siang01可查看及變更。</p></div></div>
-      <div class="rule-form-grid"><label>採購核准者（每行一個公司帳號）<textarea id="approver-emails" rows="5"></textarea></label><label>核准摘要收件人<input id="notification-recipient" type="email"></label><label>通知紀錄保留月數<input id="retention-months" type="number" min="1" max="12"></label></div>
+      <div class="rule-form-grid">
+        <label>採購核准者（每行一個公司帳號）<textarea id="approver-emails" rows="5"></textarea><small>可核准採購、管理採購規則及產生ERP採購檔。</small></label>
+        <label>週調撥總部協作帳號（每行一個公司帳號）<textarea id="store-transfer-hq-emails" rows="5"></textarea><small>可查看全部門市、建立及核准批次，並產生ERP調撥檔；不會因此取得採購核准權限。</small></label>
+        <label>核准摘要收件人<input id="notification-recipient" type="email"></label><label>通知紀錄保留月數<input id="retention-months" type="number" min="1" max="12"></label>
+      </div>
       <button id="save-access" class="secondary-button" type="button">儲存權限與通知</button><span id="access-status"></span>
     </section>
 
     <section class="panel save-panel"><label class="wide-field">本次修改原因＊<input id="change-reason" type="text" maxlength="500" placeholder="例如：修正兩類商品的可售最低庫存"></label><button id="save-rules" class="primary-button" type="button" disabled>儲存全部採購規則</button><p id="save-status" class="main-status">尚未修改。</p></section>
     <footer><p>每次儲存都會建立新版本，保留修改人、時間與原因。</p></footer>
   </main>
-  <script src="admin.js?v=20260917-store-arrival-r1"></script>
+  <script src="admin.js?v=20260921-transfer-access-r1"></script>
 </body>
 </html>

@@ -44,6 +44,8 @@ Cloudflare Worker 保存集中分類規則，以及採購流程必要的批次�
 
 Excel 的讀取、分類、統計與輸出全部在使用者目前的瀏覽器分頁或同源背景Worker完成，不會傳送到網站伺服器；只有季節模型草稿與正式輸出會另存到指定公司Google Drive資料夾。採購頁的 CSP 只額外允許 Google Identity、Drive、Sheets、Gmail、同源背景Worker與同源 API；OAuth access token 只留在分頁記憶體，不進 D1、localStorage 或伺服器日誌。採購工具另使用本機保存的 `xlsx-js-style` 產生帶有CIS底色、欄位提示與頁面間距的Excel，授權全文位於 `procurement-planning/assets/XLSX-JS-STYLE-LICENSE.txt`，不會從外部CDN載入。
 
+「採購核准者」與「週調撥總部協作帳號」為兩份獨立權限名單，均由最高權限帳號在規則管理頁維護。週調撥總部協作帳號可查看全部門市、建立及核准調撥批次並產生ERP調撥檔，但不會因此取得採購核准權限；各門市帳號仍只能處理自己的門市資料。
+
 請勿將真實庫存 Excel、測試輸出、客戶資料、密碼、API key 或環境設定提交到這個公開儲存庫。
 
 ## 本機預覽

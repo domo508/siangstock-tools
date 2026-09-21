@@ -7,7 +7,7 @@
     account: get("#account-badge"), pageStatus: get("#page-status"), suppliers: get("#supplier-rows"), units: get("#unit-rows"), stores: get("#store-rows"),
     addSupplier: get("#add-supplier"), featuredSupplierSelect: get("#featured-supplier-select"), addFeaturedSupplier: get("#add-featured-supplier"), featuredSupplierList: get("#featured-supplier-list"),
     addUnit: get("#add-unit"), addStore: get("#add-store-rule"), blacklist: get("#blacklist-input"), holidays: get("#workday-holidays"),
-    accessPanel: get("#access-panel"), approvers: get("#approver-emails"), recipient: get("#notification-recipient"), retention: get("#retention-months"),
+    accessPanel: get("#access-panel"), approvers: get("#approver-emails"), storeTransferHq: get("#store-transfer-hq-emails"), recipient: get("#notification-recipient"), retention: get("#retention-months"),
     saveAccess: get("#save-access"), accessStatus: get("#access-status"), reason: get("#change-reason"), save: get("#save-rules"), saveStatus: get("#save-status"),
     springFestivalEnabled: get("#spring-festival-enabled"), springFestivalStart: get("#spring-festival-start"), springFestivalRecovery: get("#spring-festival-recovery"), springFestivalExtraDays: get("#spring-festival-extra-days"),
     puyoumaPull: get("#puyouma-pull"), puyoumaProduction: get("#puyouma-production"), puyoumaHot: get("#puyouma-hot"), puyoumaStable: get("#puyouma-stable"), puyoumaLow: get("#puyouma-low"),
@@ -152,12 +152,12 @@
 
   async function loadAccessSettings() {
     const settings = await request("/api/procurement/access-settings");
-    elements.approvers.value = settings.approverEmails.join("\n"); elements.recipient.value = settings.notificationRecipient; elements.retention.value = String(settings.retentionMonths);
+    elements.approvers.value = settings.approverEmails.join("\n"); elements.storeTransferHq.value = settings.storeTransferHqEmails.join("\n"); elements.recipient.value = settings.notificationRecipient; elements.retention.value = String(settings.retentionMonths);
   }
   async function saveAccessSettings() {
     elements.saveAccess.disabled = true; elements.accessStatus.textContent = "正在儲存…";
     try {
-      await request("/api/procurement/access-settings", { method: "PUT", body: JSON.stringify({ approverEmails: elements.approvers.value.split(/\n/).map((item) => item.trim()).filter(Boolean), notificationRecipient: elements.recipient.value.trim(), retentionMonths: Number(elements.retention.value), notificationEvents: ["approved", "revoked", "corrected"] }) });
+      await request("/api/procurement/access-settings", { method: "PUT", body: JSON.stringify({ approverEmails: elements.approvers.value.split(/\n/).map((item) => item.trim()).filter(Boolean), storeTransferHqEmails: elements.storeTransferHq.value.split(/\n/).map((item) => item.trim()).filter(Boolean), notificationRecipient: elements.recipient.value.trim(), retentionMonths: Number(elements.retention.value), notificationEvents: ["approved", "revoked", "corrected"] }) });
       elements.accessStatus.textContent = "權限與通知已儲存。";
     } catch (error) { elements.accessStatus.textContent = `儲存失敗：${error.message}`; } finally { elements.saveAccess.disabled = false; }
   }

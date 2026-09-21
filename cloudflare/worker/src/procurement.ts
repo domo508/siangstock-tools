@@ -22,6 +22,7 @@ type ProcurementSettings = {
   notificationRecipient: string;
   retentionMonths: number;
   approverEmails: string[];
+  storeTransferHqEmails: string[];
   notificationEvents: string[];
 };
 
@@ -125,13 +126,15 @@ function normalizedCompanyEmails(value: unknown): string[] {
 }
 
 async function readProcurementSettings(env: ProcurementEnv): Promise<ProcurementSettings> {
-  const row = await env.DB.prepare("SELECT notification_recipient, notification_retention_months, approver_emails, notification_events FROM procurement_settings WHERE id = 1").first<Record<string, unknown>>();
+  const row = await env.DB.prepare("SELECT notification_recipient, notification_retention_months, approver_emails, store_transfer_hq_emails, notification_events FROM procurement_settings WHERE id = 1").first<Record<string, unknown>>();
   const approvers = parseJsonText(String(row?.approver_emails || "[]"));
+  const storeTransferHq = parseJsonText(String(row?.store_transfer_hq_emails || "[]"));
   const events = parseJsonText(String(row?.notification_events || "[]"));
   return {
     notificationRecipient: String(row?.notification_recipient || ADMIN_EMAIL).toLocaleLowerCase("en-US"),
     retentionMonths: Math.max(1, Math.min(12, Number(row?.notification_retention_months || 12))),
     approverEmails: Array.isArray(approvers) ? approvers.map(String).map((email) => email.toLocaleLowerCase("en-US")) : [],
+    storeTransferHqEmails: Array.isArray(storeTransferHq) ? storeTransferHq.map(String).map((email) => email.toLocaleLowerCase("en-US")) : [],
     notificationEvents: Array.isArray(events) ? events.map(String) : ["approved", "revoked", "corrected"]
   };
 }
@@ -352,14 +355,15 @@ async function saveAccessSettings(request: Request, env: ProcurementEnv): Promis
   const actor = await verifyAdmin(request, { ...procurementAccess(env), ADMIN_EMAILS: ADMIN_EMAIL });
   const input = await body(request);
   const approverEmails = normalizedCompanyEmails(input.approverEmails);
+  const storeTransferHqEmails = normalizedCompanyEmails(input.storeTransferHqEmails);
   const recipient = normalizedCompanyEmails([input.notificationRecipient])[0];
   const retentionMonths = Number(input.retentionMonths);
   if (!Number.isInteger(retentionMonths) || retentionMonths < 1 || retentionMonths > 12) throw new RequestValidationError("通知紀錄保留月數須介於1至12個月。");
   const events = Array.isArray(input.notificationEvents) ? input.notificationEvents.map(String) : [];
   if (events.some((event) => !["approved", "revoked", "corrected"].includes(event))) throw new RequestValidationError("通知事件格式錯誤。");
   const now = new Date().toISOString();
-  await env.DB.prepare("UPDATE procurement_settings SET notification_recipient = ?, notification_retention_months = ?, approver_emails = ?, notification_events = ?, updated_at = ?, updated_by = ? WHERE id = 1").bind(recipient, retentionMonths, JSON.stringify(approverEmails), JSON.stringify([...new Set(events)]), now, actor).run();
-  return json({ notificationRecipient: recipient, retentionMonths, approverEmails, notificationEvents: [...new Set(events)], adminEmail: ADMIN_EMAIL, updatedAt: now, updatedBy: actor });
+  await env.DB.prepare("UPDATE procurement_settings SET notification_recipient = ?, notification_retention_months = ?, approver_emails = ?, store_transfer_hq_emails = ?, notification_events = ?, updated_at = ?, updated_by = ? WHERE id = 1").bind(recipient, retentionMonths, JSON.stringify(approverEmails), JSON.stringify(storeTransferHqEmails), JSON.stringify([...new Set(events)]), now, actor).run();
+  return json({ notificationRecipient: recipient, retentionMonths, approverEmails, storeTransferHqEmails, notificationEvents: [...new Set(events)], adminEmail: ADMIN_EMAIL, updatedAt: now, updatedBy: actor });
 }
 
 async function ledger(request: Request, env: ProcurementEnv): Promise<Response> {

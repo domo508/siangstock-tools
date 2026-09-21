@@ -164,6 +164,22 @@ describe("前台導覽", () => {
     expect(worker).toContain("移除品項請使用移除按鈕");
   });
 
+  it("採購核准與週調撥總部協作使用獨立權限名單", () => {
+    const html = readFileSync("../procurement-planning/rules-admin/index.html", "utf8");
+    const admin = readFileSync("../procurement-planning/rules-admin/admin.js", "utf8");
+    const procurementWorker = readFileSync("../cloudflare/worker/src/procurement.ts", "utf8");
+    const transferWorker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    const migration = readFileSync("../cloudflare/worker/migrations/0023_store_transfer_hq_access.sql", "utf8");
+    expect(html).toContain("週調撥總部協作帳號");
+    expect(html).toContain('id="store-transfer-hq-emails"');
+    expect(admin).toContain("storeTransferHqEmails");
+    expect(procurementWorker).toContain("store_transfer_hq_emails");
+    expect(transferWorker).toContain("SELECT store_transfer_hq_emails FROM procurement_settings");
+    expect(transferWorker).not.toContain("const HQ_EMAILS");
+    expect(migration).toContain('"service1@siangapato.com.tw","sc00@siangapato.com.tw"');
+    expect(migration).toContain('approver_emails = \'["mcpheeyin@siangapato.com.tw","elerin@siangapato.com.tw"]\'');
+  });
+
   it("同週新版批次會取代舊的未完成批次並保留唯讀紀錄", () => {
     const html = readFileSync("../store-transfer/index.html", "utf8");
     const app = readFileSync("../store-transfer/app.js", "utf8");

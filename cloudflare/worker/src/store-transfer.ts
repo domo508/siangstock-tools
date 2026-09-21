@@ -7,7 +7,6 @@ type Role = "admin" | "hq" | "store";
 type ItemType = "regular" | "activity_gift" | "special_stock" | "consumable";
 
 const ADMIN = "siang01@siangapato.com.tw";
-const HQ_EMAILS = new Set([ADMIN, "mcpheeyin@siangapato.com.tw", "elerin@siangapato.com.tw"]);
 const STORES = Object.freeze({
   R00: { name: "台北中山門市", email: "tpzssa@siangapato.com.tw", company: "寬承", relationship: "直營" },
   R01: { name: "台中北屯門市", email: "txg_sianga_pato@siangapato.com.tw", company: "寬承", relationship: "直營" },
@@ -44,9 +43,9 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   } catch { throw new RequestValidationError("JSON 格式錯誤。"); }
 }
 
-function actorRole(email: string): { role: Role; storeCode: StoreCode | null } {
+function actorRole(email: string, hqEmails: Set<string>): { role: Role; storeCode: StoreCode | null } {
   if (email === ADMIN) return { role: "admin", storeCode: null };
-  if (HQ_EMAILS.has(email)) return { role: "hq", storeCode: null };
+  if (hqEmails.has(email)) return { role: "hq", storeCode: null };
   const entry = Object.entries(STORES).find(([, store]) => store.email === email);
   if (!entry) throw new RequestValidationError("此公司帳號尚未指派門市週調撥權限。", 403);
   return { role: "store", storeCode: entry[0] as StoreCode };
@@ -54,7 +53,11 @@ function actorRole(email: string): { role: Role; storeCode: StoreCode | null } {
 
 async function actor(request: Request, env: StoreTransferEnv) {
   const email = await verifyCompanyUser(request, accessConfig(env));
-  return { email, ...actorRole(email) };
+  const row = await env.DB.prepare("SELECT store_transfer_hq_emails FROM procurement_settings WHERE id = 1").first<{ store_transfer_hq_emails: string }>();
+  let configured: unknown;
+  try { configured = JSON.parse(String(row?.store_transfer_hq_emails || "[]")); } catch { configured = []; }
+  const hqEmails = new Set(Array.isArray(configured) ? configured.map((item) => String(item).trim().toLocaleLowerCase("en-US")) : []);
+  return { email, ...actorRole(email, hqEmails) };
 }
 
 function text(value: unknown, label: string, max = 300): string {
