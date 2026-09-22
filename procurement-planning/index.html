@@ -360,7 +360,7 @@
     </section>
 
     <section class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
-      <div class="section-heading"><div><p class="eyebrow"><span class="stage-number" aria-hidden="true">3</span> 回匯・核准・ERP</p><h2 id="workflow-title">人工回匯、二次確認與正式核准</h2></div><p>只能回匯本頁本次下載的報表；待核准階段不寄信。</p></div>
+      <div class="section-heading"><div><p class="eyebrow"><span class="stage-number" aria-hidden="true">3</span> 回匯・核准・ERP</p><h2 id="workflow-title">人工回匯、二次確認與正式核准</h2></div><p>可在原報表新增品號，只填ERP品號、人工量與原因；工具會以同一計算批次補齊資料。待核准階段不寄信。</p></div>
       <aside id="resume-draft-card" class="resume-draft-card" hidden>
         <div class="resume-draft-heading"><strong>採購批次續作與多人協作</strong><small>本機草稿可發布成公司共用協作草稿；授權同事能在自己的電腦查看並接續。版本衝突時會停止儲存，不會直接覆蓋別人的更新。</small></div>
         <section class="resume-draft-group" aria-labelledby="shared-draft-title">
@@ -415,7 +415,7 @@
         <article><strong>寄倉不足新增寄庫單</strong><p>缺口不提供改向其他供應商採購的選項。</p></article>
         <article><strong>黑名單只採完全一致</strong><p>避免關鍵字誤傷其他長銷商品。</p></article>
         <article><strong>客製與組合品號不備貨</strong><p>SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫；客製成本仍保留在台帳，四筆SEMO組合品另以組合品原因稽核。</p></article>
-        <article><strong>品名結尾(S)只停止外採</strong><p>不新增供應商採購或寄庫；線上可繼續銷售，門市可調撥總倉剩餘現貨，不足只警示。</p></article>
+        <article><strong>品名結尾(S)停止新增生產</strong><p>不新增生產或寄庫；供應商既有寄庫現貨仍可在可用量內拉回，公司現貨也可繼續銷售與調撥。</p></article>
         <article><strong>已確認寄倉例外</strong><p>A42359-A只採正確供應商貨號；A43359-A為放棄品號，固定忽略。</p></article>
         <article><strong>需求不重複</strong><p>銷貨、訂貨、退貨與退訂納入；取貨排除，避免總倉代出重複。</p></article>
         <article><strong>依供應商檢視期</strong><p>目標覆蓋＝供應商檢視期＋到貨交期＋分級安全緩衝；檢視期0轉人工判斷。</p></article>
@@ -435,9 +435,9 @@
   <script src="xlsx-style-runtime.js?v=20260915-reader-fix-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260918-custom-8x7-r1"></script>
+  <script src="core.js?v=20260922-new-product-manual-sku-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
   <script src="google-sources.js?v=20260914-seasonal-auto-r1"></script>
-  <script src="app.js?v=20260918-shared-drafts-r1"></script>
+  <script src="app.js?v=20260922-new-product-manual-sku-r1"></script>
 </body>
 </html>

@@ -1811,7 +1811,13 @@
     elements.reviewButton.disabled = true; setWorkflowStatus("正在重新檢查人工數量、力榮10件規則、可售至、付款月份與額度…");
     try {
       const baselineRows = state.analysis.rows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
-      state.firstReview = core.reviewReturnedWorkbook(await readWorkbook(state.reviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, baselineBySku: new Map(baselineRows.map((row) => [row.sku, row])) });
+      state.firstReview = core.reviewReturnedWorkbook(await readWorkbook(state.reviewFile), XLSX, {
+        asOfDate: elements.salesDate.value || today(),
+        orderDate: elements.orderDate.value,
+        supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
+        baselineBySku: new Map(state.analysis.rows.map((row) => [row.sku, row])),
+        allowedSkuSet: new Set(baselineRows.map((row) => row.sku))
+      });
       const t = state.firstReview.totals;
       elements.workflowSummary.replaceChildren(
         createSummaryCard("系統建議金額", formatCurrency(t.suggestedAmount), "原始工具建議", "currency"),

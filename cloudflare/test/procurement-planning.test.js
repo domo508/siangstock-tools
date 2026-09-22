@@ -1139,6 +1139,135 @@ describe("採購建議第二階段", () => {
     expect(() => core.reviewReturnedWorkbook(workbook, XLSX)).toThrow("舊版或已產生的二次覆核檔");
     expect(() => core.reviewSecondApprovalWorkbook(workbook, XLSX)).toThrow("舊版二次覆核格式");
   });
+
+  it("商品主檔同時有上市日期與開賣日期時優先採用開賣日期", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "供應商簡稱", "進貨價", "最小配貨數", "貨品狀態", "上市日期", "開賣日期"],
+      ["NEW-1", "60天絲5尺床包", "普優瑪", 500, 20, "尚可追加", "2026/01/01", "2026/09/03"]
+    ]), "工作表1");
+    expect(core.parseProductMasterWorkbook(workbook, XLSX).bySku.get("NEW-1").listedDate).toBe("2026/09/03");
+  });
+
+  it("新品15至28天且實績明顯領先時採75比25混合，並排除公關品移動", () => {
+    const masterBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(masterBook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "供應商簡稱", "進貨價", "最小配貨數", "貨品狀態", "開賣日期", "主類別", "尺碼"],
+      ["NEW-1", "60天絲5尺床包[新品]", "普優瑪", 500, 20, "尚可追加", "2026/09/03", "床包", "5尺"],
+      ["OLD-1", "60天絲5尺床包[成熟1]", "普優瑪", 500, 20, "尚可追加", "2025/01/01", "床包", "5尺"],
+      ["OLD-2", "60天絲5尺床包[成熟2]", "普優瑪", 500, 20, "尚可追加", "2025/01/01", "床包", "5尺"],
+      ["OLD-3", "60天絲5尺床包[成熟3]", "普優瑪", 500, 20, "尚可追加", "2025/01/01", "床包", "5尺"]
+    ]), "工作表1");
+    const master = core.parseProductMasterWorkbook(masterBook, XLSX);
+    const inventoryBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(inventoryBook, XLSX.utils.aoa_to_sheet([
+      ["店倉編號", "店倉名稱", "貨號", "品名", "實際庫存"],
+      ["T00", "寬承總倉", "NEW-1", "60天絲5尺床包[新品]", 0]
+    ]), "乾淨商品");
+    const salesBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(salesBook, XLSX.utils.aoa_to_sheet([
+      ["銷別", "結帳時間", "貨號", "品名", "銷售量", "開單倉編號", "開單倉名稱"],
+      ["銷貨", "2026/09/05", "NEW-1", "60天絲5尺床包[新品]", 21, "R00", "台北門市"],
+      ["銷貨", "2026/09/06", "NEW-1", "60天絲5尺床包[新品]", 4, "O06", "公關品"],
+      ["銷貨", "2026/09/05", "OLD-1", "60天絲5尺床包[成熟1]", 6, "R00", "台北門市"],
+      ["銷貨", "2026/09/05", "OLD-2", "60天絲5尺床包[成熟2]", 7, "R00", "台北門市"],
+      ["銷貨", "2026/09/05", "OLD-3", "60天絲5尺床包[成熟3]", 8, "R00", "台北門市"]
+    ]), "工作表1");
+    const analysis = core.buildProcurementRecommendations({
+      master,
+      inventory: core.parseInventoryWorkbook(inventoryBook, XLSX),
+      pendingReports: [],
+      consignment: { records: [], exceptions: [], confirmedExclusions: [] },
+      salesReports: [core.parseSalesWorkbook(salesBook, XLSX)],
+      model: { bySku: new Map(), byMaterial: new Map(), seasonalIndexByMaterial: new Map() },
+      blacklist: [], asOfDate: "2026-09-21", checkpoint: "mid-month"
+    });
+    const row = analysis.rows.find((item) => item.sku === "NEW-1");
+    expect(row.newProductDemand).toMatchObject({ activeDays: 19, netQuantity: 21, actualWeight: 0.75, categoryWeight: 0.25, categorySampleCount: 3 });
+    expect(row.skuModel).toContain("新品動態混合");
+    expect(row.newProductDemand.blendedDaily).toBeGreaterThan(row.newProductDemand.categoryDaily);
+  });
+
+  it("第一次回匯允許只填ERP品號、人工量與原因並由同批次補回資料", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "人工確認採購量", "人工調整原因"],
+      ["A42396", 40, "新品銷售優於類別基準"]
+    ]), "03B1_普優瑪_天絲");
+    const baseline = {
+      sku: "A42396", supplier: "普優瑪", name: "60天絲5尺床包[MissCrazy]", supplierSku: "P-A42396", unitCost: 750,
+      suggestedPurchaseQty: 20, packSize: 20, forecastDailyQty: 1.7, inventoryQty: 9, storeInventoryByCode: { R00: 1 },
+      hqDemandQty: 30, storeDemandQty: 10, pendingQty: 0, effectivePendingQty: 0, consignmentCurrentQty: 80, consignmentScheduledQty: 20,
+      purchaseTab: "天絲＋天絲棉", productStatusPendingReview: false, externalPurchaseBlocked: false
+    };
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, {
+      asOfDate: "2026-09-21", orderDate: "2026-09-22",
+      baselineBySku: new Map([[baseline.sku, baseline]]), allowedSkuSet: new Set([baseline.sku])
+    });
+    expect(review.errors).toHaveLength(0);
+    expect(review.rows[0]).toMatchObject({ supplier: "普優瑪", name: baseline.name, unitCost: 750, confirmedQty: 40, finalQty: 40, manuallyAdded: true, packSize: 20, consignmentCurrentQty: 80, consignmentScheduledQty: 20 });
+    const second = core.buildSecondReviewWorkbook(review, XLSX);
+    const secondRow = XLSX.utils.sheet_to_json(second.Sheets["02_二次覆核"], { defval: "" })[0];
+    expect(secondRow["本次人工新增"]).toContain("資料已由本次計算批次補回");
+    expect(secondRow["需求摘要"]).toContain("總部需求30.00");
+  });
+
+  it("人工新增品號跨出目前供應商範圍時顯示明確原因", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "人工量", "原因"], ["OTHER-1", 10, "人工追加"]
+    ]), "03B1_普優瑪_天絲");
+    const baseline = { sku: "OTHER-1", supplier: "力榮", name: "測試品", unitCost: 100, suggestedPurchaseQty: 0, packSize: 10, forecastDailyQty: 1, inventoryQty: 0, storeInventoryByCode: {}, pendingQty: 0, purchaseTab: "其它" };
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, { baselineBySku: new Map([[baseline.sku, baseline]]), allowedSkuSet: new Set() });
+    expect(review.errors.some((error) => error.message.includes("不可加入目前的採購批次"))).toBe(true);
+  });
+
+  it("普優瑪採購單位可依尺寸辨識，不要求品名一定寫單人或雙人", () => {
+    expect(core.puyoumaPackSize({ name: "60天絲4.5x6.5尺薄被套" })).toBe(10);
+    expect(core.puyoumaPackSize({ name: "60天絲6×7尺薄被套" })).toBe(20);
+    expect(core.puyoumaPackSize({ name: "60天絲6x7尺兩用被套" })).toBe(10);
+    expect(core.puyoumaPackSize({ name: "60天絲3.5尺床包" })).toBe(10);
+    expect(core.puyoumaPackSize({ name: "60天絲5尺床包" })).toBe(20);
+  });
+
+  it("S品仍可在既有寄庫現貨範圍內拉回，但不得新增寄庫生產", () => {
+    const masterBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(masterBook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "供應商貨號", "供應商簡稱", "進貨價", "最小配貨數", "貨品狀態"],
+      ["B53355", "60天絲6×7尺兩用被套[測試](S)", "V-B53355", "普優瑪", 900, 10, "尚可追加"]
+    ]), "工作表1");
+    const inventoryBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(inventoryBook, XLSX.utils.aoa_to_sheet([
+      ["店倉編號", "店倉名稱", "貨號", "品名", "實際庫存"], ["T00", "寬承總倉", "B53355", "60天絲6×7尺兩用被套[測試](S)", 0]
+    ]), "乾淨商品");
+    const salesBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(salesBook, XLSX.utils.aoa_to_sheet([
+      ["銷別", "結帳時間", "貨號", "品名", "銷售量", "開單倉編號", "開單倉名稱"],
+      ["銷貨", "2026/09/20", "B53355", "60天絲6×7尺兩用被套[測試](S)", 20, "T00", "總倉"]
+    ]), "工作表1");
+    const consignmentBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(consignmentBook, XLSX.utils.aoa_to_sheet([
+      ["產品編號", "編號", "商品名稱", "成品價", "最新庫存09/21"],
+      ["V-B53355", "B53355", "60天絲6×7尺兩用被套[測試](S)", 900, 70]
+    ]), "庫存+下單");
+    const analysis = core.buildProcurementRecommendations({
+      master: core.parseProductMasterWorkbook(masterBook, XLSX), inventory: core.parseInventoryWorkbook(inventoryBook, XLSX), pendingReports: [],
+      consignment: core.parseConsignmentWorkbook(consignmentBook, XLSX), salesReports: [core.parseSalesWorkbook(salesBook, XLSX)],
+      model: { bySku: new Map(), byMaterial: new Map(), seasonalIndexByMaterial: new Map() }, blacklist: [], asOfDate: "2026-09-21", checkpoint: "mid-month"
+    });
+    const row = analysis.rows.find((item) => item.sku === "B53355");
+    expect(row).toMatchObject({ sellThroughStop: true, sellThroughConsignmentAllowed: true, sellThroughConsignmentAvailableQty: 70, externalPurchaseBlocked: false, suggestedConsignmentQty: 0, packSize: 10 });
+    expect(row.suggestedPurchaseQty).toBeGreaterThan(0);
+    expect(row.suggestedPurchaseQty).toBeLessThanOrEqual(70);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "人工量", "原因"], ["B53355", 20, "清回既有寄庫現貨"]
+    ]), "03B1_普優瑪_天絲");
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, { baselineBySku: new Map([[row.sku, row]]), allowedSkuSet: new Set([row.sku]) });
+    expect(review.errors).toHaveLength(0);
+    expect(review.rows[0]).toMatchObject({ finalQty: 20, blockedReason: "", currentAvailableQty: 70 });
+  });
 });
 
 describe("採購規劃前台與入口", () => {
@@ -1239,7 +1368,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
     expect(toolHtml).toContain("20260918-shared-drafts-r1");
-    expect(toolHtml).toContain("20260918-custom-8x7-r1");
+    expect(toolHtml).toContain("20260922-new-product-manual-sku-r1");
     expect(toolHtml).toContain("採購批次續作與多人協作");
     expect(toolHtml).toContain('id="shared-draft-list"');
     expect(toolHtml).toContain("發布協作草稿");
