@@ -1806,17 +1806,52 @@
     setWorkflowStep(elements.workflowStepFirst, "active", "請回匯剛下載並完成填量的Excel");
     await persistWorkflowDraft("downloaded");
   }
+
+  function addDraftConsignmentReservations(target, draft) {
+    if (!["first_reviewed", "second_reviewed", "pending_approval", "approved"].includes(draft?.stage)) return;
+    const rows = draft.review?.rows || draft.firstReview?.rows || [];
+    rows.forEach((row) => {
+      if (!/普優[瑪碼]|力榮/.test(String(row.supplier || ""))) return;
+      const sku = core.normalizeSku(row.sku);
+      const quantity = Math.max(0, Number(row.finalQty || 0));
+      if (sku && quantity > 0) target.set(sku, Number(target.get(sku) || 0) + quantity);
+    });
+  }
+
+  async function activeConsignmentReservations() {
+    const reservations = new Map();
+    const currentKeys = new Set([state.draftId, state.sharedDraftId].filter(Boolean));
+    const seen = new Set();
+    const include = (draft) => {
+      const key = draft?.sharedDraftId || draft?.id;
+      if (!key || currentKeys.has(key) || seen.has(key)) return;
+      seen.add(key);
+      addDraftConsignmentReservations(reservations, draft);
+    };
+    state.workflowDrafts.forEach(include);
+    for (const metadata of state.sharedDrafts) {
+      if (!metadata?.id || currentKeys.has(metadata.id) || seen.has(metadata.id)) continue;
+      const response = await fetch(`/api/procurement/collaboration-drafts/${encodeURIComponent(metadata.id)}`, { headers: { Accept: "application/json" }, cache: "no-store" });
+      const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+      if (!response.ok) throw new Error(`無法核對其他有效採購批次的寄庫占用：${result.error || `HTTP ${response.status}`}`);
+      include(await decodeSharedSnapshot(result.draft));
+    }
+    return reservations;
+  }
+
   async function reviewReturn() {
     if (!state.reviewFile || !state.analysis || !state.returnScope) return;
     elements.reviewButton.disabled = true; setWorkflowStatus("正在重新檢查人工數量、力榮10件規則、可售至、付款月份與額度…");
     try {
       const baselineRows = state.analysis.rows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
+      const reservedConsignmentBySku = await activeConsignmentReservations();
       state.firstReview = core.reviewReturnedWorkbook(await readWorkbook(state.reviewFile), XLSX, {
         asOfDate: elements.salesDate.value || today(),
         orderDate: elements.orderDate.value,
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
         baselineBySku: new Map(state.analysis.rows.map((row) => [row.sku, row])),
-        allowedSkuSet: new Set(baselineRows.map((row) => row.sku))
+        allowedSkuSet: new Set(baselineRows.map((row) => row.sku)),
+        reservedConsignmentBySku
       });
       const t = state.firstReview.totals;
       elements.workflowSummary.replaceChildren(

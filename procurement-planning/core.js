@@ -252,6 +252,20 @@
     return String(value == null ? "" : value).normalize("NFKC").trim().toLocaleLowerCase("zh-Hant");
   }
 
+  const FULL_CONSIGNMENT_RETURN_REASON = "全部寄庫現貨清回";
+  const LEGACY_FULL_CONSIGNMENT_RETURN_REASONS = Object.freeze(new Set(["最後剩餘數量"]));
+
+  function isFullConsignmentReturnReason(value) {
+    const reason = String(value == null ? "" : value).trim();
+    return reason === FULL_CONSIGNMENT_RETURN_REASON || LEGACY_FULL_CONSIGNMENT_RETURN_REASONS.has(reason);
+  }
+
+  function reviewConsignmentAvailableQty({ baseline, source, reservedQty = 0 }) {
+    const currentQty = Math.max(0, Number(baseline?.consignmentCurrentQty ?? source?.["寄倉現貨"] ?? 0));
+    const pendingOccupancy = Math.max(0, Number(baseline?.pendingQty ?? source?.["已採購未到貨"] ?? 0));
+    return Math.max(0, currentQty - pendingOccupancy - Math.max(0, Number(reservedQty || 0)));
+  }
+
   function normalizeHeader(value) {
     return normalizeText(value).replace(/[\s\-_–—／/＆&()（）【】\[\]：:．.*\n\r]/g, "");
   }
@@ -3904,12 +3918,14 @@
         if (productStatusPendingReview && manualBlank) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白，必須明確填寫人工確認採購量，不能直接沿用系統試算。" });
         if (productStatusPendingReview && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白，人工調整原因必填，確認後才能進入二次覆核。" });
         const packSize = Math.max(1, Number(baseline?.packSize || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
-        const consignmentAvailableQty = Math.max(0, Number(
-          baseline?.sellThroughConsignmentAllowed
-            ? baseline.sellThroughConsignmentAvailableQty
-            : (baseline?.consignmentCurrentQty ?? source["寄倉現貨"] ?? 0)
-        ));
-        const tailBoxException = Boolean(baseline?.sellThroughConsignmentAllowed && confirmedQty === consignmentAvailableQty && consignmentAvailableQty < packSize);
+        const reservedConsignmentQty = Math.max(0, Number(options.reservedConsignmentBySku?.get?.(sku) || 0));
+        const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
+        const fullConsignmentReturnRequested = /普優[瑪碼]/.test(supplier) && isFullConsignmentReturnReason(reason);
+        const tailBoxException = Boolean(fullConsignmentReturnRequested && consignmentAvailableQty > 0 && confirmedQty === consignmentAvailableQty);
+        if (fullConsignmentReturnRequested && confirmedQty !== consignmentAvailableQty) errors.push({
+          sheetName, sourceRow: index + 2, sku,
+          message: `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，人工量必須等於扣除正式未到貨與其他有效批次占用後的可清回量${consignmentAvailableQty}件。`
+        });
         if (confirmedQty != null && confirmedQty > 0 && confirmedQty % packSize !== 0 && !tailBoxException) errors.push({ sheetName, sourceRow: index + 2, sku, message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件；人工量必須填0或${packSize}的倍數。` });
         if (unitCost == null || unitCost < 0) errors.push({ sheetName, sourceRow: index + 2, sku, message: "缺少有效進貨價，禁止核准金額。" });
         const supplierRule = findSupplierRule(supplier, options.supplierRules || []);
@@ -3947,7 +3963,7 @@
           consignmentCurrentQty: Math.max(0, Number(baseline?.consignmentCurrentQty ?? source["寄倉現貨"] ?? 0)),
           consignmentScheduledQty: Math.max(0, Number(baseline?.consignmentScheduledQty ?? source["粉紅排程"] ?? 0)),
           currentAvailableQty: /普優[瑪碼]|力榮/.test(supplier) ? consignmentAvailableQty : Math.max(0, Number(source["目前實際可採購量"] || finalQty)),
-          packSize
+          reservedConsignmentQty, fullConsignmentReturn: tailBoxException, packSize
         });
       }
     }
@@ -4050,7 +4066,12 @@
       if (baseline?.productStatusPendingReview && !firstReason) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "貨品狀態空白品項缺少第一次人工確認原因，請重新由第一次回匯產生確認版。" });
       if (finalQty == null || finalQty < 0 || !Number.isInteger(finalQty)) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "二次確認採購量必須為0或正整數。" });
       const packSize = Math.max(1, Number(baseline?.packSize || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
-      const tailBoxException = Boolean(baseline?.sellThroughConsignmentAllowed && finalQty === baseline.currentAvailableQty && finalQty < packSize);
+      const fullConsignmentReturnRequested = /普優[瑪碼]/.test(supplier) && isFullConsignmentReturnReason(reason);
+      const tailBoxException = Boolean(fullConsignmentReturnRequested && Number(baseline?.currentAvailableQty || 0) > 0 && finalQty === Number(baseline.currentAvailableQty));
+      if (fullConsignmentReturnRequested && finalQty !== Number(baseline?.currentAvailableQty || 0)) errors.push({
+        sheetName: "02_二次覆核", sourceRow: index + 2, sku,
+        message: `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，二次確認量必須維持第一次覆核確認的可清回量${Number(baseline?.currentAvailableQty || 0)}件。`
+      });
       if (finalQty != null && finalQty > 0 && finalQty % packSize !== 0 && !tailBoxException) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件；二次確認量必須填0或${packSize}的倍數。` });
       if (baseline?.sellThroughConsignmentAllowed && Number(finalQty || 0) > Number(baseline.currentAvailableQty || 0)) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: `S品只能拉回既有寄庫現貨；本批最多可拉${baseline.currentAvailableQty}件。` });
       if (blockedReason && finalQty !== 0) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: `規則阻擋品項必須維持0：${blockedReason}` });
@@ -4072,7 +4093,7 @@
         blockedAmount: blockedReason ? firstConfirmedQty * Math.max(0, Number(unitCost || 0)) : 0,
         approvedAmount: Math.max(0, Number(finalQty || 0)) * Math.max(0, Number(unitCost || 0)), forecastDaily, inventoryQty, storeInventoryQty, pendingQty,
         availableTo, aiJudgment, currentAvailableQty: Math.max(0, Number(source["目前實際可採購量"] || finalQty || 0)),
-        packSize
+        fullConsignmentReturn: tailBoxException, packSize
       });
     }
     const orderDate = parseDateValue(options.orderDate) || new Date().toISOString().slice(0, 10);
@@ -4126,7 +4147,9 @@
     SUPPLIER_RULES,
     DEFAULT_SPRING_FESTIVAL_RULE,
     PRIMARY_SUPPLIERS,
+    FULL_CONSIGNMENT_RETURN_REASON,
     normalizeText,
+    isFullConsignmentReturnReason,
     normalizeHeader,
     normalizeSku,
     isAutomaticProcurementExcludedSku,

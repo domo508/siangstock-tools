@@ -1230,6 +1230,52 @@ describe("採購建議第二階段", () => {
     expect(core.puyoumaPackSize({ name: "60天絲5尺床包" })).toBe(20);
   });
 
+  it("普優瑪可用指定原因精確清回全部寄庫現貨，粉紅排程不計入且二次覆核沿用", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "人工確認採購量", "人工調整原因"],
+      ["A41385", 9, "全部寄庫現貨清回"],
+      ["A42327", 22, "最後剩餘數量"]
+    ]), "03B1_普優瑪_天絲");
+    const baselines = [
+      { sku: "A41385", supplier: "普優瑪寢具有限公司", name: "3.5尺床包60S天絲 [永夜]", unitCost: 450, suggestedPurchaseQty: 0, packSize: 10, forecastDailyQty: 0.3, inventoryQty: 0, storeInventoryByCode: {}, pendingQty: 0, consignmentCurrentQty: 9, consignmentScheduledQty: 20 },
+      { sku: "A42327", supplier: "普優瑪寢具有限公司", name: "5尺天絲床包 [深灰雪松]", unitCost: 460, suggestedPurchaseQty: 20, packSize: 20, forecastDailyQty: 1.2, inventoryQty: 14, storeInventoryByCode: {}, pendingQty: 0, consignmentCurrentQty: 22, consignmentScheduledQty: 40 }
+    ];
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, {
+      baselineBySku: new Map(baselines.map((row) => [row.sku, row])),
+      allowedSkuSet: new Set(baselines.map((row) => row.sku))
+    });
+    expect(review.errors).toHaveLength(0);
+    expect(review.rows.map((row) => ({ sku: row.sku, finalQty: row.finalQty, currentAvailableQty: row.currentAvailableQty, fullConsignmentReturn: row.fullConsignmentReturn }))).toEqual([
+      { sku: "A41385", finalQty: 9, currentAvailableQty: 9, fullConsignmentReturn: true },
+      { sku: "A42327", finalQty: 22, currentAvailableQty: 22, fullConsignmentReturn: true }
+    ]);
+
+    const second = core.buildSecondReviewWorkbook(review, XLSX);
+    const secondSheet = second.Sheets["02_二次覆核"];
+    const secondRows = XLSX.utils.sheet_to_json(secondSheet, { header: 1, raw: true, defval: "" });
+    const secondQtyColumn = secondRows[0].indexOf("二次確認採購量");
+    secondSheet[XLSX.utils.encode_cell({ r: 1, c: secondQtyColumn })] = { t: "n", v: 9 };
+    secondSheet[XLSX.utils.encode_cell({ r: 2, c: secondQtyColumn })] = { t: "n", v: 22 };
+    const confirmed = core.reviewSecondApprovalWorkbook(second, XLSX, { baselineBySku: new Map(review.rows.map((row) => [row.sku, row])) });
+    expect(confirmed.errors).toHaveLength(0);
+  });
+
+  it("全部寄庫現貨清回會扣除正式未到貨與其他有效批次占用，數量不相符即阻擋", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "人工確認採購量", "人工調整原因"],
+      ["A41385", 9, "全部寄庫現貨清回"]
+    ]), "03B1_普優瑪_天絲");
+    const baseline = { sku: "A41385", supplier: "普優瑪寢具有限公司", name: "3.5尺床包60S天絲 [永夜]", unitCost: 450, suggestedPurchaseQty: 0, packSize: 10, pendingQty: 2, consignmentCurrentQty: 12, consignmentScheduledQty: 20 };
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, {
+      baselineBySku: new Map([[baseline.sku, baseline]]), allowedSkuSet: new Set([baseline.sku]),
+      reservedConsignmentBySku: new Map([[baseline.sku, 3]])
+    });
+    expect(review.rows[0].currentAvailableQty).toBe(7);
+    expect(review.errors.some((error) => error.message.includes("可清回量7件"))).toBe(true);
+  });
+
   it("S品仍可在既有寄庫現貨範圍內拉回，但不得新增寄庫生產", () => {
     const masterBook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(masterBook, XLSX.utils.aoa_to_sheet([
@@ -1368,7 +1414,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
     expect(toolHtml).toContain("20260918-shared-drafts-r1");
-    expect(toolHtml).toContain("20260922-new-product-manual-sku-r1");
+    expect(toolHtml).toContain("20260922-full-consignment-return-r1");
     expect(toolHtml).toContain("採購批次續作與多人協作");
     expect(toolHtml).toContain('id="shared-draft-list"');
     expect(toolHtml).toContain("發布協作草稿");
