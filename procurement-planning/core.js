@@ -3920,6 +3920,12 @@
         const packSize = Math.max(1, Number(baseline?.packSize || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
         const reservedConsignmentQty = Math.max(0, Number(options.reservedConsignmentBySku?.get?.(sku) || 0));
         const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
+        const sellThroughConsignmentAllowed = Boolean(baseline?.sellThroughStop && consignmentAvailableQty > 0);
+        const legacySellThroughOnlyBlock = Boolean(
+          baseline?.sellThroughStop
+          && baseline?.externalPurchaseBlocked
+          && /售完即停|S品[－：-].*寄庫現貨已用罄/.test(String(baseline?.supplyStatus || baseline?.automaticExclusionReason || ""))
+        );
         const fullConsignmentReturnRequested = /普優[瑪碼]/.test(supplier) && isFullConsignmentReturnReason(reason);
         const tailBoxException = Boolean(fullConsignmentReturnRequested && consignmentAvailableQty > 0 && confirmedQty === consignmentAvailableQty);
         if (fullConsignmentReturnRequested && confirmedQty !== consignmentAvailableQty) errors.push({
@@ -3930,13 +3936,13 @@
         if (unitCost == null || unitCost < 0) errors.push({ sheetName, sourceRow: index + 2, sku, message: "缺少有效進貨價，禁止核准金額。" });
         const supplierRule = findSupplierRule(supplier, options.supplierRules || []);
         let blockedReason = "";
-        if (baseline?.sellThroughStop && !baseline.sellThroughConsignmentAllowed) blockedReason = "S品－寄庫現貨已用罄，禁止一般採購、新增生產與新增寄庫";
+        if (baseline?.sellThroughStop && !sellThroughConsignmentAllowed) blockedReason = "S品－寄庫現貨已用罄，禁止一般採購、新增生產與新增寄庫";
         else if (baseline?.discontinued) blockedReason = "商品主檔已下架，禁止採購";
-        else if (baseline?.externalPurchaseBlocked) blockedReason = baseline.supplyStatus || baseline.automaticExclusionReason || "本品號受一般採購規則阻擋";
+        else if (baseline?.externalPurchaseBlocked && !legacySellThroughOnlyBlock) blockedReason = baseline.supplyStatus || baseline.automaticExclusionReason || "本品號受一般採購規則阻擋";
         else if (!baseline && isSellThroughStopName(name)) blockedReason = "最新主檔為(S)，且無本次寄庫可拉量基準，禁止新增外採";
         else if (/贈品/.test(`${name} ${source["存貨種類"] || ""}`)) blockedReason = "贈品排除一般自動採購";
         else if (supplierRule?.automaticPurchase === false) blockedReason = supplierRule.exclusionReason;
-        if (baseline?.sellThroughConsignmentAllowed && Number(confirmedQty || 0) > consignmentAvailableQty) {
+        if (sellThroughConsignmentAllowed && Number(confirmedQty || 0) > consignmentAvailableQty) {
           blockedReason = `S品只能拉回既有寄庫現貨；本批扣除未到貨後最多可拉${consignmentAvailableQty}件，不得轉成新增生產或新增寄庫`;
           errors.push({ sheetName, sourceRow: index + 2, sku, message: blockedReason });
         }
@@ -3958,7 +3964,7 @@
           blockedAmount: blockedReason ? Math.max(0, Number(confirmedQty || 0)) * Math.max(0, Number(unitCost || 0)) : 0,
           approvedAmount: finalQty * Math.max(0, Number(unitCost || 0)), forecastDaily, inventoryQty, storeInventoryQty, pendingQty,
           availableTo, aiJudgment, productStatusPendingReview, manuallyAdded: sparseManualAddition,
-          sellThroughConsignmentAllowed: Boolean(baseline?.sellThroughConsignmentAllowed),
+          sellThroughConsignmentAllowed,
           demandSummary: sparseManualAddition ? `總部需求${Number(baseline?.hqDemandQty || 0).toFixed(2)}；門市需求${Number(baseline?.storeDemandQty || 0).toFixed(2)}` : "",
           consignmentCurrentQty: Math.max(0, Number(baseline?.consignmentCurrentQty ?? source["寄倉現貨"] ?? 0)),
           consignmentScheduledQty: Math.max(0, Number(baseline?.consignmentScheduledQty ?? source["粉紅排程"] ?? 0)),

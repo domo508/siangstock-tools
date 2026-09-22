@@ -1313,6 +1313,25 @@ describe("採購建議第二階段", () => {
     const review = core.reviewReturnedWorkbook(workbook, XLSX, { baselineBySku: new Map([[row.sku, row]]), allowedSkuSet: new Set([row.sku]) });
     expect(review.errors).toHaveLength(0);
     expect(review.rows[0]).toMatchObject({ finalQty: 20, blockedReason: "", currentAvailableQty: 70 });
+
+    const legacyRow = { ...row, suggestedPurchaseQty: 0, externalPurchaseBlocked: true, supplyStatus: "售完即停：不對外採購、不新增寄庫；可用總倉現貨銷售或調撥" };
+    delete legacyRow.sellThroughConsignmentAllowed;
+    delete legacyRow.sellThroughConsignmentAvailableQty;
+    const legacyWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(legacyWorkbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "人工量", "原因"], ["B53355", 10, "人工增加"]
+    ]), "03B1_普優瑪_天絲");
+    const legacyReview = core.reviewReturnedWorkbook(legacyWorkbook, XLSX, { baselineBySku: new Map([[legacyRow.sku, legacyRow]]), allowedSkuSet: new Set([legacyRow.sku]) });
+    expect(legacyReview.errors).toHaveLength(0);
+    expect(legacyReview.rows[0]).toMatchObject({ finalQty: 10, blockedReason: "", currentAvailableQty: 70, sellThroughConsignmentAllowed: true });
+
+    const second = core.buildSecondReviewWorkbook(legacyReview, XLSX);
+    const secondSheet = second.Sheets["02_二次覆核"];
+    const secondRows = XLSX.utils.sheet_to_json(secondSheet, { header: 1, raw: true, defval: "" });
+    const secondQtyColumn = secondRows[0].indexOf("二次確認採購量");
+    secondSheet[XLSX.utils.encode_cell({ r: 1, c: secondQtyColumn })] = { t: "n", v: 10 };
+    const legacyConfirmed = core.reviewSecondApprovalWorkbook(second, XLSX, { baselineBySku: new Map(legacyReview.rows.map((item) => [item.sku, item])) });
+    expect(legacyConfirmed.errors).toHaveLength(0);
   });
 });
 
@@ -1414,7 +1433,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
     expect(toolHtml).toContain("20260918-shared-drafts-r1");
-    expect(toolHtml).toContain("20260922-full-consignment-return-r1");
+    expect(toolHtml).toContain("20260922-legacy-s-consignment-r1");
     expect(toolHtml).toContain("採購批次續作與多人協作");
     expect(toolHtml).toContain('id="shared-draft-list"');
     expect(toolHtml).toContain("發布協作草稿");
