@@ -7,6 +7,7 @@ type Role = "admin" | "hq" | "store";
 type ItemType = "regular" | "activity_gift" | "special_stock" | "consumable";
 
 const ADMIN = "siang01@siangapato.com.tw";
+const COLLABORATION_FINALIZERS = new Set([ADMIN, "service1@siangapato.com.tw"]);
 const STORES = Object.freeze({
   R00: { name: "台北中山門市", email: "tpzssa@siangapato.com.tw", company: "寬承", relationship: "直營" },
   R01: { name: "台中北屯門市", email: "txg_sianga_pato@siangapato.com.tw", company: "寬承", relationship: "直營" },
@@ -32,10 +33,10 @@ function requireSameOrigin(request: Request, env: StoreTransferEnv): void {
   if (!allowed.has(request.headers.get("Origin") || "")) throw new RequestValidationError("不允許的來源。", 403);
 }
 
-async function readBody(request: Request): Promise<Record<string, unknown>> {
+async function readBody(request: Request, maxBytes = 1_500_000): Promise<Record<string, unknown>> {
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get("Content-Type") || "")) throw new RequestValidationError("Content-Type 必須是 application/json。", 415);
   const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > 1_500_000) throw new RequestValidationError("調撥建議超過 1.5 MB 上限。", 413);
+  if (new TextEncoder().encode(text).byteLength > maxBytes) throw new RequestValidationError("調撥建議超過允許的資料大小。", 413);
   try {
     const value = JSON.parse(text);
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
@@ -103,6 +104,10 @@ function assertHq(role: Role): void {
   if (role === "store") throw new RequestValidationError("此動作只限總部操作。", 403);
 }
 
+function assertCollaborationFinalizer(email: string): void {
+  if (!COLLABORATION_FINALIZERS.has(email)) throw new RequestValidationError("此帳號可以協作，但只有 siang01 與 service1 可以轉成正式批次。", 403);
+}
+
 function visibleStore(requested: string | null, role: Role, ownStore: StoreCode | null): StoreCode | null {
   if (role === "store") {
     if (requested && requested !== ownStore) throw new RequestValidationError("不可查看其它門市資料。", 403);
@@ -135,7 +140,151 @@ async function config(request: Request, env: StoreTransferEnv): Promise<Response
     googleOAuthClientId: env.GOOGLE_OAUTH_CLIENT_ID || "",
     fixedSources: { marketingDriveFileId: FIXED_SOURCES.marketingDriveFileId, productMasterFolderId: FIXED_SOURCES.productMasterFolderId },
     storeInventoryRules: inventoryRules,
-    permissions: { canCreate: who.role !== "store", canApprove: who.role !== "store", canReviewAll: who.role !== "store", canManageRules: who.role !== "store", canDeleteBatch: who.role !== "store" } });
+    permissions: { canCreate: who.role !== "store", canApprove: who.role !== "store", canReviewAll: who.role !== "store", canManageRules: who.role !== "store", canDeleteBatch: who.role !== "store", canCollaborate: who.role !== "store", canFinalizeCollaboration: COLLABORATION_FINALIZERS.has(who.email) } });
+}
+
+function collaborationSummary(row: Record<string, unknown>, includePayload = false): Record<string, unknown> {
+  const result: Record<string, unknown> = {
+    id: String(row.id), weekKey: String(row.week_key), proposalDate: String(row.proposal_date), status: String(row.status),
+    storeCodes: JSON.parse(String(row.store_codes || "[]")), itemCount: Number(row.item_count || 0), differenceCount: Number(row.difference_count || 0),
+    revision: Number(row.revision || 1), finalizedBatchId: row.finalized_batch_id ? String(row.finalized_batch_id) : "",
+    createdAt: String(row.created_at), createdBy: String(row.created_by), updatedAt: String(row.updated_at), updatedBy: String(row.updated_by)
+  };
+  if (includePayload) { result.payload = String(row.payload); result.payloadSha256 = String(row.payload_sha256); }
+  return result;
+}
+
+function collaborationPayload(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new RequestValidationError("協作內容格式錯誤。");
+  const input = value as Record<string, unknown>;
+  if (Number(input.version) !== 1) throw new RequestValidationError("協作內容版本不相容。");
+  if (!Array.isArray(input.comparisonReports) || input.comparisonReports.length < 1 || input.comparisonReports.length > 6) throw new RequestValidationError("A/B門市比較內容格式錯誤。");
+  const reports = input.comparisonReports.map((rawReport) => {
+    if (!rawReport || typeof rawReport !== "object" || Array.isArray(rawReport)) throw new RequestValidationError("A/B門市比較內容格式錯誤。");
+    const report = rawReport as Record<string, unknown>;
+    const storeCode = text(report.storeCode, "門市代碼", 5) as StoreCode;
+    if (!(storeCode in STORES)) throw new RequestValidationError(`未知門市：${storeCode}。`);
+    if (!Array.isArray(report.rows) || report.rows.length > 5000) throw new RequestValidationError("A/B比較品項過多。");
+    const rows = report.rows.map((rawRow) => {
+      if (!rawRow || typeof rawRow !== "object" || Array.isArray(rawRow)) throw new RequestValidationError("A/B比較品項格式錯誤。");
+      const row = rawRow as Record<string, unknown>;
+      const decision = String(row.decision || "accept_formal");
+      if (!new Set(["accept_formal", "no_new", "custom"]).has(decision)) throw new RequestValidationError("協作決議格式錯誤。");
+      const difference = Number(row.difference || 0);
+      if (!Number.isSafeInteger(difference) || Math.abs(difference) > 100000) throw new RequestValidationError("A/B差異量格式錯誤。");
+      return {
+        section: text(row.section, "比較區塊", 20), sku: text(row.sku, "ERP品號", 80), productName: text(row.productName, "品名"),
+        physicalInventory: nonnegativeNumber(row.physicalInventory || 0, "門市庫存"), hqInventory: nonnegativeNumber(row.hqInventory || 0, "總倉庫存"),
+        displayQuantity: nonnegativeNumber(row.displayQuantity || 0, "展示量"), pendingQuantity: nonnegativeNumber(row.pendingQuantity || 0, "未完成調入量"),
+        localSales42: nonnegativeNumber(row.localSales42 || 0, "近42天銷售"), aQuantity: quantity(row.aQuantity || 0, "系統建議量"), bQuantity: quantity(row.bQuantity || 0, "人工調撥量"),
+        difference, formalSuggestedQuantity: quantity(row.formalSuggestedQuantity || 0, "正式新增建議量"),
+        aProjection: String(row.aProjection || "").slice(0, 80), bProjection: String(row.bProjection || "").slice(0, 80), itemType: itemType(row.itemType), analysis: String(row.analysis || "").slice(0, 700),
+        decision, agreedQuantity: quantity(row.agreedQuantity ?? row.formalSuggestedQuantity ?? 0, "協作決議量"), note: String(row.note || "").normalize("NFKC").trim().slice(0, 500)
+      };
+    });
+    return { storeCode, storeName: String(report.storeName || STORES[storeCode].name).slice(0, 80), rows };
+  });
+  const formalInput = input.formal;
+  if (!formalInput || typeof formalInput !== "object" || Array.isArray(formalInput)) throw new RequestValidationError("正式建議快照格式錯誤。");
+  const formal = formalInput as Record<string, unknown>;
+  if (!Array.isArray(formal.rows) || formal.rows.length > 5000 || !Array.isArray(formal.shortages) || formal.shortages.length > 5000) throw new RequestValidationError("正式建議快照筆數錯誤。");
+  const formalRows = formal.rows.map((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("正式建議快照格式錯誤。");
+    const row = raw as Record<string, unknown>;
+    const storeCode = text(row.storeCode, "門市代碼", 5) as StoreCode;
+    if (!(storeCode in STORES)) throw new RequestValidationError(`未知門市：${storeCode}。`);
+    return {
+      storeCode, sku: text(row.sku, "ERP品號", 80), productName: text(row.productName, "品名"),
+      suggestedQuantity: quantity(row.suggestedQuantity || 0, "系統建議量"), itemType: itemType(row.itemType),
+      calculationDate: dateText(row.calculationDate || input.proposalDate, "計算日期"),
+      baseSellableQuantity: nonnegativeNumber(row.baseSellableQuantity || 0, "調撥前可售量"), displayGap: quantity(row.displayGap || 0, "不可售展示缺口"),
+      dailySales: nonnegativeNumber(row.dailySales || 0, "日均現場銷售"), systemSellThroughDate: String(row.systemSellThroughDate || "").normalize("NFKC").trim().slice(0, 80),
+      ruleSummary: String(row.ruleSummary || "").normalize("NFKC").trim().slice(0, 500)
+    };
+  });
+  const formalShortages = formal.shortages.map((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("正式缺貨快照格式錯誤。");
+    const row = raw as Record<string, unknown>;
+    const storeCode = text(row.storeCode, "門市代碼", 5) as StoreCode;
+    if (!(storeCode in STORES)) throw new RequestValidationError(`未知門市：${storeCode}。`);
+    return {
+      storeCode, sku: text(row.sku, "ERP品號", 80), productName: text(row.productName, "品名"), itemType: itemType(row.itemType),
+      demandQuantity: quantity(row.demandQuantity || 0, "需求量"), allocatedQuantity: quantity(row.allocatedQuantity || 0, "已配量"), unfilledQuantity: quantity(row.unfilledQuantity || 0, "未配量"),
+      reason: text(row.reason, "未配原因", 500), followUpStatus: String(row.followUpStatus || "待回拋主採購").slice(0, 80),
+      currentArrivalDate: row.currentArrivalDate ? dateText(row.currentArrivalDate, "本批到店日") : null,
+      nextArrivalDate: row.nextArrivalDate ? dateText(row.nextArrivalDate, "下一輪到店日") : null
+    };
+  });
+  const scheduleByStore = formal.scheduleByStore && typeof formal.scheduleByStore === "object" && !Array.isArray(formal.scheduleByStore) ? formal.scheduleByStore : {};
+  if (JSON.stringify(scheduleByStore).length > 5000) throw new RequestValidationError("到店日快照內容過長。");
+  return {
+    version: 1, weekKey: text(input.weekKey, "週次", 8), proposalDate: dateText(input.proposalDate, "建議日"),
+    responseDueAt: text(input.responseDueAt, "門市回覆期限", 40), lockAt: text(input.lockAt, "鎖定時間", 40),
+    comparisonReports: reports,
+    formal: { rows: formalRows, shortages: formalShortages, scheduleByStore }
+  };
+}
+
+async function listCollaborationDrafts(request: Request, env: StoreTransferEnv): Promise<Response> {
+  const who = await actor(request, env); assertHq(who.role);
+  const rows = await env.DB.prepare("SELECT id, week_key, proposal_date, status, store_codes, item_count, difference_count, revision, finalized_batch_id, created_at, created_by, updated_at, updated_by FROM store_transfer_collaboration_drafts ORDER BY updated_at DESC LIMIT 100").all<Record<string, unknown>>();
+  return json({ drafts: rows.results.map((row) => collaborationSummary(row)) });
+}
+
+async function getCollaborationDraft(request: Request, env: StoreTransferEnv, draftId: string): Promise<Response> {
+  const who = await actor(request, env); assertHq(who.role);
+  const id = text(draftId, "協作批次編號", 100);
+  const row = await env.DB.prepare("SELECT * FROM store_transfer_collaboration_drafts WHERE id = ?").bind(id).first<Record<string, unknown>>();
+  if (!row) throw new RequestValidationError("找不到此A/B協作批次。", 404);
+  return json({ draft: collaborationSummary(row, true) });
+}
+
+async function saveCollaborationDraft(request: Request, env: StoreTransferEnv, draftId: string): Promise<Response> {
+  requireSameOrigin(request, env);
+  const who = await actor(request, env); assertHq(who.role);
+  const input = await readBody(request, 2_500_000);
+  const id = text(draftId, "協作批次編號", 100);
+  const weekKey = text(input.weekKey, "週次", 8);
+  if (!/^\d{4}-W\d{2}$/.test(weekKey)) throw new RequestValidationError("週次須為 YYYY-Www 格式。");
+  const proposalDate = dateText(input.proposalDate, "建議日");
+  const expectedRevision = Number(input.expectedRevision);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) throw new RequestValidationError("協作批次版本格式錯誤。");
+  const payloadText = String(input.payload || "");
+  const payloadBytes = new TextEncoder().encode(payloadText).byteLength;
+  if (!payloadText || payloadBytes > 1_572_864) throw new RequestValidationError("協作內容格式錯誤或超過 1.5 MB 上限。", payloadBytes > 1_572_864 ? 413 : 400);
+  const suppliedHash = text(input.payloadSha256, "協作內容雜湊", 64).toLocaleLowerCase("en-US");
+  if (!/^[a-f0-9]{64}$/.test(suppliedHash)) throw new RequestValidationError("協作內容雜湊格式錯誤。");
+  const suppliedDigest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payloadText));
+  const actualSuppliedHash = [...new Uint8Array(suppliedDigest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+  if (actualSuppliedHash !== suppliedHash) throw new RequestValidationError("協作內容檢核失敗，請重新發布。");
+  let parsed: unknown;
+  try { parsed = JSON.parse(payloadText); } catch { throw new RequestValidationError("協作內容不是有效JSON。"); }
+  const normalizedPayload = collaborationPayload(parsed);
+  if (normalizedPayload.weekKey !== weekKey || normalizedPayload.proposalDate !== proposalDate) throw new RequestValidationError("協作內容的週次或建議日不一致。");
+  const storedPayload = JSON.stringify(normalizedPayload);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(storedPayload));
+  const payloadSha256 = [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+  const reports = normalizedPayload.comparisonReports as Array<Record<string, unknown>>;
+  const storeCodes = reports.map((report) => String(report.storeCode));
+  const rows = reports.flatMap((report) => report.rows as unknown[]);
+  const differenceCount = rows.filter((row) => Number((row as Record<string, unknown>).difference || 0) !== 0).length;
+  const now = new Date().toISOString();
+  const existing = await env.DB.prepare("SELECT revision, status FROM store_transfer_collaboration_drafts WHERE id = ?").bind(id).first<Record<string, unknown>>();
+  const otherActive = await env.DB.prepare("SELECT id FROM store_transfer_collaboration_drafts WHERE week_key = ? AND status = 'draft' AND id <> ?").bind(weekKey, id).first();
+  if (otherActive) throw new RequestValidationError("本週已有進行中的A/B協作批次，請開啟最新版接續，不要重複建立。", 409);
+  if (!existing) {
+    if (expectedRevision !== 0) throw new RequestValidationError("協作批次版本已改變，請重新整理。", 409);
+    await env.DB.prepare("INSERT INTO store_transfer_collaboration_drafts (id, week_key, proposal_date, status, store_codes, item_count, difference_count, payload, payload_sha256, revision, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)")
+      .bind(id, weekKey, proposalDate, JSON.stringify(storeCodes), rows.length, differenceCount, storedPayload, payloadSha256, now, who.email, now, who.email).run();
+  } else {
+    if (String(existing.status) !== "draft") throw new RequestValidationError("此協作批次已轉為正式批次，不能再修改。", 409);
+    if (Number(existing.revision) !== expectedRevision) throw new RequestValidationError("這筆協作批次已由其他同事更新，請重新開啟最新版，避免覆蓋。", 409);
+    const updated = await env.DB.prepare("UPDATE store_transfer_collaboration_drafts SET proposal_date = ?, store_codes = ?, item_count = ?, difference_count = ?, payload = ?, payload_sha256 = ?, revision = revision + 1, updated_at = ?, updated_by = ? WHERE id = ? AND status = 'draft' AND revision = ?")
+      .bind(proposalDate, JSON.stringify(storeCodes), rows.length, differenceCount, storedPayload, payloadSha256, now, who.email, id, expectedRevision).run();
+    if (Number(updated.meta.changes || 0) !== 1) throw new RequestValidationError("這筆協作批次已由其他同事更新，請重新開啟最新版，避免覆蓋。", 409);
+  }
+  const saved = await env.DB.prepare("SELECT id, week_key, proposal_date, status, store_codes, item_count, difference_count, revision, finalized_batch_id, created_at, created_by, updated_at, updated_by FROM store_transfer_collaboration_drafts WHERE id = ?").bind(id).first<Record<string, unknown>>();
+  return json({ draft: collaborationSummary(saved || {}) }, existing ? 200 : 201);
 }
 
 async function pendingPurchases(request: Request, env: StoreTransferEnv): Promise<Response> {
@@ -176,9 +325,21 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
   const input = await readBody(request);
+  const collaborationId = String(input.collaborationId || "").normalize("NFKC").trim();
+  const collaborationRevision = Number(input.collaborationRevision || 0);
+  let collaboration: Record<string, unknown> | null = null;
+  if (collaborationId) {
+    assertCollaborationFinalizer(who.email);
+    if (collaborationId.length > 100 || !Number.isInteger(collaborationRevision) || collaborationRevision < 1) throw new RequestValidationError("A/B協作批次版本格式錯誤。");
+    collaboration = await env.DB.prepare("SELECT id, week_key, status, revision, finalized_batch_id FROM store_transfer_collaboration_drafts WHERE id = ?").bind(collaborationId).first<Record<string, unknown>>();
+    if (!collaboration) throw new RequestValidationError("找不到此A/B協作批次。", 404);
+    if (String(collaboration.status) !== "draft" || collaboration.finalized_batch_id) throw new RequestValidationError("此A/B協作批次已轉成正式批次，不能重複建立。", 409);
+    if (Number(collaboration.revision) !== collaborationRevision) throw new RequestValidationError("A/B協作批次已由其他同事更新，請重新開啟最新版。", 409);
+  }
   const id = text(input.id, "批次編號", 80);
   const weekKey = text(input.weekKey, "週次", 8);
   if (!/^\d{4}-W\d{2}$/.test(weekKey)) throw new RequestValidationError("週次須為 YYYY-Www 格式。");
+  if (collaboration && String(collaboration.week_key) !== weekKey) throw new RequestValidationError("A/B協作批次與正式批次週次不一致。");
   const proposalDate = dateText(input.proposalDate, "建議日");
   const responseDueAt = text(input.responseDueAt, "門市回覆期限", 40);
   const lockAt = text(input.lockAt, "鎖定時間", 40);
@@ -244,7 +405,8 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   const statements = [
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) SELECT id, 'cancelled', ?, ?, ? FROM store_transfer_batches WHERE week_key = ? AND status IN ('open', 'review') AND deleted_at IS NULL AND id <> ?").bind(`已由新版批次${id}取代，僅供查閱`, now, who.email, weekKey, id),
     env.DB.prepare("UPDATE store_transfer_batches SET status = 'cancelled', updated_at = ?, updated_by = ?, revision = revision + 1 WHERE week_key = ? AND status IN ('open', 'review') AND deleted_at IS NULL AND id <> ?").bind(now, who.email, weekKey, id),
-    env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, arrival_schedule, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, ?, ?, ?, ?)").bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), arrivalSchedule, now, who.email, now, who.email),
+    env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, arrival_schedule, source_collaboration_id, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)").bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), arrivalSchedule, collaborationId || null, now, who.email, now, who.email),
+    ...(collaborationId ? [env.DB.prepare("UPDATE store_transfer_collaboration_drafts SET status = 'finalized', finalized_batch_id = ?, revision = revision + 1, updated_at = ?, updated_by = ? WHERE id = ? AND status = 'draft' AND revision = ?").bind(id, now, who.email, collaborationId, collaborationRevision)] : []),
     ...normalized.map((item) => env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, item.storeCode, item.sku, item.productName, item.suggested, item.ruleSummary, item.itemType, item.calculationDate, item.baseQuantity, item.displayGap, item.dailyUsage, item.systemProjection, now, who.email)),
     ...normalizedShortages.map((row) => env.DB.prepare("INSERT INTO store_transfer_shortages (batch_id, store_code, sku, product_name, item_type, demand_quantity, allocated_quantity, unfilled_quantity, reason, follow_up_status, current_arrival_date, next_arrival_date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, row.storeCode, row.sku, row.productName, row.type, row.demand, row.allocated, row.unfilled, row.reason, row.followUpStatus, row.currentArrivalDate, row.nextArrivalDate, now, now)),
     ...stores.map((storeCode) => env.DB.prepare("INSERT INTO store_transfer_store_status (batch_id, store_code, status, updated_at) VALUES (?, ?, 'pending', ?)").bind(id, storeCode, now)),
@@ -498,6 +660,10 @@ export async function storeTransferRoute(request: Request, env: StoreTransferEnv
   if (url.pathname === "/api/store-transfer/pending-purchases" && request.method === "GET") return pendingPurchases(request, env);
   if (url.pathname === "/api/store-transfer/consumable-snapshots" && request.method === "GET") return consumableHistory(request, env);
   if (url.pathname === "/api/store-transfer/consumable-snapshots" && request.method === "POST") return saveConsumableSnapshots(request, env);
+  if (url.pathname === "/api/store-transfer/collaboration-drafts" && request.method === "GET") return listCollaborationDrafts(request, env);
+  const collaborationMatch = url.pathname.match(/^\/api\/store-transfer\/collaboration-drafts\/([^/]+)$/);
+  if (collaborationMatch && request.method === "GET") return getCollaborationDraft(request, env, decodeURIComponent(collaborationMatch[1]));
+  if (collaborationMatch && request.method === "PUT") return saveCollaborationDraft(request, env, decodeURIComponent(collaborationMatch[1]));
   if (url.pathname === "/api/store-transfer/batches" && request.method === "GET") return listBatches(request, env);
   if (url.pathname === "/api/store-transfer/batches" && request.method === "POST") return createBatch(request, env);
   const detailMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)$/);
@@ -526,6 +692,7 @@ export async function cleanupStoreTransfers(env: StoreTransferEnv): Promise<void
     env.DB.prepare(`DELETE FROM store_transfer_items WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_store_status WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_batches WHERE id IN (${expired})`),
+    env.DB.prepare("DELETE FROM store_transfer_collaboration_drafts WHERE created_at < datetime('now', '-12 months')"),
     env.DB.prepare("DELETE FROM store_transfer_consumable_snapshots WHERE snapshot_date < date('now', '-12 months')")
   ]);
 }

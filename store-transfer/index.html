@@ -9,7 +9,7 @@
   <title>門市週補貨與調撥｜翔仔居家</title>
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="../cost-analysis/style.css">
-  <link rel="stylesheet" href="style.css?v=20260922-transfer-mode-r1">
+  <link rel="stylesheet" href="style.css?v=20260922-collaboration-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -67,7 +67,7 @@
         <p id="calculation-mode-alert" class="result-alert warn" hidden></p>
         <section id="comparison-downloads" class="comparison-downloads" hidden aria-labelledby="comparison-download-title">
           <div><strong id="comparison-download-title">分店下載 A/B 差異分析</strong><p>每份檔案只包含該門市，格式與先前差異分析表一致；不會建立正式批次。</p></div>
-          <div id="comparison-download-buttons" class="comparison-download-buttons"></div>
+          <div class="comparison-download-actions"><div id="comparison-download-buttons" class="comparison-download-buttons"></div><button id="publish-collaboration-button" class="primary-button" type="button" disabled>發布 A/B 協作批次</button></div>
         </section>
         <p id="company-impact" class="result-alert info"></p>
         <p id="b3-audit" class="result-alert warn" hidden></p>
@@ -78,6 +78,10 @@
         <section id="pending-transfer-results" class="result-section pending-transfer-section" data-store-section hidden><h4>既有待發貨／在途明細（唯讀）</h4><p>本次建議量為0的品項不會出現在主要調撥建議，但仍保留在此供核對；這些數量不會寫入本次ERP調撥檔。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>調撥單號</th><th>狀態</th><th>數量</th><th>開單日</th><th>發貨日</th><th>本次計算</th></tr></thead><tbody id="pending-transfer-rows"></tbody></table></div></section>
         <section id="shortage-results" class="result-section shortage-section" data-store-section hidden><h4>缺貨未配清單</h4><p>此區顯示必要需求中總倉暫時無法配足的數量，會隨批次保存供總部與該門市追蹤；不會混入可確認量或ERP檔。S品總倉無可釋出量時仍只做背景監控。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>需求量</th><th>已配量</th><th>未配量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody id="shortage-rows"></tbody></table></div></section>
       </div>
+      <section id="collaboration-panel" class="collaboration-panel" aria-labelledby="collaboration-title">
+        <div class="section-heading compact"><div><p class="eyebrow">四位總部帳號共同作業</p><h3 id="collaboration-title">A/B 協作批次</h3><p id="collaboration-status">正在讀取公司共用協作批次…</p></div><button id="refresh-collaboration-button" class="secondary-button compact" type="button">重新整理</button></div>
+        <div id="collaboration-list" class="batch-list"><p class="empty-state">目前沒有進行中的A/B協作批次。</p></div>
+      </section>
     </section>
 
     <section id="store-panel" class="panel" hidden aria-labelledby="store-title">
@@ -99,10 +103,11 @@
 
     <section class="panel operation-guide" aria-labelledby="guide-title">
       <div class="section-heading"><div><p class="eyebrow">操作說明</p><h2 id="guide-title">每週流程怎麼走</h2></div></div>
-      <div class="guide-grid"><article><strong>正式與A/B模式</strong><p>正式模式會以待發貨及在途量防止重複補貨；A/B模式忽略提交單，只能預覽，並可依本次勾選門市各自下載差異分析表。</p></article><article><strong>同週批次版本</strong><p>同一週重新建立時，新批次會成為目前作業版本；舊的未完成批次保留紀錄，但不能再修改或送出。</p></article><article><strong>刪除舊批次</strong><p>總部可將已取代／已取消批次移出前台；目前作業與已完成批次不能直接刪除，稽核資料仍保留12個月。</p></article><article><strong>門市可撤回</strong><p>送出後、星期一上午9點鎖定前可不限次數撤回；鎖定後只能由總部更正。</p></article><article><strong>人工增減品項</strong><p>門市與總部皆可新增品項；移除時以本階段數量歸零處理，原因與原始建議仍會保留。</p></article><article><strong>人工調整原因</strong><p>新增、移除或數量不同於上一階段時，必須填原因才可送出。</p></article><article><strong>B3判斷</strong><p>只有來源單號＋ERP品號成功配對的總倉代出才認列；無法配對會列待人工確認。</p></article><article><strong>批次狀態</strong><p>等待門市→總部覆核→已核准→ERP皆完成→本週完成，每店進度會分開顯示。</p></article></div>
+      <div class="guide-grid"><article><strong>正式與A/B模式</strong><p>正式模式會以待發貨及在途量防止重複補貨；A/B模式忽略提交單，可依門市下載差異表或發布公司共用協作批次。</p></article><article><strong>A/B協作怎麼走</strong><p>四位總部帳號皆可接續查看、調整決議量及備註；只有siang01與service1能轉正式批次。</p></article><article><strong>同週批次版本</strong><p>同一週重新建立時，新批次會成為目前作業版本；舊的未完成批次保留紀錄，但不能再修改或送出。</p></article><article><strong>刪除舊批次</strong><p>總部可將已取代／已取消批次移出前台；目前作業與已完成批次不能直接刪除，稽核資料仍保留12個月。</p></article><article><strong>門市可撤回</strong><p>送出後、星期一上午9點鎖定前可不限次數撤回；鎖定後只能由總部更正。</p></article><article><strong>人工增減品項</strong><p>門市與總部皆可新增品項；移除時以本階段數量歸零處理，原因與原始建議仍會保留。</p></article><article><strong>人工調整原因</strong><p>新增、移除或數量不同於上一階段時，必須填原因才可送出。</p></article><article><strong>B3判斷</strong><p>只有來源單號＋ERP品號成功配對的總倉代出才認列；無法配對會列待人工確認。</p></article><article><strong>批次狀態</strong><p>等待門市→總部覆核→已核准→ERP皆完成→本週完成，每店進度會分開顯示。</p></article></div>
     </section>
 
     <dialog id="batch-dialog" class="batch-dialog"><form method="dialog"><button class="dialog-close" aria-label="關閉">×</button></form><div id="batch-detail"></div></dialog>
+    <dialog id="collaboration-dialog" class="batch-dialog"><form method="dialog"><button class="dialog-close" aria-label="關閉">×</button></form><div id="collaboration-detail"></div></dialog>
 
     <footer><p>翔仔居家公司工具・門市週補貨與調撥</p><p>如畫面顯示資料或權限異常，請保留訊息並通知總部。</p></footer>
   </main>
@@ -112,8 +117,8 @@
   <script src="../procurement-planning/core.js?v=20260917-company-cost-r1"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="../procurement-planning/google-sources.js?v=20260915-google-sources-r1"></script>
-  <script src="core.js?v=20260922-ab-export-r1"></script>
+  <script src="core.js?v=20260922-collaboration-r1"></script>
   <script src="xlsx-preflight.js?v=20260916-xlsx-reader-r1"></script>
-  <script src="app.js?v=20260922-ab-export-r1"></script>
+  <script src="app.js?v=20260922-collaboration-r1"></script>
 </body>
 </html>

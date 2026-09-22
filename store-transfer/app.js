@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const state = { config: null, calculation: null, activeBatch: null, calculationStore: "all", batchStore: "all", files: { master: null, marketing: null }, googleReady: false };
+  const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", files: { master: null, marketing: null }, googleReady: false };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
   const outputXlsx = globalThis.ProcurementXlsxWriter || inputXlsx;
@@ -84,6 +84,70 @@
     const safeName = String(storeName).replace(/[\\/:*?"<>|]/g, "-");
     outputXlsx.writeFile(workbook, `${state.calculation.proposalDate}_${safeName}_調撥建議差異分析.xlsx`, { compression: true });
     $("hq-status").textContent = `${storeName}的A/B調撥建議差異分析表已下載；未建立正式批次。`;
+  }
+
+  async function sha256(value) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  function collaborationCard(draft) {
+    const finalized = draft.status === "finalized";
+    const status = finalized ? `已轉正式${draft.finalizedBatchId ? `・${draft.finalizedBatchId}` : ""}` : "協作中";
+    return `<article class="batch-card collaboration-card${finalized ? " superseded" : ""}"><div><h3>${escapeHtml(draft.weekKey)} A/B協作</h3><p class="batch-meta">${escapeHtml(draft.storeCodes.join("、"))}・${draft.itemCount}項・${draft.differenceCount}項有差異・版本${draft.revision}・${escapeHtml(draft.updatedBy)}更新</p></div><span class="batch-status">${escapeHtml(status)}</span><div class="batch-card-actions"><button class="secondary-button compact" type="button" data-open-collaboration="${escapeHtml(draft.id)}">查看${finalized ? "紀錄" : "／協作"}</button></div></article>`;
+  }
+
+  async function loadCollaborationDrafts() {
+    if (!state.config?.permissions?.canCollaborate) return;
+    const result = await api("/collaboration-drafts");
+    state.collaborationDrafts = result.drafts || [];
+    $("collaboration-list").innerHTML = state.collaborationDrafts.length ? state.collaborationDrafts.map(collaborationCard).join("") : '<p class="empty-state">目前沒有A/B協作批次。</p>';
+    $("collaboration-status").textContent = state.config.permissions.canFinalizeCollaboration
+      ? "可共同編輯；此帳號也可將定稿轉成正式批次。"
+      : "可共同查看與編輯；定稿後由 siang01 或 service1 轉成正式批次。";
+  }
+
+  function buildCollaborationPayload(stores) {
+    if (state.calculation?.calculationMode !== "comparison" || !state.formalCalculation) throw new Error("請先以A/B測試比對模式產生建議。");
+    const formalByKey = new Map(state.formalCalculation.rows.map((row) => [`${row.storeCode}|${row.sku}`, row]));
+    const comparisonReports = stores.map((storeCode) => {
+      const report = transferCore.buildComparisonReport(state.calculation, storeCode, state.config.stores[storeCode]?.name || storeCode);
+      return { ...report, rows: report.rows.map((row) => {
+        const formal = formalByKey.get(`${storeCode}|${row.sku}`);
+        const formalSuggestedQuantity = Number(formal?.suggestedQuantity || 0);
+        const typeByLabel = { "一般必要補貨": "regular", "建議備貨": "special_stock", "活動／贈品": "activity_gift", "門市耗材": "consumable" };
+        return { ...row, itemType: formal?.itemType || typeByLabel[row.itemType] || "regular", formalSuggestedQuantity, decision: "accept_formal", agreedQuantity: formalSuggestedQuantity, note: "" };
+      }) };
+    });
+    const lockAt = new Date($("lock-at").value).toISOString();
+    return {
+      version: 1, weekKey: $("week-key").value, proposalDate: $("proposal-date").value, responseDueAt: lockAt, lockAt,
+      comparisonReports,
+      formal: { rows: state.formalCalculation.rows, shortages: state.formalCalculation.shortageRows, scheduleByStore: state.formalCalculation.scheduleByStore }
+    };
+  }
+
+  async function saveCollaborationPayload(id, payload, expectedRevision) {
+    const payloadText = JSON.stringify(payload);
+    const result = await api(`/collaboration-drafts/${encodeURIComponent(id)}`, { method: "PUT", body: {
+      weekKey: payload.weekKey, proposalDate: payload.proposalDate, expectedRevision, payload: payloadText, payloadSha256: await sha256(payloadText)
+    } });
+    return result.draft;
+  }
+
+  async function publishCollaboration() {
+    const stores = selectedStores();
+    const payload = buildCollaborationPayload(stores);
+    const existing = state.collaborationDrafts.find((draft) => draft.weekKey === payload.weekKey && draft.status === "draft");
+    if (existing && !confirm(`${payload.weekKey}已有進行中的A/B協作批次。\n\n要用這次重新計算的結果更新它嗎？`)) return;
+    const id = existing?.id || `STC-${payload.weekKey}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    const button = $("publish-collaboration-button"); button.disabled = true;
+    try {
+      const draft = await saveCollaborationPayload(id, payload, existing?.revision || 0);
+      state.activeCollaboration = { draft, payload };
+      await loadCollaborationDrafts();
+      $("hq-status").textContent = `已${existing ? "更新" : "發布"}${payload.weekKey} A/B協作批次；四位總部協作者現在可共同檢視與調整。`;
+    } finally { button.disabled = false; }
   }
 
   async function authorizeGoogle() {
@@ -273,7 +337,7 @@
       const latestSalesDate = sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "") || $("proposal-date").value;
       $("hq-status").textContent = "資料讀取完成，正在計算各門市建議量…";
       const mode = calculationMode();
-      state.calculation = transferCore.buildSuggestions({
+      const calculationInput = {
         storeCodes: stores,
         master,
         inventory,
@@ -284,7 +348,9 @@
         proposalDate: $("proposal-date").value,
         calculationMode: mode,
         storeInventory: state.config.storeInventoryRules?.config || {}
-      });
+      };
+      state.calculation = transferCore.buildSuggestions(calculationInput);
+      state.formalCalculation = mode === "comparison" ? transferCore.buildSuggestions({ ...calculationInput, calculationMode: "formal" }) : state.calculation;
       state.calculationStore = "all";
       $("calculation-store-filter").innerHTML = storeFilterBar("calculation", stores, state.calculationStore);
       if (mode === "formal") await api("/consumable-snapshots", { method: "POST", body: { snapshots: state.calculation.consumableSnapshots } });
@@ -293,6 +359,7 @@
       $("calculation-mode-alert").hidden = mode !== "comparison";
       $("calculation-mode-alert").innerHTML = mode === "comparison" ? `<strong>A/B測試比對：</strong>已排除${state.calculation.totals.excludedSubmittedDocumentCount}張提交單、共${state.calculation.totals.excludedSubmittedQuantity}件；本結果只能預覽，不能建立正式批次。發貨審核仍按在途量計算。` : "";
       renderComparisonDownloads(stores, mode);
+      $("publish-collaboration-button").disabled = mode !== "comparison";
       const impact = state.calculation.companyImpact;
       $("company-impact").innerHTML = `<strong>寬承／寬沐成本流向：</strong>寬沐調撥收貨${impact.kuanmuTransferCount}筆、B3代出${impact.kuanmuB3Count}筆；原始供貨成本${formatCurrency(impact.kuanmuBaseCost)}，寬承對寬沐計價參考${formatCurrency(impact.kuanmuIntercompanyRevenue)}（成本×1.11）。合併檢視時抵銷公司間計價，只保留原始成本。`;
       $("b3-audit").hidden = !state.calculation.b3Audit.pendingCount;
@@ -314,7 +381,7 @@
       $("calculation-results").hidden = false;
       applyStoreFilter("calculation", state.calculationStore);
       const ignoredNotice = transfer.ignoredRows?.length ? ` 已略過${transfer.ignoredRows.length}筆兩端皆不屬於總倉或既有門市的資料。` : "";
-      $("hq-status").textContent = (mode === "comparison" ? "A/B測試比對完成；本結果僅供預覽，不會建立批次或寫入提袋快照。" : state.calculation.rows.length ? "計算完成，請先檢查四類結果，再建立門市確認批次。" : "本週沒有可建立批次的調撥項目；缺貨與提袋快照仍已完成記錄。") + ignoredNotice;
+      $("hq-status").textContent = (mode === "comparison" ? "A/B測試比對完成；可下載差異表，或發布為四人協作批次，此時尚不會通知門市。" : state.calculation.rows.length ? "計算完成，請先檢查四類結果，再建立門市確認批次。" : "本週沒有可建立批次的調撥項目；缺貨與提袋快照仍已完成記錄。") + ignoredNotice;
     } finally { $("calculate-button").disabled = false; }
   }
 
@@ -330,6 +397,120 @@
       $("hq-status").textContent = `已建立批次${id}；同週舊的未完成批次已改為僅供查閱，門市重新登入即可看到新版確認清單。`;
       $("calculation-results").hidden = true; state.calculation = null; await loadBatches();
     } finally { $("publish-button").disabled = false; }
+  }
+
+  function collaborationTypeLabel(type) {
+    return ({ regular: "一般必要補貨", special_stock: "建議備貨", activity_gift: "活動／贈品", consumable: "門市耗材" })[type] || type;
+  }
+
+  function renderCollaborationDetail() {
+    const { draft, payload } = state.activeCollaboration;
+    const editable = draft.status === "draft";
+    const rows = payload.comparisonReports.flatMap((report, reportIndex) => report.rows.map((row, rowIndex) => ({ report, reportIndex, row, rowIndex })));
+    const body = rows.map(({ report, reportIndex, row, rowIndex }) => {
+      const step = row.itemType === "consumable" ? 100 : 1;
+      const options = [["accept_formal", "採用正式系統建議"], ["no_new", "本次不新增調撥"], ["custom", "自訂數量"]].map(([value, label]) => `<option value="${value}"${row.decision === value ? " selected" : ""}>${label}</option>`).join("");
+      return `<tr data-collaboration-row data-report-index="${reportIndex}" data-row-index="${rowIndex}" data-item-type="${escapeHtml(row.itemType)}"><td>${escapeHtml(report.storeCode)} ${escapeHtml(report.storeName)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${row.aQuantity}</td><td>${row.bQuantity}</td><td>${row.difference > 0 ? "+" : ""}${row.difference}</td><td>${row.formalSuggestedQuantity}</td><td>${escapeHtml(collaborationTypeLabel(row.itemType))}</td><td><select data-collaboration-decision ${editable ? "" : "disabled"}>${options}</select></td><td><input data-collaboration-quantity type="number" min="0" step="${step}" value="${row.agreedQuantity}" ${editable && row.decision === "custom" ? "" : "disabled"}></td><td><input data-collaboration-note maxlength="500" value="${escapeHtml(row.note || "")}" ${editable ? "" : "disabled"} placeholder="自訂或不調撥時請填原因"></td></tr>`;
+    }).join("");
+    const finalizerNote = state.config.permissions.canFinalizeCollaboration ? "您可在儲存定稿後轉成正式批次。" : "只有 siang01 與 service1 可轉成正式批次。";
+    $("collaboration-detail").innerHTML = `<p class="eyebrow">${escapeHtml(payload.weekKey)}・版本${draft.revision}</p><h2>A/B差異協作定稿</h2><p>最後更新：${escapeHtml(draft.updatedBy)}・${escapeHtml(draft.updatedAt)}。${finalizerNote}</p><div class="result-table-wrap"><table class="transfer-table collaboration-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>A系統</th><th>B人工</th><th>B-A</th><th>正式建議</th><th>類型</th><th>協作決議</th><th>定稿量</th><th>備註</th></tr></thead><tbody>${body}</tbody></table></div><div class="detail-actions">${editable ? '<button class="secondary-button" type="button" data-collaboration-action="save">儲存協作版本</button>' : ""}${editable && state.config.permissions.canFinalizeCollaboration ? '<button class="primary-button" type="button" data-collaboration-action="finalize">轉成正式批次</button>' : ""}</div><p data-collaboration-dialog-status class="status-line"></p>`;
+  }
+
+  async function openCollaboration(id) {
+    const result = await api(`/collaboration-drafts/${encodeURIComponent(id)}`);
+    const actualHash = await sha256(result.draft.payload);
+    if (actualHash !== result.draft.payloadSha256) throw new Error("協作內容完整性檢查失敗，請聯絡系統管理者。");
+    let payload;
+    try { payload = JSON.parse(result.draft.payload); } catch { throw new Error("協作內容無法解析。"); }
+    state.activeCollaboration = { draft: result.draft, payload };
+    renderCollaborationDetail();
+    $("collaboration-dialog").showModal();
+  }
+
+  function readCollaborationDecisions() {
+    const payload = state.activeCollaboration.payload;
+    $("collaboration-detail").querySelectorAll("[data-collaboration-row]").forEach((element) => {
+      const row = payload.comparisonReports[Number(element.dataset.reportIndex)].rows[Number(element.dataset.rowIndex)];
+      const decision = element.querySelector("[data-collaboration-decision]").value;
+      const note = element.querySelector("[data-collaboration-note]").value.normalize("NFKC").trim();
+      let agreedQuantity = decision === "accept_formal" ? Number(row.formalSuggestedQuantity || 0) : decision === "no_new" ? 0 : Number(element.querySelector("[data-collaboration-quantity]").value);
+      if (!Number.isSafeInteger(agreedQuantity) || agreedQuantity < 0) throw new Error(`${row.sku}的定稿量須為0以上整數。`);
+      if (row.itemType === "consumable" && agreedQuantity % 100 !== 0) throw new Error(`${row.sku}為耗材，定稿量須為100的倍數。`);
+      if (decision !== "accept_formal" && !note) throw new Error(`${row.sku}改為自訂數量或不新增調撥時，請填寫原因。`);
+      row.decision = decision; row.agreedQuantity = agreedQuantity; row.note = note;
+    });
+    return payload;
+  }
+
+  async function saveActiveCollaboration() {
+    const payload = readCollaborationDecisions();
+    const draft = await saveCollaborationPayload(state.activeCollaboration.draft.id, payload, state.activeCollaboration.draft.revision);
+    state.activeCollaboration.draft = draft;
+    await loadCollaborationDrafts();
+    renderCollaborationDetail();
+    $("collaboration-detail").querySelector("[data-collaboration-dialog-status]").textContent = `已儲存版本${draft.revision}，其他協作者重新開啟後會看到最新內容。`;
+    return draft;
+  }
+
+  function finalizedItems(payload) {
+    const decisions = new Map(payload.comparisonReports.flatMap((report) => report.rows.map((row) => [`${report.storeCode}|${row.sku}`, row])));
+    const formalKeys = new Set(payload.formal.rows.map((row) => `${row.storeCode}|${row.sku}`));
+    const items = payload.formal.rows.map((row) => {
+      const decision = decisions.get(`${row.storeCode}|${row.sku}`);
+      const suggestedQuantity = decision ? Number(decision.agreedQuantity || 0) : Number(row.suggestedQuantity || 0);
+      return { ...row, suggestedQuantity, ruleSummary: decision?.note ? `${row.ruleSummary || ""}；A/B協作：${decision.note}` : row.ruleSummary };
+    }).filter((row) => row.suggestedQuantity > 0);
+    payload.comparisonReports.forEach((report) => report.rows.forEach((row) => {
+      const key = `${report.storeCode}|${row.sku}`;
+      if (formalKeys.has(key) || Number(row.agreedQuantity || 0) <= 0) return;
+      items.push({ storeCode: report.storeCode, sku: row.sku, productName: row.productName, suggestedQuantity: Number(row.agreedQuantity), itemType: row.itemType, calculationDate: payload.proposalDate, baseSellableQuantity: 0, displayGap: 0, dailySales: 0, systemSellThroughDate: "A/B協作決議新增", ruleSummary: `A/B協作決議新增：${row.note}` });
+    }));
+    return items;
+  }
+
+  function finalizedShortages(payload) {
+    const decisions = new Map(payload.comparisonReports.flatMap((report) => report.rows.map((row) => [`${report.storeCode}|${row.sku}`, row])));
+    return payload.formal.shortages.map((row) => {
+      const decision = decisions.get(`${row.storeCode}|${row.sku}`);
+      if (!decision) return row;
+      const allocatedQuantity = Math.min(Number(row.demandQuantity || 0), Number(decision.agreedQuantity || 0));
+      return { ...row, allocatedQuantity, unfilledQuantity: Math.max(0, Number(row.demandQuantity || 0) - allocatedQuantity), reason: (decision.note ? `${row.reason}；A/B協作：${decision.note}` : row.reason).slice(0, 500) };
+    }).filter((row) => row.unfilledQuantity > 0);
+  }
+
+  async function finalizeCollaboration() {
+    if (!state.config.permissions.canFinalizeCollaboration) throw new Error("只有 siang01 與 service1 可轉成正式批次。");
+    const draft = await saveActiveCollaboration();
+    const payload = state.activeCollaboration.payload;
+    if (!confirm(`確定將${payload.weekKey} A/B協作定稿轉成正式門市確認批次嗎？\n\n建立後門市將看到正式確認清單，協作批次不能再編輯。`)) return;
+    const id = `TR-${payload.weekKey}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    await api("/batches", { method: "POST", body: {
+      id, weekKey: payload.weekKey, proposalDate: payload.proposalDate, responseDueAt: payload.responseDueAt, lockAt: payload.lockAt,
+      items: finalizedItems(payload), shortages: finalizedShortages(payload), arrivalSchedule: payload.formal.scheduleByStore,
+      collaborationId: draft.id, collaborationRevision: draft.revision
+    } });
+    $("collaboration-dialog").close(); state.activeCollaboration = null;
+    await Promise.all([loadCollaborationDrafts(), loadBatches()]);
+    $("hq-status").textContent = `已將${payload.weekKey} A/B協作定稿轉成正式批次${id}。`;
+  }
+
+  async function handleCollaborationDialog(event) {
+    const decision = event.target.closest("[data-collaboration-decision]");
+    if (decision) {
+      const row = decision.closest("[data-collaboration-row]"), quantityInput = row.querySelector("[data-collaboration-quantity]");
+      const source = state.activeCollaboration.payload.comparisonReports[Number(row.dataset.reportIndex)].rows[Number(row.dataset.rowIndex)];
+      quantityInput.disabled = decision.value !== "custom";
+      if (decision.value === "accept_formal") quantityInput.value = source.formalSuggestedQuantity;
+      if (decision.value === "no_new") quantityInput.value = "0";
+      return;
+    }
+    const button = event.target.closest("[data-collaboration-action]"); if (!button) return;
+    button.disabled = true;
+    try {
+      if (button.dataset.collaborationAction === "save") await saveActiveCollaboration();
+      else await finalizeCollaboration();
+    } catch (error) { $("collaboration-detail").querySelector("[data-collaboration-dialog-status]").textContent = error.message; }
+    finally { if (button.isConnected) button.disabled = false; }
   }
 
   function itemTable(payload) {
@@ -474,7 +655,7 @@
         if (state.config.permissions?.canManageRules) $("rules-link").hidden = false;
         if (!state.config.googleOAuthClientId) { $("google-connect-button").disabled = true; $("source-status").textContent = "正式環境尚未設定 Google OAuth，用手動備援仍可操作。"; }
       }
-      await Promise.all([loadBatches(), loadPendingPurchases()]);
+      await Promise.all([loadBatches(), loadPendingPurchases(), ...(state.config.permissions?.canCollaborate ? [loadCollaborationDrafts()] : [])]);
     } catch (error) { $("account-badge").textContent = "公司帳號驗證失敗"; $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; }
   }
 
@@ -482,12 +663,14 @@
   $("refresh-button").addEventListener("click", () => loadBatches().catch((error) => { $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; }));
   $("calculate-button").addEventListener("click", () => calculate().catch((error) => { $("hq-status").textContent = error.message; $("calculate-button").disabled = false; }));
   $("publish-button").addEventListener("click", () => publish().catch((error) => { $("hq-status").textContent = error.message; }));
+  $("publish-collaboration-button").addEventListener("click", () => publishCollaboration().catch((error) => { $("hq-status").textContent = error.message; }));
+  $("refresh-collaboration-button").addEventListener("click", () => loadCollaborationDrafts().catch((error) => { $("collaboration-status").textContent = error.message; }));
   $("google-connect-button").addEventListener("click", () => authorizeGoogle().catch((error) => { $("source-status").textContent = error.message; }));
   $("auto-source-button").addEventListener("click", () => loadGoogleSources().catch((error) => { $("source-status").textContent = `自動取得失敗：${error.message}；可改用手動備援。`; }));
   $("week-key").addEventListener("change", () => applyScheduleForWeek($("week-key").value));
   document.querySelectorAll('input[name="calculation-mode"]').forEach((input) => input.addEventListener("change", () => {
     if (!state.calculation) return;
-    state.calculation = null;
+    state.calculation = null; state.formalCalculation = null;
     $("calculation-results").hidden = true;
     $("comparison-downloads").hidden = true;
     $("publish-button").textContent = "建立門市確認批次";
@@ -501,9 +684,13 @@
     }
     const button = event.target.closest("[data-open-batch]");
     if (button) openBatch(button.dataset.openBatch).catch((error) => { $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; });
+    const collaborationButton = event.target.closest("[data-open-collaboration]");
+    if (collaborationButton) openCollaboration(collaborationButton.dataset.openCollaboration).catch((error) => { $("collaboration-status").textContent = error.message; });
   });
   $("batch-detail").addEventListener("click", handleDialog);
   $("batch-detail").addEventListener("input", updateDialogProjection);
+  $("collaboration-detail").addEventListener("click", handleCollaborationDialog);
+  $("collaboration-detail").addEventListener("change", handleCollaborationDialog);
   $("calculation-results").addEventListener("click", (event) => {
     const downloadButton = event.target.closest("[data-download-comparison]");
     if (downloadButton) {

@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20260922-ab-export-r1");
+    const appIndex = html.indexOf("app.js?v=20260922-collaboration-r1");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -243,6 +243,25 @@ describe("前台導覽", () => {
     expect(app).toContain('buildComparisonWorkbook');
     expect(core).toContain('"調撥差異分析"');
     expect(core).toContain('buildComparisonReport');
+  });
+
+  it("A/B差異可發布共用協作批次，且僅兩個指定帳號可轉正式", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    const migration = readFileSync("../cloudflare/worker/migrations/0025_store_transfer_collaboration_drafts.sql", "utf8");
+    expect(html).toContain('id="publish-collaboration-button"');
+    expect(html).toContain('id="collaboration-dialog"');
+    expect(app).toContain('/collaboration-drafts');
+    expect(app).toContain('collaborationRevision');
+    expect(app).toContain('expectedRevision');
+    expect(worker).toContain('const COLLABORATION_FINALIZERS = new Set([ADMIN, "service1@siangapato.com.tw"])');
+    expect(worker).toContain('assertCollaborationFinalizer(who.email)');
+    expect(worker).toContain('canFinalizeCollaboration');
+    expect(worker).toContain('已由其他同事更新');
+    expect(migration).toContain('store_transfer_collaboration_one_active_week');
+    expect(migration).toContain('source_collaboration_id');
+    expect(migration).toContain('store_transfer_batches_source_collaboration');
   });
 
   it("資料整理工具與規則頁都有清楚的名稱和上一層路徑", () => {
