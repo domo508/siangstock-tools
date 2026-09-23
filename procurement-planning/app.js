@@ -1261,7 +1261,7 @@
       elements.masterFileName.textContent = `自動：${sources.master.metadata.name}・${sourceProof(sources.master.metadata.id, sources.master.metadata)}`;
       elements.marketingFileName.textContent = `自動：整體行銷策略・${sourceProof(sources.marketingMetadata.fileId, sources.marketingMetadata)}`;
       elements.consignmentFileName.textContent = `自動：庫存+下單／庫存布，共${puyouma.records.length}列・${sourceProof(sources.puyoumaMetadata.spreadsheetId, sources.puyoumaMetadata)}`;
-      elements.lirongConsignmentFileName.textContent = `自動：工作表1，共${lirong.records.length}列・${sourceProof(sources.lirongMetadata.spreadsheetId, sources.lirongMetadata)}`;
+      elements.lirongConsignmentFileName.textContent = `自動：${sources.lirongMetadata.selectedSheet || lirong.sheetName || "力榮寄庫"}，共${lirong.records.length}列・${sourceProof(sources.lirongMetadata.spreadsheetId, sources.lirongMetadata)}`;
       elements.sourceStatus.textContent = masterValidation.invalidCount
         ? `固定 Google 資料源已完成格式檢核；${masterValidation.hardInvalidCount}列缺供應商、正數進貨價或MOQ並停止自動採購，${masterValidation.statusReviewCount}列貨品狀態空白仍顯示試算建議，但第一次回匯必須明確填量與原因。`
         : "固定 Google 資料源已完成格式檢核；本次採用自動來源。";

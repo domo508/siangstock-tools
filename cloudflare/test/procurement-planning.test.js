@@ -13,6 +13,19 @@ function loadBrowserScript(path, context = {}) {
 const xlsxContext = loadBrowserScript("../procurement-planning/assets/xlsx-js-style.bundle.js");
 const XLSX = xlsxContext.XLSX;
 const core = loadBrowserScript("../procurement-planning/core.js", { XLSX }).ProcurementPlanningCore;
+const googleSources = loadBrowserScript("../procurement-planning/google-sources.js").ProcurementGoogleSources;
+
+describe("固定 Google 來源頁籤選擇", () => {
+  it("力榮優先使用現行下單頁籤並相容舊名", () => {
+    expect(googleSources.selectSpreadsheetSheetTitle(["工作表1", "下單"], ["下單", "工作表1"])).toBe("下單");
+    expect(googleSources.selectSpreadsheetSheetTitle(["工作表1"], ["下單", "工作表1"])).toBe("工作表1");
+  });
+
+  it("頁籤再次改名時只取第一個頁籤，後續仍由欄位檢核把關", () => {
+    expect(googleSources.selectSpreadsheetSheetTitle(["供應商新版", "備註"], ["下單", "工作表1"])).toBe("供應商新版");
+    expect(() => googleSources.selectSpreadsheetSheetTitle([], ["下單", "工作表1"])).toThrow("沒有可讀取的頁籤");
+  });
+});
 
 function makeMaster() {
   const workbook = XLSX.utils.book_new();

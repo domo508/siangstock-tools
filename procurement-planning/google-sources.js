@@ -216,6 +216,35 @@
     };
   }
 
+  function selectSpreadsheetSheetTitle(sheetTitles, preferredTitles = []) {
+    const titles = (sheetTitles || []).map((title) => String(title || "").trim()).filter(Boolean);
+    if (!titles.length) throw new Error("Google 試算表沒有可讀取的頁籤。");
+    for (const preferred of preferredTitles || []) {
+      const normalizedPreferred = String(preferred || "").trim();
+      const matched = titles.find((title) => title === normalizedPreferred);
+      if (matched) return matched;
+    }
+    return titles[0];
+  }
+
+  function quoteSheetTitle(title) {
+    return `'${String(title || "").replace(/'/g, "''")}'`;
+  }
+
+  async function loadPreferredSpreadsheet(spreadsheetId, preferredTitles, XLSX) {
+    const params = new URLSearchParams({ fields: "sheets(properties(title,index))" });
+    const response = await googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?${params}`);
+    const payload = await response.json();
+    const sheets = (payload.sheets || [])
+      .map((sheet) => ({ title: sheet.properties?.title || "", index: Number(sheet.properties?.index || 0) }))
+      .sort((a, b) => a.index - b.index);
+    const selectedSheet = selectSpreadsheetSheetTitle(sheets.map((sheet) => sheet.title), preferredTitles);
+    const result = await loadSpreadsheet(spreadsheetId, [quoteSheetTitle(selectedSheet)], XLSX);
+    result.metadata.selectedSheet = selectedSheet;
+    result.metadata.availableSheets = sheets.map((sheet) => sheet.title);
+    return result;
+  }
+
   async function loadAll(config, XLSX, onProgress = () => {}) {
     const source = config.fixedSources;
     const tracked = async (id, task) => {
@@ -236,7 +265,7 @@
         return { file, metadata: { fileId: source.marketingDriveFileId, sha256: await sha256(await file.arrayBuffer()), fetchedAt: new Date().toISOString() } };
       }),
       tracked("puyouma", () => loadSpreadsheet(source.puyoumaSpreadsheetId, ["'庫存+下單'", "'庫存布'"], XLSX)),
-      tracked("lirong", () => loadSpreadsheet(source.lirongSpreadsheetId, ["'工作表1'"], XLSX))
+      tracked("lirong", () => loadPreferredSpreadsheet(source.lirongSpreadsheetId, ["下單", ...(source.lirongSheets || []), "工作表1"], XLSX))
     ]);
     const failed = results.find((result) => result.status === "rejected");
     if (failed) throw failed.reason;
@@ -248,6 +277,7 @@
 
   global.ProcurementGoogleSources = {
     initialize, authorize, verifyCompanyIdentity, loadAll, token,
-    downloadDriveFile, listDriveExcelFiles, loadLatestMaster, loadLatestApprovedModel, uploadDriveExcel, sendSeasonalModelSummary
+    downloadDriveFile, listDriveExcelFiles, loadLatestMaster, loadLatestApprovedModel, uploadDriveExcel, sendSeasonalModelSummary,
+    selectSpreadsheetSheetTitle
   };
 })(typeof globalThis !== "undefined" ? globalThis : window);
