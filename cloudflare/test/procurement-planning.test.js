@@ -628,6 +628,23 @@ describe("採購建議第二階段", () => {
     expect(sales.records.filter((row) => row.date.startsWith("2026")).reduce((sum, row) => sum + row.quantity, 0)).toBe(51);
   });
 
+  it("公司協作草稿不含原始檔名時仍可匯出本批報表", () => {
+    const recommendations = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28"
+    });
+    const source = recommendations.rows.find((row) => row.sku === "A1");
+    Object.assign(source, { suggestedPurchaseQty: 10, suggestedPurchaseAmount: 5000 });
+    recommendations.suggestedRows = [source];
+    recommendations.suggestedRows.forEach((row) => { delete row.sourceFiles; });
+    const output = core.buildRecommendationWorkbook(recommendations, XLSX);
+    const purchaseSheet = output.SheetNames.find((name) => /^03[ABCD]/.test(name)
+      && XLSX.utils.sheet_to_json(output.Sheets[name], { header: 1, defval: "" }).flat().includes("A1"));
+    expect(purchaseSheet).toBeTruthy();
+    const rows = XLSX.utils.sheet_to_json(output.Sheets[purchaseSheet], { header: 1, defval: "" });
+    expect(rows.flat()).toContain("公司協作草稿（不保存原始檔名）");
+  });
+
   it("讀取SKU與類別模型並產生採購、寄庫與缺貨警示", () => {
     const recommendations = core.buildProcurementRecommendations({
       master: makeMaster(),
@@ -1445,8 +1462,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260918-shared-drafts-r1");
-    expect(toolHtml).toContain("20260922-legacy-s-consignment-r1");
+    expect(toolHtml).toContain("20260923-collaboration-drafts-r1");
     expect(toolHtml).toContain("採購批次續作與多人協作");
     expect(toolHtml).toContain('id="shared-draft-list"');
     expect(toolHtml).toContain("發布協作草稿");
@@ -1455,9 +1471,19 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/collaboration-drafts");
     expect(procurementWorker).toContain('/api/procurement/cost-snapshot');
     expect(procurementWorker).toContain('/api/procurement/collaboration-drafts');
+    expect(toolApp).toContain("canManageCollaborationDrafts");
+    expect(toolApp).toContain("母批次・固定置頂");
+    expect(toolApp).toContain("移出協作區");
+    expect(toolApp).toContain('{ method: "DELETE"');
+    expect(procurementWorker).toContain("removed_at IS NULL");
+    expect(procurementWorker).toContain('request.method === "DELETE"');
     const collaborationMigration = readFileSync("worker/migrations/0022_procurement_collaboration_drafts.sql", "utf8");
     expect(collaborationMigration).toContain("CREATE TABLE procurement_collaboration_drafts");
     expect(collaborationMigration).not.toMatch(/file_name|excel|raw_rows/i);
+    const collaborationRemovalMigration = readFileSync("worker/migrations/0026_procurement_collaboration_draft_soft_remove.sql", "utf8");
+    expect(collaborationRemovalMigration).toContain("ADD COLUMN removed_at");
+    expect(collaborationRemovalMigration).toContain("ADD COLUMN removed_by");
+    expect(collaborationRemovalMigration).not.toMatch(/DELETE FROM|DROP TABLE/i);
     const costSnapshotMigration = readFileSync("worker/migrations/0021_procurement_cost_snapshots.sql", "utf8");
     expect(costSnapshotMigration).toContain("CREATE TABLE procurement_cost_snapshots");
     expect(costSnapshotMigration).toContain("source_hashes");

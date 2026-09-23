@@ -317,7 +317,7 @@ async function config(request: Request, env: ProcurementEnv): Promise<Response> 
     notification: role === "admin"
       ? { recipient: settings.notificationRecipient, retentionMonths: settings.retentionMonths, events: settings.notificationEvents }
       : { enabled: true, recipient: settings.notificationRecipient },
-    permissions: { canApprove: role === "admin" || role === "approver", canManageRules: role === "admin" || role === "approver", canManageAccess: role === "admin", canManageBudget: role === "admin" }
+    permissions: { canApprove: role === "admin" || role === "approver", canManageRules: role === "admin" || role === "approver", canManageAccess: role === "admin", canManageBudget: role === "admin", canManageCollaborationDrafts: role === "admin" }
   });
 }
 
@@ -427,7 +427,7 @@ async function listCollaborationDrafts(request: Request, env: ProcurementEnv): P
   await verifyCompanyUser(request, procurementAccess(env));
   const requestedMonth = month(new URL(request.url).searchParams.get("month"));
   const rows = await env.DB.prepare(
-    "SELECT id, analysis_month, checkpoint, workflow_type, stage, work_unit_label, supplier_summary, amount, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE analysis_month = ? AND stage != 'erp_created' ORDER BY updated_at DESC LIMIT 100"
+    "SELECT id, analysis_month, checkpoint, workflow_type, stage, work_unit_label, supplier_summary, amount, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE analysis_month = ? AND stage != 'erp_created' AND removed_at IS NULL ORDER BY CASE WHEN stage = 'analysis' AND (work_unit_label = '' OR work_unit_label = '尚未選擇審核單位') THEN 0 ELSE 1 END, updated_at DESC LIMIT 100"
   ).bind(requestedMonth).all<Record<string, unknown>>();
   return json({ month: requestedMonth, drafts: rows.results.map((row) => serializeCollaborationDraft(row)) });
 }
@@ -436,7 +436,7 @@ async function getCollaborationDraft(request: Request, env: ProcurementEnv, draf
   await verifyCompanyUser(request, procurementAccess(env));
   const id = string(draftId, "協作草稿編號", 100);
   const row = await env.DB.prepare(
-    "SELECT id, analysis_month, checkpoint, workflow_type, stage, work_unit_label, supplier_summary, amount, payload_encoding, payload, payload_sha256, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE id = ?"
+    "SELECT id, analysis_month, checkpoint, workflow_type, stage, work_unit_label, supplier_summary, amount, payload_encoding, payload, payload_sha256, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE id = ? AND removed_at IS NULL"
   ).bind(id).first<Record<string, unknown>>();
   if (!row) throw new RequestValidationError("找不到這筆公司共用協作草稿。", 404);
   return json({ draft: serializeCollaborationDraft(row, true) });
@@ -476,7 +476,8 @@ async function saveCollaborationDraft(request: Request, env: ProcurementEnv, dra
   if (!Number.isInteger(expectedRevision) || expectedRevision < 0) throw new RequestValidationError("協作草稿版本格式錯誤。");
   const supplierSummary = JSON.stringify([...new Set(suppliers.map((value) => value.trim()))]);
   const now = new Date().toISOString();
-  const existing = await env.DB.prepare("SELECT revision FROM procurement_collaboration_drafts WHERE id = ?").bind(id).first<{ revision: number }>();
+  const existing = await env.DB.prepare("SELECT revision, removed_at FROM procurement_collaboration_drafts WHERE id = ?").bind(id).first<{ revision: number; removed_at: string | null }>();
+  if (existing?.removed_at) throw new RequestValidationError("這筆協作草稿已由管理者移出共用清單；如需重新發布，請建立新的分批審核草稿。", 409);
   if (!existing) {
     if (expectedRevision !== 0) throw new RequestValidationError("協作草稿已不存在或版本已改變，請重新整理。", 409);
     await env.DB.prepare(
@@ -493,6 +494,29 @@ async function saveCollaborationDraft(request: Request, env: ProcurementEnv, dra
     "SELECT id, analysis_month, checkpoint, workflow_type, stage, work_unit_label, supplier_summary, amount, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE id = ?"
   ).bind(id).first<Record<string, unknown>>();
   return json({ draft: serializeCollaborationDraft(saved || {}) }, existing ? 200 : 201);
+}
+
+async function removeCollaborationDraft(request: Request, env: ProcurementEnv, draftId: string): Promise<Response> {
+  requireSameOrigin(request, env);
+  const access = await verifyApprover(request, env);
+  if (access.role !== "admin") throw new RequestValidationError("只有最高權限可以移出公司共用協作草稿。", 403);
+  const id = string(draftId, "協作草稿編號", 100);
+  const existing = await env.DB.prepare(
+    "SELECT stage, work_unit_label, revision FROM procurement_collaboration_drafts WHERE id = ? AND removed_at IS NULL"
+  ).bind(id).first<{ stage: string; work_unit_label: string; revision: number }>();
+  if (!existing) throw new RequestValidationError("找不到這筆公司共用協作草稿，可能已被其他同事移出。", 404);
+  if (existing.stage === "analysis" && (!existing.work_unit_label || existing.work_unit_label === "尚未選擇審核單位")) {
+    throw new RequestValidationError("母批次固定置頂供後續分批使用，不能從協作區移除。", 409);
+  }
+  if (["pending_approval", "approved", "erp_created"].includes(existing.stage)) {
+    throw new RequestValidationError("待核准、已核准或已建立ERP的批次不能從協作區移除。", 409);
+  }
+  const now = new Date().toISOString();
+  const removed = await env.DB.prepare(
+    "UPDATE procurement_collaboration_drafts SET removed_at = ?, removed_by = ?, updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ? AND revision = ? AND removed_at IS NULL"
+  ).bind(now, access.email, now, access.email, id, existing.revision).run();
+  if (Number(removed.meta.changes || 0) !== 1) throw new RequestValidationError("這筆協作草稿已由其他同事更新，請重新整理後再試。", 409);
+  return json({ id, removed: true, removedAt: now, removedBy: access.email });
 }
 
 function serializeCostSnapshot(row: Record<string, unknown>) {
@@ -913,6 +937,7 @@ export async function procurementRoute(request: Request, env: ProcurementEnv): P
   const collaborationDraftMatch = url.pathname.match(/^\/api\/procurement\/collaboration-drafts\/([^/]+)$/);
   if (collaborationDraftMatch && request.method === "GET") return getCollaborationDraft(request, env, decodeURIComponent(collaborationDraftMatch[1]));
   if (collaborationDraftMatch && request.method === "PUT") return saveCollaborationDraft(request, env, decodeURIComponent(collaborationDraftMatch[1]));
+  if (collaborationDraftMatch && request.method === "DELETE") return removeCollaborationDraft(request, env, decodeURIComponent(collaborationDraftMatch[1]));
   if (url.pathname === "/api/procurement/store-shortages" && request.method === "GET") return storeShortageNeeds(request, env);
   if (url.pathname === "/api/procurement/pending-purchase-snapshot" && request.method === "PUT") return savePendingPurchaseSnapshot(request, env);
   const shortageDecisionMatch = url.pathname.match(/^\/api\/procurement\/store-shortages\/([^/]+)\/([^/]+)$/);

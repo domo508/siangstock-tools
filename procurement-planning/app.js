@@ -486,18 +486,41 @@
   function renderSharedDrafts() {
     if (!elements.sharedDraftList || !elements.sharedDraftStatus) return;
     const fragment = document.createDocumentFragment();
-    state.sharedDrafts.forEach((draft) => {
-      const item = document.createElement("article"); item.className = "resume-draft-item is-shared";
+    const isParentDraft = (draft) => draft.stage === "analysis" && (!draft.workUnitLabel || draft.workUnitLabel === "尚未選擇審核單位");
+    const drafts = [...state.sharedDrafts].sort((left, right) => Number(isParentDraft(right)) - Number(isParentDraft(left)) || String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+    drafts.forEach((draft) => {
+      const parentDraft = isParentDraft(draft);
+      const item = document.createElement("article"); item.className = `resume-draft-item is-shared${parentDraft ? " is-parent" : ""}`;
       const copy = document.createElement("div");
       const checkpoint = ({ "month-start": "月初採購", "mid-month": "月中採購", "month-end": "月底驗證" })[draft.checkpoint] || "採購";
       const title = document.createElement("strong"); title.textContent = `${draft.analysisMonth}・${checkpoint}・${draft.workUnitLabel || "尚未選擇審核單位"}`;
       const summary = document.createElement("p");
-      summary.textContent = `${workflowStageLabel(draft.stage)}・${formatCurrency(draft.amount)}・第${draft.revision}版・${draft.updatedBy}更新於${taipeiDateTime(draft.updatedAt)}`;
+      summary.textContent = `${parentDraft ? "母批次・固定置頂・" : ""}${workflowStageLabel(draft.stage)}・${formatCurrency(draft.amount)}・第${draft.revision}版・${draft.updatedBy}更新於${taipeiDateTime(draft.updatedAt)}`;
       copy.append(title, summary);
       const actions = document.createElement("div"); actions.className = "resume-draft-actions";
       const open = document.createElement("button"); open.type = "button"; open.className = "primary-button"; open.textContent = "接續操作";
       open.addEventListener("click", async () => { open.disabled = true; try { await openSharedWorkflowDraft(draft.id); } catch (error) { setWorkflowStatus(`無法開啟協作草稿：${error.message}`, "error"); } finally { open.disabled = false; } });
-      actions.append(open); item.append(copy, actions); fragment.append(item);
+      actions.append(open);
+      if (state.config?.permissions?.canManageCollaborationDrafts && !parentDraft && !["pending_approval", "approved", "erp_created"].includes(draft.stage)) {
+        const remove = document.createElement("button"); remove.type = "button"; remove.className = "secondary-button"; remove.textContent = "移出協作區";
+        remove.addEventListener("click", async () => {
+          if (!globalThis.confirm(`確定將「${draft.workUnitLabel || "這筆草稿"}」移出公司共用協作區？\n\n不會影響正式核准台帳、ERP紀錄或已下載檔案；系統仍保留移除者與時間供稽核。`)) return;
+          remove.disabled = true;
+          try {
+            const response = await fetch(`/api/procurement/collaboration-drafts/${encodeURIComponent(draft.id)}`, { method: "DELETE", headers: { Accept: "application/json" }, cache: "no-store" });
+            const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+            if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+            state.sharedDrafts = state.sharedDrafts.filter((row) => row.id !== draft.id);
+            renderSharedDrafts();
+            setWorkflowStatus(`已將${draft.workUnitLabel || "協作草稿"}移出公司共用協作區；正式台帳與ERP紀錄未受影響。`, "success");
+          } catch (error) {
+            remove.disabled = false;
+            setWorkflowStatus(`共用草稿移除失敗：${error.message}`, "error");
+          }
+        });
+        actions.append(remove);
+      }
+      item.append(copy, actions); fragment.append(item);
     });
     elements.sharedDraftList.replaceChildren(fragment);
     elements.sharedDraftStatus.textContent = state.sharedDrafts.length ? `目前有${state.sharedDrafts.length}筆未完成公司共用草稿。` : "本月份目前沒有公司共用協作草稿。";
@@ -1373,7 +1396,14 @@
     state.selectedSuppliers = new Set(state.activeWorkUnit.suppliers); updateSupplierChecks();
     resetReviewWorkflow(`已選擇${units.length}個審核單位，正在下載合併審核報表。`);
     renderWorkUnitDashboard();
-    await downloadRecommendation();
+    elements.download.disabled = true;
+    try {
+      await downloadRecommendation();
+    } catch (error) {
+      state.returnScope = null;
+      setWorkflowStatus(`本批報表下載失敗：${error.message}。已保留勾選內容，可修正後直接重試。`, "error");
+      renderWorkUnitDashboard();
+    }
   }
   function selectedRows() {
     if (!state.analysis) return [];

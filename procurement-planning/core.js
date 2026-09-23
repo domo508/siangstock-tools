@@ -3425,7 +3425,9 @@
       "建議採購金額": row.suggestedPurchaseAmount,
       "已下架": row.discontinued ? "是" : "否",
       "季節資料完整": row.seasonalDataReady ? "是" : "否",
-      "銷售來源": row.sourceFiles.join("｜")
+      "銷售來源": Array.isArray(row.sourceFiles) && row.sourceFiles.length
+        ? row.sourceFiles.join("｜")
+        : "公司協作草稿（不保存原始檔名）"
       };
     });
     return reportRows.sort((left, right) => (
