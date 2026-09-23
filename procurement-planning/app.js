@@ -102,6 +102,33 @@
     elements.autoSourceProgress.hidden = false;
     ["master", "marketing", "puyouma", "lirong"].forEach((id) => updateSourceProgress(id, "waiting", "等待取得"));
   }
+  const automaticSourceLabels = {
+    master: "商品主檔", marketing: "整體行銷策略", puyouma: "普優瑪寄庫表", lirong: "力榮寄庫表"
+  };
+  function identifySourceError(error, sourceId, failureStage) {
+    error.sourceId ||= sourceId;
+    error.sourceLabel ||= automaticSourceLabels[sourceId] || "固定Google資料";
+    error.failureStage ||= failureStage;
+    return error;
+  }
+  function automaticSourceFailureMessage(error, hasPreviousSources) {
+    const failures = Array.isArray(error?.sourceFailures) && error.sourceFailures.length ? error.sourceFailures : [error];
+    const labels = [...new Set(failures.map((item) => item?.sourceLabel || automaticSourceLabels[item?.sourceId] || "固定Google資料"))];
+    const stages = [...new Set(failures.map((item) => item?.failureStage || "資料取得或格式檢核"))];
+    const sourceLabel = labels.join("、");
+    const stage = stages.join("、");
+    const reason = failures.map((item) => {
+      const label = item?.sourceLabel || automaticSourceLabels[item?.sourceId] || "固定Google資料";
+      return `${label}：${item?.message || "未提供錯誤原因"}`;
+    }).join("；");
+    const result = hasPreviousSources
+      ? "本分頁先前成功取得的四項資料仍保留，這次重新整理未覆蓋舊資料"
+      : "本次自動來源尚未完成，尚未採用不完整資料";
+    const nextStep = hasPreviousSources
+      ? "稍後可再按「重新取得最新資料」；不必重做門市不足量或重新選擇本次人工匯入檔"
+      : `先重試「自動取得最新資料」；若只有${sourceLabel}持續失敗，再使用該來源卡片的「手動備援」`;
+    return `操作環節：自動取得最新資料｜失敗區塊：${sourceLabel}｜失敗階段：${stage}｜原因：${reason}｜處理結果：${result}｜建議處理：${nextStep}。`;
+  }
   function setAutomaticSourceBusy(busy, label) {
     elements.autoSource.disabled = busy;
     elements.autoSource.classList.toggle("is-loading", busy);
@@ -202,6 +229,18 @@
 
   function isUnfinishedWorkflowDraft(draft) { return draft && draft.stage !== "erp_created"; }
 
+  function isParentWorkflowDraft(draft) {
+    return Boolean(draft) && !draft.activeWorkUnit && (!draft.parentBatchId || draft.id === draft.parentBatchId);
+  }
+
+  function detachChildSharedIdentity(draft) {
+    if (draft?.activeWorkUnit && draft.sharedDraftId && draft.sharedDraftId === draft.parentBatchId) {
+      draft.sharedDraftId = "";
+      draft.sharedDraftRevision = 0;
+    }
+    return draft;
+  }
+
   function taipeiDateTime(value) {
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? "時間未記錄" : new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(date);
@@ -214,6 +253,10 @@
 
   function workflowSnapshot(stage = state.draftStage || "analysis") {
     state.draftId ||= `LOCAL-${new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)}-${Math.random().toString(36).slice(2, 8)}`;
+    if (state.activeWorkUnit && state.sharedDraftId === state.parentBatchId) {
+      state.sharedDraftId = "";
+      state.sharedDraftRevision = 0;
+    }
     return {
       version: WORKFLOW_CACHE.version, id: state.draftId, stage, updatedAt: new Date().toISOString(), sharedDraftId: state.sharedDraftId, sharedDraftRevision: state.sharedDraftRevision, parentBatchId: state.parentBatchId, activeWorkUnit: state.activeWorkUnit, batchId: state.batchId,
       analysis: state.analysis, baseAnalysis: state.baseAnalysis === state.analysis ? null : state.baseAnalysis, workflowType: state.workflowType,
@@ -432,6 +475,7 @@
   }
 
   async function saveSharedWorkflowDraft(draft, expectedRevision) {
+    detachChildSharedIdentity(draft);
     const encoded = await encodeSharedSnapshot(draft);
     const result = await postJson(`/api/procurement/collaboration-drafts/${encodeURIComponent(draft.sharedDraftId || draft.id)}`, {
       analysisMonth: draft.controls?.month,
@@ -466,11 +510,23 @@
   }
 
   async function publishWorkflowDraft(draft) {
-    const localDraft = { ...draft, sharedDraftId: draft.sharedDraftId || draft.id, sharedDraftRevision: Number(draft.sharedDraftRevision || 0) };
+    const localDraft = detachChildSharedIdentity({ ...draft, sharedDraftId: draft.sharedDraftId || draft.id, sharedDraftRevision: Number(draft.sharedDraftRevision || 0) });
+    if (!localDraft.sharedDraftId) localDraft.sharedDraftId = localDraft.id;
     setWorkflowStatus("正在發布公司共用協作草稿；原始Excel不會上傳…");
-    const shared = await saveSharedWorkflowDraft(localDraft, localDraft.sharedDraftRevision);
+    let shared;
+    let repairedParent = false;
+    try {
+      shared = await saveSharedWorkflowDraft(localDraft, localDraft.sharedDraftRevision);
+    } catch (error) {
+      if (error.status !== 409 || !isParentWorkflowDraft(localDraft)) throw error;
+      shared = await repairOverwrittenParentDraft(localDraft);
+      if (!shared) throw error;
+      repairedParent = true;
+    }
     await updateSharedMetadata(localDraft, shared);
-    setWorkflowStatus(`協作草稿已發布；${shared.updatedBy}與其他授權同事現在都能查看並接續。`, "success");
+    setWorkflowStatus(repairedParent
+      ? "已保留原子批次並恢復公司共用母批次；其他授權同事現在可分別查看母批次與子批次。"
+      : `協作草稿已發布；${shared.updatedBy}與其他授權同事現在都能查看並接續。`, "success");
   }
 
   async function syncSharedWorkflowDraft(snapshot) {
@@ -545,14 +601,45 @@
 
   async function openSharedWorkflowDraft(id) {
     setWorkflowStatus("正在載入公司共用最新版…");
-    const response = await fetch(`/api/procurement/collaboration-drafts/${encodeURIComponent(id)}`, { headers: { Accept: "application/json" }, cache: "no-store" });
-    const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-    const snapshot = await decodeSharedSnapshot(result.draft);
+    const draft = await fetchSharedWorkflowDraft(id);
+    const snapshot = await decodeSharedSnapshot(draft);
     restoreWorkflowDraft(snapshot);
     await saveLocalDraftSnapshot(snapshot);
     renderResumeDrafts();
-    setWorkflowStatus(`已載入公司共用第${result.draft.revision}版；後續回匯與確認會同步給其他協作者。`, "success");
+    setWorkflowStatus(`已載入公司共用第${draft.revision}版；後續回匯與確認會同步給其他協作者。`, "success");
+  }
+
+  async function fetchSharedWorkflowDraft(id) {
+    const response = await fetch(`/api/procurement/collaboration-drafts/${encodeURIComponent(id)}`, { headers: { Accept: "application/json" }, cache: "no-store" });
+    const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    if (!response.ok) {
+      const error = new Error(result.error || `HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return result.draft;
+  }
+
+  async function repairOverwrittenParentDraft(localParent) {
+    const remoteDraft = await fetchSharedWorkflowDraft(localParent.sharedDraftId || localParent.id);
+    const overwrittenChild = await decodeSharedSnapshot(remoteDraft);
+    const matchesKnownBug = overwrittenChild.activeWorkUnit
+      && overwrittenChild.parentBatchId === localParent.id
+      && overwrittenChild.id !== localParent.id;
+    if (!matchesKnownBug) return null;
+
+    const rescuedChild = detachChildSharedIdentity({ ...overwrittenChild, sharedDraftId: "", sharedDraftRevision: 0 });
+    let childShared;
+    try {
+      childShared = await saveSharedWorkflowDraft(rescuedChild, 0);
+    } catch (error) {
+      if (error.status !== 409) throw error;
+      childShared = await fetchSharedWorkflowDraft(rescuedChild.id);
+    }
+    await updateSharedMetadata(rescuedChild, childShared);
+
+    const refreshedParent = { ...localParent, sharedDraftId: remoteDraft.id, sharedDraftRevision: remoteDraft.revision };
+    return saveSharedWorkflowDraft(refreshedParent, remoteDraft.revision);
   }
 
   function appendWorkflowSnapshotSheet(workbook, snapshot) {
@@ -1317,18 +1404,33 @@
         masterValidation = validateAutoMaster(await readWorkbook(sources.master.file));
         updateSourceProgress("master", "success", "已取得並通過格式檢核");
       } catch (error) {
-        updateSourceProgress("master", "error", "格式檢核失敗");
-        throw error;
+        const sourceError = identifySourceError(error, "master", "檔案格式檢核");
+        updateSourceProgress("master", "error", `檔案格式檢核失敗：${sourceError.message}`);
+        throw sourceError;
       }
       state.masterFile = sources.master.file; state.masterWorkbook = null; state.marketingFile = sources.marketingFile;
       state.consignmentWorkbook = sources.puyoumaWorkbook; state.consignmentFile = null;
       state.lirongConsignmentWorkbook = sources.lirongWorkbook; state.lirongConsignmentFile = null;
       state.sourceMetadata = sources;
-      const puyouma = core.parseConsignmentWorkbook(state.consignmentWorkbook, XLSX);
-      const lirong = core.parseLirongConsignmentWorkbook(state.lirongConsignmentWorkbook, XLSX);
+      let puyouma;
+      try {
+        puyouma = core.parseConsignmentWorkbook(state.consignmentWorkbook, XLSX);
+      } catch (error) {
+        const sourceError = identifySourceError(error, "puyouma", "內容解析");
+        updateSourceProgress("puyouma", "error", `內容解析失敗：${sourceError.message}`);
+        throw sourceError;
+      }
+      let lirong;
+      try {
+        lirong = core.parseLirongConsignmentWorkbook(state.lirongConsignmentWorkbook, XLSX);
+      } catch (error) {
+        const sourceError = identifySourceError(error, "lirong", "內容解析");
+        updateSourceProgress("lirong", "error", `內容解析失敗：${sourceError.message}`);
+        throw sourceError;
+      }
       if (!puyouma.styleAudit.pinkDetected) {
         updateSourceProgress("puyouma", "error", "未辨識粉紅排程格式");
-        throw new Error("普優瑪寄庫表未辨識到粉紅排程格式，已停止採用。");
+        throw identifySourceError(new Error("未辨識到粉紅排程格式，已停止採用"), "puyouma", "內容規則檢核");
       }
       updateSourceProgress("marketing", "success", "已取得並完成內容驗證");
       updateSourceProgress("puyouma", "success", `已取得並讀取${puyouma.records.length}列`);
@@ -1343,8 +1445,9 @@
       elements.sourceStatus.className = `result-alert ${masterValidation.invalidCount ? "warn" : ""}`.trim();
       completed = true; invalidateAnalysis(); updateReadyState();
     } catch (error) {
-      elements.sourceStatus.textContent = `自動來源停止：${error.message} 請修正來源或改用明確標示的手動備援。`;
-      elements.sourceStatus.className = "result-alert error";
+      const hasPreviousSources = Boolean(state.sourceMetadata && state.masterFile && state.consignmentWorkbook && state.lirongConsignmentWorkbook);
+      elements.sourceStatus.textContent = automaticSourceFailureMessage(error, hasPreviousSources);
+      elements.sourceStatus.className = `result-alert ${hasPreviousSources ? "warn" : "error"}`;
     } finally {
       setAutomaticSourceBusy(false, completed ? "重新取得最新資料" : "重試取得最新資料");
       if (!googleSources.token()) {
@@ -1444,7 +1547,7 @@
     if (!units.length) return;
     state.activeWorkUnit = combinedWorkUnit(units); state.parentBatchId ||= newParentBatchId();
     state.draftId = `${state.parentBatchId}-${Math.random().toString(36).slice(2, 8)}`;
-    state.draftStage = "analysis"; state.batchId = ""; state.returnScope = null;
+    state.draftStage = "analysis"; state.batchId = ""; state.returnScope = null; state.sharedDraftId = ""; state.sharedDraftRevision = 0;
     state.selectedSuppliers = new Set(state.activeWorkUnit.suppliers); updateSupplierChecks();
     resetReviewWorkflow(`已選擇${units.length}個審核單位，正在下載合併審核報表。`);
     renderWorkUnitDashboard();
@@ -2019,7 +2122,12 @@
   async function postJson(url, payload, headers = {}, method = "POST") {
     const response = await fetch(url, { method, headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(payload) });
     const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`); return result;
+    if (!response.ok) {
+      const error = new Error(result.error || `HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return result;
   }
   function newBatchId() {
     const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);

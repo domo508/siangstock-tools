@@ -4,6 +4,8 @@
   let accessToken = "";
   let tokenClient = null;
   const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const TRANSIENT_GOOGLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+  const GOOGLE_READ_RETRY_DELAYS = [350, 900];
   const SCOPES = [
     "openid", "email",
     "https://www.googleapis.com/auth/drive.readonly",
@@ -32,19 +34,45 @@
     });
   }
 
+  function wait(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+
+  async function googleErrorMessage(response) {
+    let message = `Google API ${response.status}`;
+    try { message = (await response.json()).error?.message || message; } catch (_error) { /* no response body */ }
+    if (TRANSIENT_GOOGLE_STATUSES.has(response.status)) {
+      return `Google Drive／試算表服務暫時忙碌（${response.status}），系統已自動重試仍未成功`;
+    }
+    return message;
+  }
+
   async function googleFetch(url, options = {}) {
     if (!accessToken) throw new Error("請先完成公司 Google 授權。");
-    const response = await fetch(url, { ...options, headers: { ...(options.headers || {}), Authorization: `Bearer ${accessToken}` } });
-    if (response.status === 401) {
-      accessToken = "";
-      throw new Error("Google 授權已過期，請重新登入。");
+    const method = String(options.method || "GET").toUpperCase();
+    const retryDelays = method === "GET" || method === "HEAD" ? GOOGLE_READ_RETRY_DELAYS : [];
+    for (let attempt = 0; ; attempt += 1) {
+      let response;
+      try {
+        response = await fetch(url, { ...options, headers: { ...(options.headers || {}), Authorization: `Bearer ${accessToken}` } });
+      } catch (error) {
+        if (attempt < retryDelays.length) {
+          await wait(retryDelays[attempt]);
+          continue;
+        }
+        throw new Error(`與 Google Drive／試算表的連線暫時中斷，系統已自動重試仍未成功：${error?.message || "網路連線失敗"}`);
+      }
+      if (response.status === 401) {
+        accessToken = "";
+        throw new Error("Google 授權已過期，請重新登入。");
+      }
+      if (response.ok) return response;
+      if (TRANSIENT_GOOGLE_STATUSES.has(response.status) && attempt < retryDelays.length) {
+        await wait(retryDelays[attempt]);
+        continue;
+      }
+      throw new Error(await googleErrorMessage(response));
     }
-    if (!response.ok) {
-      let message = `Google API ${response.status}`;
-      try { message = (await response.json()).error?.message || message; } catch (_error) { /* no response body */ }
-      throw new Error(message);
-    }
-    return response;
   }
 
   async function verifyCompanyIdentity() {
@@ -247,28 +275,36 @@
 
   async function loadAll(config, XLSX, onProgress = () => {}) {
     const source = config.fixedSources;
-    const tracked = async (id, task) => {
+    const tracked = async (id, label, task) => {
       onProgress({ id, status: "loading", message: "正在唯讀取得…" });
       try {
         const result = await task();
         onProgress({ id, status: "success", message: "已下載，正在格式檢核" });
         return result;
       } catch (error) {
-        onProgress({ id, status: "error", message: error?.message || "取得失敗" });
+        error.sourceId ||= id;
+        error.sourceLabel ||= label;
+        error.failureStage ||= "Google資料讀取";
+        onProgress({ id, status: "error", message: `${error.failureStage}失敗：${error?.message || "取得失敗"}` });
         throw error;
       }
     };
     const results = await Promise.allSettled([
-      tracked("master", () => loadLatestMaster(source.productMasterFolderId)),
-      tracked("marketing", async () => {
+      tracked("master", "商品主檔", () => loadLatestMaster(source.productMasterFolderId)),
+      tracked("marketing", "整體行銷策略", async () => {
         const file = await downloadDriveFile(source.marketingDriveFileId, "整體行銷策略.xlsx");
         return { file, metadata: { fileId: source.marketingDriveFileId, sha256: await sha256(await file.arrayBuffer()), fetchedAt: new Date().toISOString() } };
       }),
-      tracked("puyouma", () => loadSpreadsheet(source.puyoumaSpreadsheetId, ["'庫存+下單'", "'庫存布'"], XLSX)),
-      tracked("lirong", () => loadPreferredSpreadsheet(source.lirongSpreadsheetId, ["下單", ...(source.lirongSheets || []), "工作表1"], XLSX))
+      tracked("puyouma", "普優瑪寄庫表", () => loadSpreadsheet(source.puyoumaSpreadsheetId, ["'庫存+下單'", "'庫存布'"], XLSX)),
+      tracked("lirong", "力榮寄庫表", () => loadPreferredSpreadsheet(source.lirongSpreadsheetId, ["下單", ...(source.lirongSheets || []), "工作表1"], XLSX))
     ]);
-    const failed = results.find((result) => result.status === "rejected");
-    if (failed) throw failed.reason;
+    const failures = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      const error = new Error(`${failures.length}個固定來源未完成`);
+      error.sourceFailures = failures;
+      throw error;
+    }
     const [master, marketing, puyouma, lirong] = results.map((result) => result.value);
     return { master, marketingFile: marketing.file, marketingMetadata: marketing.metadata, puyoumaWorkbook: puyouma.workbook, puyoumaMetadata: puyouma.metadata, lirongWorkbook: lirong.workbook, lirongMetadata: lirong.metadata };
   }

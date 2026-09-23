@@ -25,6 +25,28 @@ describe("固定 Google 來源頁籤選擇", () => {
     expect(googleSources.selectSpreadsheetSheetTitle(["供應商新版", "備註"], ["下單", "工作表1"])).toBe("供應商新版");
     expect(() => googleSources.selectSpreadsheetSheetTitle([], ["下單", "工作表1"])).toThrow("沒有可讀取的頁籤");
   });
+
+  it("Google 唯讀來源遇到503會自動重試", async () => {
+    let client;
+    let attempts = 0;
+    const sandbox = loadBrowserScript("../procurement-planning/google-sources.js", {
+      URLSearchParams,
+      google: { accounts: { oauth2: { initTokenClient: () => {
+        client = { callback: null, requestAccessToken: () => client.callback({ access_token: "test-token" }) };
+        return client;
+      } } } },
+      fetch: async () => {
+        attempts += 1;
+        if (attempts === 1) return { ok: false, status: 503, json: async () => ({ error: { message: "The service is currently unavailable." } }) };
+        return { ok: true, status: 200, json: async () => ({ files: [] }) };
+      }
+    });
+    const sources = sandbox.ProcurementGoogleSources;
+    sources.initialize("test-client");
+    await sources.authorize();
+    await expect(sources.listDriveExcelFiles("folder-id")).resolves.toEqual([]);
+    expect(attempts).toBe(2);
+  });
 });
 
 function makeMaster() {
@@ -1462,7 +1484,12 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260923-procurement-layout-r1");
+    expect(toolHtml).toContain("20260923-collaboration-parent-r3");
+    expect(toolApp).toContain("操作環節：自動取得最新資料");
+    expect(toolApp).toContain("失敗區塊：");
+    expect(toolApp).toContain("失敗階段：");
+    expect(toolApp).toContain("處理結果：");
+    expect(toolApp).toContain("建議處理：");
     expect(toolHtml).toContain("採購批次續作與多人協作");
     expect(toolHtml).toContain('id="shared-draft-list"');
     expect(toolHtml).toContain("發布協作草稿");
@@ -1475,6 +1502,10 @@ describe("採購規劃前台與入口", () => {
     expect(procurementWorker).toContain('canManageCollaborationDrafts: role === "admin" || role === "approver"');
     expect(procurementWorker).not.toContain('只有最高權限可以移出公司共用協作草稿');
     expect(toolApp).toContain("母批次・固定置頂");
+    expect(toolApp).toContain("function detachChildSharedIdentity");
+    expect(toolApp).toContain("state.sharedDraftId = \"\"; state.sharedDraftRevision = 0;");
+    expect(toolApp).toContain("function repairOverwrittenParentDraft");
+    expect(toolApp).toContain("已保留原子批次並恢復公司共用母批次");
     expect(toolApp).toContain("移出協作區");
     expect(toolApp).toContain('{ method: "DELETE"');
     expect(procurementWorker).toContain("removed_at IS NULL");
