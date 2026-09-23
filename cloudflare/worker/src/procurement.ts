@@ -317,7 +317,7 @@ async function config(request: Request, env: ProcurementEnv): Promise<Response> 
     notification: role === "admin"
       ? { recipient: settings.notificationRecipient, retentionMonths: settings.retentionMonths, events: settings.notificationEvents }
       : { enabled: true, recipient: settings.notificationRecipient },
-    permissions: { canApprove: role === "admin" || role === "approver", canManageRules: role === "admin" || role === "approver", canManageAccess: role === "admin", canManageBudget: role === "admin", canManageCollaborationDrafts: role === "admin" }
+    permissions: { canApprove: role === "admin" || role === "approver", canManageRules: role === "admin" || role === "approver", canManageAccess: role === "admin", canManageBudget: role === "admin", canManageCollaborationDrafts: role === "admin" || role === "approver" }
   });
 }
 
@@ -499,7 +499,6 @@ async function saveCollaborationDraft(request: Request, env: ProcurementEnv, dra
 async function removeCollaborationDraft(request: Request, env: ProcurementEnv, draftId: string): Promise<Response> {
   requireSameOrigin(request, env);
   const access = await verifyApprover(request, env);
-  if (access.role !== "admin") throw new RequestValidationError("只有最高權限可以移出公司共用協作草稿。", 403);
   const id = string(draftId, "協作草稿編號", 100);
   const existing = await env.DB.prepare(
     "SELECT stage, work_unit_label, revision FROM procurement_collaboration_drafts WHERE id = ? AND removed_at IS NULL"

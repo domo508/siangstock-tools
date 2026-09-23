@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20260923-collaboration-drafts-r1">
+  <link rel="stylesheet" href="style.css?v=20260923-procurement-layout-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -37,11 +37,18 @@
       </aside>
     </section>
 
-    <section class="steps" aria-label="使用步驟">
+    <section class="steps procurement-stage-nav" aria-label="採購流程階段">
       <div><span>1</span><strong>先看營收與額度</strong><small>確認本月預估營收、已承諾與尚可承諾金額。</small></div>
-      <div><span>2</span><strong>取得資料並計算</strong><small>匯入本次資料，再依供應商查看或匯出採購建議。</small></div>
-      <div><span>3</span><strong>回匯、核准與ERP</strong><small>二次覆核通過後才核准、寄送摘要並建立ERP。</small></div>
+      <div><span>2</span><strong>準備最新資料</strong><small>取得固定來源並匯入本次庫存、採購、調撥與銷售。</small></div>
+      <div><span>3</span><strong>選擇採購方式</strong><small>處理一般、新品、人工、補登與門市不足需求。</small></div>
+      <div><span>4</span><strong>查看建議與分批</strong><small>依供應商或分類複選審核單位並下載本批報表。</small></div>
+      <div><span>5</span><strong>回匯、核准與ERP</strong><small>二次覆核通過後才核准、寄送摘要並建立ERP。</small></div>
     </section>
+
+    <a class="procurement-todo-link" href="#store-shortage-card" aria-label="前往門市不足待採購區塊">
+      <span><strong>本次例外待辦</strong><small>門市不足核准後會在採購方式區集中處理，不打斷資料準備。</small></span>
+      <span id="store-shortage-top-count" class="source-badge recommended">正在同步門市不足</span>
+    </a>
 
     <section class="panel budget-panel stage-panel stage-one" aria-labelledby="budget-title">
       <div class="section-heading compact">
@@ -83,7 +90,7 @@
 
     <section class="panel stage-panel stage-two" aria-labelledby="source-title">
       <div class="section-heading">
-        <div><p class="eyebrow"><span class="stage-number" aria-hidden="true">2</span> 本次資料・採購建議</p><h2 id="source-title">取得最新資料並產生採購建議</h2></div>
+        <div><p class="eyebrow"><span class="stage-number" aria-hidden="true">2</span> 最新資料與計算基準</p><h2 id="source-title">準備本次資料，再選擇採購方式</h2></div>
         <p>固定 Google 來源須先用公司帳號授權；銷售、庫存、全部狀態採購單與期間調撥單仍由人員選檔。</p>
       </div>
 
@@ -110,26 +117,6 @@
           </button>
         </div>
       </div>
-
-      <section id="store-shortage-card" class="store-shortage-card" aria-labelledby="store-shortage-title">
-        <div class="store-shortage-heading">
-          <div>
-            <p class="eyebrow">核准後自動回拋</p>
-            <h3 id="store-shortage-title">門市未配待採購（已由總部確認）</h3>
-            <p>同一門市同一品號只採最新版，不會把每週快照重複相加。先選擇處理方式，才會納入本次採購建議。</p>
-          </div>
-          <span id="store-shortage-count" class="source-badge recommended">正在同步</span>
-        </div>
-        <div id="store-shortage-empty" class="store-shortage-empty">目前沒有已核准的門市未配需求。</div>
-        <div id="store-shortage-table-wrap" class="result-table-wrap" hidden>
-          <table class="result-table compact-table">
-            <thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>核准需求</th><th>已配</th><th>確認未配</th><th>已採購覆蓋</th><th>尚未採購覆蓋</th><th>後續已補配</th><th>尚待門市補配</th><th>需要到店日</th><th>處理狀態</th><th>處理／結案</th></tr></thead>
-            <tbody id="store-shortage-rows"></tbody>
-          </table>
-        </div>
-        <div class="source-control-actions shortage-run-actions"><button id="run-shortage-order-button" class="primary-button" type="button" disabled>產生門市不足補採新單</button></div>
-        <p id="store-shortage-status" class="budget-note">暫估未配不會占用額度；只有總部核准後的最新版需求才會顯示在這裡。</p>
-      </section>
 
       <ol id="auto-source-progress" class="source-progress" aria-label="自動資料取得進度" aria-live="polite" hidden>
         <li data-source-progress="master" data-status="waiting"><span class="source-progress-icon" aria-hidden="true">○</span><span>商品主檔</span><strong data-source-message>等待取得</strong></li>
@@ -277,8 +264,8 @@
 
       <section class="special-workflows" aria-labelledby="special-workflows-title">
         <div class="section-heading compact">
-          <div><p class="eyebrow">其它採購流程</p><h3 id="special-workflows-title">新品、人工草稿與已開ERP補登</h3></div>
-          <p>前兩項共用本頁兩次回匯與核准；補登只接受已在ERP建立的採購單，依單號去重後直接納入台帳。</p>
+          <div><p class="eyebrow"><span class="stage-number" aria-hidden="true">3</span> 採購方式與例外需求</p><h3 id="special-workflows-title">新品、人工草稿、已開ERP補登與門市不足</h3></div>
+          <p>一般採購由上方產生；例外流程集中在此。前兩項共用兩次回匯與核准，補登依ERP單號去重後直接納入台帳。</p>
         </div>
         <div class="special-workflow-grid">
           <article>
@@ -301,6 +288,37 @@
           </article>
         </div>
         <p id="special-workflow-status" class="main-status" role="status">請先完成上方最新資料計算；系統不會把草稿直接算入正式額度。</p>
+
+        <details id="store-shortage-card" class="store-shortage-card" aria-labelledby="store-shortage-title">
+          <summary class="store-shortage-heading">
+            <span>
+              <span class="eyebrow">核准後自動回拋</span>
+              <strong id="store-shortage-title">門市不足待採購</strong>
+              <small>同一門市同一品號只採最新版；先選處理方式，才會納入本次採購建議。</small>
+            </span>
+            <span class="store-shortage-summary-state"><span id="store-shortage-count" class="source-badge recommended">正在同步</span><span class="store-shortage-toggle-text" aria-hidden="true"></span></span>
+          </summary>
+          <div class="store-shortage-body">
+            <div id="store-shortage-empty" class="store-shortage-empty">目前沒有已核准的門市未配需求。</div>
+            <div id="store-shortage-batch-bar" class="shortage-batch-bar" hidden>
+              <label><input id="store-shortage-select-all" type="checkbox"> 全選本頁 <strong id="store-shortage-selected-count">0項</strong></label>
+              <div class="shortage-batch-actions">
+                <button type="button" class="secondary-button" data-shortage-bulk-mode="merge_next" disabled>批次併入下一張</button>
+                <button type="button" class="primary-button" data-shortage-bulk-mode="new_order" disabled>批次建立補採新單</button>
+                <button type="button" class="secondary-button" data-shortage-bulk-close="resolved" disabled>批次結案</button>
+                <button type="button" class="secondary-button" data-shortage-bulk-close="cancelled" disabled>批次取消</button>
+              </div>
+            </div>
+            <div id="store-shortage-table-wrap" class="result-table-wrap" hidden>
+              <table class="result-table compact-table store-shortage-table">
+                <thead><tr><th class="shortage-select-column">選取</th><th>門市</th><th>ERP品號</th><th>品名</th><th>核准需求</th><th>已配</th><th>確認未配</th><th>已採購覆蓋</th><th>尚未採購覆蓋</th><th>後續已補配</th><th>尚待門市補配</th><th>需要到店日</th><th>處理狀態</th><th>單筆處理／結案</th></tr></thead>
+                <tbody id="store-shortage-rows"></tbody>
+              </table>
+            </div>
+            <div class="source-control-actions shortage-run-actions"><button id="run-shortage-order-button" class="primary-button" type="button" disabled>產生門市不足補採新單</button></div>
+            <p id="store-shortage-status" class="budget-note" aria-live="polite">暫估未配不會占用額度；只有總部核准後的最新版需求才會顯示在這裡。</p>
+          </div>
+        </details>
       </section>
       <div id="source-status" class="result-alert" role="status">固定來源尚未完成公司 Google 授權；可先使用各來源的手動備援。</div>
       <div class="result-alert warn" role="note"><strong>暫行權限例外：</strong>普優瑪與力榮寄庫表目前仍可能開放「知道連結的任何人可編輯」。因權限由供應商維護，本次先不阻擋部署；工具仍會逐次檢查來源格式、資料日期與內容雜湊，但此項尚未完成正式權限驗收。</div>
@@ -308,7 +326,7 @@
 
     <section id="result-panel" class="panel results stage-panel stage-two-results" aria-labelledby="result-title" hidden>
       <div class="section-heading">
-        <div><p class="eyebrow">計算結果</p><h2 id="result-title">總部採購與工廠寄庫建議</h2></div>
+        <div><p class="eyebrow"><span class="stage-number" aria-hidden="true">4</span> 建議與分批審核</p><h2 id="result-title">總部採購與工廠寄庫建議</h2></div>
         <p id="date-check-message"></p>
       </div>
       <div class="supplier-filter" aria-labelledby="supplier-filter-title">
@@ -360,7 +378,7 @@
     </section>
 
     <section class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
-      <div class="section-heading"><div><p class="eyebrow"><span class="stage-number" aria-hidden="true">3</span> 回匯・核准・ERP</p><h2 id="workflow-title">人工回匯、二次確認與正式核准</h2></div><p>可在原報表新增品號，只填ERP品號、人工量與原因；工具會以同一計算批次補齊資料。待核准階段不寄信。</p></div>
+      <div class="section-heading"><div><p class="eyebrow"><span class="stage-number" aria-hidden="true">5</span> 回匯・核准・ERP</p><h2 id="workflow-title">人工回匯、二次確認與正式核准</h2></div><p>可在原報表新增品號，只填ERP品號、人工量與原因；工具會以同一計算批次補齊資料。待核准階段不寄信。</p></div>
       <aside id="resume-draft-card" class="resume-draft-card" hidden>
         <div class="resume-draft-heading"><strong>採購批次續作與多人協作</strong><small>本機草稿可發布成公司共用協作草稿；授權同事能在自己的電腦查看並接續。版本衝突時會停止儲存，不會直接覆蓋別人的更新。</small></div>
         <section class="resume-draft-group" aria-labelledby="shared-draft-title">
@@ -438,6 +456,6 @@
   <script src="core.js?v=20260923-collaboration-drafts-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
   <script src="google-sources.js?v=20260923-lirong-sheet-r1"></script>
-  <script src="app.js?v=20260923-collaboration-drafts-r1"></script>
+  <script src="app.js?v=20260923-procurement-layout-r1"></script>
 </body>
 </html>

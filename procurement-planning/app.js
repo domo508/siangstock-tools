@@ -16,7 +16,7 @@
     selectedSuppliers: new Set(), returnScope: null, consignmentSource: null,
     googleAuthorized: false, modelWorker: null, modelDraft: null,
     baseAnalysis: null, parsedSources: null, workflowType: "system_recommendation",
-    newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], storeShortagePermissions: { canDecide: false }, shortageRunMode: "merge_next",
+    newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], storeShortagePermissions: { canDecide: false }, storeShortageRendered: false, shortageRunMode: "merge_next",
     purchaseStatusSummary: null, costSummary: null, sharedCostSnapshot: null, draftId: "", draftStage: "", latestDraft: null, workflowDrafts: [], sharedDrafts: [], sharedDraftId: "", sharedDraftRevision: 0, parentBatchId: "", activeWorkUnit: null, selectedWorkUnitIds: new Set(), forecastCostRate: DEFAULT_COST_RATE
   };
 
@@ -53,7 +53,7 @@
     resumeDraftCard: get("#resume-draft-card"), resumeDraftList: get("#resume-draft-list"), sharedDraftList: get("#shared-draft-list"), sharedDraftStatus: get("#shared-draft-status"), refreshSharedDrafts: get("#refresh-shared-drafts-button"), restoreReportFile: get("#restore-report-file"), restoreReportLabel: get("#restore-report-label")
     ,newProductFile: get("#new-product-file"), newProductButton: get("#new-product-button"), manualDraftFiles: get("#manual-draft-files"), manualDraftButton: get("#manual-draft-button"),
     postedOrderFiles: get("#posted-order-files"), postedOrderButton: get("#posted-order-button"), specialWorkflowStatus: get("#special-workflow-status"), activeLedgerRows: get("#active-ledger-rows"),
-    storeShortageCount: get("#store-shortage-count"), storeShortageEmpty: get("#store-shortage-empty"), storeShortageTableWrap: get("#store-shortage-table-wrap"), storeShortageRows: get("#store-shortage-rows"), storeShortageStatus: get("#store-shortage-status"), runShortageOrder: get("#run-shortage-order-button")
+    storeShortageCard: get("#store-shortage-card"), storeShortageTopCount: get("#store-shortage-top-count"), storeShortageCount: get("#store-shortage-count"), storeShortageEmpty: get("#store-shortage-empty"), storeShortageBatchBar: get("#store-shortage-batch-bar"), storeShortageSelectAll: get("#store-shortage-select-all"), storeShortageSelectedCount: get("#store-shortage-selected-count"), storeShortageTableWrap: get("#store-shortage-table-wrap"), storeShortageRows: get("#store-shortage-rows"), storeShortageStatus: get("#store-shortage-status"), runShortageOrder: get("#run-shortage-order-button")
   };
 
   function today() { return new Date().toISOString().slice(0, 10); }
@@ -1163,19 +1163,37 @@
     if (row.status === "arrived") return Number(row.fulfilled_quantity || 0) > 0 ? "已到貨，後續批次部分補配" : "已到貨待下次調撥";
     return ({ pending_decision: "待決定", merge_next: "等待併入下一張採購單", new_order: "建立門市不足補採新單" })[row.handling_mode] || row.status || "待決定";
   }
+  function selectedStoreShortageKeys() {
+    return [...elements.storeShortageRows.querySelectorAll("[data-shortage-select]:checked")].map((input) => ({ storeCode: input.dataset.store, sku: input.dataset.sku }));
+  }
+  function updateStoreShortageSelection() {
+    const checkboxes = [...elements.storeShortageRows.querySelectorAll("[data-shortage-select]")];
+    const selected = checkboxes.filter((input) => input.checked).length;
+    elements.storeShortageSelectedCount.textContent = `${selected}項`;
+    elements.storeShortageSelectAll.checked = checkboxes.length > 0 && selected === checkboxes.length;
+    elements.storeShortageSelectAll.indeterminate = selected > 0 && selected < checkboxes.length;
+    elements.storeShortageBatchBar.querySelectorAll("[data-shortage-bulk-mode], [data-shortage-bulk-close]").forEach((button) => { button.disabled = selected === 0 || !state.storeShortagePermissions?.canDecide; });
+  }
   function renderStoreShortageNeeds() {
     const rows = state.storeShortageNeeds || [];
     const total = rows.reduce((sum, row) => sum + Number(row.unfilled_quantity || 0), 0);
     const canDecide = Boolean(state.storeShortagePermissions?.canDecide);
-    elements.storeShortageCount.textContent = rows.length ? `${rows.length}項・${formatNumber(total)}件` : "目前無待辦";
+    const countLabel = rows.length ? `${rows.length}項・${formatNumber(total)}件` : "目前無待辦";
+    elements.storeShortageCount.textContent = countLabel;
+    elements.storeShortageTopCount.textContent = rows.length ? `門市不足 ${countLabel}` : "門市不足目前無待辦";
     elements.storeShortageEmpty.hidden = rows.length > 0;
+    elements.storeShortageBatchBar.hidden = rows.length === 0;
     elements.storeShortageTableWrap.hidden = rows.length === 0;
+    if (!state.storeShortageRendered || (rows.length > 0 && !elements.storeShortageCard.open)) elements.storeShortageCard.open = rows.length > 0;
+    state.storeShortageRendered = true;
     elements.storeShortageRows.innerHTML = rows.map((row) => {
       const purchaseUncovered = Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.covered_quantity || 0));
       const transferRemaining = Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.fulfilled_quantity || 0));
       const disabled = canDecide ? "" : " disabled";
-      return `<tr><td>${escapeHtml(row.store_code)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${formatNumber(row.approved_demand_quantity)}</td><td>${formatNumber(row.allocated_quantity)}</td><td>${formatNumber(row.unfilled_quantity)}</td><td>${formatNumber(row.covered_quantity)}</td><td>${formatNumber(purchaseUncovered)}</td><td>${formatNumber(row.fulfilled_quantity || 0)}</td><td>${formatNumber(transferRemaining)}</td><td>${escapeHtml(row.needed_by || "待確認")}</td><td>${escapeHtml(handlingLabel(row))}</td><td><div class="shortage-actions"><button type="button" data-shortage-mode="merge_next" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "merge_next" ? "is-selected" : ""}"${disabled}>併入下一張</button><button type="button" data-shortage-mode="new_order" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "new_order" ? "is-selected" : ""}"${disabled}>建立補採新單</button><button type="button" data-shortage-close="resolved" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"${disabled}>已補配結案</button><button type="button" data-shortage-close="cancelled" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"${disabled}>取消需求</button></div></td></tr>`;
+      return `<tr><td class="shortage-select-column"><input type="checkbox" data-shortage-select data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" aria-label="選取${escapeHtml(row.store_code)} ${escapeHtml(row.sku)}"${disabled}></td><td>${escapeHtml(row.store_code)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${formatNumber(row.approved_demand_quantity)}</td><td>${formatNumber(row.allocated_quantity)}</td><td>${formatNumber(row.unfilled_quantity)}</td><td>${formatNumber(row.covered_quantity)}</td><td>${formatNumber(purchaseUncovered)}</td><td>${formatNumber(row.fulfilled_quantity || 0)}</td><td>${formatNumber(transferRemaining)}</td><td>${escapeHtml(row.needed_by || "待確認")}</td><td>${escapeHtml(handlingLabel(row))}</td><td><div class="shortage-actions"><button type="button" data-shortage-mode="merge_next" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "merge_next" ? "is-selected" : ""}"${disabled}>併入下一張</button><button type="button" data-shortage-mode="new_order" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "new_order" ? "is-selected" : ""}"${disabled}>建立補採新單</button><button type="button" data-shortage-close="resolved" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"${disabled}>已補配結案</button><button type="button" data-shortage-close="cancelled" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"${disabled}>取消需求</button></div></td></tr>`;
     }).join("");
+    elements.storeShortageSelectAll.disabled = !canDecide || rows.length === 0;
+    updateStoreShortageSelection();
     elements.runShortageOrder.disabled = !rows.some((row) => row.handling_mode === "new_order" && Number(row.unfilled_quantity || 0) > Number(row.covered_quantity || 0)) || !requirementsReady();
   }
   async function loadStoreShortageNeeds() {
@@ -1223,6 +1241,40 @@
     } catch (error) {
       button.disabled = false;
       elements.storeShortageStatus.textContent = `處理方式儲存失敗：${error.message}`;
+    }
+  }
+
+  async function batchDecideStoreShortages(button) {
+    const selected = selectedStoreShortageKeys();
+    if (!selected.length) return;
+    const mode = button.dataset.shortageBulkMode;
+    const resolutionType = button.dataset.shortageBulkClose;
+    const actionLabel = mode === "merge_next" ? "併入下一張採購" : mode === "new_order" ? "建立補採新單" : resolutionType === "resolved" ? "已補配結案" : "取消需求";
+    let reason = "";
+    if (resolutionType) {
+      reason = globalThis.prompt(`請輸入這${selected.length}項批次「${actionLabel}」的共同原因：`, "")?.trim() || "";
+      if (!reason) return;
+    } else if (!globalThis.confirm(`確定將已勾選的${selected.length}項批次設為「${actionLabel}」？`)) return;
+    elements.storeShortageBatchBar.querySelectorAll("button").forEach((item) => { item.disabled = true; });
+    elements.storeShortageStatus.textContent = `正在批次處理${selected.length}項「${actionLabel}」…`;
+    const failures = [];
+    for (const item of selected) {
+      try {
+        if (resolutionType) {
+          await postJson(`/api/procurement/store-shortages/${encodeURIComponent(item.storeCode)}/${encodeURIComponent(item.sku)}/close`, { resolutionType, reason });
+        } else {
+          await postJson(`/api/procurement/store-shortages/${encodeURIComponent(item.storeCode)}/${encodeURIComponent(item.sku)}`, { handlingMode: mode }, {}, "PUT");
+        }
+      } catch (error) {
+        failures.push(`${item.storeCode}／${item.sku}：${error.message}`);
+      }
+    }
+    await loadStoreShortageNeeds();
+    if (state.analysis) invalidateAnalysis();
+    if (failures.length) {
+      elements.storeShortageStatus.textContent = `已完成${selected.length - failures.length}項；另有${failures.length}項失敗：${failures.slice(0, 3).join("；")}`;
+    } else {
+      elements.storeShortageStatus.textContent = `已完成${selected.length}項「${actionLabel}」；系統保留逐筆處理與稽核紀錄。`;
     }
   }
 
@@ -2092,6 +2144,15 @@
   elements.addChannel.addEventListener("click", addRevenueChannel); elements.refreshQueue.addEventListener("click", loadLedger); elements.refreshSharedDrafts.addEventListener("click", loadSharedWorkflowDrafts);
   elements.googleConnect.addEventListener("click", connectGoogle); elements.autoSource.addEventListener("click", loadAutomaticSources);
   elements.storeShortageRows.addEventListener("click", decideStoreShortage);
+  elements.storeShortageRows.addEventListener("change", (event) => { if (event.target.matches("[data-shortage-select]")) updateStoreShortageSelection(); });
+  elements.storeShortageSelectAll.addEventListener("change", () => {
+    elements.storeShortageRows.querySelectorAll("[data-shortage-select]").forEach((input) => { input.checked = elements.storeShortageSelectAll.checked; });
+    updateStoreShortageSelection();
+  });
+  elements.storeShortageBatchBar.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-shortage-bulk-mode], [data-shortage-bulk-close]");
+    if (button) batchDecideStoreShortages(button);
+  });
   elements.runShortageOrder.addEventListener("click", async () => { state.shortageRunMode = "new_order"; try { await analyze(); } finally { state.shortageRunMode = "merge_next"; } });
   elements.analyze.addEventListener("click", analyze); elements.download.addEventListener("click", startSelectedWorkUnits);
   elements.reviewButton.addEventListener("click", reviewReturn); elements.confirmReview.addEventListener("click", confirmSecondReview);

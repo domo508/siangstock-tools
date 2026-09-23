@@ -1462,7 +1462,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260923-collaboration-drafts-r1");
+    expect(toolHtml).toContain("20260923-procurement-layout-r1");
     expect(toolHtml).toContain("採購批次續作與多人協作");
     expect(toolHtml).toContain('id="shared-draft-list"');
     expect(toolHtml).toContain("發布協作草稿");
@@ -1472,11 +1472,18 @@ describe("採購規劃前台與入口", () => {
     expect(procurementWorker).toContain('/api/procurement/cost-snapshot');
     expect(procurementWorker).toContain('/api/procurement/collaboration-drafts');
     expect(toolApp).toContain("canManageCollaborationDrafts");
+    expect(procurementWorker).toContain('canManageCollaborationDrafts: role === "admin" || role === "approver"');
+    expect(procurementWorker).not.toContain('只有最高權限可以移出公司共用協作草稿');
     expect(toolApp).toContain("母批次・固定置頂");
     expect(toolApp).toContain("移出協作區");
     expect(toolApp).toContain('{ method: "DELETE"');
     expect(procurementWorker).toContain("removed_at IS NULL");
     expect(procurementWorker).toContain('request.method === "DELETE"');
+    expect(toolHtml).toContain('id="store-shortage-select-all"');
+    expect(toolHtml).toContain('data-shortage-bulk-mode="merge_next"');
+    expect(toolHtml).toContain('data-shortage-bulk-close="cancelled"');
+    expect(toolHtml.indexOf('id="special-workflows-title"')).toBeLessThan(toolHtml.indexOf('id="store-shortage-card"'));
+    expect(toolApp).toContain("async function batchDecideStoreShortages(button)");
     const collaborationMigration = readFileSync("worker/migrations/0022_procurement_collaboration_drafts.sql", "utf8");
     expect(collaborationMigration).toContain("CREATE TABLE procurement_collaboration_drafts");
     expect(collaborationMigration).not.toMatch(/file_name|excel|raw_rows/i);
