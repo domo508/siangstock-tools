@@ -144,6 +144,16 @@ function makeForecastModel() {
 }
 
 describe("採購規劃核心鎖定公式", () => {
+  it("完整採購檔同時有上次採購價與未稅採購價時採用本次未稅價格", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["單據編碼", "狀態", "貨號", "品名", "上次採購價", "未稅採購價", "採購數量", "交貨數量", "未交數量", "金額"],
+      ["PR2026090017", "主管審核", "D32387", "追加抱枕套", 95, 105, 80, 0, 80, 8400]
+    ]), "採購明細");
+    const report = core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: "完整採購檔.xlsx" });
+    expect(report.records[0]).toMatchObject({ documentCode: "PR2026090017", sku: "D32387", orderedQuantity: 80, unitCost: 105, orderedAmount: 8400 });
+  });
+
   it("月初只釋放第一階段額度，月中與月底自動累計釋放整月額度", () => {
     expect(core.resolveReleasedBudgetAmount({ checkpoint: "month-start", fullBudgetAmount: 2659538.3, monthStartReleasedAmount: 1329769.15 })).toEqual({
       checkpoint: "month-start", monthStartReleasedAmount: 1329769.15, additionalReleasedAmount: 0, releasedBudgetAmount: 1329769.15
@@ -1485,7 +1495,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260924-posted-order-r1");
+    expect(toolHtml).toContain("20260924-erp-reconcile-r1");
     expect(toolApp).toContain("state.postedOrderFiles.length && state.config?.permissions?.canApprove");
     expect(toolApp).toContain("state.parsedSources?.master");
     expect(toolApp).toContain("可直接檢查並補登，不必先產生採購建議");

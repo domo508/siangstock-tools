@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20260923-procurement-layout-r1">
+  <link rel="stylesheet" href="style.css?v=20260924-erp-reconcile-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -408,8 +408,6 @@
         <button id="approve-button" class="primary-button" type="button" disabled>正式核准並寄送摘要</button>
         <button id="retry-notification-button" class="secondary-button" type="button" disabled>重送摘要郵件</button>
         <button id="erp-button" class="secondary-button" type="button" disabled>下載ERP採購檔</button>
-        <label class="workflow-field"><span>ERP採購單號／確認註記</span><input id="erp-reference" type="text" maxlength="120" disabled></label>
-        <button id="erp-created-button" class="secondary-button" type="button" disabled>確認ERP已建立</button>
       </div>
       <p id="workflow-status" class="main-status" role="status">請先產生建議，再於分批審核區勾選一個或多個單位並下載本批Excel；下載後才會開放第一次人工回匯。</p>
       <div id="workflow-errors" class="workflow-errors" role="alert" hidden><strong id="workflow-error-title">尚有阻擋</strong><ul id="workflow-error-list"></ul></div>
@@ -419,8 +417,12 @@
         <div class="result-table-wrap"><table class="procurement-table compact-table"><thead><tr><th>批次</th><th>供應商</th><th>送出者</th><th>送出時間</th><th>核准金額</th><th>狀態／操作</th></tr></thead><tbody id="approval-queue-rows"></tbody></table></div>
       </div>
       <div class="approval-queue active-ledger" aria-labelledby="active-ledger-title">
-        <div class="section-heading compact"><div><h3 id="active-ledger-title">已承諾批次與額度異動</h3><p>最高權限可更正台帳金額或撤銷批次；這裡只改額度／付款摘要，不會改動已下載的Excel。</p></div></div>
+        <div class="section-heading compact"><div><h3 id="active-ledger-title">已承諾批次與額度異動</h3><p>ERP檔匯入完成後，直接在所屬批次填入ERP採購單號並確認。完整採購檔若出現品項、數量或價格差異，會在下方另列確認。</p></div></div>
         <div class="result-table-wrap"><table class="procurement-table compact-table"><thead><tr><th>批次</th><th>流程</th><th>ERP單號</th><th>供應商</th><th>狀態</th><th>承諾金額</th><th>版本</th><th>管理</th></tr></thead><tbody id="active-ledger-rows"></tbody></table></div>
+        <section id="erp-reconciliation-panel" class="erp-reconciliation-panel" aria-labelledby="erp-reconciliation-title" hidden>
+          <div class="section-heading compact"><div><h4 id="erp-reconciliation-title">ERP差異待確認</h4><p>完整採購檔與原核准內容不同時，確認原因後才會更新原批次台帳；不需要重新走第一次與第二次回匯。</p></div></div>
+          <div id="erp-reconciliation-list" class="erp-reconciliation-list"></div>
+        </section>
       </div>
     </section>
 
@@ -453,9 +455,9 @@
   <script src="xlsx-style-runtime.js?v=20260915-reader-fix-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260923-collaboration-drafts-r1"></script>
+  <script src="core.js?v=20260924-erp-reconcile-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
   <script src="google-sources.js?v=20260923-source-errors-r2"></script>
-  <script src="app.js?v=20260924-posted-order-r1"></script>
+  <script src="app.js?v=20260924-erp-reconcile-r1"></script>
 </body>
 </html>

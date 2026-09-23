@@ -45,14 +45,14 @@
     channelRows: get("#channel-rows"), kuanchengTotal: get("#kuancheng-total"), kuanmuTotal: get("#kuanmu-total"), addChannel: get("#add-channel-button"),
     reviewFile: get("#review-file"), reviewButton: get("#review-button"), secondReviewFile: get("#second-review-file"), confirmReview: get("#confirm-review-button"),
     submitApproval: get("#submit-approval-button"), approve: get("#approve-button"), retryNotification: get("#retry-notification-button"),
-    erp: get("#erp-button"), erpReference: get("#erp-reference"), erpCreated: get("#erp-created-button"), workflowStatus: get("#workflow-status"), workflowSummary: get("#workflow-summary"),
+    erp: get("#erp-button"), workflowStatus: get("#workflow-status"), workflowSummary: get("#workflow-summary"),
     workflowErrors: get("#workflow-errors"), workflowErrorTitle: get("#workflow-error-title"), workflowErrorList: get("#workflow-error-list"),
     approvalQueueRows: get("#approval-queue-rows"), refreshQueue: get("#refresh-queue-button"),
     reviewFileLabel: get("#review-file-label"), secondReviewFileLabel: get("#second-review-file-label"),
     workflowStepDownload: get("#workflow-step-download"), workflowStepFirst: get("#workflow-step-first"), workflowStepSecond: get("#workflow-step-second"), workflowStepApproval: get("#workflow-step-approval"),
     resumeDraftCard: get("#resume-draft-card"), resumeDraftList: get("#resume-draft-list"), sharedDraftList: get("#shared-draft-list"), sharedDraftStatus: get("#shared-draft-status"), refreshSharedDrafts: get("#refresh-shared-drafts-button"), restoreReportFile: get("#restore-report-file"), restoreReportLabel: get("#restore-report-label")
     ,newProductFile: get("#new-product-file"), newProductButton: get("#new-product-button"), manualDraftFiles: get("#manual-draft-files"), manualDraftButton: get("#manual-draft-button"),
-    postedOrderFiles: get("#posted-order-files"), postedOrderButton: get("#posted-order-button"), specialWorkflowStatus: get("#special-workflow-status"), activeLedgerRows: get("#active-ledger-rows"),
+    postedOrderFiles: get("#posted-order-files"), postedOrderButton: get("#posted-order-button"), specialWorkflowStatus: get("#special-workflow-status"), activeLedgerRows: get("#active-ledger-rows"), erpReconciliationPanel: get("#erp-reconciliation-panel"), erpReconciliationList: get("#erp-reconciliation-list"),
     storeShortageCard: get("#store-shortage-card"), storeShortageTopCount: get("#store-shortage-top-count"), storeShortageCount: get("#store-shortage-count"), storeShortageEmpty: get("#store-shortage-empty"), storeShortageBatchBar: get("#store-shortage-batch-bar"), storeShortageSelectAll: get("#store-shortage-select-all"), storeShortageSelectedCount: get("#store-shortage-selected-count"), storeShortageTableWrap: get("#store-shortage-table-wrap"), storeShortageRows: get("#store-shortage-rows"), storeShortageStatus: get("#store-shortage-status"), runShortageOrder: get("#run-shortage-order-button")
   };
 
@@ -362,7 +362,7 @@
     } else if (["approved", "erp_created"].includes(draft.stage) && state.review) {
       state.approved = true; setWorkflowStep(elements.workflowStepDownload, "done", "本批建議已下載"); setWorkflowStep(elements.workflowStepFirst, "done", "第一次覆核已通過");
       setWorkflowStep(elements.workflowStepSecond, "done", "二次確認已通過"); setWorkflowStep(elements.workflowStepApproval, "done", workflowStageLabel(draft.stage));
-      elements.erp.disabled = draft.stage === "erp_created"; elements.erpReference.disabled = draft.stage === "erp_created";
+      elements.erp.disabled = draft.stage === "erp_created";
       setWorkflowStatus(draft.stage === "erp_created" ? "此審核單位已完成ERP建立。" : "此審核單位已正式核准，可下載ERP採購檔。", "success");
     } else resetReviewWorkflow("已恢復採購建議；請重新選擇供應商並下載本批Excel。");
     renderWorkUnitDashboard(); renderBudget(); elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -899,7 +899,7 @@
     setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, false);
     setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, false);
     elements.reviewButton.disabled = true; elements.confirmReview.disabled = true; elements.submitApproval.disabled = true; elements.approve.disabled = true;
-    elements.retryNotification.disabled = true; elements.erp.disabled = true; elements.erpReference.value = ""; elements.erpReference.disabled = true; elements.erpCreated.disabled = true;
+    elements.retryNotification.disabled = true; elements.erp.disabled = true;
     elements.workflowSummary.replaceChildren();
     clearWorkflowErrors();
     setWorkflowStep(elements.workflowStepDownload, state.returnScope ? "done" : (state.analysis ? "active" : "waiting"), state.returnScope ? `已下載${state.activeWorkUnit?.label || `${state.returnScope.size}家供應商`}` : "先選擇一個分批審核單位並下載");
@@ -950,6 +950,7 @@
       elements.ledgerStatus.classList.remove("error");
       renderApprovalQueue();
       renderActiveLedger();
+      renderErpReconciliations();
       renderBudget();
     } catch (error) {
       state.ledger = null; elements.ledgerStatus.textContent = `台帳同步失敗：${error.message}；為避免錯算，正式核准前請重新整理。`;
@@ -989,26 +990,104 @@
     const fragment = document.createDocumentFragment();
     active.forEach((item) => {
       const row = document.createElement("tr");
-      appendCell(row, item.id); appendCell(row, workflowLabel(item.workflow_type)); appendCell(row, item.erp_reference || "—");
+      appendCell(row, item.id); appendCell(row, workflowLabel(item.workflow_type));
+      const erpCell = document.createElement("td");
+      if (item.status === "approved" && state.config?.permissions?.canApprove && !["manual_posted", "customer_custom"].includes(item.workflow_type)) {
+        const entry = document.createElement("label"); entry.className = "ledger-erp-entry";
+        const input = document.createElement("input"); input.type = "text"; input.maxLength = 120; input.placeholder = "輸入ERP採購單號"; input.setAttribute("aria-label", `${item.id} ERP採購單號`);
+        const hint = document.createElement("small"); hint.textContent = "匯入ERP後填寫；一張正式單號只能綁定一個批次。";
+        entry.append(input, hint); erpCell.appendChild(entry);
+        erpCell.dataset.erpEntry = item.id;
+      } else {
+        const reference = document.createElement("strong"); reference.textContent = item.erp_reference || "—"; erpCell.appendChild(reference);
+        if (item.erp_reference && item.erp_created_at) {
+          const meta = document.createElement("small"); meta.textContent = `由${item.erp_created_by || "核准者"}・${String(item.erp_created_at).replace("T", " ").slice(0, 19)}`; meta.style.display = "block"; erpCell.appendChild(meta);
+        }
+      }
+      row.appendChild(erpCell);
       appendCell(row, (item.supplier_summary || []).join("、") || "未提供"); appendCell(row, statusLabel(item.status)); appendCell(row, formatCurrency(item.approved_amount)); appendCell(row, `v${item.revision}`);
-      const action = document.createElement("td");
+      const action = document.createElement("td"); action.className = "ledger-action-stack";
+      if (item.status === "approved" && state.config?.permissions?.canApprove && !["manual_posted", "customer_custom"].includes(item.workflow_type)) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "secondary-button"; button.textContent = "確認ERP已開立"; button.disabled = true;
+        const input = erpCell.querySelector("input");
+        input.addEventListener("input", () => { button.disabled = !input.value.trim(); });
+        button.addEventListener("click", () => confirmLedgerErpCreated(item, input, button)); action.appendChild(button);
+      }
       if (state.config?.role === "admin" && item.status !== "received") {
         const correctButton = document.createElement("button"); correctButton.type = "button"; correctButton.className = "table-action"; correctButton.textContent = "更正金額";
         correctButton.addEventListener("click", () => correctLedgerBatch(item, correctButton));
         const revokeButton = document.createElement("button"); revokeButton.type = "button"; revokeButton.className = "table-action"; revokeButton.textContent = "撤銷";
         revokeButton.addEventListener("click", () => revokeLedgerBatch(item, revokeButton));
-        action.append(correctButton, document.createTextNode("　"), revokeButton);
+        action.append(correctButton, revokeButton);
       }
       if (state.config?.permissions?.canApprove) {
         const notifyButton = document.createElement("button"); notifyButton.type = "button"; notifyButton.className = "table-action"; notifyButton.textContent = "重送摘要";
         notifyButton.addEventListener("click", () => retryLedgerNotification(item.id, notifyButton));
-        if (action.childNodes.length) action.append(document.createTextNode("　"));
         action.appendChild(notifyButton);
       }
       if (!action.childNodes.length) action.textContent = item.status === "received" ? "已由收貨結案" : "僅最高權限可更正／撤銷";
       row.appendChild(action); fragment.appendChild(row);
     });
     elements.activeLedgerRows.replaceChildren(fragment);
+  }
+  async function confirmLedgerErpCreated(item, input, button) {
+    const erpReference = input.value.trim();
+    if (!erpReference) return;
+    button.disabled = true; input.disabled = true;
+    try {
+      await postJson(`/api/procurement/batches/${encodeURIComponent(item.id)}/erp-created`, { erpReference, idempotencyKey: `${item.id}:erp:${erpReference}` });
+      if (item.id === state.batchId) await persistWorkflowDraft("erp_created");
+      await loadLedger();
+      setWorkflowStatus(`批次${item.id}已連結ERP採購單${erpReference}；後續完整採購檔會自動核對收貨與差異。`, "success");
+    } catch (error) {
+      button.disabled = false; input.disabled = false;
+      setWorkflowStatus(`ERP單號回填失敗（已承諾批次${item.id}）：${error.message}`, "error");
+    }
+  }
+  function reconciliationTypeLabel(type) {
+    return ({ added: "ERP新增品項", removed: "ERP少了品項", quantity: "數量不同", price: "價格不同" })[type] || "內容不同";
+  }
+  function renderErpReconciliations() {
+    const records = state.ledger?.reconciliations || [];
+    elements.erpReconciliationPanel.hidden = records.length === 0;
+    if (!records.length) { elements.erpReconciliationList.replaceChildren(); return; }
+    const fragment = document.createDocumentFragment();
+    records.forEach((record) => {
+      const card = document.createElement("article"); card.className = "erp-reconciliation-card";
+      const heading = document.createElement("h5"); heading.textContent = `${record.erp_reference}・${(record.supplier_summary || []).join("、") || "未提供供應商"}`;
+      const summary = document.createElement("p"); summary.textContent = `原承諾${formatCurrencyPrecise(record.amount_before)}，ERP目前${formatCurrencyPrecise(record.amount_after)}，差額${formatCurrencyPrecise(record.amount_delta)}；共${record.difference_count}項需確認。`;
+      const wrap = document.createElement("div"); wrap.className = "result-table-wrap";
+      const table = document.createElement("table"); table.className = "procurement-table compact-table";
+      table.innerHTML = "<thead><tr><th>ERP品號</th><th>品名</th><th>差異</th><th>核准數量</th><th>ERP數量</th><th>原單價</th><th>ERP單價</th><th>金額差異</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+      (record.items || []).forEach((item) => {
+        const tr = document.createElement("tr");
+        [item.sku, item.name || "", reconciliationTypeLabel(item.difference_type), formatNumber(item.approved_quantity), formatNumber(item.erp_quantity), formatCurrencyPrecise(item.unit_cost_before), formatCurrencyPrecise(item.unit_cost_after), formatCurrencyPrecise(item.amount_delta)].forEach((value) => appendCell(tr, value));
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody); wrap.appendChild(table);
+      const actions = document.createElement("div"); actions.className = "erp-reconciliation-actions";
+      const label = document.createElement("label"); label.textContent = "差異原因";
+      const reason = document.createElement("textarea"); reason.rows = 2; reason.maxLength = 500; reason.placeholder = "例如：臨時追加贈品抱枕套，已向主管確認"; label.appendChild(reason);
+      const confirm = document.createElement("button"); confirm.type = "button"; confirm.className = "primary-button"; confirm.textContent = "確認並更新台帳"; confirm.disabled = !state.config?.permissions?.canApprove;
+      const sourceError = document.createElement("button"); sourceError.type = "button"; sourceError.className = "secondary-button"; sourceError.textContent = "標記ERP資料有誤"; sourceError.disabled = !state.config?.permissions?.canApprove;
+      const status = document.createElement("p"); status.className = "erp-reconciliation-status main-status"; status.setAttribute("role", "status");
+      confirm.addEventListener("click", () => resolveErpReconciliation(record, reason, confirm, status, "confirm"));
+      sourceError.addEventListener("click", () => resolveErpReconciliation(record, reason, sourceError, status, "source-error"));
+      actions.append(label, confirm, sourceError, status); card.append(heading, summary, wrap, actions); fragment.appendChild(card);
+    });
+    elements.erpReconciliationList.replaceChildren(fragment);
+  }
+  async function resolveErpReconciliation(record, reasonInput, button, status, action) {
+    const reason = reasonInput.value.trim();
+    if (!reason) { status.textContent = "請先填寫差異原因。"; status.className = "erp-reconciliation-status main-status error"; return; }
+    button.disabled = true; status.textContent = action === "confirm" ? "正在更新原批次台帳…" : "正在標記本次ERP來源資料…";
+    try {
+      await postJson(`/api/procurement/erp-reconciliations/${record.id}/${action}`, { reason });
+      if (action === "confirm") await sendPendingNotification(record.batch_id).catch(() => false);
+      await loadLedger();
+      setWorkflowStatus(action === "confirm" ? `${record.erp_reference}差異已確認並更新原批次台帳。` : `${record.erp_reference}已標記為ERP來源資料有誤；台帳未變更。`, "success");
+    } catch (error) { button.disabled = false; status.textContent = `ERP差異處理失敗（${record.erp_reference}）：${error.message}`; status.className = "erp-reconciliation-status main-status error"; }
   }
   async function sendPendingNotification(batchId) {
     const token = googleSources.token();
@@ -1372,6 +1451,36 @@
       expectedDeliveryDate: (row.deliveries || []).map((item) => item.deliveryDate).filter(Boolean).sort()[0] || ""
     }));
     await postJson("/api/procurement/pending-purchase-snapshot", { sourceDate: elements.pendingDate.value, rows }, {}, "PUT");
+  }
+  async function syncErpReconciliations(pendingReports) {
+    const linkedReferences = new Set((state.ledger?.batches || []).filter((row) => ["erp_created", "received"].includes(row.status) && row.erp_reference).map((row) => String(row.erp_reference).trim()));
+    if (!linkedReferences.size) return;
+    const grouped = new Map();
+    pendingReports.flatMap((report) => report.records || []).forEach((row) => {
+      const erpReference = String(row.documentCode || "").trim();
+      if (!linkedReferences.has(erpReference)) return;
+      const group = grouped.get(erpReference) || { erpReference, sourceStatus: "", documentClosed: false, fullyReceived: false, items: new Map() };
+      group.sourceStatus = row.status || group.sourceStatus;
+      group.documentClosed ||= Boolean(row.documentClosed);
+      group.fullyReceived ||= Boolean(row.fullyReceived);
+      const existing = group.items.get(row.sku);
+      if (existing && Math.abs(Number(existing.unitCost || 0) - Number(row.unitCost || 0)) >= 0.01) throw new Error(`${erpReference}的${row.sku}在完整採購檔出現不同未稅採購價。`);
+      const item = existing || { sku: row.sku, name: row.name || "", orderedQuantity: 0, unitCost: Number(row.unitCost || 0), orderedAmount: 0, deliveredQuantity: 0, remainingQuantity: 0, lifecycleStatus: "" };
+      item.orderedQuantity += Number(row.orderedQuantity || 0);
+      item.orderedAmount += Number(row.orderedAmount || 0) || Number(row.orderedQuantity || 0) * Number(row.unitCost || 0);
+      item.deliveredQuantity += Number(row.deliveredQuantity || 0);
+      item.remainingQuantity += Number(row.remainingQuantity || 0);
+      item.lifecycleStatus = row.status || item.lifecycleStatus;
+      group.items.set(row.sku, item); grouped.set(erpReference, group);
+    });
+    if (!grouped.size) return;
+    const orders = [...grouped.values()].map((group) => ({ ...group, items: [...group.items.values()] }));
+    const result = await postJson("/api/procurement/erp-reconciliations", { orders });
+    const pendingCount = (result.results || []).filter((row) => row.status === "pending").length;
+    const missing = (result.results || []).filter((row) => row.status === "missing_baseline").map((row) => row.erpReference);
+    await loadLedger();
+    if (missing.length) throw new Error(`ERP差異比對缺少原核准逐品項基準：${missing.join("、")}。這些舊批次台帳未變更，請保留原核准報表供補回。`);
+    if (pendingCount) setWorkflowStatus(`完整採購檔已找到${pendingCount}筆ERP內容差異，請在「ERP差異待確認」逐筆填寫原因後更新台帳。`, "error");
   }
   async function connectGoogle() {
     elements.googleConnect.disabled = true; elements.sourceStatus.textContent = "正在等待公司 Google 授權…";
@@ -1754,6 +1863,7 @@
       setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。${springFestivalNote}`, "success");
       await syncDetectedCustomOrders(pendingReports, master);
       await savePendingSnapshot(pendingReports);
+      await syncErpReconciliations(pendingReports);
       await persistWorkflowDraft("analysis");
       await saveCostSnapshot();
       renderBudget(); updateSpecialWorkflowReady(); elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1819,14 +1929,18 @@
     const validRows = report.records.filter((row) => workflowType !== "customer_custom" || row.isCustomOrder);
     if (!validRows.length) throw new Error(`${report.fileName}沒有可補登的採購明細。`);
     const bySupplier = new Map();
+    const approvedItems = [];
     validRows.forEach((row) => {
       const masterRow = master?.bySku?.get(row.sku);
       const supplier = String(report.metadata.supplier || masterRow?.supplier || "").trim();
       if (!supplier) throw new Error(`${report.fileName}的${row.sku}無法辨識供應商。`);
-      const amount = Number(row.amount || 0) || Number(row.quantity || 0) * Number(masterRow?.unitCost || 0);
+      const quantity = Number(row.orderedQuantity ?? row.quantity ?? 0);
+      const unitCost = Number(row.unitCost || masterRow?.unitCost || 0);
+      const amount = Number(row.orderedAmount || 0) || quantity * unitCost;
       if (!(amount > 0)) throw new Error(`${report.fileName}的${row.sku}缺少可計算的採購金額。`);
       const item = bySupplier.get(supplier) || { supplier, amount: 0, confirmedQty: 0, consignmentAvailableQty: 0 };
-      item.amount += amount; item.confirmedQty += Number(row.quantity || 0); bySupplier.set(supplier, item);
+      item.amount += amount; item.confirmedQty += quantity; bySupplier.set(supplier, item);
+      approvedItems.push({ sku: row.sku, name: row.name || masterRow?.name || "", supplier, quantity, unitCost, amount });
     });
     const paymentSchedule = [];
     let paymentCurrentMonth = 0;
@@ -1846,6 +1960,7 @@
       workflowType, supplierSummary: [...bySupplier.keys()], suggestedAmount: 0, manualAmount: amount, blockedAmount: 0,
       approvedAmount: amount, adjustmentAmount: amount, budgetAmount: currentBudget().availableBudget,
       paymentCurrentMonth, paymentFutureMonths, paymentSchedule,
+      approvedItems,
       warningSummary: workflowType === "customer_custom" ? "有客訂對應；不得扣一般淨需求" : "補登既有ERP採購單",
       idempotencyKey: `erp-import:${erpReference}`
     };
@@ -2114,6 +2229,10 @@
       approvedAmount: state.review.totals.approvedAmount, adjustmentAmount: state.review.totals.adjustmentAmount, budgetAmount: currentBudget().availableBudget,
       paymentCurrentMonth: currentMonthPayment, paymentFutureMonths: state.review.totals.approvedAmount - currentMonthPayment,
       paymentSchedule: state.review.payments.flatMap((row) => row.entries.map((entry) => ({ supplier: row.supplier, country: row.supplierCountry, ...entry }))),
+      approvedItems: state.review.rows.filter((row) => row.finalQty > 0).map((row) => ({
+        sku: row.sku, name: row.name || "", supplier: row.supplier || "", quantity: Number(row.finalQty || 0),
+        unitCost: Number(row.unitCost || 0), amount: Number(row.finalQty || 0) * Number(row.unitCost || 0)
+      })),
       storeShortageNeeds: linkedNeeds,
       warningSummary: currentBudget().remainingBudget - state.review.totals.approvedAmount < 0 ? "本批核准後超出中性情境尚可承諾額度" : "無",
       idempotencyKey: `${state.batchId}:submit`
@@ -2149,7 +2268,7 @@
     elements.approve.disabled = true; setWorkflowStatus("正在正式核准並建立通知工作…");
     try {
       await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/approve`, { idempotencyKey: `${state.batchId}:approve` });
-      state.approved = true; elements.erp.disabled = false; elements.erpReference.disabled = false; await loadLedger(); await persistWorkflowDraft("approved"); const token = googleSources.token();
+      state.approved = true; elements.erp.disabled = false; await loadLedger(); await persistWorkflowDraft("approved"); const token = googleSources.token();
       setWorkflowStep(elements.workflowStepApproval, "done", "正式核准完成，可下載ERP採購檔");
       if (!token) { elements.retryNotification.disabled = false; setWorkflowStatus("已正式核准且額度台帳已寫入；郵件待目前核准帳號完成 Google 授權後重送。", "error"); return; }
       try {
@@ -2176,20 +2295,10 @@
         const safeSupplier = String(supplier || "供應商").replace(/[\\/:*?"<>|]/g, "-").slice(0, 45);
         XLSX.writeFile(core.buildErpPurchaseWorkbook(state.review, XLSX, { approved: true, batchId: state.batchId, supplier }), `${state.batchId}_${safeSupplier}_ERP正式採購單.xlsx`, { compression: true });
       });
-      state.erpDownloaded = true; elements.erpCreated.disabled = !elements.erpReference.value.trim(); setWorkflowStatus(`已依供應商分開下載${suppliers.length}份ERP採購檔；完成ERP開單後請填採購單號或確認註記，再更新台帳狀態。`, "success");
+      state.erpDownloaded = true; setWorkflowStatus(`已依供應商分開下載${suppliers.length}份ERP採購檔；匯入ERP後，請在下方「已承諾批次與額度異動」的所屬批次填入ERP採購單號。`, "success");
     }
     catch (error) { setWorkflowStatus(error.message, "error"); }
   }
-  async function confirmErpCreated() {
-    const erpReference = elements.erpReference.value.trim();
-    if (!state.batchId || !state.erpDownloaded || !erpReference || !state.config?.permissions?.canApprove) return;
-    elements.erpCreated.disabled = true; setWorkflowStatus("正在將批次轉為已建立ERP、尚未到貨…");
-    try {
-      await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/erp-created`, { erpReference, idempotencyKey: `${state.batchId}:erp:${erpReference}` });
-      await loadLedger(); await persistWorkflowDraft("erp_created"); elements.erpReference.disabled = true; setWorkflowStatus("台帳已更新為已建立ERP、尚未到貨；金額只轉換狀態，不會重複占用額度。", "success");
-    } catch (error) { elements.erpCreated.disabled = false; setWorkflowStatus(`ERP狀態更新失敗：${error.message}`, "error"); }
-  }
-
   elements.newProductFile.addEventListener("change", () => { state.newProductFile = elements.newProductFile.files[0] || null; updateSpecialWorkflowReady(); });
   elements.manualDraftFiles.addEventListener("change", () => { state.manualDraftFiles = [...elements.manualDraftFiles.files]; updateSpecialWorkflowReady(); });
   elements.postedOrderFiles.addEventListener("change", () => {
@@ -2223,7 +2332,7 @@
     state.reviewFile = elements.reviewFile.files[0] || null; state.firstReview = null; state.secondReviewFile = null; state.review = null; state.approved = false;
     elements.reviewButton.disabled = !state.reviewFile; setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, false); elements.confirmReview.disabled = true;
     elements.submitApproval.disabled = true; elements.approve.disabled = true; elements.retryNotification.disabled = true; elements.erp.disabled = true;
-    elements.erpReference.value = ""; elements.erpReference.disabled = true; elements.erpCreated.disabled = true; state.erpDownloaded = false;
+    state.erpDownloaded = false;
     clearWorkflowErrors();
     setWorkflowStep(elements.workflowStepFirst, "active", state.reviewFile ? `已選擇${state.reviewFile.name}` : "請選擇第一次人工回匯檔");
     setWorkflowStep(elements.workflowStepSecond, "locked", "第一次覆核通過後開放");
@@ -2277,8 +2386,6 @@
   elements.reviewButton.addEventListener("click", reviewReturn); elements.confirmReview.addEventListener("click", confirmSecondReview);
   elements.submitApproval.addEventListener("click", submitForApproval); elements.approve.addEventListener("click", approveBatch);
   elements.retryNotification.addEventListener("click", retryNotification); elements.erp.addEventListener("click", downloadErp);
-  elements.erpReference.addEventListener("input", () => { elements.erpCreated.disabled = !(state.erpDownloaded && elements.erpReference.value.trim()); });
-  elements.erpCreated.addEventListener("click", confirmErpCreated);
   elements.restoreReportFile.addEventListener("change", async () => {
     const file = elements.restoreReportFile.files[0];
     if (!file) return;

@@ -363,6 +363,37 @@
 .special-workflows > .main-status { margin-top: 14px; }
 .active-ledger { margin-top: 24px; }
 .active-ledger .procurement-table { min-width: 1180px; }
+.ledger-erp-entry { display: grid; gap: 7px; min-width: 205px; }
+.ledger-erp-entry input,
+.erp-reconciliation-card textarea {
+  width: 100%;
+  border: 1px solid #bfd1d8;
+  border-radius: 10px;
+  padding: 9px 10px;
+  color: var(--ink);
+  background: #fff;
+  font: inherit;
+}
+.ledger-erp-entry small,
+.erp-reconciliation-card small { color: var(--muted); line-height: 1.5; }
+.ledger-action-stack { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 230px; }
+.ledger-action-stack .table-action { margin: 0; }
+.erp-reconciliation-panel { margin-top: 22px; padding: 18px; border: 1px solid #e2c47d; border-radius: 18px; background: var(--soft-yellow); }
+.erp-reconciliation-list { display: grid; gap: 14px; }
+.erp-reconciliation-card { padding: 17px; border: 1px solid #dbc27d; border-radius: 15px; background: #fff; }
+.erp-reconciliation-card h5 { margin: 0; color: var(--navy); font-size: 1.05rem; }
+.erp-reconciliation-card > p { margin: 7px 0 12px; color: var(--muted); line-height: 1.55; }
+.erp-reconciliation-card .result-table-wrap { margin: 10px 0 12px; }
+.erp-reconciliation-card table { min-width: 820px; }
+.erp-reconciliation-actions { display: grid; grid-template-columns: minmax(240px, 1fr) auto auto; gap: 10px; align-items: end; }
+.erp-reconciliation-actions label { display: grid; gap: 6px; color: var(--navy); font-weight: 800; }
+.erp-reconciliation-status { grid-column: 1 / -1; margin: 0; }
+
+@media (max-width: 760px) {
+  .erp-reconciliation-actions { grid-template-columns: 1fr; }
+  .erp-reconciliation-actions .primary-button,
+  .erp-reconciliation-actions .secondary-button { width: 100%; }
+}
 
 .procurement-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .summary-card .value.currency { font-size: 1.35rem; }
