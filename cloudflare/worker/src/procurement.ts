@@ -866,6 +866,34 @@ async function saveMonthPlan(request: Request, env: ProcurementEnv): Promise<Res
   return json({ month: analysisMonth, plan: serializeMonthPlan(row) });
 }
 
+function validatedApprovedItems(value: unknown, approvedAmount?: number) {
+  const approvedItems = value == null ? [] : value;
+  if (!Array.isArray(approvedItems) || approvedItems.length > 5000) throw new RequestValidationError("核准品項明細格式錯誤。");
+  const itemMap = new Map<string, { sku: string; name: string; supplier: string; quantity: number; unitCost: number; amount: number }>();
+  for (const raw of approvedItems) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("核准品項明細格式錯誤。");
+    const row = raw as Record<string, unknown>;
+    const sku = string(row.sku, "ERP品號", 80).toLocaleUpperCase("en-US");
+    const quantity = money(row.quantity, `${sku}核准數量`);
+    const unitCost = money(row.unitCost, `${sku}未稅採購價`);
+    if (!(quantity > 0)) throw new RequestValidationError(`${sku}核准數量必須大於0。`);
+    const name = typeof row.name === "string" ? row.name.trim().slice(0, 300) : "";
+    const supplier = typeof row.supplier === "string" ? row.supplier.trim().slice(0, 120) : "";
+    const amount = money(row.amount == null ? quantity * unitCost : row.amount, `${sku}核准金額`);
+    const existing = itemMap.get(sku);
+    if (existing && Math.abs(existing.unitCost - unitCost) >= 0.01) throw new RequestValidationError(`${sku}同批次出現不同未稅採購價。`);
+    if (existing) {
+      existing.quantity = Math.round((existing.quantity + quantity) * 10000) / 10000;
+      existing.amount = Math.round((existing.amount + amount) * 100) / 100;
+    } else itemMap.set(sku, { sku, name, supplier, quantity, unitCost, amount });
+  }
+  const normalizedItems = [...itemMap.values()];
+  if (normalizedItems.length && approvedAmount != null && Math.abs(normalizedItems.reduce((sum, row) => sum + row.amount, 0) - approvedAmount) >= 0.05) {
+    throw new RequestValidationError("逐品項核准金額合計與批次核准金額不一致。");
+  }
+  return normalizedItems;
+}
+
 function validatedBatch(input: Record<string, unknown>, actor: string) {
   const suggested = money(input.suggestedAmount, "系統建議金額");
   const manual = money(input.manualAmount, "人工回匯金額");
@@ -890,30 +918,7 @@ function validatedBatch(input: Record<string, unknown>, actor: string) {
     const row = raw as Record<string, unknown>;
     return { storeCode: string(row.storeCode, "門市代碼", 5), sku: string(row.sku, "ERP品號", 80), quantity: Math.round(money(row.quantity, "門市未配量")) };
   });
-  const approvedItems = input.approvedItems == null ? [] : input.approvedItems;
-  if (!Array.isArray(approvedItems) || approvedItems.length > 5000) throw new RequestValidationError("核准品項明細格式錯誤。");
-  const itemMap = new Map<string, { sku: string; name: string; supplier: string; quantity: number; unitCost: number; amount: number }>();
-  for (const raw of approvedItems) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("核准品項明細格式錯誤。");
-    const row = raw as Record<string, unknown>;
-    const sku = string(row.sku, "ERP品號", 80).toLocaleUpperCase("en-US");
-    const quantity = money(row.quantity, `${sku}核准數量`);
-    const unitCost = money(row.unitCost, `${sku}未稅採購價`);
-    if (!(quantity > 0)) throw new RequestValidationError(`${sku}核准數量必須大於0。`);
-    const name = typeof row.name === "string" ? row.name.trim().slice(0, 300) : "";
-    const supplier = typeof row.supplier === "string" ? row.supplier.trim().slice(0, 120) : "";
-    const amount = money(row.amount == null ? quantity * unitCost : row.amount, `${sku}核准金額`);
-    const existing = itemMap.get(sku);
-    if (existing && Math.abs(existing.unitCost - unitCost) >= 0.01) throw new RequestValidationError(`${sku}同批次出現不同未稅採購價。`);
-    if (existing) {
-      existing.quantity = Math.round((existing.quantity + quantity) * 10000) / 10000;
-      existing.amount = Math.round((existing.amount + amount) * 100) / 100;
-    } else itemMap.set(sku, { sku, name, supplier, quantity, unitCost, amount });
-  }
-  const normalizedItems = [...itemMap.values()];
-  if (normalizedItems.length && Math.abs(normalizedItems.reduce((sum, row) => sum + row.amount, 0) - approved) >= 0.05) {
-    throw new RequestValidationError("逐品項核准金額合計與批次核准金額不一致。");
-  }
+  const normalizedItems = validatedApprovedItems(input.approvedItems, approved);
   return {
     id: string(input.batchId, "批次編號", 80), analysisMonth: month(input.analysisMonth), supplierSummary,
     suggested, manual, blocked, approved, adjustment, budget: money(input.budgetAmount, "整月預估額度"),
@@ -1072,9 +1077,18 @@ async function markErpCreated(request: Request, env: ProcurementEnv, batchId: st
   if (duplicateReference) throw new RequestValidationError(`ERP採購單號已由批次${String(duplicateReference.id)}登錄，禁止重複占額。`, 409);
   const key = string(input.idempotencyKey, "冪等鍵", 120);
   const now = new Date().toISOString();
+  const before = await env.DB.prepare("SELECT id, status, approved_amount FROM procurement_batches WHERE id = ?").bind(batchId).first<Record<string, unknown>>();
+  if (!before) throw new RequestValidationError("找不到採購批次。", 404);
+  if (String(before.status) !== "approved") {
+    const duplicate = await env.DB.prepare("SELECT id FROM procurement_events WHERE idempotency_key = ? AND batch_id = ? AND event_type = 'erp_created'").bind(key, batchId).first();
+    if (duplicate) return json({ batch: { id: batchId, status: "erp_created" }, duplicate: true });
+    throw new RequestValidationError("只有已核准、尚未建立ERP的批次可以確認，請重新載入。", 409);
+  }
+  const approvedItems = validatedApprovedItems(input.approvedItems, Number(before.approved_amount));
   const result = await env.DB.batch([
     env.DB.prepare("UPDATE procurement_batches SET status = 'erp_created', erp_reference = ?, erp_created_at = ?, erp_created_by = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND status = 'approved'").bind(erpReference, now, actor, now, batchId),
-    env.DB.prepare("INSERT OR IGNORE INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) SELECT id, 'erp_created', approved_amount, 0, approved_amount, ?, ?, ?, ? FROM procurement_batches WHERE id = ? AND status = 'erp_created' AND updated_at = ?").bind(`ERP確認：${erpReference}`, now, actor, key, batchId, now)
+    env.DB.prepare("INSERT OR IGNORE INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) SELECT id, 'erp_created', approved_amount, 0, approved_amount, ?, ?, ?, ? FROM procurement_batches WHERE id = ? AND status = 'erp_created' AND updated_at = ?").bind(`ERP確認：${erpReference}`, now, actor, key, batchId, now),
+    ...approvedItems.map((row) => env.DB.prepare("INSERT OR IGNORE INTO procurement_batch_items (batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, remaining_quantity, lifecycle_status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ERP已開立・等待到貨', ?)").bind(batchId, row.sku, row.name, row.supplier, row.quantity, row.unitCost, row.amount, row.quantity, now))
   ]);
   if (Number(result[0].meta.changes || 0) === 0) {
     const duplicate = await env.DB.prepare("SELECT id FROM procurement_events WHERE idempotency_key = ? AND batch_id = ? AND event_type = 'erp_created'").bind(key, batchId).first();

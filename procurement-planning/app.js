@@ -1035,7 +1035,16 @@
     if (!erpReference) return;
     button.disabled = true; input.disabled = true;
     try {
-      await postJson(`/api/procurement/batches/${encodeURIComponent(item.id)}/erp-created`, { erpReference, idempotencyKey: `${item.id}:erp:${erpReference}` });
+      const localDraft = state.batchId === item.id
+        ? { review: state.review }
+        : state.workflowDrafts.find((draft) => draft.batchId === item.id && draft.review);
+      const approvedItems = (localDraft?.review?.rows || []).filter((row) => Number(row.finalQty || 0) > 0).map((row) => ({
+        sku: row.sku, name: row.name || "", supplier: row.supplier || "", quantity: Number(row.finalQty || 0),
+        unitCost: Number(row.unitCost || 0), amount: Number(row.finalQty || 0) * Number(row.unitCost || 0)
+      }));
+      await postJson(`/api/procurement/batches/${encodeURIComponent(item.id)}/erp-created`, {
+        erpReference, approvedItems, idempotencyKey: `${item.id}:erp:${erpReference}`
+      });
       if (item.id === state.batchId) await persistWorkflowDraft("erp_created");
       await loadLedger();
       setWorkflowStatus(`批次${item.id}已連結ERP採購單${erpReference}；後續完整採購檔會自動核對收貨與差異。`, "success");
