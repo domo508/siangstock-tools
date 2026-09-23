@@ -1477,6 +1477,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("新品首批採購");
     expect(toolHtml).toContain("人工匯入採購單");
     expect(toolHtml).toContain("補登已採購單");
+    expect(toolHtml).toContain("補登已建立ERP採購單可直接執行");
     expect(toolHtml).toContain('id="active-ledger-rows"');
     const toolApp = readFileSync("../procurement-planning/app.js", "utf8");
     const procurementWorker = readFileSync("worker/src/procurement.ts", "utf8");
@@ -1484,7 +1485,10 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260923-collaboration-parent-r3");
+    expect(toolHtml).toContain("20260924-posted-order-r1");
+    expect(toolApp).toContain("state.postedOrderFiles.length && state.config?.permissions?.canApprove");
+    expect(toolApp).toContain("state.parsedSources?.master");
+    expect(toolApp).toContain("可直接檢查並補登，不必先產生採購建議");
     expect(toolApp).toContain("操作環節：自動取得最新資料");
     expect(toolApp).toContain("失敗區塊：");
     expect(toolApp).toContain("失敗階段：");

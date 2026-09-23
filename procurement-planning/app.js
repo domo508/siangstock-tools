@@ -918,7 +918,7 @@
     const hasBase = Boolean(state.baseAnalysis && state.parsedSources);
     elements.newProductButton.disabled = !(hasBase && state.newProductFile);
     elements.manualDraftButton.disabled = !(hasBase && state.manualDraftFiles.length);
-    elements.postedOrderButton.disabled = !(hasBase && state.postedOrderFiles.length && state.config?.permissions?.canApprove);
+    elements.postedOrderButton.disabled = !(state.postedOrderFiles.length && state.config?.permissions?.canApprove);
   }
   function bindFileInput(input, key, label, multiple = false, workbookKey = "") {
     input.addEventListener("change", () => {
@@ -1820,7 +1820,7 @@
     if (!validRows.length) throw new Error(`${report.fileName}沒有可補登的採購明細。`);
     const bySupplier = new Map();
     validRows.forEach((row) => {
-      const masterRow = master.bySku.get(row.sku);
+      const masterRow = master?.bySku?.get(row.sku);
       const supplier = String(report.metadata.supplier || masterRow?.supplier || "").trim();
       if (!supplier) throw new Error(`${report.fileName}的${row.sku}無法辨識供應商。`);
       const amount = Number(row.amount || 0) || Number(row.quantity || 0) * Number(masterRow?.unitCost || 0);
@@ -1888,7 +1888,7 @@
       const reports = workbooks.map((workbook, index) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: state.postedOrderFiles[index].name }));
       let added = 0; let duplicate = 0;
       for (const report of reports) {
-        const result = await importPostedReport(report, state.parsedSources.master, "manual_posted");
+        const result = await importPostedReport(report, state.parsedSources?.master, "manual_posted");
         if (result.duplicate) duplicate += 1; else added += 1;
       }
       await loadLedger();
@@ -2192,7 +2192,18 @@
 
   elements.newProductFile.addEventListener("change", () => { state.newProductFile = elements.newProductFile.files[0] || null; updateSpecialWorkflowReady(); });
   elements.manualDraftFiles.addEventListener("change", () => { state.manualDraftFiles = [...elements.manualDraftFiles.files]; updateSpecialWorkflowReady(); });
-  elements.postedOrderFiles.addEventListener("change", () => { state.postedOrderFiles = [...elements.postedOrderFiles.files]; updateSpecialWorkflowReady(); });
+  elements.postedOrderFiles.addEventListener("change", () => {
+    state.postedOrderFiles = [...elements.postedOrderFiles.files];
+    updateSpecialWorkflowReady();
+    if (!state.postedOrderFiles.length) return;
+    if (!state.config?.permissions?.canApprove) {
+      elements.specialWorkflowStatus.textContent = `已選${state.postedOrderFiles.length}份ERP採購單，但目前帳號沒有補登台帳權限。`;
+      elements.specialWorkflowStatus.className = "main-status error";
+      return;
+    }
+    elements.specialWorkflowStatus.textContent = `已選${state.postedOrderFiles.length}份ERP採購單：${state.postedOrderFiles.map((file) => file.name).join("、")}。可直接檢查並補登，不必先產生採購建議。`;
+    elements.specialWorkflowStatus.className = "main-status success";
+  });
   elements.newProductButton.addEventListener("click", buildNewProductFlow);
   elements.manualDraftButton.addEventListener("click", buildManualDraftFlow);
   elements.postedOrderButton.addEventListener("click", importPostedOrders);

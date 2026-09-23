@@ -282,12 +282,12 @@
           </article>
           <article>
             <h4>補登已採購單</h4>
-            <p>只用於已在ERP建立、但未經本工具核准的採購單。需有ERP單據編碼；重複單號不會再占額。</p>
+            <p>只用於已在ERP建立、但未經本工具核准的採購單。不必先產生採購建議；需有ERP單據編碼，重複單號不會再占額。</p>
             <label class="file-button">選擇已建立ERP採購單<input id="posted-order-files" type="file" accept=".xlsx,.xls" multiple></label>
             <button id="posted-order-button" class="secondary-button" type="button" disabled>檢查並補登台帳</button>
           </article>
         </div>
-        <p id="special-workflow-status" class="main-status" role="status">請先完成上方最新資料計算；系統不會把草稿直接算入正式額度。</p>
+        <p id="special-workflow-status" class="main-status" role="status">新品與人工草稿須先完成最新資料計算；補登已建立ERP採購單可直接執行。</p>
 
         <details id="store-shortage-card" class="store-shortage-card" aria-labelledby="store-shortage-title">
           <summary class="store-shortage-heading">
@@ -456,6 +456,6 @@
   <script src="core.js?v=20260923-collaboration-drafts-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
   <script src="google-sources.js?v=20260923-source-errors-r2"></script>
-  <script src="app.js?v=20260923-collaboration-parent-r3"></script>
+  <script src="app.js?v=20260924-posted-order-r1"></script>
 </body>
 </html>
