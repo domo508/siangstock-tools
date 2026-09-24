@@ -2603,7 +2603,7 @@
           action: masterDataIncomplete
             ? "列入待人工確認；補齊供應商、正數進貨價與MOQ前不自動採購"
             : (productStatusPendingReview
-              ? "保留試算建議量；第一次回匯必須明確填寫採購量與原因，完成二次確認後才能核准"
+              ? "保留試算建議量；第一次回匯必須明確填寫採購量與原因，覆核通過後才能送出待核准"
               : (isGift ? "排除總部一般自動採購；活動需求另行管理" : `${supplierRule.exclusionReason}；只追蹤人工下單`))
         });
       }
@@ -3125,13 +3125,13 @@
     const range = XLSX.utils.decode_range(sheet["!ref"]);
     const headerRow = Number(options.headerRow || 0);
     const headerValues = XLSX.utils.sheet_to_json(sheet, { header: 1, range: headerRow, defval: "" })[0] || [];
-    const inputHeaders = new Set(options.inputHeaders || ["人工確認採購量", "人工調整原因", "二次確認採購量", "二次確認原因"]);
+    const inputHeaders = new Set(options.inputHeaders || ["人工確認採購量", "人工調整原因", "二次確認採購量", "二次確認原因", "第二次異動採購量", "第二次異動原因"]);
     const decisionHeaders = new Set(options.decisionHeaders || [
       "人工確認要求", "加總需求（公式）", "建議採購量", "總倉目前庫存可售至", "全公司合計庫存可售至", "全公司系統建議採購後可售至", "目前實際可採購量",
-      "全公司人工確認後可售至", "AI判斷", "最終可核准量", "最終可核准金額", "檢核結果", "回匯檢核狀態",
+      "全公司人工確認後可售至", "AI判斷", "最終可核准量", "第一次覆核可核准量", "最終可核准金額", "檢核結果", "回匯檢核狀態",
       "春節備貨規則", "春節額外備貨天數", "前次春節備貨未交量", "春節額外建議量", "調整前建議採購量"
     ]);
-    const longTextHeaders = new Set(["商品品名", "人工確認要求", "人工調整原因", "AI判斷理由", "規則阻擋原因", "阻擋原因", "供貨狀態", "缺貨／供貨狀態", "二次確認原因", "銷售來源"]);
+    const longTextHeaders = new Set(["商品品名", "人工確認要求", "人工調整原因", "第一次人工調整原因", "AI判斷理由", "規則阻擋原因", "阻擋原因", "供貨狀態", "缺貨／供貨狀態", "二次確認原因", "第二次異動原因", "銷售來源"]);
     const amountHeaders = new Set(["進貨價", "建議採購金額", "春節額外採購金額", "人工回匯金額", "規則阻擋金額", "最終可核准金額", "預計付款金額"]);
     const headerStyle = {
       fill: excelFill(EXCEL_CIS.navy),
@@ -3925,7 +3925,7 @@
         if (confirmedQty == null || confirmedQty < 0 || !Number.isInteger(confirmedQty)) errors.push({ sheetName, sourceRow: index + 2, sku, message: "人工確認採購量必須為0或正整數。" });
         if (!manualBlank && confirmedQty !== suggestedQty && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "修改採購量時必須填人工調整原因。" });
         if (productStatusPendingReview && manualBlank) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白，必須明確填寫人工確認採購量，不能直接沿用系統試算。" });
-        if (productStatusPendingReview && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白，人工調整原因必填，確認後才能進入二次覆核。" });
+        if (productStatusPendingReview && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白，人工調整原因必填，確認後才能完成第一次覆核。" });
         const packSize = Math.max(1, Number(baseline?.packSize || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
         const reservedConsignmentQty = Math.max(0, Number(options.reservedConsignmentBySku?.get?.(sku) || 0));
         const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
@@ -4009,26 +4009,29 @@
   function buildSecondReviewWorkbook(review, XLSX, options = {}) {
     const workbook = XLSX.utils.book_new();
     const summary = XLSX.utils.aoa_to_sheet([
-      ["第二次回匯覆核摘要"], ["批次編號", options.batchId || "待建立"], ["下單日", review.orderDate],
+      ["第一次覆核暨異動確認摘要"], ["批次編號", options.batchId || "待建立"], ["下單日", review.orderDate],
       ["系統建議金額", review.totals.suggestedAmount], ["人工回匯採購總額", review.totals.manualAmount],
       ["規則阻擋金額", review.totals.blockedAmount], ["最終可核准金額", review.totals.approvedAmount],
       ["人工調整增減金額", review.totals.adjustmentAmount], ["檢核結果", review.errors.length ? `阻擋：${review.errors.length}項` : "通過，可送正式核准"],
+      ["沒有第二次異動", "直接在工具按「全部沿用並送出待核准」，不必再次回匯本檔。"],
+      ["需要第二次異動", "只填有變更品項的「第二次異動採購量」與「第二次異動原因」；留白會沿用第一次覆核可核准量，填0代表取消且必須填原因。"],
       ["通知規則", "本步驟不寄信；正式核准／撤銷／更正才寄送摘要。"]
     ]);
     setColumnWidths(summary, [30, 70]);
     applySummaryCis(summary, XLSX);
-    XLSX.utils.book_append_sheet(workbook, summary, "01_回匯摘要");
-    appendJsonSheet(workbook, XLSX, "02_二次覆核", review.rows.map((row) => ({
+    XLSX.utils.book_append_sheet(workbook, summary, "01_覆核摘要");
+    appendJsonSheet(workbook, XLSX, "02_覆核與異動確認", review.rows.map((row) => ({
       "供應商": row.supplier, "供應商分類": row.supplierCountry, "ERP品號": row.sku, "供應商貨號": row.supplierSku,
-      "商品品名": row.name, "系統建議量": row.suggestedQty, "人工回匯量": row.confirmedQty, "人工確認要求": row.productStatusPendingReview ? "貨品狀態空白，已明確人工確認" : "一般回匯", "規則阻擋原因": row.blockedReason,
-      "最終可核准量": row.finalQty, "進貨價": row.unitCost, "人工回匯金額": row.manualAmount, "規則阻擋金額": row.blockedAmount,
-      "最終可核准金額": row.approvedAmount, "人工調整原因": row.reason, "全公司人工確認後可售至": row.availableTo, "AI判斷": row.aiJudgment,
+      "商品品名": row.name, "原始採購建議量": row.suggestedQty, "第一次人工回匯量": row.confirmedQty, "第一次人工調整原因": row.reason,
+      "第一次覆核可核准量": row.finalQty, "第二次異動採購量": "", "第二次異動原因": "",
+      "人工確認要求": row.productStatusPendingReview ? "貨品狀態空白，已明確人工確認" : "一般回匯", "規則阻擋原因": row.blockedReason,
+      "進貨價": row.unitCost, "人工回匯金額": row.manualAmount, "規則阻擋金額": row.blockedAmount,
+      "最終可核准金額": row.approvedAmount, "全公司人工確認後可售至": row.availableTo, "AI判斷": row.aiJudgment,
       "預估日需求": row.forecastDaily, "可用公司庫存": row.inventoryQty, "門市可售庫存": row.storeInventoryQty, "已採購未到貨": row.pendingQty,
       "本次人工新增": row.manuallyAdded ? "是；資料已由本次計算批次補回" : "否", "需求摘要": row.demandSummary || "",
       "寄倉現貨": row.consignmentCurrentQty || 0, "粉紅排程": row.consignmentScheduledQty || 0,
-      "目前實際可採購量": row.currentAvailableQty, "箱入／採購單位": row.packSize,
-      "二次確認採購量": "", "二次確認原因": ""
-    })), [18, 14, 16, 28, 52, 16, 16, 30, 18, 14, 18, 18, 20, 32, 18, 14, 16, 16, 16, 18, 20, 34, 16, 16, 18, 16, 18, 30]);
+      "目前實際可採購量": row.currentAvailableQty, "箱入／採購單位": row.packSize
+    })), [18, 14, 16, 28, 52, 16, 18, 32, 20, 18, 32, 30, 24, 18, 18, 18, 20, 18, 14, 16, 16, 16, 18, 20, 34, 16, 16, 18, 16]);
     appendJsonSheet(workbook, XLSX, "03_付款月份", review.payments.flatMap((supplier) => supplier.entries.map((entry) => ({
       "供應商": supplier.supplier, "供應商分類": supplier.supplierCountry, "平均採購週期": supplier.leadDays,
       "付款觸發": entry.trigger, "預計日期": entry.date, "付款月份": entry.month, "預計付款金額": entry.amount,
@@ -4041,9 +4044,10 @@
   }
 
   function reviewSecondApprovalWorkbook(workbook, XLSX, options = {}) {
-    const sheet = workbook.Sheets["02_二次覆核"];
+    const sheetName = workbook.Sheets["02_覆核與異動確認"] ? "02_覆核與異動確認" : "02_二次覆核";
+    const sheet = workbook.Sheets[sheetName];
     if (!sheet && workbook.SheetNames.some((name) => /回匯.*覆核|二次覆核/.test(name))) throw new Error("這是舊版二次覆核格式；請使用本次第一次回匯後由工具新下載的確認版。");
-    if (!sheet) throw new Error("確認版缺少02_二次覆核分頁；請使用本次第一次回匯後由工具新下載的確認版。");
+    if (!sheet) throw new Error("確認版缺少02_覆核與異動確認分頁；請使用本次第一次回匯後由工具新下載的確認版。");
     const sourceRows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: true });
     const rows = [];
     const errors = [];
@@ -4053,45 +4057,44 @@
       const sku = normalizeSku(source["ERP品號"]);
       if (!sku) continue;
       if (seen.has(sku)) {
-        errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "ERP品號重複。" });
+        errors.push({ sheetName, sourceRow: index + 2, sku, message: "ERP品號重複。" });
         continue;
       }
       seen.add(sku);
       const supplier = String(source["供應商"] || "").trim();
       const name = String(source["商品品名"] || "").trim();
-      const suggestedQty = Math.max(0, Number(parseNumber(source["系統建議量"]) || 0));
-      const firstConfirmedQty = Math.max(0, Number(parseNumber(source["人工回匯量"]) || 0));
-      const firstFinalQty = Math.max(0, Number(parseNumber(source["最終可核准量"]) || 0));
-      const confirmationCell = source["二次確認採購量"];
+      const suggestedQty = Math.max(0, Number(parseNumber(source["原始採購建議量"] ?? source["系統建議量"]) || 0));
+      const firstConfirmedQty = Math.max(0, Number(parseNumber(source["第一次人工回匯量"] ?? source["人工回匯量"]) || 0));
+      const firstFinalQty = Math.max(0, Number(parseNumber(source["第一次覆核可核准量"] ?? source["最終可核准量"]) || 0));
+      const confirmationCell = source["第二次異動採購量"] ?? source["二次確認採購量"];
       const confirmationBlank = confirmationCell === "" || confirmationCell == null;
       const finalQty = confirmationBlank ? firstFinalQty : parseNumber(confirmationCell);
-      const firstReason = String(source["人工調整原因"] || "").trim();
-      const secondReason = String(source["二次確認原因"] || "").trim();
+      const firstReason = String(source["第一次人工調整原因"] ?? source["人工調整原因"] ?? "").trim();
+      const secondReason = String(source["第二次異動原因"] ?? source["二次確認原因"] ?? "").trim();
       const reason = secondReason || firstReason;
       const blockedReason = String(source["規則阻擋原因"] || "").trim();
       const unitCost = parseNumber(source["進貨價"]);
       const baseline = options.baselineBySku?.get?.(sku);
-      if (options.baselineBySku && !baseline) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "品號不在第一次覆核結果，禁止加入。" });
+      if (options.baselineBySku && !baseline) errors.push({ sheetName, sourceRow: index + 2, sku, message: "品號不在第一次覆核結果，禁止加入。" });
       if (baseline) {
-        if (normalizeText(supplier) !== normalizeText(baseline.supplier)) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "供應商與第一次覆核結果不同，禁止修改。" });
-        if (Math.abs(Number(unitCost || 0) - Number(baseline.unitCost || 0)) >= 0.01) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "進貨價與第一次覆核結果不同，禁止修改。" });
-        if (Math.abs(firstFinalQty - Number(baseline.finalQty || 0)) >= 0.01 || blockedReason !== String(baseline.blockedReason || "")) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "第一次覆核結果欄位已被修改，請重新下載確認版。" });
+        if (normalizeText(supplier) !== normalizeText(baseline.supplier)) errors.push({ sheetName, sourceRow: index + 2, sku, message: "供應商與第一次覆核結果不同，禁止修改。" });
+        if (Math.abs(Number(unitCost || 0) - Number(baseline.unitCost || 0)) >= 0.01) errors.push({ sheetName, sourceRow: index + 2, sku, message: "進貨價與第一次覆核結果不同，禁止修改。" });
+        if (Math.abs(firstFinalQty - Number(baseline.finalQty || 0)) >= 0.01 || blockedReason !== String(baseline.blockedReason || "")) errors.push({ sheetName, sourceRow: index + 2, sku, message: "第一次覆核結果欄位已被修改，請重新下載確認版。" });
       }
-      if (confirmationBlank) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "必須填寫二次確認採購量，0也需明確填入。" });
-      if (baseline?.productStatusPendingReview && !firstReason) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "貨品狀態空白品項缺少第一次人工確認原因，請重新由第一次回匯產生確認版。" });
-      if (finalQty == null || finalQty < 0 || !Number.isInteger(finalQty)) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "二次確認採購量必須為0或正整數。" });
+      if (baseline?.productStatusPendingReview && !firstReason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白品項缺少第一次人工確認原因，請重新由第一次回匯產生確認版。" });
+      if (finalQty == null || finalQty < 0 || !Number.isInteger(finalQty)) errors.push({ sheetName, sourceRow: index + 2, sku, message: "第二次異動採購量必須為0或正整數。" });
       const packSize = Math.max(1, Number(baseline?.packSize || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
       const fullConsignmentReturnRequested = /普優[瑪碼]/.test(supplier) && isFullConsignmentReturnReason(reason);
       const tailBoxException = Boolean(fullConsignmentReturnRequested && Number(baseline?.currentAvailableQty || 0) > 0 && finalQty === Number(baseline.currentAvailableQty));
       if (fullConsignmentReturnRequested && finalQty !== Number(baseline?.currentAvailableQty || 0)) errors.push({
-        sheetName: "02_二次覆核", sourceRow: index + 2, sku,
-        message: `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，二次確認量必須維持第一次覆核確認的可清回量${Number(baseline?.currentAvailableQty || 0)}件。`
+        sheetName, sourceRow: index + 2, sku,
+        message: `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，第二次異動量必須維持第一次覆核確認的可清回量${Number(baseline?.currentAvailableQty || 0)}件。`
       });
-      if (finalQty != null && finalQty > 0 && finalQty % packSize !== 0 && !tailBoxException) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件；二次確認量必須填0或${packSize}的倍數。` });
-      if (baseline?.sellThroughConsignmentAllowed && Number(finalQty || 0) > Number(baseline.currentAvailableQty || 0)) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: `S品只能拉回既有寄庫現貨；本批最多可拉${baseline.currentAvailableQty}件。` });
-      if (blockedReason && finalQty !== 0) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: `規則阻擋品項必須維持0：${blockedReason}` });
-      if (!confirmationBlank && finalQty !== firstFinalQty && !secondReason) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "二次修改數量時必須填二次確認原因。" });
-      if (unitCost == null || unitCost < 0) errors.push({ sheetName: "02_二次覆核", sourceRow: index + 2, sku, message: "缺少有效進貨價，禁止核准金額。" });
+      if (finalQty != null && finalQty > 0 && finalQty % packSize !== 0 && !tailBoxException) errors.push({ sheetName, sourceRow: index + 2, sku, message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件；第二次異動量必須填0或${packSize}的倍數。` });
+      if (baseline?.sellThroughConsignmentAllowed && Number(finalQty || 0) > Number(baseline.currentAvailableQty || 0)) errors.push({ sheetName, sourceRow: index + 2, sku, message: `S品只能拉回既有寄庫現貨；本批最多可拉${baseline.currentAvailableQty}件。` });
+      if (blockedReason && finalQty !== 0) errors.push({ sheetName, sourceRow: index + 2, sku, message: `規則阻擋品項必須維持0：${blockedReason}` });
+      if (!confirmationBlank && finalQty !== firstFinalQty && !secondReason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "第二次異動數量時必須填寫第二次異動原因。" });
+      if (unitCost == null || unitCost < 0) errors.push({ sheetName, sourceRow: index + 2, sku, message: "缺少有效進貨價，禁止核准金額。" });
       const forecastDaily = Math.max(0, Number(source["預估日需求"] || 0));
       const inventoryQty = Math.max(0, Number(source["可用公司庫存"] || 0));
       const storeInventoryQty = Math.max(0, Number(source["門市可售庫存"] || 0));
@@ -4101,7 +4104,7 @@
       const comparison = suggestedQty > 0 ? Number(finalQty || 0) / suggestedQty : (Number(finalQty || 0) > 0 ? Infinity : 1);
       const aiJudgment = blockedReason ? "規則阻擋" : (comparison > 1.2 ? "偏高" : comparison < 0.8 ? "偏低" : "合理");
       rows.push({
-        sheetName: "02_二次覆核", sourceRow: index + 2, supplier,
+        sheetName, sourceRow: index + 2, supplier,
         supplierCountry: String(source["供應商分類"] || "待確認"), sku, supplierSku: String(source["供應商貨號"] || "").trim(), name,
         suggestedQty, confirmedQty: firstConfirmedQty, finalQty: Math.max(0, Number(finalQty || 0)), unitCost: Math.max(0, Number(unitCost || 0)), reason,
         blockedReason, productStatusPendingReview: Boolean(baseline?.productStatusPendingReview), suggestedAmount: suggestedQty * Math.max(0, Number(unitCost || 0)), manualAmount: firstConfirmedQty * Math.max(0, Number(unitCost || 0)),

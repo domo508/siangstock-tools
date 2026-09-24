@@ -224,7 +224,7 @@
   }
 
   function workflowStageLabel(stage) {
-    return ({ analysis: "已產生採購建議", downloaded: "等待第一次人工回匯", first_reviewed: "等待二次確認回匯", second_reviewed: "可送出待核准", pending_approval: "等待正式核准", approved: "已核准，待建立ERP", erp_created: "ERP已建立" })[stage] || "未完成批次";
+    return ({ analysis: "已產生採購建議", downloaded: "等待第一次人工回匯", first_reviewed: "第一次覆核完成，可直接送出或回匯異動", second_reviewed: "可送出待核准", pending_approval: "等待正式核准", approved: "已核准，待建立ERP", erp_created: "ERP已建立" })[stage] || "未完成批次";
   }
 
   function isUnfinishedWorkflowDraft(draft) { return draft && draft.stage !== "erp_created"; }
@@ -348,20 +348,22 @@
       setWorkflowStep(elements.workflowStepFirst, "active", "可繼續第一次人工回匯");
       setWorkflowStatus("已恢復未完成批次；請選擇先前填寫的第一次人工回匯檔。", "success");
     } else if (draft.stage === "first_reviewed" && state.firstReview) {
+      state.review = state.firstReview;
       setWorkflowStep(elements.workflowStepDownload, "done", "本批建議已下載"); setWorkflowStep(elements.workflowStepFirst, "done", "第一次覆核已通過");
-      setWorkflowStep(elements.workflowStepSecond, "active", "可繼續回匯二次確認版"); setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, true);
-      setWorkflowStatus("已恢復至二次確認階段；請回匯先前下載的二次覆核報表。", "success");
+      setWorkflowStep(elements.workflowStepSecond, "active", "無異動可直接送出；有異動才回匯"); setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, true);
+      elements.submitApproval.disabled = false; elements.submitApproval.textContent = "全部沿用並送出待核准";
+      setWorkflowStatus("已恢復第一次覆核結果；若沒有異動可直接送出，有異動再回匯先前下載的覆核與異動確認表。", "success");
     } else if (draft.stage === "second_reviewed" && state.review) {
       setWorkflowStep(elements.workflowStepDownload, "done", "本批建議已下載"); setWorkflowStep(elements.workflowStepFirst, "done", "第一次覆核已通過");
-      setWorkflowStep(elements.workflowStepSecond, "done", "二次確認已通過"); setWorkflowStep(elements.workflowStepApproval, "active", "可送出待核准台帳");
-      elements.submitApproval.disabled = state.review.errors?.length > 0; setWorkflowStatus("已恢復至待送核准階段。", "success");
+      setWorkflowStep(elements.workflowStepSecond, "done", "異動確認已通過"); setWorkflowStep(elements.workflowStepApproval, "active", "可送出待核准台帳");
+      elements.submitApproval.disabled = state.review.errors?.length > 0; elements.submitApproval.textContent = "送出異動後待核准"; setWorkflowStatus("已恢復至待送核准階段。", "success");
     } else if (draft.stage === "pending_approval" && state.review) {
       setWorkflowStep(elements.workflowStepDownload, "done", "本批建議已下載"); setWorkflowStep(elements.workflowStepFirst, "done", "第一次覆核已通過");
-      setWorkflowStep(elements.workflowStepSecond, "done", "二次確認已通過"); setWorkflowStep(elements.workflowStepApproval, "active", "已送待核准");
+      setWorkflowStep(elements.workflowStepSecond, "done", "覆核結果已確認"); setWorkflowStep(elements.workflowStepApproval, "active", "已送待核准");
       elements.approve.disabled = !state.config?.permissions?.canApprove; setWorkflowStatus(`批次${state.batchId}已送待核准；尚未寄信。`, "success");
     } else if (["approved", "erp_created"].includes(draft.stage) && state.review) {
       state.approved = true; setWorkflowStep(elements.workflowStepDownload, "done", "本批建議已下載"); setWorkflowStep(elements.workflowStepFirst, "done", "第一次覆核已通過");
-      setWorkflowStep(elements.workflowStepSecond, "done", "二次確認已通過"); setWorkflowStep(elements.workflowStepApproval, "done", workflowStageLabel(draft.stage));
+      setWorkflowStep(elements.workflowStepSecond, "done", "覆核結果已確認"); setWorkflowStep(elements.workflowStepApproval, "done", workflowStageLabel(draft.stage));
       elements.erp.disabled = draft.stage === "erp_created";
       setWorkflowStatus(draft.stage === "erp_created" ? "此審核單位已完成ERP建立。" : "此審核單位已正式核准，可下載ERP採購檔。", "success");
     } else resetReviewWorkflow("已恢復採購建議；請重新選擇供應商並下載本批Excel。");
@@ -898,14 +900,14 @@
     elements.reviewFile.value = ""; elements.secondReviewFile.value = "";
     setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, false);
     setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, false);
-    elements.reviewButton.disabled = true; elements.confirmReview.disabled = true; elements.submitApproval.disabled = true; elements.approve.disabled = true;
+    elements.reviewButton.disabled = true; elements.confirmReview.disabled = true; elements.submitApproval.disabled = true; elements.submitApproval.textContent = "全部沿用並送出待核准"; elements.approve.disabled = true;
     elements.retryNotification.disabled = true; elements.erp.disabled = true;
     elements.workflowSummary.replaceChildren();
     clearWorkflowErrors();
     setWorkflowStep(elements.workflowStepDownload, state.returnScope ? "done" : (state.analysis ? "active" : "waiting"), state.returnScope ? `已下載${state.activeWorkUnit?.label || `${state.returnScope.size}家供應商`}` : "先選擇一個分批審核單位並下載");
     setWorkflowStep(elements.workflowStepFirst, state.returnScope ? "active" : "locked", state.returnScope ? "已開放第一次人工回匯" : "下載本批Excel後開放");
     setWorkflowStep(elements.workflowStepSecond, "locked", "第一次覆核通過後開放");
-    setWorkflowStep(elements.workflowStepApproval, "locked", "二次確認通過後開放");
+    setWorkflowStep(elements.workflowStepApproval, "locked", "第一次覆核通過後開放");
     setWorkflowStatus(message);
   }
   function invalidateAnalysis() {
@@ -1915,7 +1917,7 @@
     state.returnScope = null;
     renderSummary(analysis, state.parsedSources.consignment);
     elements.resultPanel.hidden = false;
-    resetReviewWorkflow(`${label}已建立；請先勾選供應商並下載Excel，再走第一次回匯、二次確認與正式核准。`);
+    resetReviewWorkflow(`${label}已建立；請先勾選供應商並下載Excel，再走第一次回匯、需要時異動與正式核准。`);
     setStatus(`${label}完成：${analysis.rows.length}個SKU，系統建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。`, "success");
     elements.specialWorkflowStatus.textContent = `${label}已切換為目前工作批次；草稿尚未占用正式額度。`;
     elements.specialWorkflowStatus.className = "main-status success";
@@ -2196,24 +2198,28 @@
         createSummaryCard("系統建議金額", formatCurrency(t.suggestedAmount), "原始工具建議", "currency"),
         createSummaryCard("人工回匯採購總額", formatCurrency(t.manualAmount), "規則排除前", "currency"),
         createSummaryCard("規則阻擋金額", formatCurrency(t.blockedAmount), "S／專屬週期／贈品", "currency"),
-        createSummaryCard("最終可核准金額", formatCurrency(t.approvedAmount), "人工回匯－規則阻擋", "currency")
+        createSummaryCard("最終可核准金額", formatCurrency(t.approvedAmount), "人工回匯－規則阻擋", "currency"),
+        createSummaryCard("本次人工新增", `${state.firstReview.rows.filter((row) => row.manuallyAdded).length}項`, "已由本次計算批次補齊資料")
       );
       setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, state.firstReview.errors.length === 0);
-      elements.submitApproval.disabled = true;
-      if (state.firstReview.errors.length) renderWorkflowErrors(state.firstReview.errors, "第一次回匯尚有阻擋，未產生二次覆核報表");
+      state.review = state.firstReview.errors.length ? null : state.firstReview;
+      elements.submitApproval.disabled = state.firstReview.errors.length > 0;
+      elements.submitApproval.textContent = "全部沿用並送出待核准";
+      if (state.firstReview.errors.length) renderWorkflowErrors(state.firstReview.errors, "第一次回匯尚有阻擋，未產生覆核與異動確認表");
       else {
         clearWorkflowErrors();
         const unitLabel = (state.activeWorkUnit?.label || "採購").replace(/[\\/:*?"<>|]/g, "-").slice(0, 80);
-        outputXlsx.writeFile(core.buildSecondReviewWorkbook(state.firstReview, outputXlsx), `${elements.month.value}_${unitLabel}_回匯二次覆核報表.xlsx`, { compression: true, cellStyles: true });
+        outputXlsx.writeFile(core.buildSecondReviewWorkbook(state.firstReview, outputXlsx), `${elements.month.value}_${unitLabel}_第一次覆核暨異動確認表.xlsx`, { compression: true, cellStyles: true });
       }
       setWorkflowStep(elements.workflowStepFirst, state.firstReview.errors.length ? "blocked" : "done", state.firstReview.errors.length ? `有${state.firstReview.errors.length}項阻擋` : "第一次覆核已通過");
-      setWorkflowStep(elements.workflowStepSecond, state.firstReview.errors.length ? "locked" : "active", state.firstReview.errors.length ? "修正第一次回匯後重跑" : "請逐列填寫二次確認採購量");
-      setWorkflowStatus(state.firstReview.errors.length ? `覆核完成但有${state.firstReview.errors.length}項阻擋；請修正第一次回匯後重跑。` : "第一次覆核通過；請在下載報表逐列填二次確認採購量，再回匯確認版。", state.firstReview.errors.length ? "error" : "success");
+      setWorkflowStep(elements.workflowStepSecond, state.firstReview.errors.length ? "locked" : "active", state.firstReview.errors.length ? "修正第一次回匯後重跑" : "無異動直接送出；有異動只填變更列");
+      setWorkflowStep(elements.workflowStepApproval, state.firstReview.errors.length ? "locked" : "active", state.firstReview.errors.length ? "覆核通過後開放" : "可全部沿用並送出待核准");
+      setWorkflowStatus(state.firstReview.errors.length ? `覆核完成但有${state.firstReview.errors.length}項阻擋；請修正第一次回匯後重跑。` : "第一次覆核通過且已下載確認表；沒有異動可直接送出，有異動只需填寫變更品項後回匯同一份檔案。", state.firstReview.errors.length ? "error" : "success");
       if (!state.firstReview.errors.length) await persistWorkflowDraft("first_reviewed");
       renderBudget();
     } catch (error) {
       state.firstReview = null; state.review = null;
-      renderWorkflowErrors([{ message: error.message }], "第一次回匯失敗，未產生二次覆核報表");
+      renderWorkflowErrors([{ message: error.message }], "第一次回匯失敗，未產生覆核與異動確認表");
       setWorkflowStep(elements.workflowStepFirst, "blocked", "檔案或內容未通過檢查");
       setWorkflowStep(elements.workflowStepSecond, "locked", "第一次覆核通過後開放");
       setWorkflowStatus(`回匯失敗：${error.message}`, "error");
@@ -2222,7 +2228,7 @@
   }
   async function confirmSecondReview() {
     if (!state.secondReviewFile) return;
-    elements.confirmReview.disabled = true; setWorkflowStatus("正在檢查二次確認量、原因、付款月份與核准金額…");
+    elements.confirmReview.disabled = true; setWorkflowStatus("正在檢查第二次異動量、原因、付款月份與核准金額…");
     try {
       clearWorkflowErrors();
       state.review = core.reviewSecondApprovalWorkbook(await readWorkbook(state.secondReviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, baselineBySku: new Map(state.firstReview.rows.map((row) => [row.sku, row])) });
@@ -2231,21 +2237,21 @@
         createSummaryCard("系統建議金額", formatCurrency(t.suggestedAmount), "原始工具建議", "currency"),
         createSummaryCard("第一次人工回匯", formatCurrency(t.manualAmount), "規則排除前", "currency"),
         createSummaryCard("規則阻擋金額", formatCurrency(t.blockedAmount), "不可核准", "currency"),
-        createSummaryCard("二次確認核准金額", formatCurrency(t.approvedAmount), "將寫入集中台帳", "currency")
+        createSummaryCard("異動後核准金額", formatCurrency(t.approvedAmount), "將寫入集中台帳", "currency")
       );
-      elements.submitApproval.disabled = state.review.errors.length > 0;
-      if (state.review.errors.length) renderWorkflowErrors(state.review.errors, "二次確認版尚有阻擋，禁止送出");
-      setWorkflowStep(elements.workflowStepSecond, state.review.errors.length ? "blocked" : "done", state.review.errors.length ? `仍有${state.review.errors.length}項阻擋` : "二次確認已通過");
-      setWorkflowStep(elements.workflowStepApproval, state.review.errors.length ? "locked" : "active", state.review.errors.length ? "修正二次確認版後重跑" : "可送出待核准台帳");
-      setWorkflowStatus(state.review.errors.length ? `二次確認版仍有${state.review.errors.length}項阻擋，禁止送出。` : "二次確認版通過；可送出待核准台帳，此步驟不寄信。", state.review.errors.length ? "error" : "success");
+      elements.submitApproval.disabled = state.review.errors.length > 0; elements.submitApproval.textContent = "送出異動後待核准";
+      if (state.review.errors.length) renderWorkflowErrors(state.review.errors, "覆核與異動確認表尚有阻擋，禁止送出");
+      setWorkflowStep(elements.workflowStepSecond, state.review.errors.length ? "blocked" : "done", state.review.errors.length ? `仍有${state.review.errors.length}項阻擋` : "異動確認已通過");
+      setWorkflowStep(elements.workflowStepApproval, state.review.errors.length ? "locked" : "active", state.review.errors.length ? "修正異動確認表後重跑" : "可送出待核准台帳");
+      setWorkflowStatus(state.review.errors.length ? `覆核與異動確認表仍有${state.review.errors.length}項阻擋，禁止送出。` : "異動確認通過；可送出待核准台帳，此步驟不寄信。", state.review.errors.length ? "error" : "success");
       if (!state.review.errors.length) await persistWorkflowDraft("second_reviewed");
       renderBudget();
     } catch (error) {
       state.review = null; elements.submitApproval.disabled = true;
-      renderWorkflowErrors([{ message: error.message }], "二次確認版檢查失敗，禁止送出");
+      renderWorkflowErrors([{ message: error.message }], "覆核與異動確認表檢查失敗，禁止送出");
       setWorkflowStep(elements.workflowStepSecond, "blocked", "檔案或內容未通過檢查");
-      setWorkflowStep(elements.workflowStepApproval, "locked", "二次確認通過後開放");
-      setWorkflowStatus(`確認版失敗：${error.message}`, "error");
+      setWorkflowStep(elements.workflowStepApproval, "locked", "異動確認通過後開放");
+      setWorkflowStatus(`異動確認失敗：${error.message}`, "error");
     }
     finally { elements.confirmReview.disabled = !state.secondReviewFile; }
   }
@@ -2369,19 +2375,19 @@
   elements.reviewFile.addEventListener("change", () => {
     state.reviewFile = elements.reviewFile.files[0] || null; state.firstReview = null; state.secondReviewFile = null; state.review = null; state.approved = false;
     elements.reviewButton.disabled = !state.reviewFile; setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, false); elements.confirmReview.disabled = true;
-    elements.submitApproval.disabled = true; elements.approve.disabled = true; elements.retryNotification.disabled = true; elements.erp.disabled = true;
+    elements.submitApproval.disabled = true; elements.submitApproval.textContent = "全部沿用並送出待核准"; elements.approve.disabled = true; elements.retryNotification.disabled = true; elements.erp.disabled = true;
     state.erpDownloaded = false;
     clearWorkflowErrors();
     setWorkflowStep(elements.workflowStepFirst, "active", state.reviewFile ? `已選擇${state.reviewFile.name}` : "請選擇第一次人工回匯檔");
     setWorkflowStep(elements.workflowStepSecond, "locked", "第一次覆核通過後開放");
-    setWorkflowStep(elements.workflowStepApproval, "locked", "二次確認通過後開放");
+    setWorkflowStep(elements.workflowStepApproval, "locked", "第一次覆核通過後開放");
     setWorkflowStatus(state.reviewFile ? `已選擇${state.reviewFile.name}；請開始第一次回匯檢查。` : "尚未選擇人工回匯檔。");
   });
   elements.secondReviewFile.addEventListener("change", () => {
     state.secondReviewFile = elements.secondReviewFile.files[0] || null; state.review = null;
-    elements.confirmReview.disabled = !state.secondReviewFile; elements.submitApproval.disabled = true;
-    setWorkflowStep(elements.workflowStepSecond, "active", state.secondReviewFile ? `已選擇${state.secondReviewFile.name}` : "請選擇二次確認版");
-    setWorkflowStatus(state.secondReviewFile ? `已選擇確認版${state.secondReviewFile.name}；請執行最終檢查。` : "請回匯已填寫二次確認量的覆核報表。");
+    elements.confirmReview.disabled = !state.secondReviewFile; elements.submitApproval.disabled = true; elements.submitApproval.textContent = "送出異動後待核准";
+    setWorkflowStep(elements.workflowStepSecond, "active", state.secondReviewFile ? `已選擇${state.secondReviewFile.name}` : "請選擇覆核與異動確認表");
+    setWorkflowStatus(state.secondReviewFile ? `已選擇${state.secondReviewFile.name}；請檢查本次異動。` : "有變更時，請回匯已填寫異動量與原因的同一份確認表。");
   });
   elements.selectAllSuppliers.addEventListener("click", () => {
     state.selectedSuppliers = new Set(positiveSupplierNames(state.analysis));

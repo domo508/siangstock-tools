@@ -1174,7 +1174,7 @@ describe("採購建議第二階段", () => {
     expect(supplierErpRows[1][0]).toBe("A1");
   });
 
-  it("二次覆核必須逐列明確確認，且會重算最終核准金額", () => {
+  it("第一次覆核與第二次異動使用同一份檔案，留白沿用且異動會重算最終核准金額", () => {
     const recommendations = core.buildProcurementRecommendations({
       master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
       salesReports: [makeSales()], model: makeForecastModel(), blacklist: ["一次性代工品"], asOfDate: "2026-08-28"
@@ -1187,17 +1187,24 @@ describe("採購建議第二階段", () => {
     const firstReview = core.reviewReturnedWorkbook(recommendation, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20" });
     const secondWorkbook = core.buildSecondReviewWorkbook(firstReview, XLSX);
     expect(secondWorkbook.SheetNames.every((sheetName) => !secondWorkbook.Sheets[sheetName]["!protect"])).toBe(true);
-    const secondRows = XLSX.utils.sheet_to_json(secondWorkbook.Sheets["02_二次覆核"], { defval: "" });
+    expect(secondWorkbook.SheetNames).toContain("01_覆核摘要");
+    expect(secondWorkbook.SheetNames).toContain("02_覆核與異動確認");
+    const secondRows = XLSX.utils.sheet_to_json(secondWorkbook.Sheets["02_覆核與異動確認"], { defval: "" });
     expect(secondRows[0]["全公司人工確認後可售至"]).toMatch(/^2026-/);
     expect(secondRows[0]).not.toHaveProperty("人工填寫可售至");
-    const secondStyleHeaders = XLSX.utils.sheet_to_json(secondWorkbook.Sheets["02_二次覆核"], { header: 1, defval: "" })[0];
-    const secondManualCell = secondWorkbook.Sheets["02_二次覆核"][XLSX.utils.encode_cell({ r: 1, c: secondStyleHeaders.indexOf("二次確認採購量") })];
+    const secondStyleHeaders = XLSX.utils.sheet_to_json(secondWorkbook.Sheets["02_覆核與異動確認"], { header: 1, defval: "" })[0];
+    expect(secondStyleHeaders.slice(5, 11)).toEqual(["原始採購建議量", "第一次人工回匯量", "第一次人工調整原因", "第一次覆核可核准量", "第二次異動採購量", "第二次異動原因"]);
+    const secondManualCell = secondWorkbook.Sheets["02_覆核與異動確認"][XLSX.utils.encode_cell({ r: 1, c: secondStyleHeaders.indexOf("第二次異動採購量") })];
     expect(secondManualCell.s?.fill?.fgColor?.rgb).toBe("FFFFF2CC");
-    expect(core.reviewSecondApprovalWorkbook(secondWorkbook, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20" }).errors[0].message).toContain("必須填寫二次確認");
-    const secondSheet = secondWorkbook.Sheets["02_二次覆核"];
+    const unchangedReview = core.reviewSecondApprovalWorkbook(secondWorkbook, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20", baselineBySku: new Map(firstReview.rows.map((row) => [row.sku, row])) });
+    expect(unchangedReview.errors).toHaveLength(0);
+    expect(unchangedReview.rows[0].finalQty).toBe(firstReview.rows[0].finalQty);
+    const secondSheet = secondWorkbook.Sheets["02_覆核與異動確認"];
     const secondHeaders = XLSX.utils.sheet_to_json(secondSheet, { header: 1, defval: "" })[0];
-    secondSheet[XLSX.utils.encode_cell({ r: 1, c: secondHeaders.indexOf("二次確認採購量") })] = { t: "n", v: 22 };
-    secondSheet[XLSX.utils.encode_cell({ r: 1, c: secondHeaders.indexOf("二次確認原因") })] = { t: "s", v: "供應商臨時可追加" };
+    secondSheet[XLSX.utils.encode_cell({ r: 1, c: secondHeaders.indexOf("第二次異動採購量") })] = { t: "n", v: 22 };
+    const missingReasonReview = core.reviewSecondApprovalWorkbook(secondWorkbook, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20", baselineBySku: new Map(firstReview.rows.map((row) => [row.sku, row])) });
+    expect(missingReasonReview.errors.some((error) => error.message.includes("必須填寫第二次異動原因"))).toBe(true);
+    secondSheet[XLSX.utils.encode_cell({ r: 1, c: secondHeaders.indexOf("第二次異動原因") })] = { t: "s", v: "供應商臨時可追加" };
     const finalReview = core.reviewSecondApprovalWorkbook(secondWorkbook, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20" });
     expect(finalReview.errors).toHaveLength(0);
     expect(finalReview.rows[0]).toMatchObject({ finalQty: 22, approvedAmount: 11000, aiJudgment: expect.any(String) });
@@ -1278,7 +1285,7 @@ describe("採購建議第二階段", () => {
     expect(review.errors).toHaveLength(0);
     expect(review.rows[0]).toMatchObject({ supplier: "普優瑪", name: baseline.name, unitCost: 750, confirmedQty: 40, finalQty: 40, manuallyAdded: true, packSize: 20, consignmentCurrentQty: 80, consignmentScheduledQty: 20 });
     const second = core.buildSecondReviewWorkbook(review, XLSX);
-    const secondRow = XLSX.utils.sheet_to_json(second.Sheets["02_二次覆核"], { defval: "" })[0];
+    const secondRow = XLSX.utils.sheet_to_json(second.Sheets["02_覆核與異動確認"], { defval: "" })[0];
     expect(secondRow["本次人工新增"]).toContain("資料已由本次計算批次補回");
     expect(secondRow["需求摘要"]).toContain("總部需求30.00");
   });
@@ -1323,9 +1330,9 @@ describe("採購建議第二階段", () => {
     ]);
 
     const second = core.buildSecondReviewWorkbook(review, XLSX);
-    const secondSheet = second.Sheets["02_二次覆核"];
+    const secondSheet = second.Sheets["02_覆核與異動確認"];
     const secondRows = XLSX.utils.sheet_to_json(secondSheet, { header: 1, raw: true, defval: "" });
-    const secondQtyColumn = secondRows[0].indexOf("二次確認採購量");
+    const secondQtyColumn = secondRows[0].indexOf("第二次異動採購量");
     secondSheet[XLSX.utils.encode_cell({ r: 1, c: secondQtyColumn })] = { t: "n", v: 9 };
     secondSheet[XLSX.utils.encode_cell({ r: 2, c: secondQtyColumn })] = { t: "n", v: 22 };
     const confirmed = core.reviewSecondApprovalWorkbook(second, XLSX, { baselineBySku: new Map(review.rows.map((row) => [row.sku, row])) });
@@ -1397,9 +1404,9 @@ describe("採購建議第二階段", () => {
     expect(legacyReview.rows[0]).toMatchObject({ finalQty: 10, blockedReason: "", currentAvailableQty: 70, sellThroughConsignmentAllowed: true });
 
     const second = core.buildSecondReviewWorkbook(legacyReview, XLSX);
-    const secondSheet = second.Sheets["02_二次覆核"];
+    const secondSheet = second.Sheets["02_覆核與異動確認"];
     const secondRows = XLSX.utils.sheet_to_json(secondSheet, { header: 1, raw: true, defval: "" });
-    const secondQtyColumn = secondRows[0].indexOf("二次確認採購量");
+    const secondQtyColumn = secondRows[0].indexOf("第二次異動採購量");
     secondSheet[XLSX.utils.encode_cell({ r: 1, c: secondQtyColumn })] = { t: "n", v: 10 };
     const legacyConfirmed = core.reviewSecondApprovalWorkbook(second, XLSX, { baselineBySku: new Map(legacyReview.rows.map((item) => [item.sku, item])) });
     expect(legacyConfirmed.errors).toHaveLength(0);
@@ -1434,7 +1441,8 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="workflow-errors"');
     expect(toolHtml).toContain("公司 Google 授權");
     expect(toolHtml).toContain("正式核准並寄送摘要");
-    expect(toolHtml).toContain("回匯二次確認版");
+    expect(toolHtml).toContain("回匯有異動的覆核表");
+    expect(toolHtml).toContain("全部沿用並送出待核准");
     expect(toolHtml).toContain("重送摘要郵件");
     expect(toolHtml).toContain("儲存本月額度");
     expect(toolHtml).toContain("整月額度與已釋放額度分開呈現");

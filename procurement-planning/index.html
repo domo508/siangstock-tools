@@ -42,7 +42,7 @@
       <div><span>2</span><strong>準備最新資料</strong><small>取得固定來源並匯入本次庫存、採購、調撥與銷售。</small></div>
       <div><span>3</span><strong>選擇採購方式</strong><small>處理一般、新品、人工、補登與門市不足需求。</small></div>
       <div><span>4</span><strong>查看建議與分批</strong><small>依供應商或分類複選審核單位並下載本批報表。</small></div>
-      <div><span>5</span><strong>回匯、核准與ERP</strong><small>二次覆核通過後才核准、寄送摘要並建立ERP。</small></div>
+      <div><span>5</span><strong>回匯、核准與ERP</strong><small>第一次覆核通過後，可直接送出或只回匯異動品項。</small></div>
     </section>
 
     <a class="procurement-todo-link" href="#store-shortage-card" aria-label="前往門市不足待採購區塊">
@@ -360,7 +360,7 @@
       <div id="result-alert" class="result-alert" role="status"></div>
       <details id="excluded-result-panel" class="excluded-result-panel" hidden>
         <summary><span>未列入自動建議／需人工確認</span><strong id="excluded-result-count">0項</strong></summary>
-        <p>這些品項仍保留在稽核中；貨品狀態空白者會顯示試算建議量，但第一次回匯必須明確填量與原因，完成二次確認後才可核准。</p>
+        <p>這些品項仍保留在稽核中；貨品狀態空白者會顯示試算建議量，但第一次回匯必須明確填量與原因，覆核通過後才可送出待核准。</p>
         <div class="result-table-wrap">
           <table class="procurement-table compact-table">
             <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>未進位缺口</th><th>試算建議量</th><th>處理狀態</th></tr></thead>
@@ -378,7 +378,7 @@
     </section>
 
     <section class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
-      <div class="section-heading"><div><p class="eyebrow"><span class="stage-number" aria-hidden="true">5</span> 回匯・核准・ERP</p><h2 id="workflow-title">人工回匯、二次確認與正式核准</h2></div><p>可在原報表新增品號，只填ERP品號、人工量與原因；工具會以同一計算批次補齊資料。待核准階段不寄信。</p></div>
+      <div class="section-heading"><div><p class="eyebrow"><span class="stage-number" aria-hidden="true">5</span> 回匯・核准・ERP</p><h2 id="workflow-title">人工回匯、需要時異動與正式核准</h2></div><p>可在原報表新增品號，只填ERP品號、人工量與原因；工具會以同一計算批次補齊資料。待核准階段不寄信。</p></div>
       <aside id="resume-draft-card" class="resume-draft-card" hidden>
         <div class="resume-draft-heading"><strong>採購批次續作與多人協作</strong><small>本機草稿可發布成公司共用協作草稿；授權同事能在自己的電腦查看並接續。版本衝突時會停止儲存，不會直接覆蓋別人的更新。</small></div>
         <section class="resume-draft-group" aria-labelledby="shared-draft-title">
@@ -395,16 +395,16 @@
       <div class="resume-file-row"><span>換電腦或已清除瀏覽器資料：</span><label id="restore-report-label" class="secondary-button file-button-inline">選擇先前下載的本批採購建議<input id="restore-report-file" type="file" accept=".xlsx"></label></div>
       <ol class="workflow-progress" aria-label="回匯核准進度">
         <li id="workflow-step-download" data-status="waiting"><span>1</span><strong>下載本批建議</strong><small>在分批審核區複選單位並下載</small></li>
-        <li id="workflow-step-first" data-status="locked"><span>2</span><strong>第一次人工回匯</strong><small>工具重新計算並產生二次覆核</small></li>
-        <li id="workflow-step-second" data-status="locked"><span>3</span><strong>二次確認</strong><small>逐列填量後執行最終檢查</small></li>
+        <li id="workflow-step-first" data-status="locked"><span>2</span><strong>第一次人工回匯</strong><small>工具重新計算並下載覆核結果</small></li>
+        <li id="workflow-step-second" data-status="locked"><span>3</span><strong>需要時再異動</strong><small>只填變更品項的數量與原因</small></li>
         <li id="workflow-step-approval" data-status="locked"><span>4</span><strong>核准與ERP</strong><small>正式核准才寄摘要並占用額度</small></li>
       </ol>
       <div class="workflow-grid">
         <label id="review-file-label" class="file-button is-disabled">選擇第一次人工回匯<input id="review-file" type="file" accept=".xlsx" disabled></label>
-        <button id="review-button" class="secondary-button" type="button" disabled>產生二次覆核報表</button>
-        <label id="second-review-file-label" class="file-button is-disabled">回匯二次確認版<input id="second-review-file" type="file" accept=".xlsx" disabled></label>
-        <button id="confirm-review-button" class="secondary-button" type="button" disabled>檢查二次確認版</button>
-        <button id="submit-approval-button" class="secondary-button" type="button" disabled>送出待核准台帳</button>
+        <button id="review-button" class="secondary-button" type="button" disabled>產生並下載覆核與異動確認表</button>
+        <label id="second-review-file-label" class="file-button is-disabled">回匯有異動的覆核表<input id="second-review-file" type="file" accept=".xlsx" disabled></label>
+        <button id="confirm-review-button" class="secondary-button" type="button" disabled>檢查異動內容</button>
+        <button id="submit-approval-button" class="secondary-button" type="button" disabled>全部沿用並送出待核准</button>
         <button id="approve-button" class="primary-button" type="button" disabled>正式核准並寄送摘要</button>
         <button id="retry-notification-button" class="secondary-button" type="button" disabled>重送摘要郵件</button>
         <button id="erp-button" class="secondary-button" type="button" disabled>下載ERP採購檔</button>
@@ -455,9 +455,9 @@
   <script src="xlsx-style-runtime.js?v=20260915-reader-fix-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260924-p0-r1"></script>
+  <script src="core.js?v=20260924-review-flow-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
   <script src="google-sources.js?v=20260923-source-errors-r2"></script>
-  <script src="app.js?v=20260924-p0-r1"></script>
+  <script src="app.js?v=20260924-review-flow-r1"></script>
 </body>
 </html>
