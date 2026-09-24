@@ -30,11 +30,11 @@
     lirongConsignmentFile: get("#lirong-consignment-file"), salesFiles: get("#sales-files"), modelFile: get("#model-file"), marketingFile: get("#marketing-file"),
     masterFileName: get("#master-file-name"), inventoryFileName: get("#inventory-file-name"), pendingFilesName: get("#pending-files-name"), transferFileName: get("#transfer-file-name"),
     consignmentFileName: get("#consignment-file-name"), lirongConsignmentFileName: get("#lirong-consignment-file-name"), salesFilesName: get("#sales-files-name"),
-    modelFileName: get("#model-file-name"), modelBadge: get("#model-badge"), marketingFileName: get("#marketing-file-name"), blacklist: get("#blacklist-input"),
+    modelFileName: get("#model-file-name"), modelBadge: get("#model-badge"), marketingFileName: get("#marketing-file-name"),
     modelRunBadge: get("#model-run-badge"), modelRefresh: get("#model-refresh-button"), modelRefreshLabel: get("#model-refresh-label"),
     modelDownloadDraft: get("#model-download-draft-button"), modelApprove: get("#model-approve-button"), modelProgressBar: get("#model-progress-bar"),
     modelProgressText: get("#model-progress-text"), modelRunSummary: get("#model-run-summary"),
-    blacklistStatus: get("#blacklist-status"), analyze: get("#analyze-button"), download: get("#download-button"), status: get("#main-status"),
+    analyze: get("#analyze-button"), download: get("#download-button"), status: get("#main-status"),
     resultPanel: get("#result-panel"), dateCheck: get("#date-check-message"), summaryCards: get("#summary-cards"), resultAlert: get("#result-alert"), resultRows: get("#result-rows"),
     supplierFilterList: get("#supplier-filter-list"), otherSupplierFilterList: get("#other-supplier-filter-list"), otherSupplierGroup: get("#other-supplier-group"), otherSupplierSummary: get("#other-supplier-summary"),
     supplierScopeStatus: get("#supplier-scope-status"), selectAllSuppliers: get("#select-all-suppliers"), clearSuppliers: get("#clear-suppliers"), workUnitList: get("#work-unit-list"), workUnitTotal: get("#work-unit-total"), workUnitSelectionStatus: get("#work-unit-selection-status"),
@@ -1208,8 +1208,6 @@
     const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     state.procurementRules = result.rules;
-    elements.blacklist.value = blacklistEntries().join("\n");
-    elements.blacklistStatus.textContent = `公司共用黑名單目前${blacklistEntries().length}項・規則版本v${result.version}`;
   }
   function applyMonthPlan(plan) {
     state.monthPlan = plan;

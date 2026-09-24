@@ -1480,8 +1480,8 @@ describe("採購規劃前台與入口", () => {
     expect(headers).toMatch(/\/procurement-planning\/index\.html[\s\S]*connect-src[^\n]*https:\/\/gmail\.googleapis\.com/);
     expect(headers).toMatch(/\/procurement-planning\/index\.html[\s\S]*worker-src 'self'/);
     expect(headers).not.toMatch(/\/procurement-planning\/index\.html[\s\S]*worker-src 'none'/);
-    expect(toolHtml).toContain("class=\"rules-entry-button\"");
-    expect(toolHtml).toContain("新增、移除或調整公司共用黑名單");
+    expect(toolHtml).not.toContain('id="blacklist-input"');
+    expect(toolHtml).not.toContain("人工控制");
     expect(toolHtml).toContain('id="model-badge"');
     expect(toolHtml).toContain("每6個月到期才重跑近三年歷史銷售");
     expect(toolHtml).toContain('id="model-refresh-button"');
@@ -1512,7 +1512,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260924-p0-r1");
+    expect(toolHtml).toContain("20260924-p0-r2");
     expect(toolApp).toContain("state.postedOrderFiles.length && state.config?.permissions?.canApprove");
     expect(toolApp).toContain("state.parsedSources?.master");
     expect(toolApp).toContain("可直接檢查並補登，不必先產生採購建議");
@@ -1584,6 +1584,8 @@ describe("採購規劃前台與入口", () => {
     expect(toolCss).toContain(".supplier-filter-list");
     const rulesAdminHtml = readFileSync("../procurement-planning/rules-admin/index.html", "utf8");
     const rulesAdminApp = readFileSync("../procurement-planning/rules-admin/admin.js", "utf8");
+    expect(rulesAdminHtml).toContain('id="blacklist-input"');
+    expect(rulesAdminHtml).toContain("排除採購商品黑名單");
     expect(rulesAdminHtml).toContain('id="featured-supplier-list"');
     expect(rulesAdminHtml).toContain("未列入、新增後尚未列入或由資料臨時辨識到的供應商");
     expect(rulesAdminHtml).toContain('id="spring-festival-extra-days"');
