@@ -565,6 +565,33 @@ describe("五來源匯入與品號串接", () => {
     expect(consignment.records[0].scheduleNotes).toEqual(["9/2新增\n預計9/16完工"]);
   });
 
+  it("力榮採購頁使用力榮寄庫現貨與製作中數量，不再誤用普優瑪來源", () => {
+    const masterWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(masterWorkbook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "供應商貨號", "供應商簡稱", "進貨價", "最小配貨數", "貨品狀態", "已下架"],
+      ["A1", "5尺床包 [小日子 A]", "A1", "力榮", 400, 10, "尚可追加", "否"]
+    ]), "工作表1");
+    const lirongWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(lirongWorkbook, XLSX.utils.aoa_to_sheet([
+      ["翔仔貨號", "翔仔品名", "成品價", "9/1庫存", "9/2新增\n預計9/16完工"],
+      ["A1", "5尺床包 [小日子 A]", "", 40, 60]
+    ]), "下單");
+    const analysis = core.buildProcurementRecommendations({
+      master: core.parseProductMasterWorkbook(masterWorkbook, XLSX),
+      inventory: makeInventory(), pendingReports: [], consignment: makeConsignment(),
+      lirongConsignment: core.parseLirongConsignmentWorkbook(lirongWorkbook, XLSX),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", checkpoint: "mid-month"
+    });
+    const row = analysis.rows.find((item) => item.sku === "A1");
+    expect(row).toMatchObject({ supplier: "力榮", consignmentCurrentQty: 40, consignmentScheduledQty: 60, immediateConsignmentGap: 0 });
+    const output = core.buildRecommendationWorkbook(analysis, XLSX, { selectedSuppliers: ["力榮"] });
+    const purchaseRow = XLSX.utils.sheet_to_json(output.Sheets["03A_力榮採購"], { defval: "" })[0];
+    expect(purchaseRow["寄倉現貨"]).toBe(40);
+    expect(purchaseRow["粉紅排程"]).toBe(60);
+    expect(purchaseRow["寄倉缺口"]).toBe(Math.max(row.suggestedPurchaseQty - 100, 0));
+    expect(purchaseRow["目前實際可採購量"]).toBe(Math.min(row.suggestedPurchaseQty, 40));
+  });
+
   it("人工黑名單優先排除一次性代工品", () => {
     const resolved = core.resolveConsignment(makeConsignment(), makeMaster(), ["一次性代工品"]);
     expect(resolved.excluded).toHaveLength(1);

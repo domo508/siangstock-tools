@@ -1256,10 +1256,10 @@
   function resolveConsignment(consignment, master, blacklistInput) {
     const blacklist = normalizeBlacklist(blacklistInput);
     const bySku = new Map();
-    const exceptions = [...consignment.exceptions];
-    const confirmedExclusions = [...(consignment.confirmedExclusions || [])];
+    const exceptions = [...(consignment?.exceptions || [])];
+    const confirmedExclusions = [...(consignment?.confirmedExclusions || [])];
     const excluded = [];
-    for (const row of consignment.records) {
+    for (const row of consignment?.records || []) {
       const blocked = blacklistMatch(row, blacklist);
       if (blocked) {
         excluded.push({ ...row, blacklistEntry: blocked.original, reason: "人工黑名單" });
@@ -2069,6 +2069,7 @@
     const puyoumaProductionDays = Math.max(0, Number(puyoumaRules.productionDays ?? PROCUREMENT_POLICY.puyoumaFactoryLeadDays));
     const puyoumaTargetDays = puyoumaRules.targetDays || PROCUREMENT_POLICY.puyoumaFactoryTargetDays;
     const lirongProductionDays = Math.max(0, Number(lirongRules.productionDays ?? PROCUREMENT_POLICY.lirongProductionDays));
+    const lirongTargetDays = lirongRules.targetDays || PROCUREMENT_POLICY.lirongFactoryTargetDays;
     const pending = aggregatePendingReports(input.pendingReports || []);
     const storeTransferNeeds = (input.storeTransferNeeds || []).filter((row) => Number(row.unfilledQuantity || row.unfilled_quantity || 0) > 0 && ["merge_next", "new_order"].includes(String(row.handlingMode || row.handling_mode || "")));
     const storeTransferNeedBySkuStore = new Map();
@@ -2085,6 +2086,7 @@
     }
     const transfers = aggregateTransferReports(input.transferReports || [], { asOfDate: input.inventoryDate || input.asOfDate });
     const resolvedConsignment = resolveConsignment(input.consignment, input.master, input.blacklist || []);
+    const resolvedLirongConsignment = resolveConsignment(input.lirongConsignment, input.master, input.blacklist || []);
     const blacklist = normalizeBlacklist(input.blacklist || []);
     const salesRecords = (input.salesReports || []).flatMap((report) => report.records || []);
     const procurementSalesRecords = salesRecords.filter((row) => {
@@ -2446,6 +2448,7 @@
     const rows = preliminary.map((row) => {
       const pool = categoryPools.get(`${row.categoryKey}||${row.categoryModel}`);
       const supplier = row.masterRecord?.supplier || "未辨識供應商";
+      const supplierConsignment = /力榮/.test(normalizeText(supplier)) ? resolvedLirongConsignment : resolvedConsignment;
       const supplierRule = findSupplierRule(supplier, input.supplierRules || []);
       const supplyProfile = resolveSupplyProfile(supplier, input.supplierRules || [], row.tier);
       const supplierLeadDays = supplyProfile.leadDays;
@@ -2590,7 +2593,7 @@
         safetyStockQty: 0,
         availableInventoryQty: inventoryQty,
         pendingPurchaseQty: effectivePendingQty,
-        factoryConsignmentQty: resolvedConsignment.bySku.get(row.demand.sku)?.currentQty || 0
+        factoryConsignmentQty: supplierConsignment.bySku.get(row.demand.sku)?.currentQty || 0
       });
       const springFestivalAdjustedRawPurchaseQty = springFestival.active
         ? calculateNetProcurementDemand({
@@ -2598,7 +2601,7 @@
           safetyStockQty: 0,
           availableInventoryQty: inventoryQty,
           pendingPurchaseQty: effectivePendingQty,
-          factoryConsignmentQty: resolvedConsignment.bySku.get(row.demand.sku)?.currentQty || 0
+          factoryConsignmentQty: supplierConsignment.bySku.get(row.demand.sku)?.currentQty || 0
         })
         : rawPurchaseQty;
       const springFestivalUncoveredRawQty = Math.max(springFestivalAdjustedRawPurchaseQty - rawPurchaseQty, 0);
@@ -2617,7 +2620,7 @@
       const supplierAutomaticBlocked = supplierRule?.automaticPurchase === false;
       const masterDataIncomplete = !row.masterRecord?.supplier || !(Number(row.masterRecord?.unitCost) > 0) || !(Number(row.masterRecord?.moq) > 0);
       const productStatusPendingReview = !String(row.masterRecord?.productStatus || "").trim();
-      const consignment = resolvedConsignment.bySku.get(row.demand.sku);
+      const consignment = supplierConsignment.bySku.get(row.demand.sku);
       const sellThroughConsignmentAvailableQty = sellThroughStop && consignment
         ? Math.max(0, Number(consignment.currentQty || 0) - pendingQty)
         : 0;
@@ -2665,10 +2668,15 @@
       const consignmentCurrentQty = consignment?.currentQty || 0;
       const consignmentScheduledQty = consignment?.scheduledQty || 0;
       const immediateConsignmentGap = consignment && !externalPurchaseBlocked && !sellThroughStop ? Math.max(factoryPullQty - consignmentCurrentQty, 0) : 0;
-      const tierFactoryTargetDays = /普優[瑪碼]/.test(normalizedSupplier) ? Number(puyoumaTargetDays[row.tier] ?? PROCUREMENT_POLICY.puyoumaFactoryTargetDays[row.tier]) : factoryTargetDays;
+      const tierFactoryTargetDays = /普優[瑪碼]/.test(normalizedSupplier)
+        ? Number(puyoumaTargetDays[row.tier] ?? PROCUREMENT_POLICY.puyoumaFactoryTargetDays[row.tier])
+        : (/力榮/.test(normalizedSupplier) ? Number(lirongTargetDays[row.tier] ?? PROCUREMENT_POLICY.lirongFactoryTargetDays[row.tier]) : factoryTargetDays);
+      const consignmentProductionDays = /普優[瑪碼]/.test(normalizedSupplier)
+        ? puyoumaProductionDays
+        : (/力榮/.test(normalizedSupplier) ? lirongProductionDays : 0);
       const factoryTargetQty = consignment && !externalPurchaseBlocked && !sellThroughStop ? channelAdjustedDaily * tierFactoryTargetDays : 0;
       const rawConsignmentOrderQty = consignment
-        ? Math.max(factoryPullQty + channelAdjustedDaily * puyoumaProductionDays + factoryTargetQty - consignmentCurrentQty - consignmentScheduledQty, immediateConsignmentGap, 0)
+        ? Math.max(factoryPullQty + channelAdjustedDaily * consignmentProductionDays + factoryTargetQty - consignmentCurrentQty - consignmentScheduledQty, immediateConsignmentGap, 0)
         : 0;
       const suggestedConsignmentQty = externalPurchaseBlocked || sellThroughStop ? 0 : roundSuggestedQuantity(rawConsignmentOrderQty, Math.max(score, 0.5));
       let supplyStatus = "非寄倉供應商／寄倉品號未命中";
@@ -2857,6 +2865,7 @@
       pending,
       transfers,
       consignment: resolvedConsignment,
+      lirongConsignment: resolvedLirongConsignment,
       productExclusions,
       factoryTargetDays,
       appliedRules: {
@@ -3450,7 +3459,7 @@
       "寄倉現貨": row.consignmentCurrentQty,
       "粉紅排程": row.consignmentScheduledQty,
       "寄倉缺口": Math.max(row.suggestedPurchaseQty - row.consignmentCurrentQty - row.consignmentScheduledQty, 0),
-      "目前實際可採購量": /普優[瑪碼]/.test(row.supplier) ? Math.min(row.suggestedPurchaseQty, row.consignmentCurrentQty) : row.suggestedPurchaseQty,
+      "目前實際可採購量": /普優[瑪碼]|力榮/.test(row.supplier) ? Math.min(row.suggestedPurchaseQty, row.consignmentCurrentQty) : row.suggestedPurchaseQty,
       "人工確認採購量": row.initialManualQty ?? "",
       "人工調整原因": row.initialManualReason || "",
       "全公司人工確認後可售至": "",
