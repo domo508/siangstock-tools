@@ -1252,8 +1252,12 @@
     elements.terminalForecastRevenue.value = String(kuancheng + kuanmu);
   }
   function updateAutomaticForecastCost() {
-    if (state.costSummary?.forecastCost > 0) {
-      elements.forecastCost.value = String(Math.round(state.costSummary.forecastCost * 100) / 100);
+    if (state.sharedCostSnapshot?.forecastCost >= 0) {
+      elements.forecastCost.value = String(Math.round(Number(state.sharedCostSnapshot.forecastCost || 0) * 100) / 100);
+      return;
+    }
+    if (Number(state.monthPlan?.forecastCostOutflow || 0) > 0) {
+      elements.forecastCost.value = String(Math.round(Number(state.monthPlan.forecastCostOutflow) * 100) / 100);
       return;
     }
     const revenue = Math.max(0, Number(elements.forecastRevenue.value || 0));
@@ -1277,14 +1281,18 @@
     }
   }
   function effectiveCostSummary() {
-    return state.costSummary || state.sharedCostSnapshot;
+    return state.sharedCostSnapshot || state.costSummary;
   }
   function renderCostSnapshotStatus() {
     if (!elements.costSnapshotStatus) return;
     const snapshot = state.sharedCostSnapshot;
-    elements.costSnapshotStatus.textContent = snapshot
+    const official = snapshot
       ? `公司共用成本快照：資料截至${snapshot.dataAsOfDate}・由${snapshot.updatedBy}更新於${String(snapshot.updatedAt || "").replace("T", " ").slice(0, 19)}。`
-      : `${elements.month.value}尚無公司共用成本快照；完成一次正式採購建議運算後才會建立。`;
+      : `${elements.month.value}尚無公司共用成本快照。`;
+    const trial = state.costSummary
+      ? ` 本次資料試算整月成本${formatCurrencyPrecise(state.costSummary.forecastCost)}，只供本批採購建議檢查，不會改動正式額度；正式核准時通過完整性檢查才會更新共用快照。`
+      : "";
+    elements.costSnapshotStatus.textContent = `${official}${trial}`;
   }
   async function loadCostSnapshot() {
     if (!state.config || !elements.month.value) return;
@@ -1293,7 +1301,7 @@
       const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
       if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
       state.sharedCostSnapshot = result.snapshot || null;
-      if (!state.costSummary && state.sharedCostSnapshot?.forecastCost >= 0) elements.forecastCost.value = String(state.sharedCostSnapshot.forecastCost);
+      if (state.sharedCostSnapshot?.forecastCost >= 0) elements.forecastCost.value = String(state.sharedCostSnapshot.forecastCost);
       renderCostSnapshotStatus(); renderBudget();
     } catch (error) {
       state.sharedCostSnapshot = null;
@@ -1307,6 +1315,11 @@
       return;
     }
     const summary = state.costSummary;
+    const assessment = core.assessCostSnapshotPromotion({ analysisMonth: elements.month.value, summary, previous: state.sharedCostSnapshot });
+    if (!assessment.allowed) {
+      if (elements.costSnapshotStatus) elements.costSnapshotStatus.textContent = `正式核准已完成，但本次成本試算未更新公司共用快照：${assessment.reasons.join("；")}。目前仍保留前一筆有效額度基準。`;
+      return false;
+    }
     try {
       const result = await postJson("/api/procurement/cost-snapshot", {
         analysisMonth: elements.month.value,
@@ -1316,7 +1329,7 @@
         pendingDate: elements.pendingDate.value,
         transferDate: elements.transferDate.value,
         salesDate: elements.salesDate.value,
-        forecastCost: Number(elements.forecastCost.value || 0),
+        forecastCost: Number(summary.forecastCost || 0),
         managementCostToDate: Number(summary.managementCostToDate || 0),
         actualReceiptCost: Number(summary.actualReceiptCost || 0),
         directCost: Number(summary.directCost || 0),
@@ -1333,9 +1346,13 @@
         calculationVersion: "20260918-custom-cost-r1"
       }, {}, "PUT");
       state.sharedCostSnapshot = result.snapshot;
+      elements.forecastCost.value = String(result.snapshot.forecastCost);
       renderCostSnapshotStatus();
+      renderBudget();
+      return true;
     } catch (error) {
       if (elements.costSnapshotStatus) elements.costSnapshotStatus.textContent = `本次採購建議已完成，但公司共用成本快照未更新：${error.message}`;
+      return false;
     }
   }
   async function loadConfig() {
@@ -1863,7 +1880,6 @@
         analysisMonth: elements.month.value, master, inventory, salesReports, transferReports: [transferReport],
         purchaseSummary: state.purchaseStatusSummary, openingInventoryCost: Number(elements.openingCost.value || 0), supplierReturns: Number(elements.supplierReturns.value || 0)
       });
-      updateAutomaticForecastCost();
       const model = core.parseForecastModelWorkbook(modelWorkbook, XLSX, { fileName: "季節模型" });
       const validation = core.buildAnalysis({ master, inventory, pendingReports, transferReports: [transferReport], consignment, blacklist: blacklistEntries(), dates: {
         inventory: elements.inventoryDate.value, pending: elements.pendingDate.value, transfer: elements.transferDate.value, consignment: elements.consignmentDate.value, sales: elements.salesDate.value
@@ -1906,7 +1922,7 @@
       await savePendingSnapshot(pendingReports);
       await syncErpReconciliations(pendingReports);
       await persistWorkflowDraft("analysis");
-      await saveCostSnapshot();
+      renderCostSnapshotStatus();
       renderBudget(); updateSpecialWorkflowReady(); elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
       state.analysis = null; elements.resultPanel.hidden = true; setStatus(`無法完成：${error.message || "請確認檔案格式"}`, "error");
@@ -2316,6 +2332,7 @@
     try {
       await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/approve`, { idempotencyKey: `${state.batchId}:approve` });
       state.approved = true; elements.erp.disabled = false; await loadLedger(); await persistWorkflowDraft("approved"); const token = googleSources.token();
+      await saveCostSnapshot();
       setWorkflowStep(elements.workflowStepApproval, "done", "正式核准完成，可下載ERP採購檔");
       if (!token) { elements.retryNotification.disabled = false; setWorkflowStatus("已正式核准且額度台帳已寫入；郵件待目前核准帳號完成 Google 授權後重送。", "error"); return; }
       try {

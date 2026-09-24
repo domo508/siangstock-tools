@@ -164,6 +164,25 @@ describe("採購規劃核心鎖定公式", () => {
     expect(core.resolveReleasedBudgetAmount({ checkpoint: "month-end", fullBudgetAmount: 2659538.3, monthStartReleasedAmount: 1329769.15 }).releasedBudgetAmount).toBe(2659538.3);
   });
 
+  it("不完整或異常驟降的成本試算不得覆蓋公司共用快照", () => {
+    const previous = { forecastCost: 2840127.71 };
+    const incomplete = core.assessCostSnapshotPromotion({
+      analysisMonth: "2026-09",
+      previous,
+      summary: { month: "2026-09", minSalesDate: "2026-09-18", maxSalesDate: "2026-09-24", currentMonthSalesRecordCount: 57, forecastCost: 720899.9 }
+    });
+    expect(incomplete.allowed).toBe(false);
+    expect(incomplete.reasons.join("；")).toContain("未涵蓋月初");
+    expect(incomplete.reasons.join("；")).toContain("25%");
+
+    const complete = core.assessCostSnapshotPromotion({
+      analysisMonth: "2026-09",
+      previous,
+      summary: { month: "2026-09", minSalesDate: "2026-09-01", maxSalesDate: "2026-09-24", currentMonthSalesRecordCount: 5000, forecastCost: 2900000 }
+    });
+    expect(complete).toMatchObject({ allowed: true, reasons: [] });
+  });
+
   it("以明確客製備註辨識客訂，並排除一般未到貨淨需求", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([

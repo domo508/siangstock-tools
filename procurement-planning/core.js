@@ -1384,7 +1384,9 @@
     const kuanmuTransferBaseCost = kuanmuTransferRows.reduce((sum, row) => sum + Number(masterBySku.get(row.sku)?.unitCost || 0) * Number(row.quantity || 0), 0);
     const kuanmuBaseCost = kuanmuB3BaseCost + kuanmuTransferBaseCost;
     const managementCostToDate = directCost + kuanmuBaseCost;
-    const maxSalesDate = [...salesRecords, ...takeRecords].filter(inMonth).reduce((max, row) => row.date > max ? row.date : max, "");
+    const currentMonthSalesRecords = [...salesRecords, ...takeRecords].filter(inMonth);
+    const minSalesDate = currentMonthSalesRecords.reduce((min, row) => !min || row.date < min ? row.date : min, "");
+    const maxSalesDate = currentMonthSalesRecords.reduce((max, row) => row.date > max ? row.date : max, "");
     let elapsedDays = 0;
     let daysInMonth = 0;
     if (month && maxSalesDate) {
@@ -1400,12 +1402,41 @@
     const supplierReturns = Number(input.supplierReturns || 0);
     const inventoryBridgeCost = openingInventoryCost > 0 ? openingInventoryCost + actualReceiptCost - supplierReturns - currentInventoryCost : null;
     return {
-      month, maxSalesDate, elapsedDays, daysInMonth, directCost, kuanmuB3BaseCost, kuanmuTransferBaseCost, kuanmuBaseCost,
+      month, minSalesDate, maxSalesDate, currentMonthSalesRecordCount: currentMonthSalesRecords.length, elapsedDays, daysInMonth, directCost, kuanmuB3BaseCost, kuanmuTransferBaseCost, kuanmuBaseCost,
       kuanmuIntercompanyRevenue: kuanmuBaseCost * 1.11, managementCostToDate, forecastCost, currentInventoryCost,
       openingInventoryCost, actualReceiptCost, supplierReturns, inventoryBridgeCost,
       b3MatchedCount: kuanmuB3Rows.length, transferReceivedCount: kuanmuTransferRows.length,
       source: managementCostToDate > 0 ? "actual_weighted" : "fallback",
       warnings: openingInventoryCost > 0 ? [] : ["尚缺月初庫存成本快照；本月至今成本先以銷售與寬沐供貨流向作管理暫估。"]
+    };
+  }
+
+  function assessCostSnapshotPromotion(input = {}) {
+    const summary = input.summary || {};
+    const previous = input.previous || null;
+    const month = String(input.analysisMonth || summary.month || "").slice(0, 7);
+    const forecastCost = Number(summary.forecastCost || 0);
+    const previousForecastCost = Number(previous?.forecastCost || 0);
+    const minSalesDate = String(summary.minSalesDate || "");
+    const maxSalesDate = String(summary.maxSalesDate || "");
+    const salesRecordCount = Number(summary.currentMonthSalesRecordCount || 0);
+    const reasons = [];
+    if (!(forecastCost > 0)) reasons.push("本次試算沒有可用的整月成本預估");
+    if (!minSalesDate || !maxSalesDate || salesRecordCount <= 0) reasons.push("本次缺少分析月份的銷售資料");
+    if (month && minSalesDate.slice(0, 7) === month && Number(minSalesDate.slice(8, 10)) > 3) {
+      reasons.push(`本月銷售資料從${minSalesDate}才開始，未涵蓋月初`);
+    }
+    if (previousForecastCost > 0 && forecastCost < previousForecastCost * 0.6) {
+      reasons.push(`本次整月成本預估只有前次有效快照的${Math.round(forecastCost / previousForecastCost * 100)}%`);
+    }
+    return {
+      allowed: reasons.length === 0,
+      reasons,
+      forecastCost,
+      previousForecastCost,
+      minSalesDate,
+      maxSalesDate,
+      salesRecordCount
     };
   }
 
@@ -4196,6 +4227,7 @@
     aggregatePendingReports,
     summarizePurchaseReports,
     summarizeCompanyCostFlows,
+    assessCostSnapshotPromotion,
     warehouseCompany,
     aggregateTransferReports,
     calculateNetProcurementDemand,
