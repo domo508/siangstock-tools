@@ -1492,7 +1492,7 @@
   }
   async function syncErpReconciliations(pendingReports) {
     const linkedReferences = new Set((state.ledger?.batches || []).filter((row) => ["erp_created", "received"].includes(row.status) && row.erp_reference).map((row) => String(row.erp_reference).trim()));
-    if (!linkedReferences.size) return;
+    if (!linkedReferences.size) return { pendingCount: 0, missing: [] };
     const grouped = new Map();
     pendingReports.flatMap((report) => report.records || []).forEach((row) => {
       const erpReference = String(row.documentCode || "").trim();
@@ -1511,14 +1511,17 @@
       item.lifecycleStatus = row.status || item.lifecycleStatus;
       group.items.set(row.sku, item); grouped.set(erpReference, group);
     });
-    if (!grouped.size) return;
+    if (!grouped.size) return { pendingCount: 0, missing: [] };
     const orders = [...grouped.values()].map((group) => ({ ...group, items: [...group.items.values()] }));
     const result = await postJson("/api/procurement/erp-reconciliations", { orders });
     const pendingCount = (result.results || []).filter((row) => row.status === "pending").length;
     const missing = (result.results || []).filter((row) => row.status === "missing_baseline").map((row) => row.erpReference);
     await loadLedger();
-    if (missing.length) throw new Error(`ERP差異比對缺少原核准逐品項基準：${missing.join("、")}。這些舊批次台帳未變更，請保留原核准報表供補回。`);
-    if (pendingCount) setWorkflowStatus(`完整採購檔已找到${pendingCount}筆ERP內容差異，請在「ERP差異待確認」逐筆填寫原因後更新台帳。`, "error");
+    const messages = [];
+    if (pendingCount) messages.push(`完整採購檔已找到${pendingCount}筆ERP內容差異，請在「ERP差異待確認」逐筆填寫原因後更新台帳。`);
+    if (missing.length) messages.push(`ERP差異比對提醒：${missing.join("、")}缺少舊版逐品項基準，已略過這些單據，本次採購建議仍正常完成。請在「補登已採購單」重新匯入原始ERP採購檔；系統核對單號與總額後，只補回明細，不會重複占用額度。`);
+    if (messages.length) setWorkflowStatus(messages.join(" "), "error");
+    return { pendingCount, missing };
   }
   async function connectGoogle() {
     elements.googleConnect.disabled = true; elements.sourceStatus.textContent = "正在等待公司 Google 授權…";
@@ -2039,13 +2042,15 @@
     try {
       const workbooks = await Promise.all(state.postedOrderFiles.map(readWorkbook));
       const reports = workbooks.map((workbook, index) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: state.postedOrderFiles[index].name }));
-      let added = 0; let duplicate = 0;
+      let added = 0; let duplicate = 0; let backfilled = 0;
       for (const report of reports) {
         const result = await importPostedReport(report, state.parsedSources?.master, "manual_posted");
-        if (result.duplicate) duplicate += 1; else added += 1;
+        if (result.baselineBackfilled) backfilled += 1;
+        else if (result.duplicate) duplicate += 1;
+        else added += 1;
       }
       await loadLedger();
-      elements.specialWorkflowStatus.textContent = `補登完成：新增${added}張、重複未計價${duplicate}張。已納入目前額度與付款月份。`;
+      elements.specialWorkflowStatus.textContent = `補登完成：新增${added}張、補回舊版逐品項基準${backfilled}張、重複未計價${duplicate}張。新增單已納入目前額度與付款月份；補回基準不會重複占用額度。`;
       elements.specialWorkflowStatus.className = "main-status success";
     } catch (error) {
       elements.specialWorkflowStatus.textContent = `補登停止：${error.message}`;

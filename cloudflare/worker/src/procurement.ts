@@ -986,8 +986,25 @@ async function importManualOrder(request: Request, env: ProcurementEnv): Promise
   const item = validatedBatch(input, access.email);
   if (!["manual_posted", "customer_custom"].includes(item.workflowType)) throw new RequestValidationError("補登流程類型錯誤。");
   const erpReference = string(input.erpReference, "ERP採購單號", 120);
-  const existing = await env.DB.prepare("SELECT id, status, workflow_type, erp_reference FROM procurement_batches WHERE erp_reference = ? OR idempotency_key = ?").bind(erpReference, item.idempotencyKey).first<Record<string, unknown>>();
-  if (existing) return json({ batch: existing, duplicate: true, notification: "sent_or_not_required" });
+  const existing = await env.DB.prepare("SELECT id, status, workflow_type, erp_reference, approved_amount FROM procurement_batches WHERE erp_reference = ? OR idempotency_key = ?").bind(erpReference, item.idempotencyKey).first<Record<string, unknown>>();
+  if (existing) {
+    const existingReference = String(existing.erp_reference || "").trim();
+    const existingWorkflow = String(existing.workflow_type || "").trim();
+    const existingAmount = Number(existing.approved_amount || 0);
+    const baseline = await env.DB.prepare("SELECT COUNT(*) AS item_count FROM procurement_batch_items WHERE batch_id = ?").bind(existing.id).first<{ item_count: number }>();
+    const canBackfill = existingReference === erpReference
+      && existingWorkflow === item.workflowType
+      && Number(baseline?.item_count || 0) === 0
+      && item.approvedItems.length > 0;
+    if (canBackfill) {
+      if (Math.abs(existingAmount - item.approved) >= 0.05) {
+        throw new RequestValidationError(`ERP採購單${erpReference}既有台帳總額${existingAmount.toFixed(2)}元，與本次匯入${item.approved.toFixed(2)}元不一致；未補寫逐品項基準。`, 409);
+      }
+      await env.DB.batch(item.approvedItems.map((row) => env.DB.prepare("INSERT OR IGNORE INTO procurement_batch_items (batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, erp_quantity, remaining_quantity, lifecycle_status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ERP已開立・等待到貨', ?)").bind(existing.id, row.sku, row.name, row.supplier, row.quantity, row.unitCost, row.amount, row.quantity, row.quantity, item.now)));
+      return json({ batch: existing, duplicate: true, baselineBackfilled: true, notification: "sent_or_not_required" });
+    }
+    return json({ batch: existing, duplicate: true, baselineBackfilled: false, notification: "sent_or_not_required" });
+  }
   try {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO procurement_batches (id, analysis_month, workflow_type, erp_reference, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, approved_at, approved_by, erp_created_at, erp_created_by, updated_at, revision, idempotency_key) VALUES (?, ?, ?, ?, ?, 'erp_created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, ?)")

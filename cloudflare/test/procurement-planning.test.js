@@ -1572,6 +1572,12 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("下載後才會開放第一次人工回匯");
     expect(toolApp).toContain("大型檔案預檢未通過");
     expect(toolApp).toContain("/api/procurement/manual-orders");
+    expect(toolApp).toContain("補回舊版逐品項基準");
+    expect(toolApp).toContain("本次採購建議仍正常完成");
+    expect(toolApp).not.toContain('if (missing.length) throw new Error(`ERP差異比對缺少原核准逐品項基準');
+    expect(procurementWorker).toContain("baselineBackfilled: true");
+    expect(procurementWorker).toContain("ERP採購單${erpReference}既有台帳總額");
+    expect(procurementWorker).toContain("INSERT OR IGNORE INTO procurement_batch_items");
     const specialMigration = readFileSync("worker/migrations/0007_special_procurement_workflows.sql", "utf8");
     expect(specialMigration).toContain("workflow_type");
     expect(specialMigration).toContain("erp_reference");
