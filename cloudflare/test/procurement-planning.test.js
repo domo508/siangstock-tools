@@ -1299,7 +1299,7 @@ describe("採購建議第二階段", () => {
     };
     const review = core.reviewReturnedWorkbook(workbook, XLSX, {
       asOfDate: "2026-09-21", orderDate: "2026-09-22",
-      baselineBySku: new Map([[baseline.sku, baseline]]), allowedSkuSet: new Set([baseline.sku])
+      baselineBySku: new Map([[baseline.sku, baseline]]), allowedSkuSet: new Set([baseline.sku]), exportedSkuSet: new Set()
     });
     expect(review.errors).toHaveLength(0);
     expect(review.rows[0]).toMatchObject({ supplier: "普優瑪", name: baseline.name, unitCost: 750, confirmedQty: 40, finalQty: 40, manuallyAdded: true, packSize: 20, consignmentCurrentQty: 80, consignmentScheduledQty: 20 });
@@ -1307,6 +1307,39 @@ describe("採購建議第二階段", () => {
     const secondRow = XLSX.utils.sheet_to_json(second.Sheets["02_覆核與異動確認"], { defval: "" })[0];
     expect(secondRow["本次人工新增"]).toContain("資料已由本次計算批次補回");
     expect(secondRow["需求摘要"]).toContain("總部需求30.00");
+  });
+
+  it("人工新增列即使帶到Excel格式或舊欄位，仍依原始匯出品號判斷並補回系統資料", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "供應商", "商品品名", "建議採購量", "人工確認採購量", "人工調整原因", "進貨價"],
+      ["B53336", "", "複製列殘留品名", 10, 20, "工廠尚有現貨，人工追加", ""]
+    ]), "03A_力榮採購");
+    const baseline = {
+      sku: "B53336", supplier: "力榮", name: "6×7尺兩用被套[測試]", supplierSku: "L-B53336", unitCost: 680,
+      suggestedPurchaseQty: 0, packSize: 10, forecastDailyQty: 0.2, inventoryQty: 0, storeInventoryByCode: {},
+      hqDemandQty: 3, storeDemandQty: 2, pendingQty: 0, effectivePendingQty: 0, externalPurchaseBlocked: false
+    };
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, {
+      baselineBySku: new Map([[baseline.sku, baseline]]), allowedSkuSet: new Set([baseline.sku]), exportedSkuSet: new Set()
+    });
+    expect(review.errors).toHaveLength(0);
+    expect(review.rows[0]).toMatchObject({
+      sku: "B53336", supplier: "力榮", name: baseline.name, supplierSku: baseline.supplierSku,
+      suggestedQty: 0, confirmedQty: 20, finalQty: 20, unitCost: 680, manuallyAdded: true
+    });
+  });
+
+  it("人工新增品項缺少原因時會明確阻擋", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "人工確認採購量", "人工調整原因"], ["B53336", 20, ""]
+    ]), "03A_力榮採購");
+    const baseline = { sku: "B53336", supplier: "力榮", name: "測試品", unitCost: 680, suggestedPurchaseQty: 0, packSize: 10 };
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, {
+      baselineBySku: new Map([[baseline.sku, baseline]]), allowedSkuSet: new Set([baseline.sku]), exportedSkuSet: new Set()
+    });
+    expect(review.errors.some((error) => error.message === "人工新增品項必須填寫新增原因。")).toBe(true);
   });
 
   it("人工新增品號跨出目前供應商範圍時顯示明確原因", () => {

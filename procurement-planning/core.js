@@ -3939,21 +3939,24 @@
         const manualCell = source["人工確認採購量"] !== undefined ? source["人工確認採購量"] : source["人工量"];
         const manualBlank = manualCell === "" || manualCell == null;
         const reason = String(source["人工調整原因"] || source["原因"] || "").trim();
+        const hasExportedSkuSet = Boolean(options.exportedSkuSet && typeof options.exportedSkuSet.has === "function");
         const sparseManualAddition = Boolean(baseline && !sourceSupplier && !sourceName && sourceSuggestedQty == null && sourceUnitCost == null && !manualBlank);
-        const supplier = sparseManualAddition ? String(baseline.supplier || "").trim() : sourceSupplier;
-        const name = sparseManualAddition ? String(baseline.name || "").trim() : sourceName;
-        const suggestedQty = sparseManualAddition ? Math.max(0, Number(baseline.suggestedPurchaseQty || 0)) : sourceSuggestedQty;
+        const manuallyAdded = Boolean(baseline && (hasExportedSkuSet ? !options.exportedSkuSet.has(sku) : sparseManualAddition));
+        const supplier = manuallyAdded ? String(baseline.supplier || "").trim() : sourceSupplier;
+        const name = manuallyAdded ? String(baseline.name || "").trim() : sourceName;
+        const suggestedQty = manuallyAdded ? Math.max(0, Number(baseline.suggestedPurchaseQty || 0)) : sourceSuggestedQty;
         const confirmedQty = manualBlank ? Math.max(0, suggestedQty || 0) : parseNumber(manualCell);
-        const unitCost = sparseManualAddition ? Number(baseline.unitCost || 0) : sourceUnitCost;
+        const unitCost = manuallyAdded ? Number(baseline.unitCost || 0) : sourceUnitCost;
         const productStatusPendingReview = Boolean(baseline?.productStatusPendingReview);
         if (options.baselineBySku && !baseline) errors.push({ sheetName, sourceRow: index + 2, sku, message: "ERP品號不在本次計算批次，無法補回供應商、進貨價、庫存、需求及寄庫資料。" });
         if (baseline && !inCurrentScope) errors.push({ sheetName, sourceRow: index + 2, sku, message: `ERP品號屬於「${procurementWorkUnitForRow(baseline)?.label || baseline.supplier || "其它採購範圍"}」，不可加入目前的採購批次。` });
         if (baseline) {
-          if (!sparseManualAddition && normalizeText(supplier) !== normalizeText(baseline.supplier)) errors.push({ sheetName, sourceRow: index + 2, sku, message: `供應商與本次計算結果不同；此品號應屬「${baseline.supplier}」。` });
+          if (!manuallyAdded && normalizeText(supplier) !== normalizeText(baseline.supplier)) errors.push({ sheetName, sourceRow: index + 2, sku, message: `供應商與本次計算結果不同；此品號應屬「${baseline.supplier}」。` });
           if (Math.abs(Number(unitCost || 0) - Number(baseline.unitCost || 0)) >= 0.01) errors.push({ sheetName, sourceRow: index + 2, sku, message: "進貨價與本次商品主檔不同，請重新產生報表。" });
           if (Math.abs(Number(suggestedQty || 0) - Number(baseline.suggestedPurchaseQty || 0)) >= 0.01) errors.push({ sheetName, sourceRow: index + 2, sku, message: "系統建議量已被修改，請只填人工欄位。" });
         }
         if (confirmedQty == null || confirmedQty < 0 || !Number.isInteger(confirmedQty)) errors.push({ sheetName, sourceRow: index + 2, sku, message: "人工確認採購量必須為0或正整數。" });
+        if (manuallyAdded && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "人工新增品項必須填寫新增原因。" });
         if (!manualBlank && confirmedQty !== suggestedQty && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "修改採購量時必須填人工調整原因。" });
         if (productStatusPendingReview && manualBlank) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白，必須明確填寫人工確認採購量，不能直接沿用系統試算。" });
         if (productStatusPendingReview && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白，人工調整原因必填，確認後才能完成第一次覆核。" });
@@ -3987,25 +3990,25 @@
           errors.push({ sheetName, sourceRow: index + 2, sku, message: blockedReason });
         }
         const finalQty = blockedReason ? 0 : Math.max(0, Number(confirmedQty || 0));
-        const forecastDaily = Math.max(0, Number(sparseManualAddition ? baseline?.forecastDailyQty : source["預估日需求"] || 0));
-        const inventoryQty = Math.max(0, Number(sparseManualAddition ? baseline?.inventoryQty : source["可用公司庫存"] || 0));
-        const storeInventoryQty = Math.max(0, Number(sparseManualAddition ? Object.values(baseline?.storeInventoryByCode || {}).reduce((sum, value) => sum + Number(value || 0), 0) : source["門市可售庫存"] || 0));
-        const pendingQty = Math.max(0, Number(sparseManualAddition ? (baseline?.effectivePendingQty ?? baseline?.pendingQty) : source["已採購未到貨"] || 0));
+        const forecastDaily = Math.max(0, Number(manuallyAdded ? baseline?.forecastDailyQty : source["預估日需求"] || 0));
+        const inventoryQty = Math.max(0, Number(manuallyAdded ? baseline?.inventoryQty : source["可用公司庫存"] || 0));
+        const storeInventoryQty = Math.max(0, Number(manuallyAdded ? Object.values(baseline?.storeInventoryByCode || {}).reduce((sum, value) => sum + Number(value || 0), 0) : source["門市可售庫存"] || 0));
+        const pendingQty = Math.max(0, Number(manuallyAdded ? (baseline?.effectivePendingQty ?? baseline?.pendingQty) : source["已採購未到貨"] || 0));
         const availableDays = forecastDaily > 0 ? (inventoryQty + storeInventoryQty + pendingQty + finalQty) / forecastDaily : null;
       const availableTo = availableDays == null ? "需求為0" : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
         const comparison = Number(suggestedQty || 0) > 0 ? finalQty / Number(suggestedQty) : (finalQty > 0 ? Infinity : 1);
         const aiJudgment = blockedReason ? "規則阻擋" : (comparison > 1.2 ? "偏高" : comparison < 0.8 ? "偏低" : "合理");
         rows.push({
           sheetName, sourceRow: index + 2, supplier, supplierCountry: supplierRule?.country || "待確認", sku,
-          supplierSku: String(source["供應商貨號"] || "").trim(), name, suggestedQty: Math.max(0, Number(suggestedQty || 0)),
+          supplierSku: manuallyAdded ? String(baseline?.supplierSku || "").trim() : String(source["供應商貨號"] || "").trim(), name, suggestedQty: Math.max(0, Number(suggestedQty || 0)),
           confirmedQty: Math.max(0, Number(confirmedQty || 0)), finalQty, unitCost: Math.max(0, Number(unitCost || 0)), reason,
           blockedReason, suggestedAmount: Math.max(0, Number(suggestedQty || 0)) * Math.max(0, Number(unitCost || 0)),
           manualAmount: Math.max(0, Number(confirmedQty || 0)) * Math.max(0, Number(unitCost || 0)),
           blockedAmount: blockedReason ? Math.max(0, Number(confirmedQty || 0)) * Math.max(0, Number(unitCost || 0)) : 0,
           approvedAmount: finalQty * Math.max(0, Number(unitCost || 0)), forecastDaily, inventoryQty, storeInventoryQty, pendingQty,
-          availableTo, aiJudgment, productStatusPendingReview, manuallyAdded: sparseManualAddition,
+          availableTo, aiJudgment, productStatusPendingReview, manuallyAdded,
           sellThroughConsignmentAllowed,
-          demandSummary: sparseManualAddition ? `總部需求${Number(baseline?.hqDemandQty || 0).toFixed(2)}；門市需求${Number(baseline?.storeDemandQty || 0).toFixed(2)}` : "",
+          demandSummary: manuallyAdded ? `總部需求${Number(baseline?.hqDemandQty || 0).toFixed(2)}；門市需求${Number(baseline?.storeDemandQty || 0).toFixed(2)}` : "",
           consignmentCurrentQty: Math.max(0, Number(baseline?.consignmentCurrentQty ?? source["寄倉現貨"] ?? 0)),
           consignmentScheduledQty: Math.max(0, Number(baseline?.consignmentScheduledQty ?? source["粉紅排程"] ?? 0)),
           currentAvailableQty: /普優[瑪碼]|力榮/.test(supplier) ? consignmentAvailableQty : Math.max(0, Number(source["目前實際可採購量"] || finalQty)),
