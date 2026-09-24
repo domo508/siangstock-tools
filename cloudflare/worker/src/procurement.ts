@@ -372,11 +372,40 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
   const rows = await env.DB.prepare(
     "SELECT id, analysis_month, workflow_type, erp_reference, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, approved_at, approved_by, erp_created_at, erp_created_by, updated_at, revision FROM procurement_batches WHERE analysis_month = ? ORDER BY updated_at DESC LIMIT 200"
   ).bind(requestedMonth).all<Record<string, unknown>>();
-  const batches: Record<string, unknown>[] = rows.results.map((row): Record<string, unknown> => ({
-    ...row,
-    supplier_summary: parseJsonText(String(row.supplier_summary || "[]")),
-    payment_schedule: parseJsonText(String(row.payment_schedule || "[]"))
-  }));
+  const batchIds = rows.results.map((row) => String(row.id));
+  const itemSummaryRows = batchIds.length
+    ? await env.DB.prepare(`SELECT batch_id, COUNT(*) item_count, COALESCE(SUM(approved_quantity), 0) approved_quantity, COALESCE(SUM(erp_quantity), 0) erp_quantity, COALESCE(SUM(received_quantity), 0) received_quantity, COALESCE(SUM(remaining_quantity), 0) remaining_quantity FROM procurement_batch_items WHERE batch_id IN (${batchIds.map(() => "?").join(",")}) GROUP BY batch_id`).bind(...batchIds).all<Record<string, unknown>>()
+    : { results: [] as Record<string, unknown>[] };
+  const approvedEventRows = batchIds.length
+    ? await env.DB.prepare(`SELECT batch_id, amount_after, created_at FROM procurement_events WHERE event_type = 'approved' AND batch_id IN (${batchIds.map(() => "?").join(",")}) ORDER BY created_at ASC`).bind(...batchIds).all<Record<string, unknown>>()
+    : { results: [] as Record<string, unknown>[] };
+  const itemSummaryByBatch = new Map(itemSummaryRows.results.map((row) => [String(row.batch_id), row]));
+  const originalApprovalByBatch = new Map<string, number>();
+  for (const row of approvedEventRows.results) {
+    const batchId = String(row.batch_id);
+    if (!originalApprovalByBatch.has(batchId)) originalApprovalByBatch.set(batchId, Number(row.amount_after || 0));
+  }
+  const batches: Record<string, unknown>[] = rows.results.map((row): Record<string, unknown> => {
+    const summary = itemSummaryByBatch.get(String(row.id));
+    const currentCommittedAmount = Number(row.approved_amount || 0);
+    const originalApprovedAmount = originalApprovalByBatch.get(String(row.id)) ?? currentCommittedAmount;
+    return {
+      ...row,
+      supplier_summary: parseJsonText(String(row.supplier_summary || "[]")),
+      payment_schedule: parseJsonText(String(row.payment_schedule || "[]")),
+      closure_summary: {
+        hasItemBaseline: Boolean(summary),
+        itemCount: Number(summary?.item_count || 0),
+        originalApprovedAmount,
+        currentCommittedAmount,
+        amountDelta: Math.round((currentCommittedAmount - originalApprovedAmount) * 100) / 100,
+        approvedQuantity: Number(summary?.approved_quantity || 0),
+        erpOrderedQuantity: Number(summary?.erp_quantity || 0),
+        receivedQuantity: Number(summary?.received_quantity || 0),
+        remainingQuantity: Number(summary?.remaining_quantity || 0)
+      }
+    };
+  });
   const approved = batches.filter((row) => ["approved", "erp_created", "received"].includes(String(row.status)));
   const statusAmount = (status: string) => batches.filter((row) => row.status === status).reduce((sum, row) => sum + Number(row.approved_amount || 0), 0);
   const reconciliationRows = await env.DB.prepare(

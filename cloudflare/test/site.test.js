@@ -153,6 +153,22 @@ describe("前台導覽", () => {
     expect(migration).toContain("manual_cancelled");
   });
 
+  it("主採購台帳提供可展開的ERP閉環摘要", () => {
+    const html = readFileSync("../procurement-planning/index.html", "utf8");
+    const app = readFileSync("../procurement-planning/app.js", "utf8");
+    const style = readFileSync("../procurement-planning/style.css", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/procurement.ts", "utf8");
+    expect(html).toContain("完整採購檔若出現品項、數量或價格差異");
+    expect(app).toContain("查看ERP閉環摘要");
+    expect(app).toContain("ERP／調整後金額");
+    expect(app).toContain("累計實收");
+    expect(app).toContain("剩餘未到");
+    expect(style).toContain(".ledger-closure-summary");
+    expect(worker).toContain("closure_summary");
+    expect(worker).toContain("originalApprovedAmount");
+    expect(worker).toContain("remainingQuantity");
+  });
+
   it("週調撥允許門市與總部人工新增或移除品項並保留原因", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");

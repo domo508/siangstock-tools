@@ -3127,8 +3127,8 @@
     const headerValues = XLSX.utils.sheet_to_json(sheet, { header: 1, range: headerRow, defval: "" })[0] || [];
     const inputHeaders = new Set(options.inputHeaders || ["人工確認採購量", "人工調整原因", "二次確認採購量", "二次確認原因"]);
     const decisionHeaders = new Set(options.decisionHeaders || [
-      "人工確認要求", "加總需求（公式）", "建議採購量", "目前庫存可售至", "系統建議採購後可售至", "目前實際可採購量",
-      "人工確認後可售至", "AI判斷", "最終可核准量", "最終可核准金額", "檢核結果", "回匯檢核狀態",
+      "人工確認要求", "加總需求（公式）", "建議採購量", "總倉目前庫存可售至", "全公司合計庫存可售至", "全公司系統建議採購後可售至", "目前實際可採購量",
+      "全公司人工確認後可售至", "AI判斷", "最終可核准量", "最終可核准金額", "檢核結果", "回匯檢核狀態",
       "春節備貨規則", "春節額外備貨天數", "前次春節備貨未交量", "春節額外建議量", "調整前建議採購量"
     ]);
     const longTextHeaders = new Set(["商品品名", "人工確認要求", "人工調整原因", "AI判斷理由", "規則阻擋原因", "阻擋原因", "供貨狀態", "缺貨／供貨狀態", "二次確認原因", "銷售來源"]);
@@ -3317,12 +3317,18 @@
     const reportRows = rows.map((row) => {
       const storeInventoryQty = Object.values(row.storeInventoryByCode || {})
         .reduce((sum, quantity) => sum + Math.max(0, Number(quantity || 0)), 0);
-      const currentInventoryAvailableDays = row.forecastDailyQty > 0
+      const hqCurrentInventoryAvailableDays = row.hqDailyQty > 0
+        ? Math.max(0, Number(row.inventoryQty || 0)) / row.hqDailyQty
+        : null;
+      const hqCurrentInventoryAvailableTo = hqCurrentInventoryAvailableDays == null
+        ? "需求為0"
+        : addDays(asOfDate || new Date().toISOString().slice(0, 10), Math.floor(hqCurrentInventoryAvailableDays));
+      const companyCurrentInventoryAvailableDays = row.forecastDailyQty > 0
         ? (Math.max(0, Number(row.inventoryQty || 0)) + storeInventoryQty) / row.forecastDailyQty
         : null;
-      const currentInventoryAvailableTo = currentInventoryAvailableDays == null
+      const companyCurrentInventoryAvailableTo = companyCurrentInventoryAvailableDays == null
         ? "需求為0"
-        : addDays(asOfDate || new Date().toISOString().slice(0, 10), Math.floor(currentInventoryAvailableDays));
+        : addDays(asOfDate || new Date().toISOString().slice(0, 10), Math.floor(companyCurrentInventoryAvailableDays));
       const systemAvailableDays = row.forecastDailyQty > 0
         ? (Number(row.inventoryQty || 0) + storeInventoryQty + Number((row.effectivePendingQty ?? row.pendingQty) || 0) + Number(row.suggestedPurchaseQty || 0)) / row.forecastDailyQty
         : null;
@@ -3407,15 +3413,16 @@
       "調整前建議採購量": row.standardSuggestedPurchaseQty,
       "建議採購量": row.suggestedPurchaseQty,
       "本次新增採購量": row.suggestedPurchaseQty,
-      "目前庫存可售至": currentInventoryAvailableTo,
-      "系統建議採購後可售至": systemAvailableTo,
+      "總倉目前庫存可售至": hqCurrentInventoryAvailableTo,
+      "全公司合計庫存可售至": companyCurrentInventoryAvailableTo,
+      "全公司系統建議採購後可售至": systemAvailableTo,
       "寄倉現貨": row.consignmentCurrentQty,
       "粉紅排程": row.consignmentScheduledQty,
       "寄倉缺口": Math.max(row.suggestedPurchaseQty - row.consignmentCurrentQty - row.consignmentScheduledQty, 0),
       "目前實際可採購量": /普優[瑪碼]/.test(row.supplier) ? Math.min(row.suggestedPurchaseQty, row.consignmentCurrentQty) : row.suggestedPurchaseQty,
       "人工確認採購量": row.initialManualQty ?? "",
       "人工調整原因": row.initialManualReason || "",
-      "人工確認後可售至": "",
+      "全公司人工確認後可售至": "",
       "AI判斷": "待回匯後重算",
       "新品上市日": row.listedDate || "",
       "新品預計通路／門市": row.plannedChannels || "",
@@ -3954,7 +3961,7 @@
         const storeInventoryQty = Math.max(0, Number(sparseManualAddition ? Object.values(baseline?.storeInventoryByCode || {}).reduce((sum, value) => sum + Number(value || 0), 0) : source["門市可售庫存"] || 0));
         const pendingQty = Math.max(0, Number(sparseManualAddition ? (baseline?.effectivePendingQty ?? baseline?.pendingQty) : source["已採購未到貨"] || 0));
         const availableDays = forecastDaily > 0 ? (inventoryQty + storeInventoryQty + pendingQty + finalQty) / forecastDaily : null;
-        const availableTo = availableDays == null ? "需求為0" : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
+      const availableTo = availableDays == null ? "需求為0" : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
         const comparison = Number(suggestedQty || 0) > 0 ? finalQty / Number(suggestedQty) : (finalQty > 0 ? Infinity : 1);
         const aiJudgment = blockedReason ? "規則阻擋" : (comparison > 1.2 ? "偏高" : comparison < 0.8 ? "偏低" : "合理");
         rows.push({
@@ -4015,7 +4022,7 @@
       "供應商": row.supplier, "供應商分類": row.supplierCountry, "ERP品號": row.sku, "供應商貨號": row.supplierSku,
       "商品品名": row.name, "系統建議量": row.suggestedQty, "人工回匯量": row.confirmedQty, "人工確認要求": row.productStatusPendingReview ? "貨品狀態空白，已明確人工確認" : "一般回匯", "規則阻擋原因": row.blockedReason,
       "最終可核准量": row.finalQty, "進貨價": row.unitCost, "人工回匯金額": row.manualAmount, "規則阻擋金額": row.blockedAmount,
-      "最終可核准金額": row.approvedAmount, "人工調整原因": row.reason, "人工確認後可售至": row.availableTo, "AI判斷": row.aiJudgment,
+      "最終可核准金額": row.approvedAmount, "人工調整原因": row.reason, "全公司人工確認後可售至": row.availableTo, "AI判斷": row.aiJudgment,
       "預估日需求": row.forecastDaily, "可用公司庫存": row.inventoryQty, "門市可售庫存": row.storeInventoryQty, "已採購未到貨": row.pendingQty,
       "本次人工新增": row.manuallyAdded ? "是；資料已由本次計算批次補回" : "否", "需求摘要": row.demandSummary || "",
       "寄倉現貨": row.consignmentCurrentQty || 0, "粉紅排程": row.consignmentScheduledQty || 0,
@@ -4090,7 +4097,7 @@
       const storeInventoryQty = Math.max(0, Number(source["門市可售庫存"] || 0));
       const pendingQty = Math.max(0, Number(source["已採購未到貨"] || 0));
       const availableDays = forecastDaily > 0 ? (inventoryQty + storeInventoryQty + pendingQty + Math.max(0, Number(finalQty || 0))) / forecastDaily : null;
-      const availableTo = availableDays == null ? String(source["人工確認後可售至"] || source["人工填寫可售至"] || "需求為0") : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
+      const availableTo = availableDays == null ? String(source["全公司人工確認後可售至"] || source["人工確認後可售至"] || source["人工填寫可售至"] || "需求為0") : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
       const comparison = suggestedQty > 0 ? Number(finalQty || 0) / suggestedQty : (Number(finalQty || 0) > 0 ? Infinity : 1);
       const aiJudgment = blockedReason ? "規則阻擋" : (comparison > 1.2 ? "偏高" : comparison < 0.8 ? "偏低" : "合理");
       rows.push({

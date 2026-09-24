@@ -982,6 +982,31 @@
   function workflowLabel(type) {
     return ({ system_recommendation: "一般採購", new_product: "新品首批", manual_draft: "人工匯入", manual_posted: "補登已採購", customer_custom: "客製採購" })[type] || "一般採購";
   }
+  function appendLedgerClosureSummary(cell, item) {
+    const summary = item.closure_summary || {};
+    const details = document.createElement("details"); details.className = "ledger-closure-summary";
+    const trigger = document.createElement("summary"); trigger.textContent = "查看ERP閉環摘要"; details.appendChild(trigger);
+    if (!summary.hasItemBaseline) {
+      const empty = document.createElement("p"); empty.textContent = "此舊批次尚無逐品項閉環基準；回填ERP單號或補回原核准報表後才會顯示收貨數量。"; details.appendChild(empty);
+      cell.appendChild(details); return;
+    }
+    const waitingForErp = item.status === "approved";
+    const values = [
+      ["原核准金額", formatCurrencyPrecise(summary.originalApprovedAmount)],
+      ["ERP／調整後金額", formatCurrencyPrecise(summary.currentCommittedAmount)],
+      ["承諾差額", formatCurrencyPrecise(summary.amountDelta)],
+      ["ERP訂購量", waitingForErp ? "尚未回填ERP" : `${formatNumber(summary.erpOrderedQuantity)}件`],
+      ["累計實收", waitingForErp ? "尚未比對" : `${formatNumber(summary.receivedQuantity)}件`],
+      ["剩餘未到", waitingForErp ? "尚未比對" : `${formatNumber(summary.remainingQuantity)}件`]
+    ];
+    const grid = document.createElement("dl"); grid.className = "ledger-closure-grid";
+    values.forEach(([label, value]) => {
+      const term = document.createElement("dt"); term.textContent = label;
+      const description = document.createElement("dd"); description.textContent = value;
+      grid.append(term, description);
+    });
+    details.appendChild(grid); cell.appendChild(details);
+  }
   function renderActiveLedger() {
     const active = (state.ledger?.batches || []).filter((row) => ["approved", "erp_created", "received"].includes(row.status));
     if (!active.length) {
@@ -1005,7 +1030,11 @@
         }
       }
       row.appendChild(erpCell);
-      appendCell(row, (item.supplier_summary || []).join("、") || "未提供"); appendCell(row, statusLabel(item.status)); appendCell(row, formatCurrency(item.approved_amount)); appendCell(row, `v${item.revision}`);
+      appendCell(row, (item.supplier_summary || []).join("、") || "未提供"); appendCell(row, statusLabel(item.status));
+      const amountCell = document.createElement("td");
+      const amount = document.createElement("strong"); amount.textContent = formatCurrency(item.approved_amount); amountCell.appendChild(amount);
+      appendLedgerClosureSummary(amountCell, item); row.appendChild(amountCell);
+      appendCell(row, `v${item.revision}`);
       const action = document.createElement("td"); action.className = "ledger-action-stack";
       if (item.status === "approved" && state.config?.permissions?.canApprove && !["manual_posted", "customer_custom"].includes(item.workflow_type)) {
         const button = document.createElement("button"); button.type = "button"; button.className = "secondary-button"; button.textContent = "確認ERP已開立"; button.disabled = true;

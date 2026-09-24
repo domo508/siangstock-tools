@@ -973,28 +973,37 @@ describe("採購建議第二階段", () => {
     ]);
     const rows = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { defval: "" });
     expect(rows[0]["建議採購量"]).toBeGreaterThan(0);
-    const expectedCurrentAvailableDays = Math.floor(
+    const recommendationRow = recommendations.rows.find((item) => item.sku === rows[0]["ERP品號"]);
+    const expectedHqAvailableDays = Number(recommendationRow.hqDailyQty) > 0
+      ? Math.floor(Number(recommendationRow.inventoryQty || 0) / Number(recommendationRow.hqDailyQty))
+      : null;
+    const expectedHqAvailableTo = expectedHqAvailableDays == null
+      ? "需求為0"
+      : new Date(Date.UTC(2026, 7, 28 + expectedHqAvailableDays)).toISOString().slice(0, 10);
+    const expectedCompanyAvailableDays = Math.floor(
       (Number(rows[0]["可用公司庫存"] || 0) + Number(rows[0]["門市可售庫存"] || 0)) / Number(rows[0]["預估日需求"])
     );
-    const expectedCurrentAvailableTo = new Date(Date.UTC(2026, 7, 28 + expectedCurrentAvailableDays)).toISOString().slice(0, 10);
-    expect(rows[0]["目前庫存可售至"]).toBe(expectedCurrentAvailableTo);
-    expect(rows[0]["系統建議採購後可售至"]).toMatch(/^2026-/);
+    const expectedCompanyAvailableTo = new Date(Date.UTC(2026, 7, 28 + expectedCompanyAvailableDays)).toISOString().slice(0, 10);
+    expect(rows[0]["總倉目前庫存可售至"]).toBe(expectedHqAvailableTo);
+    expect(rows[0]["全公司合計庫存可售至"]).toBe(expectedCompanyAvailableTo);
+    expect(rows[0]["全公司系統建議採購後可售至"]).toMatch(/^2026-/);
     expect(rows[0]["人工確認採購量"]).toBe("");
-    expect(rows[0]["人工確認後可售至"]).toBe("");
+    expect(rows[0]["全公司人工確認後可售至"]).toBe("");
     expect(rows[0]).not.toHaveProperty("總部需求（人工）");
     expect(rows[0]).not.toHaveProperty("門市需求（人工）");
     expect(rows[0]).toMatchObject({ "供應交期類型": "寄倉快速補貨", "到貨交期天數": 5, "目標覆蓋天數": 23 });
     expect(output.SheetNames.every((sheetName) => !output.Sheets[sheetName]["!protect"])).toBe(true);
     const editableHeaders = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { header: 1, defval: "" })[0];
-    expect(editableHeaders.indexOf("目前庫存可售至") + 1).toBe(editableHeaders.indexOf("系統建議採購後可售至"));
+    expect(editableHeaders.indexOf("總倉目前庫存可售至") + 1).toBe(editableHeaders.indexOf("全公司合計庫存可售至"));
+    expect(editableHeaders.indexOf("全公司合計庫存可售至") + 1).toBe(editableHeaders.indexOf("全公司系統建議採購後可售至"));
     const totalCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("加總需求（公式）") })];
     const hqCell = XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("總部需求（系統）") });
     const storeCell = XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("門市需求（系統）") });
     expect(totalCell.f).toBe(`${hqCell}+${storeCell}`);
     expect(totalCell.s?.protection).toBeUndefined();
     const manualCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("人工確認採購量") })];
-    const decisionCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("系統建議採購後可售至") })];
-    const currentInventoryAvailableToCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("目前庫存可售至") })];
+    const decisionCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("全公司系統建議採購後可售至") })];
+    const currentInventoryAvailableToCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("總倉目前庫存可售至") })];
     expect(manualCell.s?.fill?.fgColor?.rgb).toBe("FFFFF2CC");
     expect(currentInventoryAvailableToCell.s?.fill?.fgColor?.rgb).toBe("FFE8F2F5");
     expect(decisionCell.s?.fill?.fgColor?.rgb).toBe("FFE8F2F5");
@@ -1179,7 +1188,7 @@ describe("採購建議第二階段", () => {
     const secondWorkbook = core.buildSecondReviewWorkbook(firstReview, XLSX);
     expect(secondWorkbook.SheetNames.every((sheetName) => !secondWorkbook.Sheets[sheetName]["!protect"])).toBe(true);
     const secondRows = XLSX.utils.sheet_to_json(secondWorkbook.Sheets["02_二次覆核"], { defval: "" });
-    expect(secondRows[0]["人工確認後可售至"]).toMatch(/^2026-/);
+    expect(secondRows[0]["全公司人工確認後可售至"]).toMatch(/^2026-/);
     expect(secondRows[0]).not.toHaveProperty("人工填寫可售至");
     const secondStyleHeaders = XLSX.utils.sheet_to_json(secondWorkbook.Sheets["02_二次覆核"], { header: 1, defval: "" })[0];
     const secondManualCell = secondWorkbook.Sheets["02_二次覆核"][XLSX.utils.encode_cell({ r: 1, c: secondStyleHeaders.indexOf("二次確認採購量") })];
@@ -1495,7 +1504,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260924-erp-reconcile-r1");
+    expect(toolHtml).toContain("20260924-p0-r1");
     expect(toolApp).toContain("state.postedOrderFiles.length && state.config?.permissions?.canApprove");
     expect(toolApp).toContain("state.parsedSources?.master");
     expect(toolApp).toContain("可直接檢查並補登，不必先產生採購建議");
