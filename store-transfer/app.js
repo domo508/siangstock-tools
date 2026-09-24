@@ -71,6 +71,90 @@
   function calculationMode() { return document.querySelector('input[name="calculation-mode"]:checked')?.value === "comparison" ? "comparison" : "formal"; }
   function renderStores() { $("store-options").innerHTML = Object.entries(state.config.stores).map(([code, store]) => `<label><input type="checkbox" value="${code}" checked><span>${code} ${escapeHtml(store.name)}<small>${escapeHtml(store.company)}・${escapeHtml(store.relationship)}</small></span></label>`).join(""); }
 
+  function displayExceptionDate(value) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "—" : new Intl.DateTimeFormat("zh-TW", { dateStyle: "short", timeStyle: "short" }).format(date);
+  }
+
+  function renderDisplayExceptions() {
+    const query = $("display-exception-search").value.trim().toLocaleUpperCase("en-US");
+    const filter = $("display-exception-status-filter").value;
+    const all = state.config.displayExceptions || [];
+    const rows = all.filter((item) => (!query || String(item.sku).toLocaleUpperCase("en-US").includes(query))
+      && (filter === "all" || (filter === "enabled" ? item.enabled : !item.enabled)));
+    $("display-exception-rows").innerHTML = rows.map((item) => `<tr><td><strong>${escapeHtml(item.sku)}</strong></td><td>${item.displayQuantity}件</td><td>取代總部通用量為 <strong>${item.displayQuantity}件</strong></td><td>${escapeHtml(item.reason)}</td><td><span class="display-exception-status${item.enabled ? "" : " disabled"}">${item.enabled ? "啟用" : "已停用"}</span></td><td>${escapeHtml(displayExceptionDate(item.updatedAt))}<br><small>${escapeHtml(item.updatedBy)}</small></td><td><div class="exception-actions"><button class="secondary-button compact" type="button" data-edit-display-exception="${escapeHtml(item.sku)}">編輯</button><button class="secondary-button compact" type="button" data-toggle-display-exception="${escapeHtml(item.sku)}">${item.enabled ? "停用" : "重新啟用"}</button></div></td></tr>`).join("");
+    $("display-exception-empty").hidden = rows.length > 0;
+    const enabled = all.filter((item) => item.enabled).length;
+    $("display-exception-summary").textContent = `已啟用 ${enabled} 項・共 ${all.length} 項紀錄`;
+  }
+
+  async function loadDisplayExceptions() {
+    const result = await api("/display-exceptions");
+    state.config.displayExceptions = result.exceptions || [];
+    renderDisplayExceptions();
+  }
+
+  async function showDisplayExceptions() {
+    if (state.config?.role !== "store") return;
+    document.querySelectorAll("[data-weekly-view]").forEach((element) => { element.hidden = true; });
+    $("display-exceptions-panel").hidden = false;
+    const store = state.config.stores[state.config.storeCode];
+    $("display-exceptions-title").textContent = `管理${store.name}的展示例外`;
+    history.replaceState(null, "", `${location.pathname}${location.search}#display-exceptions`);
+    await loadDisplayExceptions();
+    $("display-exceptions-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function hideDisplayExceptions() {
+    $("display-exceptions-panel").hidden = true;
+    document.querySelectorAll("[data-weekly-view]").forEach((element) => {
+      if (element.id === "hq-panel") element.hidden = state.config.role === "store";
+      else if (element.id === "store-panel") element.hidden = state.config.role !== "store";
+      else element.hidden = false;
+    });
+    history.replaceState(null, "", `${location.pathname}${location.search}`);
+  }
+
+  function openDisplayExceptionDialog(item = null) {
+    const dialog = $("display-exception-dialog");
+    $("display-exception-dialog-title").textContent = item ? "編輯品號例外" : "新增品號例外";
+    $("display-exception-sku").value = item?.sku || "";
+    $("display-exception-sku").disabled = Boolean(item);
+    $("display-exception-quantity").value = String(item?.displayQuantity ?? 1);
+    $("display-exception-reason").value = item?.reason || "";
+    $("display-exception-enabled").checked = item?.enabled !== false;
+    $("display-exception-revision").value = String(item?.revision || 0);
+    $("display-exception-dialog-status").textContent = "";
+    dialog.showModal();
+  }
+
+  async function saveDisplayException(event) {
+    event.preventDefault();
+    const sku = $("display-exception-sku").value.trim().toLocaleUpperCase("en-US");
+    const button = event.currentTarget.querySelector('button[type="submit"]');
+    button.disabled = true; $("display-exception-dialog-status").textContent = "正在儲存…";
+    try {
+      await api(`/display-exceptions/${encodeURIComponent(state.config.storeCode)}/${encodeURIComponent(sku)}`, { method: "PUT", body: {
+        displayQuantity: Number($("display-exception-quantity").value), reason: $("display-exception-reason").value.trim(),
+        enabled: $("display-exception-enabled").checked, expectedRevision: Number($("display-exception-revision").value || 0)
+      } });
+      $("display-exception-dialog").close();
+      await loadDisplayExceptions();
+      $("display-exception-page-status").textContent = `${sku} 已儲存；將從下一次總部重新計算開始生效。`;
+    } catch (error) { $("display-exception-dialog-status").textContent = error.message; }
+    finally { button.disabled = false; }
+  }
+
+  async function toggleDisplayException(sku) {
+    const item = (state.config.displayExceptions || []).find((row) => row.sku === sku);
+    if (!item) return;
+    await api(`/display-exceptions/${encodeURIComponent(state.config.storeCode)}/${encodeURIComponent(item.sku)}`, { method: "PUT", body: {
+      displayQuantity: item.displayQuantity, reason: item.reason, enabled: !item.enabled, expectedRevision: item.revision
+    } });
+    await loadDisplayExceptions();
+    $("display-exception-page-status").textContent = `${sku} 已${item.enabled ? "停用" : "重新啟用"}；下一次總部重新計算時套用。`;
+  }
+
   function renderComparisonDownloads(stores, mode) {
     const panel = $("comparison-downloads");
     panel.hidden = mode !== "comparison";
@@ -333,7 +417,8 @@
         sales.push(report);
         await yieldToBrowser();
       }
-      const historyPayload = await api("/consumable-snapshots");
+      const [historyPayload, exceptionPayload] = await Promise.all([api("/consumable-snapshots"), api("/display-exceptions")]);
+      state.config.displayExceptions = exceptionPayload.exceptions || [];
       const latestSalesDate = sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "") || $("proposal-date").value;
       $("hq-status").textContent = "資料讀取完成，正在計算各門市建議量…";
       const mode = calculationMode();
@@ -347,7 +432,8 @@
         consumableHistory: historyPayload.snapshots || [],
         proposalDate: $("proposal-date").value,
         calculationMode: mode,
-        storeInventory: state.config.storeInventoryRules?.config || {}
+        storeInventory: state.config.storeInventoryRules?.config || {},
+        storeDisplayExceptions: state.config.displayExceptions || []
       };
       state.calculation = transferCore.buildSuggestions(calculationInput);
       state.formalCalculation = mode === "comparison" ? transferCore.buildSuggestions({ ...calculationInput, calculationMode: "formal" }) : state.calculation;
@@ -649,13 +735,20 @@
       state.config = await api("/config");
       $("account-badge").textContent = `${state.config.email}・${state.config.role === "store" ? state.config.storeCode : state.config.role === "admin" ? "最高權限" : "總部"}`;
       $("refresh-button").disabled = false;
-      if (state.config.role === "store") { $("store-panel").hidden = false; const store = state.config.stores[state.config.storeCode]; $("store-identity").textContent = `${state.config.storeCode} ${store.name}；只會顯示本店資料。`; }
+      if (state.config.role === "store") {
+        $("store-panel").hidden = false;
+        const store = state.config.stores[state.config.storeCode];
+        $("page-title").innerHTML = "本週調撥，<br>確認自己的門市就好。";
+        $("hero-description").textContent = "查看系統建議、調整數量並送出總部審核；本店展示例外從固定入口另外維護。";
+        $("store-identity").textContent = `${state.config.storeCode} ${store.name}；只會顯示本店資料。`;
+      }
       else {
         $("hq-panel").hidden = false; renderStores(); defaults();
         if (state.config.permissions?.canManageRules) $("rules-link").hidden = false;
         if (!state.config.googleOAuthClientId) { $("google-connect-button").disabled = true; $("source-status").textContent = "正式環境尚未設定 Google OAuth，用手動備援仍可操作。"; }
       }
       await Promise.all([loadBatches(), loadPendingPurchases(), ...(state.config.permissions?.canCollaborate ? [loadCollaborationDrafts()] : [])]);
+      if (state.config.role === "store" && location.hash === "#display-exceptions") await showDisplayExceptions();
     } catch (error) { $("account-badge").textContent = "公司帳號驗證失敗"; $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; }
   }
 
@@ -667,6 +760,19 @@
   $("refresh-collaboration-button").addEventListener("click", () => loadCollaborationDrafts().catch((error) => { $("collaboration-status").textContent = error.message; }));
   $("google-connect-button").addEventListener("click", () => authorizeGoogle().catch((error) => { $("source-status").textContent = error.message; }));
   $("auto-source-button").addEventListener("click", () => loadGoogleSources().catch((error) => { $("source-status").textContent = `自動取得失敗：${error.message}；可改用手動備援。`; }));
+  $("show-display-exceptions").addEventListener("click", () => showDisplayExceptions().catch((error) => { $("display-exception-page-status").textContent = error.message; }));
+  $("hide-display-exceptions").addEventListener("click", hideDisplayExceptions);
+  $("add-display-exception").addEventListener("click", () => openDisplayExceptionDialog());
+  document.querySelectorAll("[data-close-display-exception]").forEach((button) => button.addEventListener("click", () => $("display-exception-dialog").close()));
+  $("display-exception-form").addEventListener("submit", saveDisplayException);
+  $("display-exception-search").addEventListener("input", renderDisplayExceptions);
+  $("display-exception-status-filter").addEventListener("change", renderDisplayExceptions);
+  $("display-exception-rows").addEventListener("click", (event) => {
+    const edit = event.target.closest("[data-edit-display-exception]");
+    if (edit) { openDisplayExceptionDialog((state.config.displayExceptions || []).find((item) => item.sku === edit.dataset.editDisplayException)); return; }
+    const toggle = event.target.closest("[data-toggle-display-exception]");
+    if (toggle) toggleDisplayException(toggle.dataset.toggleDisplayException).catch((error) => { $("display-exception-page-status").textContent = error.message; });
+  });
   $("week-key").addEventListener("change", () => applyScheduleForWeek($("week-key").value));
   document.querySelectorAll('input[name="calculation-mode"]').forEach((input) => input.addEventListener("change", () => {
     if (!state.calculation) return;

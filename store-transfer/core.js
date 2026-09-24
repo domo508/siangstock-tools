@@ -127,9 +127,9 @@
     const standalone = [["3.5尺", /(?<![\dx*.])3\.5尺/], ["5尺", /(?<![\dx*.])5尺/], ["6尺", /(?<![\dx*.])6尺/], ["7尺", /(?<![\dx*.])7尺/]].find(([, pattern]) => pattern.test(value));
     if (standalone) return configuredRule(standalone[0] === "5尺"
       ? { name: "獨立5尺商品", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "5尺不可售展示1件" }
-      : { name: "獨立3.5尺、6尺、7尺商品", role: "可售最低庫存", quantity: 1, scope: "全部有銷售資料的營運門市", note: `${standalone[0]}可售最低庫存1件` }, storeInventory);
+      : { name: "獨立3.5尺、6尺、7尺商品", role: "可售最低庫存", quantity: 1, scope: "近42天有該品號現場銷售的營運門市", note: `${standalone[0]}可售最低庫存1件` }, storeInventory);
     if (/6x7尺.*薄被套/.test(value)) return configuredRule(/天絲|華爾紗|純棉|精梳棉|精梳純/.test(`${value}${categoryValue}`)
-      ? { name: "6×7尺雙人薄被套天絲／華爾紗／純棉／精梳純棉", legacyNames: ["6×7尺雙人薄被套天絲／華爾紗"], role: "可售最低庫存", quantity: 1, scope: "全部有銷售資料的營運門市", note: "天絲／華爾紗／純棉／精梳純棉雙人薄被套最低1件" }
+      ? { name: "6×7尺雙人薄被套天絲／華爾紗／純棉／精梳純棉", legacyNames: ["6×7尺雙人薄被套天絲／華爾紗"], role: "可售最低庫存", quantity: 1, scope: "近42天有該品號現場銷售的營運門市", note: "天絲／華爾紗／純棉／精梳純棉雙人薄被套最低1件" }
       : { name: "6×7尺雙人薄被套一般材質", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "雙人薄被套展示1件" }, storeInventory);
     if (/6x7尺.*兩用被套/.test(value)) return configuredRule({ name: "6×7尺雙人兩用被套", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "雙人兩用被套展示1件" }, storeInventory);
     if (/床包|被套/.test(value)) return null;
@@ -159,12 +159,13 @@
     const isGeneralAccessory = /圍裙|坐墊|眼罩|萬年曆|束口袋|抓板|票卡|零錢包|室內鞋|室內拖鞋|拖鞋|鞋袋|香氛|空氣噴霧|熊冷被|涼毯|蓋毯/.test(itemSource);
     const isProtectedStandardQuilt = !/被套/.test(itemSource) && /被胎|棉被|被子|夏季被|四季被|涼被|羽絨被|羊毛被|蠶絲被|機能被|舒眠被|冷被|暖被/.test(itemSource) && /(?:4\.5x6\.5|8x7)尺/.test(itemSource) && !/熊冷被|涼毯|蓋毯/.test(itemSource);
     let productCategory = "";
-    if (!isProtectedStandardQuilt && (/配件/.test(categorySource) || isKnownNoSize || isGeneralAccessory || /保潔墊/.test(itemSource))) productCategory = "配件";
-    else if (/床包/.test(itemSource)) productCategory = "床包";
+    if (/床包/.test(itemSource)) productCategory = "床包";
     else if (/被套/.test(itemSource)) productCategory = "被套";
+    else if (!isProtectedStandardQuilt && (/配件/.test(categorySource) || isKnownNoSize || isGeneralAccessory || /保潔墊/.test(itemSource))) productCategory = "配件";
     else productCategory = String(record?.mainCategory || record?.style1 || "").trim();
     let sizeAttribute = "";
-    if (/無尺寸/.test(`${fields.sizeGroup}${fields.size}`) || isKnownNoSize) sizeAttribute = "無尺寸";
+    if (["床包", "被套"].includes(productCategory) && hasBedDimension) sizeAttribute = "有尺寸";
+    else if (/無尺寸/.test(`${fields.sizeGroup}${fields.size}`) || isKnownNoSize) sizeAttribute = "無尺寸";
     else if (/有尺寸/.test(`${fields.sizeGroup}${fields.size}`) || hasBedDimension || hasAccessorySize) sizeAttribute = "有尺寸";
     else if (productCategory === "配件") sizeAttribute = "無尺寸";
     return { productCategory, sizeAttribute, itemSource };
@@ -174,13 +175,14 @@
     const productCategory = String(rule?.productCategory || "").trim();
     const sizeAttribute = String(rule?.sizeAttribute || "").trim();
     const itemTypeKeywords = String(rule?.itemTypeKeywords || "").trim();
+    const exactSkus = String(rule?.exactSkus || "").trim();
     if (rule?.conditionMode === "structured") {
-      if ((!productCategory || productCategory === "全部") && (!sizeAttribute || sizeAttribute === "全部") && !itemTypeKeywords) return null;
-      return { productCategory, sizeAttribute, itemTypeKeywords };
+      if ((!productCategory || productCategory === "全部") && (!sizeAttribute || sizeAttribute === "全部") && !itemTypeKeywords && !exactSkus) return null;
+      return { productCategory, sizeAttribute, itemTypeKeywords, exactSkus };
     }
     const legacy = normalizeName(`${rule?.name || ""}${rule?.matchText || ""}`);
-    if (/無尺寸配件|配件.*無尺寸/.test(legacy)) return { productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "" };
-    if (/有尺寸配件|配件.*有尺寸/.test(legacy)) return { productCategory: "配件", sizeAttribute: "有尺寸", itemTypeKeywords: "" };
+    if (/無尺寸配件|配件.*無尺寸/.test(legacy)) return { productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "", exactSkus: "" };
+    if (/有尺寸配件|配件.*有尺寸/.test(legacy)) return { productCategory: "配件", sizeAttribute: "有尺寸", itemTypeKeywords: "", exactSkus: "" };
     return null;
   }
 
@@ -190,6 +192,8 @@
     const facts = productRuleFacts(record);
     if (conditions.productCategory && conditions.productCategory !== "全部" && normalizeName(conditions.productCategory) !== normalizeName(facts.productCategory)) return false;
     if (conditions.sizeAttribute && conditions.sizeAttribute !== "全部" && conditions.sizeAttribute !== facts.sizeAttribute) return false;
+    const skus = conditions.exactSkus.split(/[|｜、,，\s]+/).map((value) => value.normalize("NFKC").trim().toLocaleUpperCase("en-US")).filter(Boolean);
+    if (skus.length && !skus.includes(String(record?.sku || "").normalize("NFKC").trim().toLocaleUpperCase("en-US"))) return false;
     const keywords = conditions.itemTypeKeywords.split(/[|｜、,，]/).map(normalizeName).filter(Boolean);
     return !keywords.length || keywords.some((keyword) => facts.itemSource.includes(keyword));
   }
@@ -215,10 +219,19 @@
     return candidates.sort((left, right) => Number(right.priority || 0) - Number(left.priority || 0))[0] || null;
   }
 
+  function storeDisplayException(storeCode, sku, exceptions) {
+    const match = (Array.isArray(exceptions) ? exceptions : []).find((item) => item?.enabled !== false
+      && String(item?.storeCode || item?.store_code || "") === storeCode
+      && String(item?.sku || "").normalize("NFKC").trim().toLocaleUpperCase("en-US") === String(sku || "").normalize("NFKC").trim().toLocaleUpperCase("en-US"));
+    if (!match) return null;
+    const quantity = Math.max(0, Math.floor(Number(match.displayQuantity ?? match.display_quantity ?? 0)));
+    return { name: "本店單品展示例外", role: "不可售展示", quantity, scope: storeCode, priority: 10000, note: `本店單品展示例外：不可售展示${quantity}件` };
+  }
+
   function appliesToStore(rule, store, localSales42) {
     if (!rule) return false;
     const scope = String(rule.scope || "");
-    if (/全部有銷售資料/.test(scope)) return Number(localSales42) > 0;
+    if (/全部有銷售資料|近42天有該品號現場銷售/.test(scope)) return rule.role === "不可售展示" || Number(localSales42) > 0;
     const codes = scope.match(/R\d{2}/g) || [];
     return codes.length ? codes.includes(store) : true;
   }
@@ -610,12 +623,18 @@
         const daily = local42 / 42;
         const schedule = scheduleByStore[store];
         const target = daily * schedule.coverageDays;
-        const rule = stockRule(master, input.storeInventory);
+        const rule = storeDisplayException(store, sku, input.storeDisplayExceptions) || stockRule(master, input.storeInventory);
         if (rule?.role === "排除規則") continue;
         const ruleApplies = appliesToStore(rule, store, local42);
         const appliesDisplay = ruleApplies && rule?.role === "不可售展示";
         const minimum = ruleApplies && rule?.role === "可售最低庫存" ? rule.quantity : 0;
-        const display = appliesDisplay ? rule.quantity : 0;
+        let display = appliesDisplay ? rule.quantity : 0;
+        let displaySuppressedReason = "";
+        if (master.sellThroughStop && display > 0) {
+          const hqAvailableForDisplay = Math.max(0, Math.floor((inventory.get(`T00|${sku}`) || 0) - (pendingOutbound.get(`T00|${sku}`) || 0)));
+          const displayProtection = sStockProtection(hqAvailableForDisplay, Math.max(0, hqUsage14.get(sku) || 0), Math.max(0, hqUsage42.get(sku) || 0), Math.max(0, hqUsage84.get(sku) || 0));
+          if (displayProtection.releasable === 0) { display = 0; displaySuppressedReason = "S品總倉無可釋出量，本次停用展示需求"; }
+        }
         const physicalInventory = Math.max(0, inventory.get(key) || 0);
         const pendingSubmittedQuantity = Math.max(0, submittedInbound.get(key) || 0);
         const inTransitQuantity = Math.max(0, inTransitInbound.get(key) || 0);
@@ -638,7 +657,7 @@
           preArrivalStockoutRisk: daily > 0 && sellable < daily * schedule.preArrivalDays,
           systemSellThroughDate: projectedSellThroughDate(schedule.currentArrivalDate, Math.max(0, sellable - daily * schedule.preArrivalDays), Math.max(0, need - displayGap), daily),
           isSellThroughStop: Boolean(master.sellThroughStop),
-          ruleSummary: [itemType === "special_stock" ? `${singleDuvetType(master)}／${materialName(master)}前2名花色；建議維持1件，非必要調撥` : `${tier}；保護${schedule.coverageDays}天至${schedule.nextArrivalDate}`, displayGap ? `展示缺口${displayGap}件另補` : "", rule?.note, pendingSubmittedQuantity ? `${calculationMode === "comparison" ? "A/B測試排除待發貨" : "待發貨"}${pendingSubmittedQuantity}件` : "", inTransitQuantity ? `發貨在途${inTransitQuantity}件` : "", daily > 0 && sellable < daily * schedule.preArrivalDays ? `本批${schedule.currentArrivalDate}到店前有缺貨風險` : ""].filter(Boolean).join("；")
+          ruleSummary: [itemType === "special_stock" ? `${singleDuvetType(master)}／${materialName(master)}前2名花色；建議維持1件，非必要調撥` : `${tier}；保護${schedule.coverageDays}天至${schedule.nextArrivalDate}`, displayGap ? `展示缺口${displayGap}件另補` : "", rule?.note, displaySuppressedReason, pendingSubmittedQuantity ? `${calculationMode === "comparison" ? "A/B測試排除待發貨" : "待發貨"}${pendingSubmittedQuantity}件` : "", inTransitQuantity ? `發貨在途${inTransitQuantity}件` : "", daily > 0 && sellable < daily * schedule.preArrivalDays ? `本批${schedule.currentArrivalDate}到店前有缺貨風險` : ""].filter(Boolean).join("；")
         };
         if (!needsBySku.has(sku)) needsBySku.set(sku, []); needsBySku.get(sku).push(row);
       }
@@ -868,9 +887,15 @@
       const localSales42 = Math.max(0, local.get(compoundKey) || 0);
       const b3Sales42 = Math.max(0, b3.get(compoundKey) || 0);
       const schedule = scheduleByStore[storeCode];
-      const rule = stockRule(master, input.storeInventory);
+      const rule = storeDisplayException(storeCode, sku, input.storeDisplayExceptions) || stockRule(master, input.storeInventory);
       const ruleApplies = rule && appliesToStore(rule, storeCode, localSales42);
-      const displayQuantity = ruleApplies && rule.role === "不可售展示" ? Number(rule.quantity || 0) : 0;
+      let displayQuantity = ruleApplies && rule.role === "不可售展示" ? Number(rule.quantity || 0) : 0;
+      let displaySuppressedReason = "";
+      if (master.sellThroughStop && displayQuantity > 0) {
+        const hqAvailableForDisplay = Math.max(0, Math.floor((inventory.get(`T00|${sku}`) || 0) - (pendingOutbound.get(`T00|${sku}`) || 0)));
+        const displayProtection = sStockProtection(hqAvailableForDisplay, Math.max(0, hqUsage14.get(sku) || 0), Math.max(0, hqUsage42.get(sku) || 0), Math.max(0, hqUsage84.get(sku) || 0));
+        if (displayProtection.releasable === 0) { displayQuantity = 0; displaySuppressedReason = "S品總倉無可釋出量，本次停用展示需求"; }
+      }
       const physicalInventory = Math.max(0, inventory.get(compoundKey) || 0);
       const inTransitQuantity = Math.max(0, inTransitInbound.get(compoundKey) || 0);
       const baseSellableQuantity = Math.max(0, physicalInventory + inTransitQuantity - displayQuantity - (localSales42 / 42) * (schedule?.preArrivalDays || 0));
@@ -889,7 +914,7 @@
         suggestedQuantity: Number(systemRow?.suggestedQuantity || 0),
         systemSellThroughDate: systemRow?.systemSellThroughDate || projectedSellThroughDate(schedule?.currentArrivalDate || latest, baseSellableQuantity, 0, localSales42 / 42),
         itemType: systemRow?.itemType || "regular",
-        ruleSummary: systemRow?.ruleSummary || [rule?.name, rule?.role, ruleApplies ? `適用${rule.quantity || 0}件` : ""].filter(Boolean).join("；")
+        ruleSummary: systemRow?.ruleSummary || [rule?.name, rule?.role, ruleApplies ? `適用${rule.quantity || 0}件` : "", displaySuppressedReason].filter(Boolean).join("；")
       };
     });
     return {
@@ -1019,5 +1044,5 @@
     return workbook;
   }
 
-  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook };
+  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, storeDisplayException, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook };
 });

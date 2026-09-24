@@ -121,7 +121,7 @@
       const setCondition = (key, value) => { item.conditionMode = "structured"; item[key] = value; };
       const row = document.createElement("tr");
       row.append(cell(input("checkbox", item.enabled !== false, (value) => item.enabled = value)), cell(input("text", item.name, (value) => item.name = value)),
-        cell(input("text", item.scope || "", (value) => item.scope = value)), cell(input("text", inferredCategory, (value) => setCondition("productCategory", value), { placeholder: "全部或主檔值" })),
+        cell(input("text", item.scope || "", (value) => item.scope = value)), cell(input("text", item.exactSkus || "", (value) => setCondition("exactSkus", value), { placeholder: "N00126,N00127" })), cell(input("text", inferredCategory, (value) => setCondition("productCategory", value), { placeholder: "全部或主檔值" })),
         cell(select(inferredSize, ["全部", "有尺寸", "無尺寸"], (value) => setCondition("sizeAttribute", value))),
         cell(input("text", item.itemTypeKeywords || "", (value) => setCondition("itemTypeKeywords", value), { placeholder: "留白或枕頭｜枕芯" })),
         cell(select(item.inventoryRole, ["不可售展示", "可售最低庫存", "可售特殊備貨", "排除規則"], (value) => item.inventoryRole = value)),
@@ -166,6 +166,7 @@
     state.rules.blacklist = elements.blacklist.value.split(/\n/).map((item) => item.trim()).filter(Boolean);
     state.rules.storeInventory.workdayHolidays = elements.holidays.value.split(/\n/).map((item) => item.trim()).filter(Boolean);
     state.rules.storeInventory.arrivalWeekdayByStore = Object.fromEntries(Object.entries(elements.arrivals).map(([code, control]) => [code, Number(control.value)]));
+    state.rules.storeInventory.rules.sort((left, right) => Number(right.priority || 0) - Number(left.priority || 0) || String(left.name || "").localeCompare(String(right.name || ""), "zh-Hant"));
     elements.save.disabled = true; elements.saveStatus.textContent = "正在儲存新版本…";
     try {
       const result = await request("/api/procurement/rules", { method: "PUT", body: JSON.stringify({ expectedVersion: state.version, changeReason: reason, rules: state.rules }) });
@@ -186,7 +187,7 @@
   elements.addSupplier.addEventListener("click", () => { state.rules.suppliers.push({ name: "新供應商", aliases: [], country: "國內", leadDays: 14, reviewDays: 14, automaticPurchase: true, exclusionReason: "" }); markDirty(); render(); });
   elements.addFeaturedSupplier.addEventListener("click", () => { const name = elements.featuredSupplierSelect.value; if (!name) return; ensureFeaturedSuppliers().push(name); markDirty(); renderFeaturedSuppliers(); });
   elements.addUnit.addEventListener("click", () => { state.rules.purchaseUnits.push({ supplier: "普優瑪寢具有限公司", ruleName: "其它品項", matchText: "", quantity: null, enabled: true }); markDirty(); render(); });
-  elements.addStore.addEventListener("click", () => { state.rules.storeInventory.rules.push({ name: "新門市規則", enabled: false, scope: "R00、R06", conditionMode: "structured", productCategory: "全部", sizeAttribute: "全部", itemTypeKeywords: "", matchText: "", inventoryRole: "可售最低庫存", quantity: 1, priority: 50 }); markDirty(); render(); });
+  elements.addStore.addEventListener("click", () => { state.rules.storeInventory.rules.push({ name: "新門市規則", enabled: false, scope: "R00、R06", conditionMode: "structured", exactSkus: "", productCategory: "全部", sizeAttribute: "全部", itemTypeKeywords: "", matchText: "", inventoryRole: "可售最低庫存", quantity: 1, priority: 50 }); markDirty(); render(); });
   elements.springFestivalEnabled.addEventListener("change", () => { ensureSpringFestivalRule().enabled = elements.springFestivalEnabled.checked; markDirty(); });
   elements.springFestivalStart.addEventListener("input", () => { ensureSpringFestivalRule().closureStart = elements.springFestivalStart.value; markDirty(); });
   elements.springFestivalRecovery.addEventListener("input", () => { ensureSpringFestivalRule().recoveryDate = elements.springFestivalRecovery.value; markDirty(); });

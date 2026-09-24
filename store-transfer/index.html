@@ -9,7 +9,7 @@
   <title>門市週補貨與調撥｜翔仔居家</title>
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="../cost-analysis/style.css">
-  <link rel="stylesheet" href="style.css?v=20260922-collaboration-r1">
+  <link rel="stylesheet" href="style.css?v=20260924-display-exception-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -20,18 +20,18 @@
 
     <nav class="breadcrumb" aria-label="頁面導覽"><ol><li><a href="/">公司工具首頁</a></li><li aria-current="page">門市週補貨與調撥</li></ol><a class="back-link" href="/">← 返回公司工具首頁</a></nav>
 
-    <section class="hero compact-hero" aria-labelledby="page-title">
-      <div><p class="eyebrow">WEEKLY STORE REPLENISHMENT</p><h1 id="page-title">總部算一次，<br>各門市只確認自己的量。</h1><p class="hero-description">星期五由總部建立六間門市建議；門市於星期一回覆，總部核准後依門市分開產生 ERP 調撥檔。</p></div>
-      <aside class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>原始 Excel 不會上傳</strong><p>庫存與銷售只在瀏覽器運算；雲端只保存流程必要欄位及每店三種提袋的週彙總快照，12個月後刪除。</p></div></aside>
+    <section class="hero compact-hero" data-weekly-view aria-labelledby="page-title">
+      <div><p class="eyebrow">WEEKLY STORE REPLENISHMENT</p><h1 id="page-title">總部算一次，<br>各門市只確認自己的量。</h1><p id="hero-description" class="hero-description">星期五由總部建立六間門市建議；門市於星期一回覆，總部核准後依門市分開產生 ERP 調撥檔。</p></div>
+      <aside class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>原始 Excel 不會上傳</strong><p>庫存與銷售只在瀏覽器運算；雲端只保存流程必要欄位、門市展示例外及提袋週彙總，異動紀錄12個月後刪除。</p></div></aside>
     </section>
 
-    <section class="steps" aria-label="使用步驟">
+    <section class="steps" data-weekly-view aria-label="使用步驟">
       <div><span>1</span><strong>總部建立建議</strong><small>匯入最新資料，確認本週門市與作業期限。</small></div>
       <div><span>2</span><strong>門市線上確認</strong><small>各門市只看自己的品項，可暫存並於期限前送出。</small></div>
       <div><span>3</span><strong>總部核准轉ERP</strong><small>逐店覆核後，拆成每間門市一份ERP檔。</small></div>
     </section>
 
-    <section id="hq-panel" class="panel" hidden aria-labelledby="hq-title">
+    <section id="hq-panel" class="panel" data-weekly-view hidden aria-labelledby="hq-title">
       <div class="section-heading"><div><p class="eyebrow">總部工作台</p><h2 id="hq-title">建立本週調撥建議</h2></div><div class="heading-actions"><p>星期五遇假日會提前；星期一遇假日，回覆期限順延至下一個工作日。</p><a id="rules-link" class="secondary-button compact" href="../procurement-planning/rules-admin/?from=store-transfer#store-inventory" hidden>展示／最低庫存規則</a></div></div>
       <div class="period-grid">
         <label><span>本週週次</span><input id="week-key" type="week" required></label>
@@ -84,30 +84,61 @@
       </section>
     </section>
 
-    <section id="store-panel" class="panel" hidden aria-labelledby="store-title">
-      <div class="section-heading"><div><p class="eyebrow">門市確認區</p><h2 id="store-title">本週待確認調撥</h2></div><p id="store-identity"></p></div>
+    <section id="store-panel" class="panel" data-weekly-view hidden aria-labelledby="store-title">
+      <div class="section-heading"><div><p class="eyebrow">門市確認區</p><h2 id="store-title">本週待確認調撥</h2><p id="store-identity"></p></div><div class="heading-actions"><button id="show-display-exceptions" class="secondary-button" type="button">管理本店展示例外</button></div></div>
       <div id="store-batches" class="batch-list"><p class="empty-state">正在讀取本週資料…</p></div>
     </section>
 
-    <section class="panel" aria-labelledby="history-title">
+    <section id="display-exceptions-panel" class="panel display-exceptions-panel" hidden aria-labelledby="display-exceptions-title">
+      <nav class="sub-breadcrumb" aria-label="子頁面導覽"><span>門市週補貨與調撥　›　<strong>本店展示例外</strong></span><button id="hide-display-exceptions" class="back-link button-link" type="button">← 返回週調撥</button></nav>
+      <div class="section-heading"><div><p class="eyebrow">STORE DISPLAY EXCEPTIONS</p><h2 id="display-exceptions-title">管理本店不同的展示數量</h2><p id="display-exceptions-identity">只維護自己的門市；本店設定會取代總部通用展示量，不會與通用數量相加。</p></div><button id="add-display-exception" class="primary-button" type="button">＋ 新增品號例外</button></div>
+      <div class="display-exception-toolbar">
+        <input id="display-exception-search" type="search" placeholder="搜尋ERP貨號" aria-label="搜尋ERP貨號">
+        <select id="display-exception-status-filter" aria-label="展示例外狀態"><option value="enabled">啟用中</option><option value="all">全部狀態</option><option value="disabled">已停用</option></select>
+        <span id="display-exception-summary" class="status-line">正在讀取本店設定…</span>
+      </div>
+      <div class="result-table-wrap"><table class="transfer-table display-exception-table"><thead><tr><th>ERP貨號</th><th>本店不可售展示最低量</th><th>實際套用</th><th>設定原因</th><th>狀態</th><th>最後更新</th><th>操作</th></tr></thead><tbody id="display-exception-rows"></tbody></table></div>
+      <p id="display-exception-empty" class="empty-state" hidden>目前沒有符合條件的展示例外。</p>
+      <div class="display-exception-note"><strong>套用時點：</strong>儲存後從下一次總部重新計算開始生效；已建立的週調撥批次保留當時的規則快照，不會回頭改寫。</div>
+      <p id="display-exception-page-status" class="status-line" role="status"></p>
+    </section>
+
+    <section class="panel" data-weekly-view aria-labelledby="history-title">
       <div class="section-heading"><div><p class="eyebrow">每週進度</p><h2 id="history-title">批次與門市回覆狀態</h2></div><button id="refresh-button" class="secondary-button" type="button" disabled>重新整理</button></div>
       <div id="batch-list" class="batch-list"><p class="empty-state">完成公司帳號驗證後顯示。</p></div>
     </section>
 
-    <section class="panel" aria-labelledby="pending-purchase-title">
+    <section class="panel" data-weekly-view aria-labelledby="pending-purchase-title">
       <div class="section-heading"><div><p class="eyebrow">主採購工具唯讀摘要</p><h2 id="pending-purchase-title">採購未交量</h2></div><span id="pending-purchase-updated" class="status-line">尚未由主採購工具同步</span></div>
       <p>此區只供判斷與提示；未到貨商品仍不能當成本週可調撥庫存。主採購工具每次成功讀取完整未到貨清單後會覆寫此摘要。</p>
       <div id="pending-purchase-empty" class="empty-state">目前沒有可顯示的未到貨摘要。</div>
       <div id="pending-purchase-wrap" class="result-table-wrap" hidden><table class="transfer-table compact-table"><thead><tr><th>ERP品號</th><th>品名</th><th>採購未交量</th><th>預計到貨日</th><th>清單截止日</th><th>提示</th></tr></thead><tbody id="pending-purchase-rows"></tbody></table></div>
     </section>
 
-    <section class="panel operation-guide" aria-labelledby="guide-title">
+    <section class="panel operation-guide" data-weekly-view aria-labelledby="guide-title">
       <div class="section-heading"><div><p class="eyebrow">操作說明</p><h2 id="guide-title">每週流程怎麼走</h2></div></div>
-      <div class="guide-grid"><article><strong>正式與A/B模式</strong><p>正式模式會以待發貨及在途量防止重複補貨；A/B模式忽略提交單，可依門市下載差異表或發布公司共用協作批次。</p></article><article><strong>A/B協作怎麼走</strong><p>四位總部帳號皆可接續查看、調整決議量及備註；只有siang01與service1能轉正式批次。</p></article><article><strong>同週批次版本</strong><p>同一週重新建立時，新批次會成為目前作業版本；舊的未完成批次保留紀錄，但不能再修改或送出。</p></article><article><strong>刪除舊批次</strong><p>總部可將已取代／已取消批次移出前台；目前作業與已完成批次不能直接刪除，稽核資料仍保留12個月。</p></article><article><strong>門市可撤回</strong><p>送出後、星期一上午9點鎖定前可不限次數撤回；鎖定後只能由總部更正。</p></article><article><strong>人工增減品項</strong><p>門市與總部皆可新增品項；移除時以本階段數量歸零處理，原因與原始建議仍會保留。</p></article><article><strong>人工調整原因</strong><p>新增、移除或數量不同於上一階段時，必須填原因才可送出。</p></article><article><strong>B3判斷</strong><p>只有來源單號＋ERP品號成功配對的總倉代出才認列；無法配對會列待人工確認。</p></article><article><strong>批次狀態</strong><p>等待門市→總部覆核→已核准→ERP皆完成→本週完成，每店進度會分開顯示。</p></article></div>
+      <div class="guide-grid"><article><strong>正式與A/B模式</strong><p>正式模式會以待發貨及在途量防止重複補貨；A/B模式忽略提交單，可依門市下載差異表或發布公司共用協作批次。</p></article><article><strong>本店展示例外</strong><p>門市可用單一ERP貨號設定自己的不可售展示最低量；下次總部重算生效，不會改寫已建立批次。</p></article><article><strong>展示與42天銷售</strong><p>可售最低庫存仍要求近42天有現場銷售；不可售展示不受零銷售影響。S品總倉無可釋出量時取消展示需求。</p></article><article><strong>A/B協作怎麼走</strong><p>四位總部帳號皆可接續查看、調整決議量及備註；只有siang01與service1能轉正式批次。</p></article><article><strong>同週批次版本</strong><p>同一週重新建立時，新批次會成為目前作業版本；舊的未完成批次保留紀錄，但不能再修改或送出。</p></article><article><strong>刪除舊批次</strong><p>總部可將已取代／已取消批次移出前台；目前作業與已完成批次不能直接刪除，稽核資料仍保留12個月。</p></article><article><strong>門市可撤回</strong><p>送出後、星期一上午9點鎖定前可不限次數撤回；鎖定後只能由總部更正。</p></article><article><strong>人工增減品項</strong><p>門市與總部皆可新增品項；移除時以本階段數量歸零處理，原因與原始建議仍會保留。</p></article><article><strong>人工調整原因</strong><p>新增、移除或數量不同於上一階段時，必須填原因才可送出。</p></article><article><strong>B3判斷</strong><p>只有來源單號＋ERP品號成功配對的總倉代出才認列；無法配對會列待人工確認。</p></article><article><strong>批次狀態</strong><p>等待門市→總部覆核→已核准→ERP皆完成→本週完成，每店進度會分開顯示。</p></article></div>
     </section>
 
     <dialog id="batch-dialog" class="batch-dialog"><form method="dialog"><button class="dialog-close" aria-label="關閉">×</button></form><div id="batch-detail"></div></dialog>
     <dialog id="collaboration-dialog" class="batch-dialog"><form method="dialog"><button class="dialog-close" aria-label="關閉">×</button></form><div id="collaboration-detail"></div></dialog>
+    <dialog id="display-exception-dialog" class="batch-dialog display-exception-dialog">
+      <form id="display-exception-form">
+        <button class="dialog-close" type="button" data-close-display-exception aria-label="關閉">×</button>
+        <p class="eyebrow">門市例外設定</p><h2 id="display-exception-dialog-title">新增品號例外</h2>
+        <p>一筆只設定一個完整ERP貨號，避免規則範圍誤套。</p>
+        <div class="display-exception-form-grid">
+          <label class="wide-field"><span>ERP貨號</span><input id="display-exception-sku" type="text" maxlength="80" placeholder="例如：G10009" autocomplete="off" required><small>精準命中單一貨號，不接受逗號串接多個品號。</small></label>
+          <label><span>本店不可售展示最低量</span><input id="display-exception-quantity" type="number" min="0" max="100" step="1" value="1" required></label>
+          <label class="wide-field"><span>設定原因</span><textarea id="display-exception-reason" maxlength="300" rows="3" placeholder="例如：本店有6組床位情境展示" required></textarea></label>
+          <div class="display-exception-priority"><strong>套用順位：門市單品例外</strong><span>固定優先於總部通用展示規則，門市不需要填優先權數字。</span></div>
+          <label class="display-exception-check"><input id="display-exception-enabled" type="checkbox" checked><span>立即啟用這筆例外</span></label>
+        </div>
+        <input id="display-exception-revision" type="hidden" value="0">
+        <div class="detail-actions"><button class="secondary-button" type="button" data-close-display-exception>取消</button><button class="primary-button" type="submit">儲存例外設定</button></div>
+        <p id="display-exception-dialog-status" class="status-line" role="status"></p>
+      </form>
+    </dialog>
 
     <footer><p>翔仔居家公司工具・門市週補貨與調撥</p><p>如畫面顯示資料或權限異常，請保留訊息並通知總部。</p></footer>
   </main>
@@ -117,8 +148,8 @@
   <script src="../procurement-planning/core.js?v=20260917-company-cost-r1"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="../procurement-planning/google-sources.js?v=20260915-google-sources-r1"></script>
-  <script src="core.js?v=20260922-collaboration-r1"></script>
+  <script src="core.js?v=20260924-display-exception-r1"></script>
   <script src="xlsx-preflight.js?v=20260916-xlsx-reader-r1"></script>
-  <script src="app.js?v=20260922-collaboration-r1"></script>
+  <script src="app.js?v=20260924-display-exception-r1"></script>
 </body>
 </html>

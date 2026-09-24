@@ -158,5 +158,31 @@
 .dialog-close { float: right; border: 0; background: transparent; font-size: 2rem; cursor: pointer; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1rem; }
 .secondary-button.compact { padding: .55rem .8rem; }
+.button-link { border: 0; background: transparent; font: inherit; cursor: pointer; }
+.sub-breadcrumb { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.4rem; color: #647b8d; }
+.sub-breadcrumb strong { color: #17324d; }
+.display-exceptions-panel { background: linear-gradient(135deg, #fff, #f7fbfb); }
+.display-exception-toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) auto auto; gap: .75rem; align-items: center; margin: 1.25rem 0 1rem; }
+.display-exception-toolbar input,
+.display-exception-toolbar select,
+.display-exception-form-grid input,
+.display-exception-form-grid textarea { width: 100%; min-height: 42px; padding: .65rem .75rem; border: 1px solid #bfcfd9; border-radius: 9px; background: #fff; font: inherit; }
+.display-exception-table { min-width: 920px; }
+.display-exception-table .exception-actions { display: flex; flex-wrap: wrap; gap: .35rem; }
+.display-exception-status { display: inline-flex; padding: .3rem .6rem; border-radius: 999px; color: #2f725b; background: #e8f4ed; font-weight: 800; white-space: nowrap; }
+.display-exception-status.disabled { color: #725e2c; background: #f3ecd9; }
+.display-exception-note { margin-top: 1rem; padding: .9rem 1rem; border-radius: 12px; color: #2f725b; background: #e8f4ed; line-height: 1.6; }
+.display-exception-dialog { width: min(620px, calc(100vw - 2rem)); }
+.display-exception-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.display-exception-form-grid label { display: grid; gap: .4rem; color: #233d52; font-weight: 800; }
+.display-exception-form-grid label small { color: #647b8d; font-weight: 600; line-height: 1.5; }
+.display-exception-form-grid .wide-field,
+.display-exception-priority,
+.display-exception-check { grid-column: 1 / -1; }
+.display-exception-priority { padding: .9rem; border: 1px solid #d8e4e8; border-radius: 12px; background: #f5f8fa; }
+.display-exception-priority strong { display: block; margin-bottom: .3rem; color: #1e455f; }
+.display-exception-priority span { color: #647b8d; }
+.display-exception-check { display: flex !important; grid-template-columns: auto 1fr; align-items: center; }
+.display-exception-check input { width: 20px; min-height: 20px; }
 @media (max-width: 960px) { .guide-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .manual-item-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 760px) { .period-grid, .transfer-sources, .fixed-source-panel, .calculation-mode-panel, .guide-grid, .status-grid, .manual-item-form { grid-template-columns: 1fr; } .calculation-mode-panel > p { grid-column: auto; } .manual-item-form .manual-reason-field { grid-column: auto; } .fixed-source-panel > .status-line { grid-column: auto; } .fixed-source-actions { justify-content: stretch; } .fixed-source-actions button { width: 100%; } .batch-card { grid-template-columns: 1fr; } .batch-card-actions { justify-content: stretch; } .batch-card-actions button { flex: 1 1 10rem; } .action-row, .comparison-downloads { align-items: stretch; flex-direction: column; } .comparison-download-actions { justify-items: stretch; } .comparison-download-buttons { justify-content: stretch; } .comparison-download-buttons button, .comparison-download-actions > button { width: 100%; } .heading-actions { justify-items: start; } .store-filter-bar > div { flex-wrap: nowrap; overflow-x: auto; padding-bottom: .2rem; } .store-filter-button { flex: 0 0 auto; } }
+@media (max-width: 760px) { .period-grid, .transfer-sources, .fixed-source-panel, .calculation-mode-panel, .guide-grid, .status-grid, .manual-item-form, .display-exception-form-grid, .display-exception-toolbar { grid-template-columns: 1fr; } .calculation-mode-panel > p { grid-column: auto; } .manual-item-form .manual-reason-field, .display-exception-form-grid .wide-field, .display-exception-priority, .display-exception-check { grid-column: auto; } .fixed-source-panel > .status-line { grid-column: auto; } .fixed-source-actions { justify-content: stretch; } .fixed-source-actions button { width: 100%; } .batch-card { grid-template-columns: 1fr; } .batch-card-actions { justify-content: stretch; } .batch-card-actions button { flex: 1 1 10rem; } .action-row, .comparison-downloads, .sub-breadcrumb { align-items: stretch; flex-direction: column; } .comparison-download-actions { justify-items: stretch; } .comparison-download-buttons { justify-content: stretch; } .comparison-download-buttons button, .comparison-download-actions > button { width: 100%; } .heading-actions { justify-items: start; } .store-filter-bar > div { flex-wrap: nowrap; overflow-x: auto; padding-bottom: .2rem; } .store-filter-button { flex: 0 0 auto; } }

@@ -203,7 +203,7 @@ describe("展示與最低庫存管理規則", () => {
       { name: "6×7尺薄被套華爾紗 [禾隅]" },
       { name: "6×7尺薄被套 [野花草] 純棉" },
       { name: "6×7尺薄被套 [橡實]", mainCategory: "寢具_精梳純棉" }
-    ]) expect(core.stockRule(record)).toMatchObject({ role: "可售最低庫存", quantity: 1, scope: "全部有銷售資料的營運門市" });
+    ]) expect(core.stockRule(record)).toMatchObject({ role: "可售最低庫存", quantity: 1, scope: "近42天有該品號現場銷售的營運門市" });
   });
 
   it("6×7尺雙層紗或長絨棉薄被套仍為不可售展示1件", () => {
@@ -233,6 +233,60 @@ describe("展示與最低庫存管理規則", () => {
     const managed = { rules: [{ name: "坐墊展示", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "坐墊｜椅墊", scope: "R01", inventoryRole: "不可售展示", quantity: 1, priority: 90 }] };
     expect(core.stockRule({ name: "舒適椅墊", mainCategory: "配件" }, managed)).toMatchObject({ name: "坐墊展示", scope: "R01" });
     expect(core.stockRule({ name: "浴巾", mainCategory: "配件" }, managed)).toBeNull();
+  });
+
+  it("總部通用規則可用ERP品號精準命中多個品項", () => {
+    const managed = { rules: [{ name: "指定贈品不展示", enabled: true, conditionMode: "structured", exactSkus: "N00126,N00127", productCategory: "全部", sizeAttribute: "全部", itemTypeKeywords: "", scope: "R00、R06", inventoryRole: "排除規則", quantity: 0, priority: 151 }] };
+    expect(core.stockRule({ sku: "N00126", name: "指定品項一" }, managed)).toMatchObject({ name: "指定贈品不展示", role: "排除規則" });
+    expect(core.stockRule({ sku: "N00127", name: "指定品項二" }, managed)).toMatchObject({ name: "指定贈品不展示", role: "排除規則" });
+    expect(core.stockRule({ sku: "N0012", name: "相似但不同品項" }, managed)).toBeNull();
+  });
+
+  it("4.5×6.5尺兩用被套即使品名含枕套也不誤列展示", () => {
+    const managed = { rules: [{ name: "無尺寸配件", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "", scope: "R00、R06", inventoryRole: "不可售展示", quantity: 1, priority: 60 }] };
+    for (const record of [
+      { sku: "B51326", name: "4.5X6.5尺兩用被套[綠霧森林] 60S(含枕套x1)(S)" },
+      { sku: "B51341", name: "4.5X6.5尺兩用被套[鯨語 A] 60S(含枕套x1)" }
+    ]) expect(core.stockRule(record, managed)).toBeNull();
+  });
+
+  it("門市單品展示例外會取代總部通用展示量", () => {
+    const result = core.buildSuggestions({
+      proposalDate: "2026-09-13", storeCodes: ["R06"],
+      master: { bySku: new Map([["G10009", { sku: "G10009", name: "灰鵝絨軟枕", mainCategory: "枕頭" }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "G10009", quantity: 20 }] }, transfer: { records: [] },
+      storeDisplayExceptions: [{ storeCode: "R06", sku: "G10009", displayQuantity: 6, enabled: true }],
+      sales: [{ maxDate: "2026-09-13", records: [], takeRecords: [] }]
+    });
+    expect(result.regularRows[0]).toMatchObject({ storeCode: "R06", sku: "G10009", displayQuantity: 6, displayGap: 6, suggestedQuantity: 6 });
+  });
+
+  it("42天銷售為0時不補可售最低庫存，但仍補不可售展示", () => {
+    const result = core.buildSuggestions({
+      proposalDate: "2026-09-13", storeCodes: ["R00"],
+      master: { bySku: new Map([
+        ["A44394", { sku: "A44394", name: "獨立7尺純棉床包" }],
+        ["G10009", { sku: "G10009", name: "灰鵝絨軟枕", mainCategory: "枕頭" }]
+      ]) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "A44394", quantity: 10 }, { warehouseCode: "T00", sku: "G10009", quantity: 10 }] },
+      transfer: { records: [] }, sales: [{ maxDate: "2026-09-13", records: [], takeRecords: [] }]
+    });
+    expect(result.regularRows.some((row) => row.sku === "A44394")).toBe(false);
+    expect(result.regularRows.find((row) => row.sku === "G10009")).toMatchObject({ displayQuantity: 2, suggestedQuantity: 2 });
+  });
+
+  it("S品總倉扣除提交與周轉保留後無可釋出量時取消展示需求", () => {
+    const result = core.buildSuggestions({
+      calculationMode: "formal", proposalDate: "2026-09-13", storeCodes: ["R00"],
+      master: { bySku: new Map([["B103100-1", { sku: "B103100-1", name: "6×7尺薄被套 [雙層紗-櫻染 A](S)", sellThroughStop: true }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "B103100-1", quantity: 1 }] },
+      transfer: { records: [{ documentCode: "AT-1", status: "提交", sourceWarehouseCode: "T00", destinationWarehouseCode: "R00", sku: "B103100-1", quantity: 1 }] },
+      sales: [{ maxDate: "2026-09-13", records: [], takeRecords: [] }]
+    });
+    expect(result.regularRows).toHaveLength(0);
+    expect(result.shortageRows).toHaveLength(0);
+    expect(result.comparisonFacts[0]).toMatchObject({ sku: "B103100-1", displayQuantity: 0 });
+    expect(result.comparisonFacts[0].ruleSummary).toContain("S品總倉無可釋出量");
   });
 
   it("毛巾、浴巾與手巾可穩定命中無尺寸配件規則", () => {

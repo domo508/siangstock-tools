@@ -133,14 +133,73 @@ async function storeInventoryConfig(env: StoreTransferEnv): Promise<{ version: n
   return { version: Number(row?.version || 0), updatedAt: String(row?.updated_at || ""), updatedBy: String(row?.updated_by || ""), config };
 }
 
+function displayExceptionSummary(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    storeCode: String(row.store_code), sku: String(row.sku), displayQuantity: Number(row.display_quantity || 0),
+    reason: String(row.reason || ""), enabled: Number(row.enabled) === 1, revision: Number(row.revision || 1),
+    createdAt: String(row.created_at || ""), createdBy: String(row.created_by || ""),
+    updatedAt: String(row.updated_at || ""), updatedBy: String(row.updated_by || "")
+  };
+}
+
+async function visibleDisplayExceptions(env: StoreTransferEnv, storeCode: StoreCode | null): Promise<Record<string, unknown>[]> {
+  const rows = storeCode
+    ? await env.DB.prepare("SELECT * FROM store_transfer_display_exceptions WHERE store_code = ? ORDER BY enabled DESC, sku").bind(storeCode).all<Record<string, unknown>>()
+    : await env.DB.prepare("SELECT * FROM store_transfer_display_exceptions ORDER BY store_code, enabled DESC, sku").all<Record<string, unknown>>();
+  return rows.results.map(displayExceptionSummary);
+}
+
 async function config(request: Request, env: StoreTransferEnv): Promise<Response> {
   const who = await actor(request, env);
   const inventoryRules = await storeInventoryConfig(env);
+  const displayExceptions = await visibleDisplayExceptions(env, who.role === "store" ? who.storeCode : null);
   return json({ email: who.email, role: who.role, storeCode: who.storeCode, stores: STORES, retentionMonths: 12,
     googleOAuthClientId: env.GOOGLE_OAUTH_CLIENT_ID || "",
     fixedSources: { marketingDriveFileId: FIXED_SOURCES.marketingDriveFileId, productMasterFolderId: FIXED_SOURCES.productMasterFolderId },
-    storeInventoryRules: inventoryRules,
-    permissions: { canCreate: who.role !== "store", canApprove: who.role !== "store", canReviewAll: who.role !== "store", canManageRules: who.role !== "store", canDeleteBatch: who.role !== "store", canCollaborate: who.role !== "store", canFinalizeCollaboration: COLLABORATION_FINALIZERS.has(who.email) } });
+    storeInventoryRules: inventoryRules, displayExceptions,
+    permissions: { canCreate: who.role !== "store", canApprove: who.role !== "store", canReviewAll: who.role !== "store", canManageRules: who.role !== "store", canManageDisplayExceptions: who.role === "store", canDeleteBatch: who.role !== "store", canCollaborate: who.role !== "store", canFinalizeCollaboration: COLLABORATION_FINALIZERS.has(who.email) } });
+}
+
+async function listDisplayExceptions(request: Request, env: StoreTransferEnv): Promise<Response> {
+  const who = await actor(request, env);
+  const requested = new URL(request.url).searchParams.get("store");
+  const scope = visibleStore(requested, who.role, who.storeCode);
+  return json({ exceptions: await visibleDisplayExceptions(env, scope), visibleTo: who.role === "store" ? who.storeCode : "hq" });
+}
+
+async function saveDisplayException(request: Request, env: StoreTransferEnv, requestedStore: string, requestedSku: string): Promise<Response> {
+  requireSameOrigin(request, env);
+  const who = await actor(request, env);
+  if (who.role !== "store") throw new RequestValidationError("本店展示例外只能由對應門市帳號維護；總部通用規則請至規則管理頁修改。", 403);
+  const storeCode = visibleStore(requestedStore, who.role, who.storeCode);
+  if (!storeCode) throw new RequestValidationError("必須指定門市。");
+  const sku = text(requestedSku, "ERP品號", 80).toLocaleUpperCase("en-US");
+  if (!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) throw new RequestValidationError("ERP品號格式錯誤；請輸入單一完整貨號，不要以逗號串接。");
+  const input = await readBody(request, 4096);
+  const displayQuantity = quantity(input.displayQuantity, "本店展示最低量");
+  if (displayQuantity > 100) throw new RequestValidationError("本店展示最低量不得超過100。");
+  const reason = text(input.reason, "設定原因", 300);
+  const enabled = input.enabled !== false ? 1 : 0;
+  const expectedRevision = Number(input.expectedRevision || 0);
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new RequestValidationError("規則版本格式錯誤。");
+  const existing = await env.DB.prepare("SELECT * FROM store_transfer_display_exceptions WHERE store_code = ? AND sku = ?").bind(storeCode, sku).first<Record<string, unknown>>();
+  const now = new Date().toISOString();
+  let action = "created";
+  if (!existing) {
+    if (expectedRevision !== 0) throw new RequestValidationError("這筆展示例外已變更，請重新整理後再試。", 409);
+    await env.DB.prepare("INSERT INTO store_transfer_display_exceptions (store_code, sku, display_quantity, reason, enabled, revision, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)")
+      .bind(storeCode, sku, displayQuantity, reason, enabled, now, who.email, now, who.email).run();
+  } else {
+    if (Number(existing.revision) !== expectedRevision) throw new RequestValidationError("這筆展示例外已被更新，請重新整理後再試。", 409);
+    action = Number(existing.enabled) !== enabled ? (enabled ? "enabled" : "disabled") : "updated";
+    const updated = await env.DB.prepare("UPDATE store_transfer_display_exceptions SET display_quantity = ?, reason = ?, enabled = ?, revision = revision + 1, updated_at = ?, updated_by = ? WHERE store_code = ? AND sku = ? AND revision = ?")
+      .bind(displayQuantity, reason, enabled, now, who.email, storeCode, sku, expectedRevision).run();
+    if (Number(updated.meta.changes || 0) !== 1) throw new RequestValidationError("這筆展示例外已被更新，請重新整理後再試。", 409);
+  }
+  await env.DB.prepare("INSERT INTO store_transfer_display_exception_events (store_code, sku, display_quantity, reason, enabled, action, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(storeCode, sku, displayQuantity, reason, enabled, action, now, who.email).run();
+  const saved = await env.DB.prepare("SELECT * FROM store_transfer_display_exceptions WHERE store_code = ? AND sku = ?").bind(storeCode, sku).first<Record<string, unknown>>();
+  return json({ exception: displayExceptionSummary(saved || {}) }, existing ? 200 : 201);
 }
 
 function collaborationSummary(row: Record<string, unknown>, includePayload = false): Record<string, unknown> {
@@ -657,6 +716,9 @@ export async function storeTransferRoute(request: Request, env: StoreTransferEnv
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/store-transfer")) return null;
   if (url.pathname === "/api/store-transfer/config" && request.method === "GET") return config(request, env);
+  if (url.pathname === "/api/store-transfer/display-exceptions" && request.method === "GET") return listDisplayExceptions(request, env);
+  const displayExceptionMatch = url.pathname.match(/^\/api\/store-transfer\/display-exceptions\/([^/]+)\/([^/]+)$/);
+  if (displayExceptionMatch && request.method === "PUT") return saveDisplayException(request, env, decodeURIComponent(displayExceptionMatch[1]), decodeURIComponent(displayExceptionMatch[2]));
   if (url.pathname === "/api/store-transfer/pending-purchases" && request.method === "GET") return pendingPurchases(request, env);
   if (url.pathname === "/api/store-transfer/consumable-snapshots" && request.method === "GET") return consumableHistory(request, env);
   if (url.pathname === "/api/store-transfer/consumable-snapshots" && request.method === "POST") return saveConsumableSnapshots(request, env);
@@ -693,6 +755,7 @@ export async function cleanupStoreTransfers(env: StoreTransferEnv): Promise<void
     env.DB.prepare(`DELETE FROM store_transfer_store_status WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_batches WHERE id IN (${expired})`),
     env.DB.prepare("DELETE FROM store_transfer_collaboration_drafts WHERE created_at < datetime('now', '-12 months')"),
-    env.DB.prepare("DELETE FROM store_transfer_consumable_snapshots WHERE snapshot_date < date('now', '-12 months')")
+    env.DB.prepare("DELETE FROM store_transfer_consumable_snapshots WHERE snapshot_date < date('now', '-12 months')"),
+    env.DB.prepare("DELETE FROM store_transfer_display_exception_events WHERE created_at < datetime('now', '-12 months')")
   ]);
 }

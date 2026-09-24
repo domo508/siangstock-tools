@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20260922-collaboration-r1");
+    const appIndex = html.indexOf("app.js?v=20260924-display-exception-r1");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -278,6 +278,36 @@ describe("前台導覽", () => {
     expect(migration).toContain('store_transfer_collaboration_one_active_week');
     expect(migration).toContain('source_collaboration_id');
     expect(migration).toContain('store_transfer_batches_source_collaboration');
+  });
+
+  it("門市有獨立展示例外頁，且只能維護自己的精準ERP品號", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    const migration = readFileSync("../cloudflare/worker/migrations/0028_store_display_exceptions.sql", "utf8");
+    expect(html).toContain('id="show-display-exceptions"');
+    expect(html).toContain('id="display-exceptions-panel"');
+    expect(html).toContain('id="display-exception-dialog"');
+    expect(app).toContain('#display-exceptions');
+    expect(app).toContain('/display-exceptions/');
+    expect(app).toContain('storeDisplayExceptions: state.config.displayExceptions');
+    expect(worker).toContain('who.role !== "store"');
+    expect(worker).toContain('不可查看其它門市資料');
+    expect(worker).toContain('不要以逗號串接');
+    expect(migration).toContain('CREATE TABLE store_transfer_display_exceptions');
+    expect(migration).toContain('CREATE TABLE store_transfer_display_exception_events');
+    expect(migration).not.toMatch(/file_name|excel|raw_rows/i);
+  });
+
+  it("總部門市規則支援精準ERP品號並在儲存時依優先序排序", () => {
+    const html = readFileSync("../procurement-planning/rules-admin/index.html", "utf8");
+    const admin = readFileSync("../procurement-planning/rules-admin/admin.js", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/procurement.ts", "utf8");
+    expect(html).toContain('ERP品號（精準）');
+    expect(html).toContain('N00126,N00127');
+    expect(admin).toContain('item.exactSkus');
+    expect(admin).toContain('rules.sort');
+    expect(worker).toContain('rule.exactSkus');
   });
 
   it("資料整理工具與規則頁都有清楚的名稱和上一層路徑", () => {
