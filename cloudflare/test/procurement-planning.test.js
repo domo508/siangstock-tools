@@ -660,7 +660,8 @@ describe("採購建議第二階段", () => {
     const output = core.buildRecommendationWorkbook(special, XLSX);
     const row = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { defval: "" })[0];
     expect(row["人工確認採購量"]).toBe(27);
-    expect(row["人工調整原因"]).toBe("人工匯入採購草稿");
+    expect(row["人工調整原因類別"]).toBe("其他");
+    expect(row["人工調整補充說明"]).toBe("人工匯入採購草稿");
   });
 
   it("品名結尾(S)保留需求資料，但不進對外採購或寄庫建議", () => {
@@ -969,7 +970,8 @@ describe("採購建議第二階段", () => {
 
     const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })[0];
     sheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("人工確認採購量") })] = { t: "n", v: row.suggestedPurchaseQty };
-    sheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("人工調整原因") })] = { t: "s", v: "貨品狀態空白，採購人工確認仍可追加" };
+    sheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("人工調整原因類別") })] = { t: "s", v: "其他" };
+    sheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("人工調整補充說明") })] = { t: "s", v: "貨品狀態空白，採購人工確認仍可追加" };
     const confirmedReview = core.reviewReturnedWorkbook(output, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20", baselineBySku });
     expect(confirmedReview.errors).toHaveLength(0);
     expect(confirmedReview.rows[0]).toMatchObject({ productStatusPendingReview: true, finalQty: row.suggestedPurchaseQty });
@@ -1015,7 +1017,7 @@ describe("採購建議第二階段", () => {
       "01_採購摘要", "03A_力榮採購", "03B1_普優瑪_天絲",
       "03B2_普優瑪_長絨棉", "03B3_普優瑪_無尺寸", "03C_上林採購", "03D_其它供應商",
       "04A_普優瑪寄庫建議", "04B_力榮寄庫建議", "05_新品採購建議", "06_普優瑪新品寄庫",
-      "07_排除與例外", "08_核心規則"
+      "07_排除與例外", "08_核心規則", "09_人工調整原因"
     ]);
     const rows = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { defval: "" });
     expect(rows[0]["建議採購量"]).toBeGreaterThan(0);
@@ -1134,7 +1136,10 @@ describe("採購建議第二階段", () => {
       .flatMap((sheetName) => XLSX.utils.sheet_to_json(output.Sheets[sheetName], { defval: "" }));
     expect(new Set(selectedRows.map((row) => row["供應商"]))).toEqual(new Set(["普優瑪"]));
 
-    recommendations.lirongConsignmentRows = [{ sku: "L1", supplierSku: "LR-L1", sourceName: "力榮測試品", masterName: "力榮測試品", tier: "穩定", forecastDailyQty: 1, pullLeadDays: 5, productionDays: 14, earliestDeliveryDays: 19, targetLowDays: 60, targetHighDays: 90, targetDays: 60, currentQty: 0, scheduledQty: 0, approvedPullQty: 0, productionCompleteDate: "", expectedArrivalDate: "", rawQty: 20, downQty: 20, upQty: 20, suggestedQty: 20, availableDaysAfter: 20, beforePullRisk: true, beforeProductionRisk: true, beforeDeliveryRisk: true, status: "需製作", futureCost: 6000, scheduleNotes: [] }];
+    recommendations.lirongConsignmentRows = [
+      { sku: "L1", supplierSku: "LR-L1", sourceName: "力榮測試品", masterName: "力榮測試品", tier: "穩定", forecastDailyQty: 1, pullLeadDays: 5, productionDays: 14, earliestDeliveryDays: 19, targetLowDays: 60, targetHighDays: 90, targetDays: 60, currentQty: 0, scheduledQty: 0, approvedPullQty: 0, productionCompleteDate: "", expectedArrivalDate: "", rawQty: 20, downQty: 20, upQty: 20, suggestedQty: 20, availableDaysAfter: 20, beforePullRisk: true, beforeProductionRisk: true, beforeDeliveryRisk: true, status: "需製作", futureCost: 6000, scheduleNotes: [], sellThroughStop: false },
+      { sku: "L-S", supplierSku: "LR-S", sourceName: "力榮S品", masterName: "力榮S品(S)", tier: "低銷", forecastDailyQty: 1, suggestedQty: 0, status: "S品－寄庫現貨已用罄", futureCost: 0, scheduleNotes: [], sellThroughStop: true }
+    ];
     const lirongOutput = core.buildRecommendationWorkbook(recommendations, XLSX, { selectedSuppliers: ["力榮"] });
     expect(lirongOutput.SheetNames).toEqual(expect.arrayContaining(["03A_力榮採購", "04B_力榮寄庫建議"]));
     expect(lirongOutput.SheetNames).not.toContain("03B1_普優瑪_天絲");
@@ -1145,6 +1150,7 @@ describe("採購建議第二階段", () => {
       "小類（尺寸）": expect.any(String)
     }));
     const lirongConsignment = XLSX.utils.sheet_to_json(lirongOutput.Sheets["04B_力榮寄庫建議"], { defval: "" });
+    expect(lirongConsignment.map((row) => row["ERP品號"])).toEqual(["L1"]);
     expect(lirongConsignment[0]).toEqual(expect.objectContaining({
       "大類（花色／同品項）": expect.any(String),
       "中類（品項）": expect.any(String),
@@ -1197,9 +1203,9 @@ describe("採購建議第二階段", () => {
     const sheet = workbook.Sheets["03B1_普優瑪_天絲"];
     const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })[0];
     const manualColumn = headers.indexOf("人工確認採購量");
-    const reasonColumn = headers.indexOf("人工調整原因");
+    const reasonColumn = headers.indexOf("人工調整原因類別");
     sheet[XLSX.utils.encode_cell({ r: 1, c: manualColumn })] = { t: "n", v: 20 };
-    sheet[XLSX.utils.encode_cell({ r: 1, c: reasonColumn })] = { t: "s", v: "人工調整測試" };
+    sheet[XLSX.utils.encode_cell({ r: 1, c: reasonColumn })] = { t: "s", v: "需求增加，人工提高數量" };
     const review = core.reviewReturnedWorkbook(workbook, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20" });
     expect(review.errors).toHaveLength(0);
     expect(review.rows[0]).toMatchObject({ confirmedQty: 20, finalQty: 20, availableTo: expect.stringMatching(/^2026-/) });
@@ -1229,7 +1235,7 @@ describe("採購建議第二階段", () => {
     const firstSheet = recommendation.Sheets["03B1_普優瑪_天絲"];
     const firstHeaders = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: "" })[0];
     firstSheet[XLSX.utils.encode_cell({ r: 1, c: firstHeaders.indexOf("人工確認採購量") })] = { t: "n", v: 20 };
-    firstSheet[XLSX.utils.encode_cell({ r: 1, c: firstHeaders.indexOf("人工調整原因") })] = { t: "s", v: "第一次人工判斷" };
+    firstSheet[XLSX.utils.encode_cell({ r: 1, c: firstHeaders.indexOf("人工調整原因類別") })] = { t: "s", v: "需求增加，人工提高數量" };
     const firstReview = core.reviewReturnedWorkbook(recommendation, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20" });
     const secondWorkbook = core.buildSecondReviewWorkbook(firstReview, XLSX);
     expect(secondWorkbook.SheetNames.every((sheetName) => !secondWorkbook.Sheets[sheetName]["!protect"])).toBe(true);
@@ -1239,7 +1245,7 @@ describe("採購建議第二階段", () => {
     expect(secondRows[0]["全公司人工確認後可售至"]).toMatch(/^2026-/);
     expect(secondRows[0]).not.toHaveProperty("人工填寫可售至");
     const secondStyleHeaders = XLSX.utils.sheet_to_json(secondWorkbook.Sheets["02_覆核與異動確認"], { header: 1, defval: "" })[0];
-    expect(secondStyleHeaders.slice(5, 11)).toEqual(["原始採購建議量", "第一次人工回匯量", "第一次人工調整原因", "第一次覆核可核准量", "第二次異動採購量", "第二次異動原因"]);
+    expect(secondStyleHeaders.slice(5, 13)).toEqual(["原始採購建議量", "第一次人工回匯量", "第一次人工調整原因類別", "第一次人工調整補充說明", "第一次覆核可核准量", "第二次異動採購量", "第二次異動原因類別", "第二次異動補充說明"]);
     const secondManualCell = secondWorkbook.Sheets["02_覆核與異動確認"][XLSX.utils.encode_cell({ r: 1, c: secondStyleHeaders.indexOf("第二次異動採購量") })];
     expect(secondManualCell.s?.fill?.fgColor?.rgb).toBe("FFFFF2CC");
     const unchangedReview = core.reviewSecondApprovalWorkbook(secondWorkbook, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20", baselineBySku: new Map(firstReview.rows.map((row) => [row.sku, row])) });
@@ -1250,7 +1256,7 @@ describe("採購建議第二階段", () => {
     secondSheet[XLSX.utils.encode_cell({ r: 1, c: secondHeaders.indexOf("第二次異動採購量") })] = { t: "n", v: 22 };
     const missingReasonReview = core.reviewSecondApprovalWorkbook(secondWorkbook, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20", baselineBySku: new Map(firstReview.rows.map((row) => [row.sku, row])) });
     expect(missingReasonReview.errors.some((error) => error.message.includes("必須填寫第二次異動原因"))).toBe(true);
-    secondSheet[XLSX.utils.encode_cell({ r: 1, c: secondHeaders.indexOf("第二次異動原因") })] = { t: "s", v: "供應商臨時可追加" };
+    secondSheet[XLSX.utils.encode_cell({ r: 1, c: secondHeaders.indexOf("第二次異動原因類別") })] = { t: "s", v: "需求增加，人工提高數量" };
     const finalReview = core.reviewSecondApprovalWorkbook(secondWorkbook, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20" });
     expect(finalReview.errors).toHaveLength(0);
     expect(finalReview.rows[0]).toMatchObject({ finalQty: 22, approvedAmount: 11000, aiJudgment: expect.any(String) });
@@ -1489,6 +1495,43 @@ describe("採購建議第二階段", () => {
     secondSheet[XLSX.utils.encode_cell({ r: 1, c: secondQtyColumn })] = { t: "n", v: 10 };
     const legacyConfirmed = core.reviewSecondApprovalWorkbook(second, XLSX, { baselineBySku: new Map(legacyReview.rows.map((item) => [item.sku, item])) });
     expect(legacyConfirmed.errors).toHaveLength(0);
+  });
+
+  it("S品可用固定人工原因放寬單一批次，但仍遵守採購單位且二次覆核可沿用", () => {
+    const baseline = {
+      sku: "L-S", supplier: "力榮", name: "5尺床包 [測試](S)", unitCost: 300,
+      suggestedPurchaseQty: 0, packSize: 10, sellThroughStop: true, externalPurchaseBlocked: true,
+      supplyStatus: "S品－寄庫現貨已用罄，禁止一般採購、新增生產與新增寄庫",
+      consignmentCurrentQty: 0, consignmentScheduledQty: 0, pendingQty: 0, inventoryQty: 0,
+      storeInventoryByCode: {}, forecastDailyQty: 1
+    };
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "人工確認採購量", "人工調整原因類別", "人工調整補充說明"],
+      ["L-S", 20, "商品主檔已取消S／確認恢復採購，等待同步", "廠商通知可恢復生產"]
+    ]), "03A_力榮採購");
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, {
+      baselineBySku: new Map([[baseline.sku, baseline]]), allowedSkuSet: new Set([baseline.sku])
+    });
+    expect(review.errors).toHaveLength(0);
+    expect(review.rows[0]).toMatchObject({ finalQty: 20, blockedReason: "", sellThroughRestartException: true, aiJudgment: "S品人工例外" });
+
+    const second = core.buildSecondReviewWorkbook(review, XLSX);
+    expect(second.SheetNames).toContain("09_人工調整原因");
+    const confirmed = core.reviewSecondApprovalWorkbook(second, XLSX, { baselineBySku: new Map(review.rows.map((row) => [row.sku, row])) });
+    expect(confirmed.errors).toHaveLength(0);
+    expect(confirmed.rows[0]).toMatchObject({ finalQty: 20, sellThroughRestartException: true, aiJudgment: "S品人工例外" });
+  });
+
+  it("新版人工原因只接受固定選項，選其他時必須補充說明", () => {
+    const baseline = { sku: "A1", supplier: "普優瑪", name: "測試品", unitCost: 100, suggestedPurchaseQty: 10, packSize: 1 };
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "人工確認採購量", "人工調整原因類別", "人工調整補充說明"],
+      ["A1", 20, "其他", ""]
+    ]), "03B1_普優瑪_天絲");
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, { baselineBySku: new Map([[baseline.sku, baseline]]) });
+    expect(review.errors.some((error) => error.message.includes("必須填寫補充說明"))).toBe(true);
   });
 });
 
