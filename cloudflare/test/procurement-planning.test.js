@@ -12,6 +12,8 @@ function loadBrowserScript(path, context = {}) {
 
 const xlsxContext = loadBrowserScript("../procurement-planning/assets/xlsx-js-style.bundle.js");
 const XLSX = xlsxContext.XLSX;
+const jszipContext = loadBrowserScript("../cost-analysis/assets/jszip.min.js", { setImmediate, clearImmediate });
+const JSZip = jszipContext.JSZip;
 const core = loadBrowserScript("../procurement-planning/core.js", { XLSX }).ProcurementPlanningCore;
 const googleSources = loadBrowserScript("../procurement-planning/google-sources.js").ProcurementGoogleSources;
 
@@ -1533,6 +1535,48 @@ describe("採購建議第二階段", () => {
     const review = core.reviewReturnedWorkbook(workbook, XLSX, { baselineBySku: new Map([[baseline.sku, baseline]]) });
     expect(review.errors.some((error) => error.message.includes("必須填寫補充說明"))).toBe(true);
   });
+
+  it("新下載的人工審核與異動確認表包含可點選的固定原因下拉選單", async () => {
+    const recommendations = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: ["一次性代工品"], asOfDate: "2026-08-28"
+    });
+    const workbook = core.buildRecommendationWorkbook(recommendations, XLSX);
+    const bytes = await core.buildWorkbookBytesWithManualReasonValidation(workbook, XLSX, JSZip);
+    const archive = await JSZip.loadAsync(bytes);
+    const worksheetXml = await Promise.all(Object.keys(archive.files).filter((path) => /^xl\/worksheets\/sheet\d+\.xml$/.test(path)).map((path) => archive.file(path).async("string")));
+    expect(worksheetXml.some((xml) => xml.includes("<dataValidations") && xml.includes("'09_人工調整原因'!$A$2:$A$10"))).toBe(true);
+
+    const firstSheet = workbook.Sheets["03B1_普優瑪_天絲"];
+    const headers = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: "" })[0];
+    firstSheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("人工確認採購量") })] = { t: "n", v: 20 };
+    firstSheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("人工調整原因類別") })] = { t: "s", v: "需求增加，人工提高數量" };
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, { baselineBySku: new Map(recommendations.rows.map((row) => [row.sku, row])) });
+    const second = core.buildSecondReviewWorkbook(review, XLSX);
+    const secondBytes = await core.buildWorkbookBytesWithManualReasonValidation(second, XLSX, JSZip);
+    const secondArchive = await JSZip.loadAsync(secondBytes);
+    const secondXml = await Promise.all(Object.keys(secondArchive.files).filter((path) => /^xl\/worksheets\/sheet\d+\.xml$/.test(path)).map((path) => secondArchive.file(path).async("string")));
+    expect(secondXml.some((xml) => xml.includes("<dataValidations") && xml.includes("'09_人工調整原因'!$A$2:$A$10"))).toBe(true);
+  });
+
+  it("第一次回匯可找出需填原因品項並批次寫回原因與補充說明", () => {
+    const baseline = { sku: "L-S", supplier: "力榮", name: "測試床包(S)", suggestedPurchaseQty: 0, productStatusPendingReview: false, sellThroughStop: true };
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "商品品名", "建議採購量", "人工確認採購量", "人工調整原因類別", "人工調整補充說明"],
+      ["L-S", "測試床包(S)", 0, 20, "", ""]
+    ]), "03A_力榮採購");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["原因類別"], ...core.MANUAL_REASON_OPTIONS.map((reason) => [reason])]), "09_人工調整原因");
+    const candidates = core.listManualReasonCandidates(workbook, XLSX, {
+      baselineBySku: new Map([[baseline.sku, baseline]]), exportedSkuSet: new Set([baseline.sku])
+    });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({ sku: "L-S", type: "S品人工例外", manualQty: 20 });
+    core.applyManualReasonUpdates(workbook, XLSX, [{ ...candidates[0], reasonCategory: "商品主檔已取消S／確認恢復採購，等待同步", reasonDetail: "廠商確認餘料可生產" }]);
+    const row = XLSX.utils.sheet_to_json(workbook.Sheets["03A_力榮採購"], { defval: "" })[0];
+    expect(row["人工調整原因類別"]).toBe("商品主檔已取消S／確認恢復採購，等待同步");
+    expect(row["人工調整補充說明"]).toBe("廠商確認餘料可生產");
+  });
 });
 
 describe("採購規劃前台與入口", () => {
@@ -1623,6 +1667,11 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("春節加量");
     expect(toolHtml).toContain('id="workflow-step-download"');
     expect(toolHtml).toContain('id="review-file-label" class="file-button is-disabled"');
+    expect(toolHtml).toContain('id="reason-batch-panel"');
+    expect(toolHtml).toContain('id="reason-apply-selected"');
+    expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
+    expect(toolHtml).toContain('core.js?v=20260926-reason-batch-r1');
+    expect(toolHtml).toContain('app.js?v=20260926-reason-batch-r1');
     expect(toolHtml).toContain("新品首批採購");
     expect(toolHtml).toContain("人工匯入採購單");
     expect(toolHtml).toContain("補登已採購單");
@@ -1634,7 +1683,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260924-p0-r2");
+    expect(toolHtml).toContain("20260926-reason-batch-r1");
     expect(toolApp).toContain("state.postedOrderFiles.length && state.config?.permissions?.canApprove");
     expect(toolApp).toContain("state.parsedSources?.master");
     expect(toolApp).toContain("可直接檢查並補登，不必先產生採購建議");
@@ -1648,6 +1697,10 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("發布協作草稿");
     expect(toolApp).toContain("function renderResumeDrafts()");
     expect(toolApp).toContain("function renderSharedDrafts()");
+    expect(toolApp).toContain("setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, true)");
+    expect(toolApp).toContain("重新回匯會取代本批尚未送出的覆核結果");
+    expect(toolApp).toContain("listManualReasonCandidates");
+    expect(toolApp).toContain("applyReasonToSelected");
     expect(toolApp).toContain("/api/procurement/collaboration-drafts");
     expect(procurementWorker).toContain('/api/procurement/cost-snapshot');
     expect(procurementWorker).toContain('/api/procurement/collaboration-drafts');

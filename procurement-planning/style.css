@@ -570,6 +570,33 @@
   cursor: not-allowed;
   opacity: 0.78;
 }
+.reason-batch-panel {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid rgba(23, 107, 135, .28);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(232, 242, 245, .82), rgba(255, 255, 255, .94));
+}
+.reason-batch-panel[hidden] { display: none; }
+.reason-batch-panel .section-heading { margin-bottom: 14px; }
+.reason-batch-panel .section-heading strong { color: var(--blue); white-space: nowrap; }
+.reason-batch-toolbar {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.3fr) minmax(230px, 1fr) minmax(260px, 1.2fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+.reason-batch-toolbar label { display: grid; gap: 6px; color: var(--navy); font-size: .86rem; font-weight: 800; }
+.reason-batch-toolbar select,
+.reason-batch-toolbar input { min-width: 0; min-height: 44px; border: 1px solid var(--line); border-radius: 11px; padding: 0 11px; background: #fff; color: var(--navy); font: inherit; }
+.reason-batch-select-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.reason-batch-select-actions button { min-height: 40px; padding: 7px 10px; }
+.reason-batch-table { min-width: 1120px; }
+.reason-batch-table td:first-child { text-align: center; }
+.reason-batch-table input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--blue); }
+.reason-batch-table select,
+.reason-batch-table input[type="text"] { min-width: 220px; min-height: 40px; border: 1px solid var(--line); border-radius: 9px; padding: 6px 9px; background: #fff; color: var(--navy); font: inherit; }
+.reason-batch-table tr[data-reason-complete="false"] { background: rgba(255, 242, 204, .55); }
 .workflow-progress {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -637,6 +664,7 @@
   .budget-grid .budget-source-field { grid-column: span 2; }
   .special-workflow-grid { grid-template-columns: 1fr; }
   .special-workflow-grid p { min-height: 0; }
+  .reason-batch-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {
@@ -668,6 +696,8 @@
   .procurement-period p { grid-column: auto; }
   .resume-draft-item { align-items: stretch; flex-direction: column; }
   .resume-draft-group-heading { align-items: stretch; flex-direction: column; }
+  .reason-batch-toolbar { grid-template-columns: 1fr; }
+  .reason-batch-toolbar .primary-button { width: 100%; }
   .resume-draft-actions button { flex: 1; }
 }
 .store-shortage-card {

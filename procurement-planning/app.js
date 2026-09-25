@@ -11,7 +11,7 @@
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
-    salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, firstReview: null,
+    salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, reviewWorkbook: null, manualReasonCandidates: [], firstReview: null,
     secondReviewFile: null, review: null, ledger: null, monthPlan: null, procurementRules: null, revenueChannels: [], budgetDirty: false, sourceMetadata: null, modelMetadata: null, batchId: "", approved: false, erpDownloaded: false,
     selectedSuppliers: new Set(), returnScope: null, consignmentSource: null,
     googleAuthorized: false, modelWorker: null, modelDraft: null,
@@ -47,6 +47,9 @@
     submitApproval: get("#submit-approval-button"), approve: get("#approve-button"), retryNotification: get("#retry-notification-button"),
     erp: get("#erp-button"), workflowStatus: get("#workflow-status"), workflowSummary: get("#workflow-summary"),
     workflowErrors: get("#workflow-errors"), workflowErrorTitle: get("#workflow-error-title"), workflowErrorList: get("#workflow-error-list"),
+    reasonBatchPanel: get("#reason-batch-panel"), reasonBatchCount: get("#reason-batch-count"), reasonBatchRows: get("#reason-batch-rows"), reasonBatchStatus: get("#reason-batch-status"),
+    reasonBatchCategory: get("#reason-batch-category"), reasonBatchDetail: get("#reason-batch-detail"), reasonApplySelected: get("#reason-apply-selected"),
+    reasonSelectAll: get("#reason-select-all"), reasonSelectChanged: get("#reason-select-changed"), reasonSelectAdded: get("#reason-select-added"), reasonSelectS: get("#reason-select-s"), reasonClearSelection: get("#reason-clear-selection"),
     approvalQueueRows: get("#approval-queue-rows"), refreshQueue: get("#refresh-queue-button"),
     reviewFileLabel: get("#review-file-label"), secondReviewFileLabel: get("#second-review-file-label"),
     workflowStepDownload: get("#workflow-step-download"), workflowStepFirst: get("#workflow-step-first"), workflowStepSecond: get("#workflow-step-second"), workflowStepApproval: get("#workflow-step-approval"),
@@ -89,6 +92,100 @@
       elements.workflowErrorList.append(item);
     }
     elements.workflowErrors.hidden = false;
+  }
+  function reasonOptionNodes(selected = "") {
+    const fragment = document.createDocumentFragment();
+    const placeholder = document.createElement("option");
+    placeholder.value = ""; placeholder.textContent = "請選擇原因";
+    fragment.append(placeholder);
+    core.MANUAL_REASON_OPTIONS.forEach((reason) => {
+      const option = document.createElement("option");
+      option.value = reason; option.textContent = reason; option.selected = reason === selected;
+      fragment.append(option);
+    });
+    return fragment;
+  }
+  function resetReasonBatchPanel() {
+    state.reviewWorkbook = null;
+    state.manualReasonCandidates = [];
+    elements.reasonBatchRows?.replaceChildren();
+    if (elements.reasonBatchPanel) elements.reasonBatchPanel.hidden = true;
+    if (elements.reasonBatchStatus) elements.reasonBatchStatus.textContent = "尚未選取品項。";
+    if (elements.reasonBatchCategory) elements.reasonBatchCategory.value = "";
+    if (elements.reasonBatchDetail) elements.reasonBatchDetail.value = "";
+  }
+  function manualReasonComplete(row) {
+    return Boolean(row.reasonCategory) && (row.reasonCategory !== "其他" || Boolean(String(row.reasonDetail || "").trim()));
+  }
+  function updateReasonBatchStatus(message = "") {
+    if (!elements.reasonBatchPanel || elements.reasonBatchPanel.hidden) return;
+    const selected = elements.reasonBatchRows.querySelectorAll("[data-reason-select]:checked").length;
+    const pending = state.manualReasonCandidates.filter((row) => !manualReasonComplete(row)).length;
+    elements.reasonBatchCount.textContent = `${state.manualReasonCandidates.length}項需確認・${pending}項未完成`;
+    elements.reasonBatchStatus.textContent = message || (selected ? `已選${selected}項；選擇批次原因後可一次套用。` : `尚未選取品項；目前有${pending}項尚未填妥原因。`);
+  }
+  function syncManualReasonCandidate(candidate, category, detail) {
+    candidate.reasonCategory = category;
+    candidate.reasonDetail = detail;
+    core.applyManualReasonUpdates(state.reviewWorkbook, XLSX, [{
+      sheetName: candidate.sheetName,
+      sourceRow: candidate.sourceRow,
+      reasonCategory: category,
+      reasonDetail: detail
+    }]);
+  }
+  function renderReasonBatchPanel() {
+    const rows = state.manualReasonCandidates;
+    if (!elements.reasonBatchPanel || !rows.length) {
+      if (elements.reasonBatchPanel) elements.reasonBatchPanel.hidden = true;
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    rows.forEach((candidate) => {
+      const tr = document.createElement("tr");
+      tr.dataset.reasonId = candidate.id;
+      tr.dataset.reasonType = candidate.type;
+      tr.dataset.reasonComplete = String(manualReasonComplete(candidate));
+      const selectCell = document.createElement("td");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox"; checkbox.dataset.reasonSelect = candidate.id; checkbox.setAttribute("aria-label", `選取${candidate.sku}`);
+      selectCell.append(checkbox);
+      const values = [candidate.type, candidate.sku, candidate.name || "—", candidate.suggestedQty, candidate.manualQty === "" ? "未填" : candidate.manualQty];
+      const cells = values.map((value) => { const td = document.createElement("td"); td.textContent = String(value); return td; });
+      const categoryCell = document.createElement("td");
+      const category = document.createElement("select"); category.dataset.reasonCategory = candidate.id; category.append(reasonOptionNodes(candidate.reasonCategory));
+      const detailCell = document.createElement("td");
+      const detail = document.createElement("input"); detail.type = "text"; detail.value = candidate.reasonDetail || ""; detail.placeholder = "需要時補充；選其他必填"; detail.dataset.reasonDetail = candidate.id;
+      categoryCell.append(category); detailCell.append(detail);
+      tr.append(selectCell, ...cells, categoryCell, detailCell);
+      fragment.append(tr);
+    });
+    elements.reasonBatchRows.replaceChildren(fragment);
+    elements.reasonBatchPanel.hidden = false;
+    updateReasonBatchStatus();
+  }
+  function selectReasonRows(predicate) {
+    elements.reasonBatchRows.querySelectorAll("tr[data-reason-id]").forEach((row) => {
+      const candidate = state.manualReasonCandidates.find((item) => item.id === row.dataset.reasonId);
+      row.querySelector("[data-reason-select]").checked = Boolean(candidate && predicate(candidate));
+    });
+    updateReasonBatchStatus();
+  }
+  function applyReasonToSelected() {
+    const category = elements.reasonBatchCategory.value;
+    const detail = elements.reasonBatchDetail.value.trim();
+    const selectedIds = new Set([...elements.reasonBatchRows.querySelectorAll("[data-reason-select]:checked")].map((input) => input.dataset.reasonSelect));
+    if (!selectedIds.size) return updateReasonBatchStatus("請先勾選至少一項品項。");
+    if (!category) return updateReasonBatchStatus("請先選擇要批次套用的人工調整原因。");
+    if (category === "其他" && !detail) return updateReasonBatchStatus("原因選擇「其他」時，必須填寫補充說明。");
+    state.manualReasonCandidates.filter((row) => selectedIds.has(row.id)).forEach((candidate) => {
+      syncManualReasonCandidate(candidate, category, detail);
+      const tr = elements.reasonBatchRows.querySelector(`tr[data-reason-id="${CSS.escape(candidate.id)}"]`);
+      tr.querySelector("[data-reason-category]").value = category;
+      tr.querySelector("[data-reason-detail]").value = detail;
+      tr.dataset.reasonComplete = String(manualReasonComplete(candidate));
+    });
+    updateReasonBatchStatus(`已將「${category}」套用至${selectedIds.size}項品項；仍可逐項修改。`);
   }
   function updateSourceProgress(id, status, message) {
     const item = elements.autoSourceProgress.querySelector(`[data-source-progress="${id}"]`);
@@ -139,6 +236,17 @@
   async function readWorkbook(file) {
     const data = await file.arrayBuffer();
     return XLSX.read(data, { type: "array", cellDates: true, cellStyles: true, nodim: true });
+  }
+  async function downloadWorkbookWithManualReasonValidation(workbook, fileName) {
+    const bytes = await core.buildWorkbookBytesWithManualReasonValidation(workbook, outputXlsx, globalThis.JSZip);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
   function monthAfter(isoDate, months) {
     const date = new Date(isoDate);
@@ -351,12 +459,14 @@
       state.review = state.firstReview;
       setWorkflowStep(elements.workflowStepDownload, "done", "本批建議已下載"); setWorkflowStep(elements.workflowStepFirst, "done", "第一次覆核已通過");
       setWorkflowStep(elements.workflowStepSecond, "active", "無異動可直接送出；有異動才回匯"); setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, true);
+      setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, true);
       elements.submitApproval.disabled = false; elements.submitApproval.textContent = "全部沿用並送出待核准";
-      setWorkflowStatus("已恢復第一次覆核結果；若沒有異動可直接送出，有異動再回匯先前下載的覆核與異動確認表。", "success");
+      setWorkflowStatus("已恢復第一次覆核結果；可直接送出、回匯異動，或重新選擇第一次人工回匯檔。重新回匯會取代本批尚未送出的覆核結果，不會改動母批次或其它供應商批次。", "success");
     } else if (draft.stage === "second_reviewed" && state.review) {
       setWorkflowStep(elements.workflowStepDownload, "done", "本批建議已下載"); setWorkflowStep(elements.workflowStepFirst, "done", "第一次覆核已通過");
       setWorkflowStep(elements.workflowStepSecond, "done", "異動確認已通過"); setWorkflowStep(elements.workflowStepApproval, "active", "可送出待核准台帳");
-      elements.submitApproval.disabled = state.review.errors?.length > 0; elements.submitApproval.textContent = "送出異動後待核准"; setWorkflowStatus("已恢復至待送核准階段。", "success");
+      setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, true);
+      elements.submitApproval.disabled = state.review.errors?.length > 0; elements.submitApproval.textContent = "送出異動後待核准"; setWorkflowStatus("已恢復至待送核准階段；如仍需修改，可重新選擇第一次人工回匯檔。重新回匯只會覆蓋本子批次尚未送出的覆核結果。", "warning");
     } else if (draft.stage === "pending_approval" && state.review) {
       setWorkflowStep(elements.workflowStepDownload, "done", "本批建議已下載"); setWorkflowStep(elements.workflowStepFirst, "done", "第一次覆核已通過");
       setWorkflowStep(elements.workflowStepSecond, "done", "覆核結果已確認"); setWorkflowStep(elements.workflowStepApproval, "active", "已送待核准");
@@ -897,6 +1007,7 @@
   }
   function resetReviewWorkflow(message = "請先在分批審核區勾選一個或多個單位並下載本批Excel；下載後才會開放第一次人工回匯。") {
     state.reviewFile = null; state.firstReview = null; state.secondReviewFile = null; state.review = null; state.approved = false; state.erpDownloaded = false; state.batchId = "";
+    resetReasonBatchPanel();
     elements.reviewFile.value = ""; elements.secondReviewFile.value = "";
     setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, false);
     setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, false);
@@ -2157,7 +2268,7 @@
     state.returnScope = new Set(selected);
     const workbook = core.buildRecommendationWorkbook(state.analysis, outputXlsx, { budget: currentBudget(), selectedSuppliers: selected, workUnit: state.activeWorkUnit });
     appendWorkflowSnapshotSheet(workbook, workflowSnapshot("downloaded"));
-    outputXlsx.writeFile(workbook, `${elements.month.value}_${elements.checkpoint.value === "mid-month" ? "月中" : elements.checkpoint.value === "month-end" ? "月底" : "月初"}_${scopeLabel}_${workflowLabel}_人工審核.xlsx`, { compression: true, cellStyles: true });
+    await downloadWorkbookWithManualReasonValidation(workbook, `${elements.month.value}_${elements.checkpoint.value === "mid-month" ? "月中" : elements.checkpoint.value === "month-end" ? "月底" : "月初"}_${scopeLabel}_${workflowLabel}_人工審核.xlsx`);
     state.selectedWorkUnitIds = new Set();
     resetReviewWorkflow(`已下載${state.activeWorkUnit.memberIds?.length || 1}個審核單位的合併採購建議；完成Excel人工填量後，請選擇這一份第一次回匯檔。`);
     setFileInputEnabled(elements.reviewFile, elements.reviewFileLabel, true);
@@ -2205,7 +2316,7 @@
       const baselineRows = state.analysis.rows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
       const exportedRows = state.analysis.suggestedRows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
       const reservedConsignmentBySku = await activeConsignmentReservations();
-      state.firstReview = core.reviewReturnedWorkbook(await readWorkbook(state.reviewFile), XLSX, {
+      state.firstReview = core.reviewReturnedWorkbook(state.reviewWorkbook || await readWorkbook(state.reviewFile), XLSX, {
         asOfDate: elements.salesDate.value || today(),
         orderDate: elements.orderDate.value,
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
@@ -2230,7 +2341,7 @@
       else {
         clearWorkflowErrors();
         const unitLabel = (state.activeWorkUnit?.label || "採購").replace(/[\\/:*?"<>|]/g, "-").slice(0, 80);
-        outputXlsx.writeFile(core.buildSecondReviewWorkbook(state.firstReview, outputXlsx), `${elements.month.value}_${unitLabel}_第一次覆核暨異動確認表.xlsx`, { compression: true, cellStyles: true });
+        await downloadWorkbookWithManualReasonValidation(core.buildSecondReviewWorkbook(state.firstReview, outputXlsx), `${elements.month.value}_${unitLabel}_第一次覆核暨異動確認表.xlsx`);
       }
       setWorkflowStep(elements.workflowStepFirst, state.firstReview.errors.length ? "blocked" : "done", state.firstReview.errors.length ? `有${state.firstReview.errors.length}項阻擋` : "第一次覆核已通過");
       setWorkflowStep(elements.workflowStepSecond, state.firstReview.errors.length ? "locked" : "active", state.firstReview.errors.length ? "修正第一次回匯後重跑" : "無異動直接送出；有異動只填變更列");
@@ -2394,8 +2505,13 @@
   elements.modelDownloadDraft.addEventListener("click", downloadModelDraft);
   elements.modelApprove.addEventListener("click", approveSeasonalModel);
   bindFileInput(elements.marketingFile, "marketingFile", elements.marketingFileName);
-  elements.reviewFile.addEventListener("change", () => {
+  elements.reviewFile.addEventListener("change", async () => {
     state.reviewFile = elements.reviewFile.files[0] || null; state.firstReview = null; state.secondReviewFile = null; state.review = null; state.approved = false;
+    resetReasonBatchPanel();
+    state.reviewFile = elements.reviewFile.files[0] || null;
+    state.batchId = "";
+    elements.secondReviewFile.value = "";
+    elements.workflowSummary.replaceChildren();
     elements.reviewButton.disabled = !state.reviewFile; setFileInputEnabled(elements.secondReviewFile, elements.secondReviewFileLabel, false); elements.confirmReview.disabled = true;
     elements.submitApproval.disabled = true; elements.submitApproval.textContent = "全部沿用並送出待核准"; elements.approve.disabled = true; elements.retryNotification.disabled = true; elements.erp.disabled = true;
     state.erpDownloaded = false;
@@ -2403,7 +2519,28 @@
     setWorkflowStep(elements.workflowStepFirst, "active", state.reviewFile ? `已選擇${state.reviewFile.name}` : "請選擇第一次人工回匯檔");
     setWorkflowStep(elements.workflowStepSecond, "locked", "第一次覆核通過後開放");
     setWorkflowStep(elements.workflowStepApproval, "locked", "第一次覆核通過後開放");
-    setWorkflowStatus(state.reviewFile ? `已選擇${state.reviewFile.name}；請開始第一次回匯檢查。` : "尚未選擇人工回匯檔。");
+    if (!state.reviewFile) return setWorkflowStatus("尚未選擇人工回匯檔。");
+    setWorkflowStatus(`正在讀取${state.reviewFile.name}並整理需要填寫原因的品項…`);
+    try {
+      state.reviewWorkbook = await readWorkbook(state.reviewFile);
+      const baselineRows = state.analysis.rows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
+      const exportedRows = state.analysis.suggestedRows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
+      state.manualReasonCandidates = core.listManualReasonCandidates(state.reviewWorkbook, XLSX, {
+        baselineBySku: new Map(baselineRows.map((row) => [row.sku, row])),
+        exportedSkuSet: new Set(exportedRows.map((row) => row.sku))
+      });
+      if (state.reviewWorkbook.SheetNames.includes("09_人工調整原因")) renderReasonBatchPanel();
+      else elements.reasonBatchPanel.hidden = true;
+      state.draftStage = "downloaded";
+      setWorkflowStatus(state.reviewWorkbook.SheetNames.includes("09_人工調整原因")
+        ? `已選擇${state.reviewFile.name}；可先批次套用人工原因，再開始第一次回匯檢查。`
+        : `已選擇${state.reviewFile.name}；這是舊版報表，可沿用原有自由文字原因回匯，但沒有批次下拉功能。`, "success");
+    } catch (error) {
+      state.reviewWorkbook = null;
+      state.manualReasonCandidates = [];
+      elements.reviewButton.disabled = true;
+      setWorkflowStatus(`第一次回匯檔讀取失敗：${error.message}`, "error");
+    }
   });
   elements.secondReviewFile.addEventListener("change", () => {
     state.secondReviewFile = elements.secondReviewFile.files[0] || null; state.review = null;
@@ -2452,6 +2589,34 @@
   elements.reviewButton.addEventListener("click", reviewReturn); elements.confirmReview.addEventListener("click", confirmSecondReview);
   elements.submitApproval.addEventListener("click", submitForApproval); elements.approve.addEventListener("click", approveBatch);
   elements.retryNotification.addEventListener("click", retryNotification); elements.erp.addEventListener("click", downloadErp);
+  elements.reasonBatchCategory.append(reasonOptionNodes());
+  elements.reasonSelectAll.addEventListener("click", () => selectReasonRows(() => true));
+  elements.reasonSelectChanged.addEventListener("click", () => selectReasonRows((row) => row.type === "數量增加" || row.type === "數量降低"));
+  elements.reasonSelectAdded.addEventListener("click", () => selectReasonRows((row) => row.type === "人工新增品項"));
+  elements.reasonSelectS.addEventListener("click", () => selectReasonRows((row) => row.type === "S品人工例外"));
+  elements.reasonClearSelection.addEventListener("click", () => selectReasonRows(() => false));
+  elements.reasonApplySelected.addEventListener("click", applyReasonToSelected);
+  elements.reasonBatchRows.addEventListener("change", (event) => {
+    if (event.target.matches("[data-reason-select]")) return updateReasonBatchStatus();
+    if (!event.target.matches("[data-reason-category]")) return;
+    const candidate = state.manualReasonCandidates.find((row) => row.id === event.target.dataset.reasonCategory);
+    if (!candidate) return;
+    const tr = event.target.closest("tr");
+    const detail = tr.querySelector("[data-reason-detail]").value.trim();
+    syncManualReasonCandidate(candidate, event.target.value, detail);
+    tr.dataset.reasonComplete = String(manualReasonComplete(candidate));
+    updateReasonBatchStatus();
+  });
+  elements.reasonBatchRows.addEventListener("input", (event) => {
+    if (!event.target.matches("[data-reason-detail]")) return;
+    const candidate = state.manualReasonCandidates.find((row) => row.id === event.target.dataset.reasonDetail);
+    if (!candidate) return;
+    const tr = event.target.closest("tr");
+    const category = tr.querySelector("[data-reason-category]").value;
+    syncManualReasonCandidate(candidate, category, event.target.value.trim());
+    tr.dataset.reasonComplete = String(manualReasonComplete(candidate));
+    updateReasonBatchStatus();
+  });
   elements.restoreReportFile.addEventListener("change", async () => {
     const file = elements.restoreReportFile.files[0];
     if (!file) return;

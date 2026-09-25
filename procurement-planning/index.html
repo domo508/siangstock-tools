@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20260924-p0-r2">
+  <link rel="stylesheet" href="style.css?v=20260926-reason-batch-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -392,6 +392,28 @@
         <button id="retry-notification-button" class="secondary-button" type="button" disabled>重送摘要郵件</button>
         <button id="erp-button" class="secondary-button" type="button" disabled>下載ERP採購檔</button>
       </div>
+      <section id="reason-batch-panel" class="reason-batch-panel" aria-labelledby="reason-batch-title" hidden>
+        <div class="section-heading compact"><div><h3 id="reason-batch-title">批次設定人工調整原因</h3><p>只列出數量有變更、人工新增、貨品狀態待確認或S品例外的品項。可複選後一次套用，也可在下表逐項修改。</p></div><strong id="reason-batch-count">0項待確認</strong></div>
+        <div class="reason-batch-toolbar">
+          <div class="reason-batch-select-actions" role="group" aria-label="快速選取品項">
+            <button id="reason-select-all" class="secondary-button" type="button">全選</button>
+            <button id="reason-select-changed" class="secondary-button" type="button">只選數量異動</button>
+            <button id="reason-select-added" class="secondary-button" type="button">只選新增品項</button>
+            <button id="reason-select-s" class="secondary-button" type="button">只選S品例外</button>
+            <button id="reason-clear-selection" class="secondary-button" type="button">取消全選</button>
+          </div>
+          <label>批次原因<select id="reason-batch-category"></select></label>
+          <label>補充說明<input id="reason-batch-detail" type="text" placeholder="選其他時必填；其餘原因可視需要補充"></label>
+          <button id="reason-apply-selected" class="primary-button" type="button">套用至已選品項</button>
+        </div>
+        <p id="reason-batch-status" class="result-note">尚未選取品項。</p>
+        <div class="result-table-wrap">
+          <table class="procurement-table compact-table reason-batch-table">
+            <thead><tr><th>選取</th><th>類型</th><th>ERP品號</th><th>商品品名</th><th>系統量</th><th>人工量</th><th>人工調整原因</th><th>補充說明</th></tr></thead>
+            <tbody id="reason-batch-rows"></tbody>
+          </table>
+        </div>
+      </section>
       <p id="workflow-status" class="main-status" role="status">請先產生建議，再於分批審核區勾選一個或多個單位並下載本批Excel；下載後才會開放第一次人工回匯。</p>
       <div id="workflow-errors" class="workflow-errors" role="alert" hidden><strong id="workflow-error-title">尚有阻擋</strong><ul id="workflow-error-list"></ul></div>
       <div id="workflow-summary" class="summary-grid budget-summary"></div>
@@ -435,12 +457,13 @@
   </main>
 
   <script src="assets/xlsx-js-style.bundle.js"></script>
-  <script src="xlsx-style-runtime.js?v=20260915-reader-fix-r1"></script>
+  <script src="../cost-analysis/assets/jszip.min.js"></script>
+  <script src="xlsx-style-runtime.js?v=20260926-reason-batch-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260924-budget-guard-r1"></script>
+  <script src="core.js?v=20260926-reason-batch-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
   <script src="google-sources.js?v=20260923-source-errors-r2"></script>
-  <script src="app.js?v=20260924-budget-guard-r1"></script>
+  <script src="app.js?v=20260926-reason-batch-r1"></script>
 </body>
 </html>

@@ -311,6 +311,131 @@
     ], [34, 54, 62]);
   }
 
+  function manualReasonSourceSheets(workbook) {
+    const preferred = workbook.SheetNames.filter((name) => /^03(?:A|B\d|C|D)_/.test(name));
+    return preferred.length ? preferred : workbook.SheetNames.filter((name) => ["02_全部採購建議", "02_所選範圍採購建議"].includes(name));
+  }
+
+  function listManualReasonCandidates(workbook, XLSX, options = {}) {
+    const rows = [];
+    for (const sheetName of manualReasonSourceSheets(workbook)) {
+      const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "", raw: true });
+      for (let index = 0; index < data.length; index += 1) {
+        const source = data[index];
+        const sku = normalizeSku(source["ERP品號"]);
+        if (!sku || source["狀態"] === "本次無資料") continue;
+        const baseline = options.baselineBySku?.get?.(sku);
+        const suggestedQty = parseNumber(source["建議採購量"]);
+        const manualCell = source["人工確認採購量"] !== undefined ? source["人工確認採購量"] : source["人工量"];
+        const manualBlank = manualCell === "" || manualCell == null;
+        const manualQty = manualBlank ? null : parseNumber(manualCell);
+        const manuallyAdded = Boolean(options.exportedSkuSet?.has && !options.exportedSkuSet.has(sku));
+        const reasonInput = manualReasonFromSource(source, {
+          categoryHeader: "人工調整原因類別",
+          detailHeader: "人工調整補充說明",
+          legacyHeaders: ["人工調整原因", "原因"]
+        });
+        const changed = !manualBlank && manualQty !== suggestedQty;
+        const pendingStatus = Boolean(baseline?.productStatusPendingReview);
+        const sellThroughException = Boolean(baseline?.sellThroughStop && Number(manualQty || 0) > 0);
+        if (!changed && !manuallyAdded && !pendingStatus && !sellThroughException && !reasonInput.reason) continue;
+        let type = "已填原因";
+        if (manuallyAdded) type = "人工新增品項";
+        else if (sellThroughException) type = "S品人工例外";
+        else if (pendingStatus) type = "貨品狀態待確認";
+        else if (manualQty > suggestedQty) type = "數量增加";
+        else if (manualQty < suggestedQty) type = "數量降低";
+        rows.push({
+          id: `${sheetName}::${index + 2}`,
+          sheetName,
+          sourceRow: index + 2,
+          sku,
+          name: String(source["商品品名"] || baseline?.name || "").trim(),
+          suggestedQty: Math.max(0, Number(suggestedQty || 0)),
+          manualQty: manualQty == null ? "" : Math.max(0, Number(manualQty || 0)),
+          type,
+          reasonCategory: reasonInput.category || (MANUAL_REASON_OPTIONS.includes(reasonInput.legacy) ? reasonInput.legacy : ""),
+          reasonDetail: reasonInput.detail || (reasonInput.legacy && !MANUAL_REASON_OPTIONS.includes(reasonInput.legacy) ? reasonInput.legacy : "")
+        });
+      }
+    }
+    return rows;
+  }
+
+  function applyManualReasonUpdates(workbook, XLSX, updates = []) {
+    for (const update of updates) {
+      const sheet = workbook.Sheets[update.sheetName];
+      if (!sheet || !Number.isInteger(update.sourceRow) || update.sourceRow < 2) continue;
+      const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, range: 0, defval: "" })[0] || [];
+      const categoryColumn = headers.indexOf("人工調整原因類別");
+      const detailColumn = headers.indexOf("人工調整補充說明");
+      if (categoryColumn < 0 || detailColumn < 0) throw new Error(`${update.sheetName}缺少新版人工原因欄位；請重新下載本批報表。`);
+      sheet[XLSX.utils.encode_cell({ r: update.sourceRow - 1, c: categoryColumn })] = { t: "s", v: String(update.reasonCategory || "").trim() };
+      sheet[XLSX.utils.encode_cell({ r: update.sourceRow - 1, c: detailColumn })] = { t: "s", v: String(update.reasonDetail || "").trim() };
+    }
+    return workbook;
+  }
+
+  function manualReasonValidationTargets(workbook, XLSX) {
+    const targetHeaders = new Set(["人工調整原因類別", "第二次異動原因類別"]);
+    const targets = new Map();
+    for (const sheetName of workbook.SheetNames) {
+      if (sheetName === "09_人工調整原因") continue;
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet?.["!ref"]) continue;
+      const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, range: 0, defval: "" })[0] || [];
+      const range = XLSX.utils.decode_range(sheet["!ref"]);
+      const lastRow = Math.max(1000, range.e.r + 201);
+      const refs = headers.flatMap((header, column) => targetHeaders.has(String(header || ""))
+        ? [`${XLSX.utils.encode_col(column)}2:${XLSX.utils.encode_col(column)}${lastRow}`]
+        : []);
+      if (refs.length) targets.set(sheetName, refs);
+    }
+    return targets;
+  }
+
+  function injectManualReasonValidationXml(xml, refs) {
+    const rules = refs.map((ref) => (
+      `<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" errorStyle="stop" promptTitle="人工調整原因" prompt="請由下拉選單選擇固定原因；選其他時須填補充說明。" errorTitle="原因不在固定選項" error="請由下拉選單選擇09_人工調整原因列出的固定原因。" sqref="${ref}"><formula1>'09_人工調整原因'!$A$2:$A$${MANUAL_REASON_OPTIONS.length + 1}</formula1></dataValidation>`
+    )).join("");
+    if (/<dataValidations\b[^>]*>/.test(xml)) {
+      return xml.replace(/<dataValidations\b([^>]*)>([\s\S]*?)<\/dataValidations>/, (_match, attributes, content) => {
+        const current = Number((attributes.match(/\bcount="(\d+)"/) || [])[1] || 0);
+        const nextAttributes = /\bcount="\d+"/.test(attributes)
+          ? attributes.replace(/\bcount="\d+"/, `count="${current + refs.length}"`)
+          : `${attributes} count="${current + refs.length}"`;
+        return `<dataValidations${nextAttributes}>${content}${rules}</dataValidations>`;
+      });
+    }
+    const block = `<dataValidations count="${refs.length}">${rules}</dataValidations>`;
+    const insertionPoint = /<(?:hyperlinks|printOptions|pageMargins|pageSetup|headerFooter|drawing|legacyDrawing|extLst)\b/;
+    return insertionPoint.test(xml) ? xml.replace(insertionPoint, `${block}$&`) : xml.replace("</worksheet>", `${block}</worksheet>`);
+  }
+
+  async function buildWorkbookBytesWithManualReasonValidation(workbook, XLSX, JSZip) {
+    if (!JSZip || typeof JSZip.loadAsync !== "function") throw new Error("Excel下拉選單元件未載入，請重新整理後再下載。");
+    const targets = manualReasonValidationTargets(workbook, XLSX);
+    if (!targets.size) return new Uint8Array(XLSX.write(workbook, { type: "array", bookType: "xlsx", compression: true, cellStyles: true }));
+    const source = XLSX.write(workbook, { type: "array", bookType: "xlsx", compression: true, cellStyles: true });
+    const archive = await JSZip.loadAsync(source);
+    const workbookXml = await archive.file("xl/workbook.xml")?.async("string");
+    const relationshipsXml = await archive.file("xl/_rels/workbook.xml.rels")?.async("string");
+    if (!workbookXml || !relationshipsXml) throw new Error("匯出檔缺少Excel工作表索引，無法加入下拉選單。");
+    const sheetIds = [...workbookXml.matchAll(/<sheet\b[^>]*\br:id="([^"]+)"[^>]*\/?\s*>/g)].map((match) => match[1]);
+    const relationshipTargets = new Map([...relationshipsXml.matchAll(/<Relationship\b[^>]*\bId="([^"]+)"[^>]*\bTarget="([^"]+)"[^>]*\/?\s*>/g)].map((match) => [match[1], match[2]]));
+    for (let index = 0; index < workbook.SheetNames.length; index += 1) {
+      const sheetName = workbook.SheetNames[index];
+      const refs = targets.get(sheetName);
+      if (!refs?.length) continue;
+      const target = relationshipTargets.get(sheetIds[index]);
+      const path = target?.startsWith("/") ? target.slice(1) : target?.startsWith("xl/") ? target : `xl/${target || ""}`;
+      const entry = archive.file(path);
+      if (!entry) throw new Error(`匯出檔找不到${sheetName}的工作表內容，無法加入下拉選單。`);
+      archive.file(path, injectManualReasonValidationXml(await entry.async("string"), refs));
+    }
+    return archive.generateAsync({ type: "uint8array", compression: "DEFLATE", compressionOptions: { level: 6 } });
+  }
+
   function reviewConsignmentAvailableQty({ baseline, source, reservedQty = 0 }) {
     const currentQty = Math.max(0, Number(baseline?.consignmentCurrentQty ?? source?.["寄倉現貨"] ?? 0));
     const pendingOccupancy = Math.max(0, Number(baseline?.pendingQty ?? source?.["已採購未到貨"] ?? 0));
@@ -4351,6 +4476,12 @@
     listProcurementWorkUnits,
     rowMatchesProcurementWorkUnit,
     buildRecommendationWorkbook,
+    MANUAL_REASON_OPTIONS,
+    listManualReasonCandidates,
+    applyManualReasonUpdates,
+    manualReasonValidationTargets,
+    injectManualReasonValidationXml,
+    buildWorkbookBytesWithManualReasonValidation,
     reviewReturnedWorkbook,
     buildSecondReviewWorkbook,
     reviewSecondApprovalWorkbook,
