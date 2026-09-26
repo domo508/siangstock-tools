@@ -1670,8 +1670,8 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20260926-erp-supplier-r1');
-    expect(toolHtml).toContain('app.js?v=20260926-erp-supplier-r1');
+    expect(toolHtml).toContain('core.js?v=20260926-erp-supplier-r2');
+    expect(toolHtml).toContain('app.js?v=20260926-erp-supplier-r2');
     expect(toolHtml).toContain("新品首批採購");
     expect(toolHtml).toContain("人工匯入採購單");
     expect(toolHtml).toContain("補登已採購單");
@@ -1683,7 +1683,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260926-erp-supplier-r1");
+    expect(toolHtml).toContain("20260926-erp-supplier-r2");
     expect(toolApp).toContain("state.postedOrderFiles.length && state.config?.permissions?.canApprove");
     expect(toolApp).toContain("state.parsedSources?.master");
     expect(toolApp).toContain("可直接檢查並補登，不必先產生採購建議");
@@ -1849,5 +1849,6 @@ describe("採購規劃前台與入口", () => {
     expect(procurementWorker).toContain("各供應商ERP皆已開立");
     expect(toolApp).toContain("下載此供應商ERP檔");
     expect(toolApp).toContain("全部供應商完成後，批次會自動結案");
+    expect(toolApp).not.toContain("documents.forEach((document)");
   });
 });

@@ -1138,18 +1138,18 @@
       const erpCell = document.createElement("td");
       if (item.status === "approved" && state.config?.permissions?.canApprove && !["manual_posted", "customer_custom"].includes(item.workflow_type)) {
         const documents = item.erp_documents || (item.supplier_summary || []).map((supplier) => ({ supplier, status: "pending" }));
-        documents.forEach((document) => {
+        documents.forEach((erpDocument) => {
           const entry = document.createElement("div"); entry.className = "ledger-erp-entry";
-          const title = document.createElement("strong"); title.textContent = document.supplier;
-          if (document.status === "erp_created") {
-            const done = document.createElement("small"); done.textContent = `已回填：${document.erp_reference}`; entry.append(title, done); erpCell.appendChild(entry); return;
+          const title = document.createElement("strong"); title.textContent = erpDocument.supplier;
+          if (erpDocument.status === "erp_created") {
+            const done = document.createElement("small"); done.textContent = `已回填：${erpDocument.erp_reference}`; entry.append(title, done); erpCell.appendChild(entry); return;
           }
           const download = document.createElement("button"); download.type = "button"; download.className = "table-action"; download.textContent = "下載此供應商ERP檔";
-          download.addEventListener("click", () => downloadLedgerErpSupplier(item, document.supplier, download));
-          const input = document.createElement("input"); input.type = "text"; input.maxLength = 120; input.placeholder = "輸入ERP採購單號"; input.setAttribute("aria-label", `${item.id} ${document.supplier} ERP採購單號`);
+          download.addEventListener("click", () => downloadLedgerErpSupplier(item, erpDocument.supplier, download));
+          const input = document.createElement("input"); input.type = "text"; input.maxLength = 120; input.placeholder = "輸入ERP採購單號"; input.setAttribute("aria-label", `${item.id} ${erpDocument.supplier} ERP採購單號`);
           const confirm = document.createElement("button"); confirm.type = "button"; confirm.className = "secondary-button"; confirm.textContent = "確認此供應商ERP已開立"; confirm.disabled = true;
           input.addEventListener("input", () => { confirm.disabled = !input.value.trim(); });
-          confirm.addEventListener("click", () => confirmLedgerErpCreated(item, document.supplier, input, confirm));
+          confirm.addEventListener("click", () => confirmLedgerErpCreated(item, erpDocument.supplier, input, confirm));
           const hint = document.createElement("small"); hint.textContent = "各供應商分別下載、分別回填；全部完成後母批次才結案。";
           entry.append(title, download, input, confirm, hint); erpCell.appendChild(entry);
         });
