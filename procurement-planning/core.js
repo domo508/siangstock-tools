@@ -958,6 +958,7 @@
             fileName: options.fileName || "",
             saleType,
             date,
+            transactionTimestamp: transactionValue instanceof Date ? transactionValue.toISOString() : String(transactionValue || "").trim(),
             sku,
             name: String(valueAt(row, selected.mapping, "name") || "").trim(),
             quantity: parseNumber(valueAt(row, selected.mapping, "salesQuantity")) || 0,
@@ -1018,6 +1019,48 @@
       if (!maxDate || date > maxDate) maxDate = date;
     }
     return { fileName: options.fileName || "", sheetName: selected.name, records, takeRecords, excluded, minDate, maxDate };
+  }
+
+  function deduplicateReportRows(reports, rowSelector, signature) {
+    const kept = [];
+    const maximumOccurrences = new Map();
+    let duplicateRows = 0;
+    for (const report of reports || []) {
+      const occurrences = new Map();
+      for (const row of rowSelector(report) || []) {
+        const key = signature(row);
+        const occurrence = (occurrences.get(key) || 0) + 1;
+        occurrences.set(key, occurrence);
+        if (occurrence <= (maximumOccurrences.get(key) || 0)) duplicateRows += 1;
+        else kept.push(row);
+      }
+      for (const [key, count] of occurrences) maximumOccurrences.set(key, Math.max(maximumOccurrences.get(key) || 0, count));
+    }
+    return { records: kept, duplicateRows };
+  }
+
+  function salesRowSignature(row) {
+    return [row.saleType, row.transactionTimestamp || row.date, row.sku, row.quantity, row.deductQuantity,
+      row.warehouseCode, row.shipWarehouseCode, row.posOrder, row.sourceOrder, row.pickupOrder,
+      row.actualAmount, row.purchaseCostAmount, row.storeCostAmount, row.registeredWarehouseCostAmount]
+      .map((value) => String(value ?? "").normalize("NFKC").trim()).join("||");
+  }
+
+  function deduplicateSalesReports(reports) {
+    const sales = deduplicateReportRows(reports, (report) => report.records, salesRowSignature);
+    const takes = deduplicateReportRows(reports, (report) => report.takeRecords, salesRowSignature);
+    return { records: sales.records, takeRecords: takes.records, duplicateRows: sales.duplicateRows + takes.duplicateRows };
+  }
+
+  function pendingRowSignature(row) {
+    return [row.documentCode, row.supplier, row.sku, row.name, row.status, row.orderedQuantity, row.deliveredQuantity,
+      row.remainingQuantity, row.quantity, row.unitCost, row.orderedAmount, row.purchaseDate, row.expectedDeliveryDate,
+      row.receiptDate, row.documentClosed, row.fullyReceived]
+      .map((value) => String(value ?? "").normalize("NFKC").trim()).join("||");
+  }
+
+  function deduplicatePendingReports(reports) {
+    return deduplicateReportRows(reports, (report) => report.records, pendingRowSignature);
   }
 
   function findHeaderTable(workbook, XLSX, sheetNames, requiredHeaders) {
@@ -1495,7 +1538,8 @@
 
   function aggregatePendingReports(reports) {
     const bySku = new Map();
-    const records = reports.flatMap((report) => report.records);
+    const deduplicated = deduplicatePendingReports(reports);
+    const records = deduplicated.records;
     for (const row of records) {
       if (row.isCustomOrder || row.automaticProcurementExcluded || row.quantity <= 0) continue;
       if (!bySku.has(row.sku)) {
@@ -1515,11 +1559,12 @@
       });
       if (!aggregated.name && row.name) aggregated.name = row.name;
     }
-    return { records, bySku, customRecords: records.filter((row) => row.isCustomOrder) };
+    return { records, bySku, customRecords: records.filter((row) => row.isCustomOrder), duplicateRows: deduplicated.duplicateRows };
   }
 
   function summarizePurchaseReports(reports, analysisMonth) {
-    const records = (reports || []).flatMap((report) => report.records || []);
+    const deduplicated = deduplicatePendingReports(reports || []);
+    const records = deduplicated.records;
     const month = String(analysisMonth || "").slice(0, 7);
     const received = records.filter((row) => row.receiptDate && (!month || row.receiptDate.slice(0, 7) === month) && row.deliveredQuantity > 0);
     const pending = records.filter((row) => !row.isCustomOrder && !row.automaticProcurementExcluded && row.quantity > 0);
@@ -1535,15 +1580,17 @@
       pendingDocumentCount: documentCount(pending),
       draftAmount: drafts.reduce((sum, row) => sum + Number(row.orderedAmount || 0), 0),
       draftDocumentCount: documentCount(drafts),
-      closedPartialDocumentCount: documentCount(records.filter((row) => row.documentClosed && /部分到貨/.test(normalizeText(row.status))))
+      closedPartialDocumentCount: documentCount(records.filter((row) => row.documentClosed && /部分到貨/.test(normalizeText(row.status)))),
+      duplicateRows: deduplicated.duplicateRows
     };
   }
 
   function summarizeCompanyCostFlows(input = {}) {
     const month = String(input.analysisMonth || "").slice(0, 7);
     const masterBySku = input.master?.bySku || new Map();
-    const salesRecords = (input.salesReports || []).flatMap((report) => report.records || []);
-    const takeRecords = (input.salesReports || []).flatMap((report) => report.takeRecords || []);
+    const deduplicatedSales = deduplicateSalesReports(input.salesReports || []);
+    const salesRecords = deduplicatedSales.records;
+    const takeRecords = deduplicatedSales.takeRecords;
     const inMonth = (row) => !month || String(row.date || "").slice(0, 7) === month;
     const costOf = (row) => {
       const explicit = Number(row.purchaseCostAmount || row.storeCostAmount || row.registeredWarehouseCostAmount || 0);
@@ -1583,6 +1630,7 @@
       kuanmuIntercompanyRevenue: kuanmuBaseCost * 1.11, managementCostToDate, forecastCost, currentInventoryCost,
       openingInventoryCost, actualReceiptCost, supplierReturns, inventoryBridgeCost,
       b3MatchedCount: kuanmuB3Rows.length, transferReceivedCount: kuanmuTransferRows.length,
+      duplicateSalesRows: deduplicatedSales.duplicateRows,
       source: managementCostToDate > 0 ? "actual_weighted" : "fallback",
       warnings: openingInventoryCost > 0 ? [] : ["尚缺月初庫存成本快照；本月至今成本先以銷售與寬沐供貨流向作管理暫估。"]
     };
@@ -2265,7 +2313,8 @@
     const resolvedConsignment = resolveConsignment(input.consignment, input.master, input.blacklist || []);
     const resolvedLirongConsignment = resolveConsignment(input.lirongConsignment, input.master, input.blacklist || []);
     const blacklist = normalizeBlacklist(input.blacklist || []);
-    const salesRecords = (input.salesReports || []).flatMap((report) => report.records || []);
+    const deduplicatedSales = deduplicateSalesReports(input.salesReports || []);
+    const salesRecords = deduplicatedSales.records;
     const procurementSalesRecords = salesRecords.filter((row) => {
       const masterRecord = input.master.bySku.get(row.sku);
       return !isAutomaticProcurementExcludedItem(row.sku, masterRecord?.name, row.name);
@@ -3069,6 +3118,8 @@
         consignmentSuggestionSkuCount: consignmentRows.length,
         seasonalFallbackSkuCount: rows.filter((row) => !row.seasonalDataReady).length,
         sellThroughStopExcludedCount: productExclusions.length,
+        duplicateSalesRows: deduplicatedSales.duplicateRows,
+        duplicatePendingRows: pending.duplicateRows || 0,
         activeTransferDocumentCount: transfers.activeDocumentCount,
         transferSubmittedQty: transfers.submittedQty,
         transferInTransitQty: transfers.shippedQty,
@@ -4171,11 +4222,12 @@
         );
         const fullConsignmentReturnRequested = /普優[瑪碼]/.test(supplier) && isFullConsignmentReturnReason(reason);
         const tailBoxException = Boolean(fullConsignmentReturnRequested && consignmentAvailableQty > 0 && confirmedQty === consignmentAvailableQty);
+        const existingSellThroughConsignmentPull = Boolean(baseline?.sellThroughStop && consignmentAvailableQty > 0 && confirmedQty > 0 && confirmedQty <= consignmentAvailableQty);
         if (fullConsignmentReturnRequested && confirmedQty !== consignmentAvailableQty) errors.push({
           sheetName, sourceRow: index + 2, sku,
           message: `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，人工量必須等於扣除正式未到貨與其他有效批次占用後的可清回量${consignmentAvailableQty}件。`
         });
-        if (confirmedQty != null && confirmedQty > 0 && confirmedQty % packSize !== 0 && !tailBoxException) errors.push({ sheetName, sourceRow: index + 2, sku, message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件；人工量必須填0或${packSize}的倍數。` });
+        if (confirmedQty != null && confirmedQty > 0 && confirmedQty % packSize !== 0 && !tailBoxException && !existingSellThroughConsignmentPull) errors.push({ sheetName, sourceRow: index + 2, sku, message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件；人工量必須填0或${packSize}的倍數。` });
         if (unitCost == null || unitCost < 0) errors.push({ sheetName, sourceRow: index + 2, sku, message: "缺少有效進貨價，禁止核准金額。" });
         const supplierRule = findSupplierRule(supplier, options.supplierRules || []);
         let blockedReason = "";
@@ -4338,7 +4390,8 @@
         sheetName, sourceRow: index + 2, sku,
         message: `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，第二次異動量必須維持第一次覆核確認的可清回量${Number(baseline?.currentAvailableQty || 0)}件。`
       });
-      if (finalQty != null && finalQty > 0 && finalQty % packSize !== 0 && !tailBoxException) errors.push({ sheetName, sourceRow: index + 2, sku, message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件；第二次異動量必須填0或${packSize}的倍數。` });
+      const existingSellThroughConsignmentPull = Boolean(baseline?.sellThroughConsignmentAllowed && finalQty > 0 && finalQty <= Number(baseline.currentAvailableQty || 0));
+      if (finalQty != null && finalQty > 0 && finalQty % packSize !== 0 && !tailBoxException && !existingSellThroughConsignmentPull) errors.push({ sheetName, sourceRow: index + 2, sku, message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件；第二次異動量必須填0或${packSize}的倍數。` });
       if (baseline?.sellThroughConsignmentAllowed && !baseline?.sellThroughRestartException && Number(finalQty || 0) > Number(baseline.currentAvailableQty || 0)) errors.push({ sheetName, sourceRow: index + 2, sku, message: `S品只能拉回既有寄庫現貨；本批最多可拉${baseline.currentAvailableQty}件。` });
       if (blockedReason && finalQty !== 0) errors.push({ sheetName, sourceRow: index + 2, sku, message: `規則阻擋品項必須維持0：${blockedReason}` });
       if (!confirmationBlank && finalQty !== firstFinalQty && !secondReason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "第二次異動數量時必須填寫第二次異動原因。" });

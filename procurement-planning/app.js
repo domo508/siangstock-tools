@@ -335,7 +335,11 @@
     return ({ analysis: "已產生採購建議", downloaded: "等待第一次人工回匯", first_reviewed: "第一次覆核完成，可直接送出或回匯異動", second_reviewed: "可送出待核准", pending_approval: "等待正式核准", approved: "已核准，待建立ERP", erp_created: "ERP已建立" })[stage] || "未完成批次";
   }
 
-  function isUnfinishedWorkflowDraft(draft) { return draft && draft.stage !== "erp_created"; }
+  function isUnfinishedWorkflowDraft(draft) {
+    if (!draft || draft.stage === "erp_created") return false;
+    const ledgerBatch = draft.batchId && state.ledger?.batches?.find((batch) => batch.id === draft.batchId);
+    return !ledgerBatch || !["erp_created", "received"].includes(ledgerBatch.status);
+  }
 
   function isParentWorkflowDraft(draft) {
     return Boolean(draft) && !draft.activeWorkUnit && (!draft.parentBatchId || draft.id === draft.parentBatchId);
@@ -411,7 +415,7 @@
       const copy = document.createElement("div");
       const title = document.createElement("strong"); title.textContent = `${draft.controls?.month || "月份未標示"}・${checkpoint}`;
       const summary = document.createElement("p");
-      const amount = Number(draft.activeWorkUnit?.amount || 0);
+      const amount = sharedDraftAmount(draft);
       summary.textContent = `${draft.activeWorkUnit?.label || "尚未選擇審核單位"}・${workflowStageLabel(draft.stage)}${amount > 0 ? `・${formatCurrency(amount)}` : ""}・最後保存${taipeiDateTime(draft.updatedAt)}`;
       copy.append(title, summary);
       const actions = document.createElement("div"); actions.className = "resume-draft-actions";
@@ -593,6 +597,7 @@
       analysisMonth: draft.controls?.month,
       checkpoint: draft.controls?.checkpoint,
       workflowType: draft.workflowType || "system_recommendation",
+      batchId: draft.batchId || "",
       stage: draft.stage || "analysis",
       workUnitLabel: draft.activeWorkUnit?.label || "尚未選擇審核單位",
       supplierSummary: sharedDraftSuppliers(draft),
@@ -1064,6 +1069,7 @@
       renderApprovalQueue();
       renderActiveLedger();
       renderErpReconciliations();
+      renderResumeDrafts();
       renderBudget();
     } catch (error) {
       state.ledger = null; elements.ledgerStatus.textContent = `台帳同步失敗：${error.message}；為避免錯算，正式核准前請重新整理。`;
@@ -1131,11 +1137,22 @@
       appendCell(row, item.id); appendCell(row, workflowLabel(item.workflow_type));
       const erpCell = document.createElement("td");
       if (item.status === "approved" && state.config?.permissions?.canApprove && !["manual_posted", "customer_custom"].includes(item.workflow_type)) {
-        const entry = document.createElement("label"); entry.className = "ledger-erp-entry";
-        const input = document.createElement("input"); input.type = "text"; input.maxLength = 120; input.placeholder = "輸入ERP採購單號"; input.setAttribute("aria-label", `${item.id} ERP採購單號`);
-        const hint = document.createElement("small"); hint.textContent = "匯入ERP後填寫；一張正式單號只能綁定一個批次。";
-        entry.append(input, hint); erpCell.appendChild(entry);
-        erpCell.dataset.erpEntry = item.id;
+        const documents = item.erp_documents || (item.supplier_summary || []).map((supplier) => ({ supplier, status: "pending" }));
+        documents.forEach((document) => {
+          const entry = document.createElement("div"); entry.className = "ledger-erp-entry";
+          const title = document.createElement("strong"); title.textContent = document.supplier;
+          if (document.status === "erp_created") {
+            const done = document.createElement("small"); done.textContent = `已回填：${document.erp_reference}`; entry.append(title, done); erpCell.appendChild(entry); return;
+          }
+          const download = document.createElement("button"); download.type = "button"; download.className = "table-action"; download.textContent = "下載此供應商ERP檔";
+          download.addEventListener("click", () => downloadLedgerErpSupplier(item, document.supplier, download));
+          const input = document.createElement("input"); input.type = "text"; input.maxLength = 120; input.placeholder = "輸入ERP採購單號"; input.setAttribute("aria-label", `${item.id} ${document.supplier} ERP採購單號`);
+          const confirm = document.createElement("button"); confirm.type = "button"; confirm.className = "secondary-button"; confirm.textContent = "確認此供應商ERP已開立"; confirm.disabled = true;
+          input.addEventListener("input", () => { confirm.disabled = !input.value.trim(); });
+          confirm.addEventListener("click", () => confirmLedgerErpCreated(item, document.supplier, input, confirm));
+          const hint = document.createElement("small"); hint.textContent = "各供應商分別下載、分別回填；全部完成後母批次才結案。";
+          entry.append(title, download, input, confirm, hint); erpCell.appendChild(entry);
+        });
       } else {
         const reference = document.createElement("strong"); reference.textContent = item.erp_reference || "—"; erpCell.appendChild(reference);
         if (item.erp_reference && item.erp_created_at) {
@@ -1149,12 +1166,6 @@
       appendLedgerClosureSummary(amountCell, item); row.appendChild(amountCell);
       appendCell(row, `v${item.revision}`);
       const action = document.createElement("td"); action.className = "ledger-action-stack";
-      if (item.status === "approved" && state.config?.permissions?.canApprove && !["manual_posted", "customer_custom"].includes(item.workflow_type)) {
-        const button = document.createElement("button"); button.type = "button"; button.className = "secondary-button"; button.textContent = "確認ERP已開立"; button.disabled = true;
-        const input = erpCell.querySelector("input");
-        input.addEventListener("input", () => { button.disabled = !input.value.trim(); });
-        button.addEventListener("click", () => confirmLedgerErpCreated(item, input, button)); action.appendChild(button);
-      }
       if (state.config?.role === "admin" && item.status !== "received") {
         const correctButton = document.createElement("button"); correctButton.type = "button"; correctButton.className = "table-action"; correctButton.textContent = "更正金額";
         correctButton.addEventListener("click", () => correctLedgerBatch(item, correctButton));
@@ -1172,24 +1183,41 @@
     });
     elements.activeLedgerRows.replaceChildren(fragment);
   }
-  async function confirmLedgerErpCreated(item, input, button) {
+  function draftReviewForBatch(item) {
+    if (state.batchId === item.id && state.review) return state.review;
+    return state.workflowDrafts.find((draft) => draft.batchId === item.id && draft.review)?.review || null;
+  }
+  function downloadLedgerErpSupplier(item, supplier, button) {
+    const review = draftReviewForBatch(item);
+    if (!review) { setWorkflowStatus(`找不到批次${item.id}的逐品項草稿；請先從公司共用協作區開啟該批次。`, "error"); return; }
+    button.disabled = true;
+    try {
+      const safeSupplier = supplier.replace(/[\\/:*?"<>|]/g, "-").slice(0, 45);
+      XLSX.writeFile(core.buildErpPurchaseWorkbook(review, XLSX, { approved: true, batchId: item.id, supplier }), `${item.id}_${safeSupplier}_ERP正式採購單.xlsx`, { compression: true });
+      setWorkflowStatus(`已下載${supplier}的ERP採購檔；匯入ERP後請在同一列回填單號。`, "success");
+    } catch (error) { setWorkflowStatus(`ERP檔下載失敗（${supplier}）：${error.message}`, "error"); }
+    finally { button.disabled = false; }
+  }
+  async function confirmLedgerErpCreated(item, supplier, input, button) {
     const erpReference = input.value.trim();
     if (!erpReference) return;
     button.disabled = true; input.disabled = true;
     try {
-      const localDraft = state.batchId === item.id
-        ? { review: state.review }
-        : state.workflowDrafts.find((draft) => draft.batchId === item.id && draft.review);
-      const approvedItems = (localDraft?.review?.rows || []).filter((row) => Number(row.finalQty || 0) > 0).map((row) => ({
+      const review = draftReviewForBatch(item);
+      const approvedItems = (review?.rows || []).filter((row) => Number(row.finalQty || 0) > 0 && row.supplier === supplier).map((row) => ({
         sku: row.sku, name: row.name || "", supplier: row.supplier || "", quantity: Number(row.finalQty || 0),
         unitCost: Number(row.unitCost || 0), amount: Number(row.finalQty || 0) * Number(row.unitCost || 0)
       }));
       await postJson(`/api/procurement/batches/${encodeURIComponent(item.id)}/erp-created`, {
-        erpReference, approvedItems, idempotencyKey: `${item.id}:erp:${erpReference}`
+        supplier, erpReference, approvedItems, idempotencyKey: `${item.id}:erp:${supplier}:${erpReference}`
       });
-      if (item.id === state.batchId) await persistWorkflowDraft("erp_created");
+      if (item.id === state.batchId) {
+        const refreshed = await fetch(`/api/procurement/ledger?month=${encodeURIComponent(elements.month.value)}`, { headers: { Accept: "application/json" }, cache: "no-store" }).then((response) => response.json());
+        const latest = refreshed.batches?.find((batch) => batch.id === item.id);
+        if (latest?.status === "erp_created") await persistWorkflowDraft("erp_created");
+      }
       await loadLedger();
-      setWorkflowStatus(`批次${item.id}已連結ERP採購單${erpReference}；後續完整採購檔會自動核對收貨與差異。`, "success");
+      setWorkflowStatus(`${supplier}已連結ERP採購單${erpReference}；全部供應商完成後，批次會自動結案並移出未完成協作區。`, "success");
     } catch (error) {
       button.disabled = false; input.disabled = false;
       setWorkflowStatus(`ERP單號回填失敗（已承諾批次${item.id}）：${error.message}`, "error");
@@ -1823,6 +1851,12 @@
   async function startSelectedWorkUnits() {
     const units = core.listProcurementWorkUnits(state.analysis).filter((unit) => state.selectedWorkUnitIds.has(unit.id));
     if (!units.length) return;
+    const unitRows = units.flatMap((unit) => workUnitRows(unit));
+    const missingPaymentRules = selectedPaymentSummary(unitRows).reviewSuppliers;
+    if (missingPaymentRules.length) {
+      setWorkflowStatus(`本批尚不能下載：${missingPaymentRules.join("、")}缺少可計算付款月份的供應商規則。請先到「規則管理 → 供應商規則」補齊國內／國外、平均採購週期與付款條件。`, "error");
+      return;
+    }
     state.activeWorkUnit = combinedWorkUnit(units); state.parentBatchId ||= newParentBatchId();
     state.draftId = `${state.parentBatchId}-${Math.random().toString(36).slice(2, 8)}`;
     state.draftStage = "analysis"; state.batchId = ""; state.returnScope = null; state.sharedDraftId = ""; state.sharedDraftRevision = 0;
@@ -2028,7 +2062,10 @@
       const springFestivalNote = analysis.totals.springFestivalSkuCount > 0
         ? `其中春節停工備貨${analysis.totals.springFestivalSkuCount}個SKU、加量${formatNumber(analysis.totals.springFestivalExtraQty)}件、增加${formatCurrency(analysis.totals.springFestivalExtraAmount)}。`
         : "本次無春節停工備貨加量。";
-      setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。${springFestivalNote}`, "success");
+      const duplicateNote = (analysis.totals.duplicateSalesRows || analysis.totals.duplicatePendingRows)
+        ? ` 已自動排除重疊資料：銷售${formatNumber(analysis.totals.duplicateSalesRows || 0)}列、採購${formatNumber(analysis.totals.duplicatePendingRows || 0)}列，未重複計算。`
+        : "";
+      setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。${springFestivalNote}${duplicateNote}`, "success");
       await syncDetectedCustomOrders(pendingReports, master);
       await savePendingSnapshot(pendingReports);
       await syncErpReconciliations(pendingReports);
@@ -2468,11 +2505,16 @@
     if (!state.review || !state.approved) return;
     try {
       const suppliers = [...new Set(state.review.rows.filter((row) => Number(row.finalQty || 0) > 0).map((row) => row.supplier))];
+      if (suppliers.length > 1) {
+        elements.activeLedgerRows?.closest(".active-ledger")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        setWorkflowStatus(`本批含${suppliers.length}家供應商。請在下方「已承諾批次與額度異動」逐家下載ERP檔並分別回填單號，避免瀏覽器擋住多檔下載。`, "success");
+        return;
+      }
       suppliers.forEach((supplier) => {
         const safeSupplier = String(supplier || "供應商").replace(/[\\/:*?"<>|]/g, "-").slice(0, 45);
         XLSX.writeFile(core.buildErpPurchaseWorkbook(state.review, XLSX, { approved: true, batchId: state.batchId, supplier }), `${state.batchId}_${safeSupplier}_ERP正式採購單.xlsx`, { compression: true });
       });
-      state.erpDownloaded = true; setWorkflowStatus(`已依供應商分開下載${suppliers.length}份ERP採購檔；匯入ERP後，請在下方「已承諾批次與額度異動」的所屬批次填入ERP採購單號。`, "success");
+      state.erpDownloaded = true; setWorkflowStatus(`已下載${suppliers[0] || "本批"}ERP採購檔；匯入ERP後，請在下方同一供應商列填入ERP採購單號。`, "success");
     }
     catch (error) { setWorkflowStatus(error.message, "error"); }
   }

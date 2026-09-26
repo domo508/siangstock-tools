@@ -287,6 +287,7 @@
 .active-ledger { margin-top: 24px; }
 .active-ledger .procurement-table { min-width: 1180px; }
 .ledger-erp-entry { display: grid; gap: 7px; min-width: 205px; }
+.ledger-erp-entry + .ledger-erp-entry { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .ledger-erp-entry input,
 .erp-reconciliation-card textarea {
   width: 100%;
