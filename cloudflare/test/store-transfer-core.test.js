@@ -289,6 +289,19 @@ describe("展示與最低庫存管理規則", () => {
     expect(result.comparisonFacts[0].ruleSummary).toContain("S品總倉無可釋出量");
   });
 
+  it("D101094總倉為0時不會產生S品展示調撥需求", () => {
+    expect(core.stockRule({ sku: "D101094", name: "60支天絲枕套1入 [測試花色](S)", mainCategory: "枕套", sellThroughStop: true }))
+      .toMatchObject({ name: "枕套1入／單入", role: "不可售展示", quantity: 2 });
+    const result = core.buildSuggestions({
+      calculationMode: "formal", proposalDate: "2026-09-29", storeCodes: ["R00"],
+      master: { bySku: new Map([["D101094", { sku: "D101094", name: "60支天絲枕套1入 [測試花色](S)", mainCategory: "枕套", sellThroughStop: true }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "D101094", quantity: 0 }] },
+      transfer: { records: [] }, sales: [{ maxDate: "2026-09-29", records: [], takeRecords: [] }]
+    });
+    expect(result.regularRows).toHaveLength(0);
+    expect(result.shortageRows).toHaveLength(0);
+  });
+
   it("毛巾、浴巾與手巾可穩定命中無尺寸配件規則", () => {
     const managed = { rules: [{ name: "無尺寸配件", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "", scope: "R00", inventoryRole: "不可售展示", quantity: 1, priority: 50 }] };
     for (const name of ["純棉毛巾", "長絨棉浴巾", "隨身手巾"]) expect(core.stockRule({ name }, managed)).toMatchObject({ name: "無尺寸配件", quantity: 1 });
@@ -300,6 +313,13 @@ describe("展示與最低庫存管理規則", () => {
       { name: "無尺寸配件", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "無尺寸", itemTypeKeywords: "", scope: "R00、R06", inventoryRole: "不可售展示", quantity: 1, priority: 60 }
     ] };
     for (const record of [
+      { sku: "L50037", name: "26ss 熊冷墊-單人 [Soft Beige]", mainCategory: "床墊", size: "均碼" },
+      { sku: "L50038", name: "26ss 熊冷墊-雙人 [Soft Beige]", mainCategory: "床墊", size: "均碼" },
+      { sku: "L50039", name: "26ss 熊冷墊-加大 [Soft Beige]", mainCategory: "床墊", size: "均碼" },
+      { sku: "L50040", name: "26ss 熊冷墊-特大 [Soft Beige]", mainCategory: "床墊", size: "均碼" },
+      { sku: "L50041", name: "26ss 熊冷墊-沙發70×70cm [Soft Beige]", mainCategory: "床墊", size: "均碼" },
+      { sku: "L50042", name: "26ss 熊冷墊-沙發70×120cm [Soft Beige]", mainCategory: "床墊", size: "均碼" },
+      { sku: "L50043", name: "26ss 熊冷墊-沙發70×180cm [Soft Beige]", mainCategory: "床墊", size: "均碼" },
       { sku: "F13053", name: "PINGU™ x 熊冷被(大) [Let’s Go Fishing]", mainCategory: "家飾品", size: "均碼" },
       { sku: "F13058", name: "26ss 熊冷被 [Soft Beige]", mainCategory: "家飾品", size: "均碼" },
       { sku: "F13059", name: "春浪 x 熊冷涼毯", mainCategory: "家飾品", size: "均碼" },
@@ -308,12 +328,33 @@ describe("展示與最低庫存管理規則", () => {
     ]) expect(core.stockRule(record, managed)).toMatchObject({ name: "有尺寸配件", quantity: 1 });
 
     for (const record of [
+      { sku: "L64027", name: "沐浴擦澡球 [杏色]", mainCategory: "其他", size: "均碼" },
+      { sku: "L64028", name: "沐浴擦澡球 [灰色]", mainCategory: "其他", size: "均碼" },
+      { sku: "L67012", name: "中筒襪S", mainCategory: "鞋襪", size: "均碼" },
+      { sku: "L67013", name: "中筒襪M", mainCategory: "鞋襪", size: "均碼" },
+      { sku: "L67014", name: "中筒襪L", mainCategory: "鞋襪", size: "均碼" },
+      { sku: "N00097", name: "造型髮帶", mainCategory: "", size: "均碼" },
+      { sku: "N44031", name: "抗菌洗衣膠囊", mainCategory: "其他", size: "均碼" },
+      { sku: "N44032", name: "香氛洗衣膠囊", mainCategory: "", size: "均碼" },
+      { sku: "H20054", name: "抗菌純棉雙面兒童睡袋", mainCategory: "睡袋", size: "均碼" },
+      { sku: "H20055", name: "抗菌純棉雙面兒童睡袋", mainCategory: "睡袋", size: "均碼" },
+      { sku: "H20056", name: "抗菌純棉雙面兒童睡袋", mainCategory: "睡袋", size: "均碼" },
+      { sku: "H20057", name: "抗菌純棉雙面兒童睡袋", mainCategory: "睡袋", size: "均碼" },
       { sku: "L63001-1", name: "聯名品牌眼罩 [夏日蔚藍]", mainCategory: "家飾品", size: "均碼" },
       { sku: "L63004", name: "聯名品牌束口袋 [夏日蔚藍]", mainCategory: "家飾品", size: "均碼" },
       { sku: "L67003", name: "可水洗鞋袋 [野花草]", mainCategory: "家飾品", size: "均碼" },
       { sku: "L66004", name: "伸縮票卡零錢包", mainCategory: "家飾品", size: "均碼" },
       { sku: "N43003", name: "香氛空氣噴霧 100ml", mainCategory: "家飾品", size: "均碼" }
     ]) expect(core.stockRule(record, managed)).toMatchObject({ name: "無尺寸配件", quantity: 1 });
+  });
+
+  it("D101087-N以枕套商品本身判斷，不因說明含被套而被排除", () => {
+    const managed = { rules: [
+      { name: "枕套2入組", enabled: true, scope: "R00、R06", inventoryRole: "不可售展示", quantity: 1, priority: 80 },
+      { name: "無尺寸配件", enabled: true, conditionMode: "structured", productCategory: "配件", sizeAttribute: "無尺寸", scope: "R00、R06", inventoryRole: "不可售展示", quantity: 1, priority: 50 }
+    ] };
+    expect(core.stockRule({ sku: "D101087-N", name: "枕套2入(刺繡同被套)", mainCategory: "枕套", size: "均碼" }, managed))
+      .toMatchObject({ name: "枕套2入組", role: "不可售展示", quantity: 1 });
   });
 
   it("特殊展示與單店地墊不會被一般配件規則擴大套用", () => {

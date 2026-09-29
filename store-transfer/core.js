@@ -118,6 +118,7 @@
   function builtInStockRule(record, storeInventory) {
     const value = normalizeName(`${record?.name || ""} ${record?.size || ""}`);
     const categoryValue = normalizeName(`${record?.mainCategory || ""} ${record?.style1 || ""} ${record?.style2 || ""}`);
+    const isPillowcaseProduct = /枕套|枕頭套/.test(normalizeName(record?.mainCategory)) || /^(?:\[[^\]]+\])?(?:枕套|枕頭套)/.test(value);
     const isQuilt = !/被套/.test(value) && /被胎|棉被|被子|夏季被|四季被|涼被|羽絨被|羊毛被|蠶絲被|機能被|舒眠被|冷被|暖被/.test(value);
     const isNonStandardAccessoryBlanket = /熊冷被|涼毯|蓋毯/.test(value);
     if (isQuilt) {
@@ -132,11 +133,11 @@
       ? { name: "6×7尺雙人薄被套天絲／華爾紗／純棉／精梳純棉", legacyNames: ["6×7尺雙人薄被套天絲／華爾紗"], role: "可售最低庫存", quantity: 1, scope: "近42天有該品號現場銷售的營運門市", note: "天絲／華爾紗／純棉／精梳純棉雙人薄被套最低1件" }
       : { name: "6×7尺雙人薄被套一般材質", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "雙人薄被套展示1件" }, storeInventory);
     if (/6x7尺.*兩用被套/.test(value)) return configuredRule({ name: "6×7尺雙人兩用被套", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "雙人兩用被套展示1件" }, storeInventory);
-    if (/床包|被套/.test(value)) return null;
-    if (/抱枕|靠枕/.test(value)) return configuredRule({ name: "抱枕、靠枕及相關套件", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "抱枕／靠枕展示1件" }, storeInventory);
-    if (/枕套|枕頭套/.test(value)) return configuredRule(/(?:2|二|兩)(?:入|個|只|件|枚)|一對|x2(?:\D|$)/i.test(value)
+    if (isPillowcaseProduct) return configuredRule(/(?:2|二|兩)(?:入|個|只|件|枚)|一對|x2(?:\D|$)/i.test(value)
       ? { name: "枕套2入組", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "枕套2入組展示1組" }
       : { name: "枕套1入／單入", role: "不可售展示", quantity: 2, scope: "R00、R06", note: "單入枕套展示2件" }, storeInventory);
+    if (/床包|被套/.test(value)) return null;
+    if (/抱枕|靠枕/.test(value)) return configuredRule({ name: "抱枕、靠枕及相關套件", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "抱枕／靠枕展示1件" }, storeInventory);
     if (/枕頭|枕芯|乳膠枕|羽絨枕|鵝絨枕|記憶枕|水洗枕|舒眠枕|柔眠枕|軟枕|硬枕|午安枕|午睡枕|體驗枕|頸枕|好眠枕|忘憂枕|抗菌枕/.test(value) || /枕頭|枕芯/.test(categoryValue)) return configuredRule({ name: "枕頭／枕芯", role: "不可售展示", quantity: 2, scope: "R00、R06", note: "枕頭／枕芯展示2件" }, storeInventory);
     if (/\d+(?:\.\d+)?(?:尺|cm|公分)|\d+(?:\.\d+)?x\d+(?:\.\d+)?/i.test(value)) return configuredRule({ name: "有尺寸配件", role: "不可售展示", quantity: 1, scope: "R00、R06", note: "有尺寸配件展示1件" }, storeInventory);
     return null;
@@ -153,10 +154,11 @@
     };
     const categorySource = `${fields.mainCategory}${fields.style1}${fields.style2}`;
     const itemSource = `${categorySource}${fields.name}${fields.sizeGroup}${fields.size}`;
-    const isKnownNoSize = /枕套|枕頭套|枕頭|枕芯|乳膠枕|羽絨枕|鵝絨枕|記憶枕|水洗枕|舒眠枕|柔眠枕|軟枕|硬枕|午安枕|午睡枕|體驗枕|頸枕|好眠枕|忘憂枕|抗菌枕|抱枕|靠枕|毛巾|浴巾|手巾|方巾/.test(itemSource);
+    const isBearCoolingPad = /熊冷墊/.test(itemSource);
+    const isKnownNoSize = /枕套|枕頭套|枕頭|枕芯|乳膠枕|羽絨枕|鵝絨枕|記憶枕|水洗枕|舒眠枕|柔眠枕|軟枕|硬枕|午安枕|午睡枕|體驗枕|頸枕|好眠枕|忘憂枕|抗菌枕|抱枕|靠枕|毛巾|浴巾|手巾|方巾|擦澡球|中筒襪|髮帶|洗衣膠囊|兒童睡袋/.test(itemSource);
     const hasBedDimension = /(?<![\dx*.])(?:3\.5|5|6|7)尺|6x7尺|\d+(?:\.\d+)?(?:cm|公分)|\d+(?:\.\d+)?x\d+(?:\.\d+)?/i.test(`${fields.sizeGroup}${fields.size}${fields.name}`);
-    const hasAccessorySize = /熊冷被|涼毯|蓋毯|單人|沙發|(?:M|L|XL|XXL)號|(?:大|小)(?:號|款|尺寸|[\]】)）]|$)/i.test(`${fields.sizeGroup}${fields.size}${fields.name}`);
-    const isGeneralAccessory = /圍裙|坐墊|眼罩|萬年曆|束口袋|抓板|票卡|零錢包|室內鞋|室內拖鞋|拖鞋|鞋袋|香氛|空氣噴霧|熊冷被|涼毯|蓋毯/.test(itemSource);
+    const hasAccessorySize = isBearCoolingPad || /熊冷被|涼毯|蓋毯|單人|沙發|(?:M|L|XL|XXL)號|(?:大|小)(?:號|款|尺寸|[\]】)）]|$)/i.test(`${fields.sizeGroup}${fields.size}${fields.name}`);
+    const isGeneralAccessory = /圍裙|坐墊|眼罩|萬年曆|束口袋|抓板|票卡|零錢包|室內鞋|室內拖鞋|拖鞋|鞋袋|香氛|空氣噴霧|熊冷被|熊冷墊|涼毯|蓋毯/.test(itemSource);
     const isProtectedStandardQuilt = !/被套/.test(itemSource) && /被胎|棉被|被子|夏季被|四季被|涼被|羽絨被|羊毛被|蠶絲被|機能被|舒眠被|冷被|暖被/.test(itemSource) && /(?:4\.5x6\.5|8x7)尺/.test(itemSource) && !/熊冷被|涼毯|蓋毯/.test(itemSource);
     let productCategory = "";
     if (/床包/.test(itemSource)) productCategory = "床包";
@@ -246,7 +248,7 @@
   function excludedFromRegularTransfer(record) {
     const value = normalizeName(`${record?.name || ""} ${record?.size || ""}`);
     const category = String(record?.style1 || "");
-    return /贈品|運費|客製|代工|拍照樣|拍攝樣|樣品|耗材|保費|折扣|折價|蝦幣|手續費|服務費|商品券/i.test(value) || /贈品|輔料|客製/.test(category);
+    return /贈品|運費|客製|代工|拍照樣|拍攝樣|樣品|展示品|展示專用|耗材|保費|折扣|折價|蝦幣|手續費|服務費|商品券/i.test(value) || /贈品|輔料|客製/.test(category);
   }
 
   function daysBetween(value, latest) {
