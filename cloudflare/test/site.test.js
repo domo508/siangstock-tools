@@ -257,8 +257,34 @@ describe("前台導覽", () => {
     expect(html).toContain('id="comparison-download-buttons"');
     expect(app).toContain('data-download-comparison');
     expect(app).toContain('buildComparisonWorkbook');
-    expect(core).toContain('"調撥差異分析"');
+    expect(core).toContain('XLSX.utils.book_append_sheet(workbook, worksheet, section)');
+    expect(core).toContain('三個比較區塊分頁顯示');
     expect(core).toContain('buildComparisonReport');
+  });
+
+  it("A/B差異分析把三個比較區塊分成獨立頁籤", () => {
+    const transferContext = loadBrowserScript("../store-transfer/core.js", { XLSX });
+    const transferCore = transferContext.StoreTransferCore;
+    const calculation = {
+      calculationMode: "comparison", proposalDate: "2026-09-29", latestSalesDate: "2026-09-24",
+      pendingTransferRows: [
+        { storeCode: "R00", status: "提交", sku: "BOTH", quantity: 1, documentCode: "T1" },
+        { storeCode: "R00", status: "提交", sku: "ONLY-B", quantity: 2, documentCode: "T2" }
+      ],
+      comparisonFacts: [
+        { storeCode: "R00", sku: "BOTH", productName: "共同品項", suggestedQuantity: 2, physicalInventory: 1, hqInventory: 5, displayQuantity: 0, inTransitQuantity: 0, localSales42: 2, dailySales: 1, baseSellableQuantity: 1, calculationDate: "2026-09-24", systemSellThroughDate: "2026-09-27", itemType: "regular" },
+        { storeCode: "R00", sku: "ONLY-A", productName: "系統品項", suggestedQuantity: 1, physicalInventory: 0, hqInventory: 5, displayQuantity: 0, inTransitQuantity: 0, localSales42: 1, dailySales: 1, baseSellableQuantity: 0, calculationDate: "2026-09-24", systemSellThroughDate: "2026-09-25", itemType: "regular" },
+        { storeCode: "R00", sku: "ONLY-B", productName: "人工品項", suggestedQuantity: 0, physicalInventory: 1, hqInventory: 5, displayQuantity: 0, inTransitQuantity: 0, localSales42: 0, dailySales: 0, baseSellableQuantity: 1, calculationDate: "2026-09-24", systemSellThroughDate: "近期無現場銷售", itemType: "regular" }
+      ]
+    };
+    const workbook = transferCore.buildComparisonWorkbook(calculation, XLSX, "R00", "台北中山門市");
+    expect(workbook.SheetNames).toEqual(["A、B都有", "僅A", "僅B"]);
+    for (const sheetName of workbook.SheetNames) {
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: true });
+      expect(rows[9][0]).toContain(sheetName);
+      expect(rows[10]).toEqual(expect.arrayContaining(["ERP品號", "系統建議量(A)", "人工調撥量(B)"]));
+    }
+    expect(workbook.Sheets["A、B都有"].K12.f).toBe("J12-I12");
   });
 
   it("A/B差異可發布共用協作批次，且僅兩個指定帳號可轉正式", () => {

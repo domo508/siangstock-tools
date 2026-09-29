@@ -1006,41 +1006,42 @@
   function buildComparisonWorkbook(calculation, XLSX, storeCode, storeName) {
     const report = buildComparisonReport(calculation, storeCode, storeName);
     const workbook = XLSX.utils.book_new();
-    const worksheet = {};
-    const merges = [];
-    const set = (address, value, style) => { worksheet[address] = { v: value, t: typeof value === "number" ? "n" : "s", ...(style ? { s: style } : {}) }; };
-    const merge = (range) => merges.push(XLSX.utils.decode_range(range));
     const titleStyle = { fill: { fgColor: { rgb: "15344A" } }, font: { name: "Arial", bold: true, color: { rgb: "FFFFFF" }, sz: 18 }, alignment: { vertical: "center" } };
     const infoStyle = { fill: { fgColor: { rgb: "EEF3F6" } }, font: { name: "Arial", color: { rgb: "36566C" }, sz: 10 }, alignment: { vertical: "center" } };
     const kpiStyle = { fill: { fgColor: { rgb: "B58B2A" } }, font: { name: "Arial", bold: true, color: { rgb: "FFFFFF" }, sz: 11 }, alignment: { horizontal: "center", vertical: "center" } };
     const kpiNoteStyle = { fill: { fgColor: { rgb: "FFF6D9" } }, font: { name: "Arial", color: { rgb: "6D5720" }, sz: 9 }, alignment: { horizontal: "center", vertical: "center" } };
-    merge("A1:O2"); set("A1", `${report.storeName}｜本週調撥建議差異分析`, titleStyle);
-    merge("A3:O3"); set("A3", `A＝本次A/B模式系統獨立建議（建議日 ${report.proposalDate}）　｜　B＝匯入調撥單中狀態為「提交」的人工調撥`, infoStyle);
-    [["A","C",`A、B都有｜${report.summary.both} 項`,"共同品項，重點看數量差"],["D","F",`僅A｜${report.summary.onlyA} 項`,"系統有建議、人工未開"],["G","I",`僅B｜${report.summary.onlyB} 項`,"人工有開、系統未建議"],["J","L",`A建議總量｜${report.summary.totalA} 件`,"系統獨立建議量"],["M","O",`B手動總量｜${report.summary.totalB} 件`,"提交狀態人工調撥量"]].forEach(([left,right,label,note]) => { merge(`${left}5:${right}5`); merge(`${left}6:${right}6`); set(`${left}5`, label, kpiStyle); set(`${left}6`, note, kpiNoteStyle); });
-    merge("A8:O8"); set("A8", `口徑：A/B模式完全排除「提交」調撥對門市需求與總倉可用量的影響；未完成調入量僅包含「發貨審核」在途量。近42天門市銷售截止 ${report.latestSalesDate}；B為匯入檔內提交狀態人工調撥量。`, { fill: { fgColor: { rgb: "F7F1E5" } }, font: { name: "Arial", color: { rgb: "5C5140" }, sz: 9 }, alignment: { wrapText: true, vertical: "center" } });
-    let nextRow = 10;
-    const sections = [["A、B都有","第一區：A、B都有品項","237A76"],["僅A","第二區：僅A有的品項","B07A1A"],["僅B","第三區：僅B有的品項","A64B5A"]];
+    const sections = [["A、B都有","A、B都有品項","237A76"],["僅A","僅A有的品項","B07A1A"],["僅B","僅B有的品項","A64B5A"]];
     for (const [section, label, color] of sections) {
+      const worksheet = {};
+      const merges = [];
+      const set = (address, value, style) => { worksheet[address] = { v: value, t: typeof value === "number" ? "n" : "s", ...(style ? { s: style } : {}) }; };
+      const merge = (range) => merges.push(XLSX.utils.decode_range(range));
       const sectionRows = report.rows.filter((row) => row.section === section);
-      merge(`A${nextRow}:O${nextRow}`); set(`A${nextRow}`, `${label}｜${sectionRows.length} 項`, { fill: { fgColor: { rgb: color } }, font: { name: "Arial", bold: true, color: { rgb: "FFFFFF" }, sz: 12 }, alignment: { vertical: "center" } });
-      nextRow += 1;
-      COMPARISON_COLUMNS.forEach((column, index) => set(XLSX.utils.encode_cell({ r: nextRow - 1, c: index }), column, { fill: { fgColor: { rgb: "E7EFF3" } }, font: { name: "Arial", bold: true, color: { rgb: "15344A" }, sz: 10 }, alignment: { wrapText: true, horizontal: "center", vertical: "center" } }));
-      nextRow += 1;
-      if (!sectionRows.length) { merge(`A${nextRow}:O${nextRow}`); set(`A${nextRow}`, "本區無品項", { font: { name: "Arial", italic: true, color: { rgb: "6B7F8E" } } }); nextRow += 2; continue; }
+      merge("A1:O2"); set("A1", `${report.storeName}｜本週調撥建議差異分析｜${section}`, titleStyle);
+      merge("A3:O3"); set("A3", `A＝本次A/B模式系統獨立建議（建議日 ${report.proposalDate}）　｜　B＝匯入調撥單中狀態為「提交」的人工調撥`, infoStyle);
+      [["A","C",`A、B都有｜${report.summary.both} 項`,"共同品項，重點看數量差"],["D","F",`僅A｜${report.summary.onlyA} 項`,"系統有建議、人工未開"],["G","I",`僅B｜${report.summary.onlyB} 項`,"人工有開、系統未建議"],["J","L",`A建議總量｜${report.summary.totalA} 件`,"系統獨立建議量"],["M","O",`B手動總量｜${report.summary.totalB} 件`,"提交狀態人工調撥量"]].forEach(([left,right,kpiLabel,note]) => { merge(`${left}5:${right}5`); merge(`${left}6:${right}6`); set(`${left}5`, kpiLabel, kpiStyle); set(`${left}6`, note, kpiNoteStyle); });
+      merge("A8:O8"); set("A8", `口徑：A/B模式完全排除「提交」調撥對門市需求與總倉可用量的影響；未完成調入量僅包含「發貨審核」在途量。近42天門市銷售截止 ${report.latestSalesDate}；B為匯入檔內提交狀態人工調撥量。三個比較區塊分頁顯示，本頁為「${section}」。`, { fill: { fgColor: { rgb: "F7F1E5" } }, font: { name: "Arial", color: { rgb: "5C5140" }, sz: 9 }, alignment: { wrapText: true, vertical: "center" } });
+      merge("A10:O10"); set("A10", `${label}｜${sectionRows.length} 項`, { fill: { fgColor: { rgb: color } }, font: { name: "Arial", bold: true, color: { rgb: "FFFFFF" }, sz: 12 }, alignment: { vertical: "center" } });
+      COMPARISON_COLUMNS.forEach((column, index) => set(XLSX.utils.encode_cell({ r: 10, c: index }), column, { fill: { fgColor: { rgb: "E7EFF3" } }, font: { name: "Arial", bold: true, color: { rgb: "15344A" }, sz: 10 }, alignment: { wrapText: true, horizontal: "center", vertical: "center" } }));
+      let nextRow = 12;
+      if (!sectionRows.length) {
+        merge("A12:O12");
+        set("A12", "本頁無品項", { font: { name: "Arial", italic: true, color: { rgb: "6B7F8E" } } });
+        nextRow = 13;
+      }
       for (const row of sectionRows) {
         const values = [row.section,row.sku,row.productName,row.physicalInventory,row.hqInventory,row.displayQuantity,row.pendingQuantity,row.localSales42,row.aQuantity,row.bQuantity,row.difference,row.aProjection,row.bProjection,row.itemType,row.analysis];
         values.forEach((value, index) => set(XLSX.utils.encode_cell({ r: nextRow - 1, c: index }), value, { font: { name: "Arial", sz: 10, color: { rgb: "243746" } }, alignment: { wrapText: true, vertical: "top", horizontal: index >= 3 && index <= 12 ? "center" : "left" }, fill: index >= 3 && index <= 7 ? { fgColor: { rgb: "EAF4F7" } } : index >= 11 && index <= 12 ? { fgColor: { rgb: "FFF5D9" } } : index === 14 ? { fgColor: { rgb: "F2F7F9" } } : undefined }));
         worksheet[`K${nextRow}`] = { f: `J${nextRow}-I${nextRow}`, t: "n", v: row.difference, s: worksheet[`K${nextRow}`].s };
         nextRow += 1;
       }
-      nextRow += 1;
+      worksheet["!ref"] = `A1:O${Math.max(12, nextRow - 1)}`;
+      worksheet["!merges"] = merges;
+      worksheet["!cols"] = [14,15,38,13,13,13,13,13,13,13,13,20,20,16,50].map((wch) => ({ wch }));
+      worksheet["!rows"] = Array.from({ length: Math.max(12, nextRow) }, (_value, index) => ({ hpt: index < 2 ? 27 : index === 7 ? 58 : 25 }));
+      worksheet["!freeze"] = { xSplit: 0, ySplit: 11, topLeftCell: "A12", activePane: "bottomLeft", state: "frozen" };
+      XLSX.utils.book_append_sheet(workbook, worksheet, section);
     }
-    worksheet["!ref"] = `A1:O${Math.max(1, nextRow - 1)}`;
-    worksheet["!merges"] = merges;
-    worksheet["!cols"] = [14,15,38,13,13,13,13,13,13,13,13,20,20,16,50].map((wch) => ({ wch }));
-    worksheet["!rows"] = Array.from({ length: nextRow }, (_, index) => ({ hpt: index < 2 ? 27 : index === 7 ? 58 : 25 }));
-    worksheet["!freeze"] = { xSplit: 0, ySplit: 3, topLeftCell: "A4", activePane: "bottomLeft", state: "frozen" };
-    XLSX.utils.book_append_sheet(workbook, worksheet, "調撥差異分析");
     return workbook;
   }
 
