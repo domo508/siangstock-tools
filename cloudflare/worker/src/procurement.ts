@@ -319,7 +319,7 @@ async function config(request: Request, env: ProcurementEnv): Promise<Response> 
     notification: role === "admin"
       ? { recipient: settings.notificationRecipient, retentionMonths: settings.retentionMonths, events: settings.notificationEvents }
       : { enabled: true, recipient: settings.notificationRecipient },
-    permissions: { canApprove: role === "admin" || role === "approver", canManageRules: role === "admin" || role === "approver", canManageAccess: role === "admin", canManageBudget: role === "admin", canManageCollaborationDrafts: role === "admin" || role === "approver" }
+    permissions: { canApprove: role === "admin" || role === "approver", canManageRules: role === "admin" || role === "approver", canManageAccess: role === "admin", canManageBudget: role === "admin" || role === "approver", canManageCollaborationDrafts: role === "admin" || role === "approver" }
   });
 }
 
@@ -884,7 +884,7 @@ async function monthPlan(request: Request, env: ProcurementEnv): Promise<Respons
 
 async function saveMonthPlan(request: Request, env: ProcurementEnv): Promise<Response> {
   requireSameOrigin(request, env);
-  const actor = await verifyAdmin(request, { ...procurementAccess(env), ADMIN_EMAILS: ADMIN_EMAIL });
+  const { email: actor } = await verifyApprover(request, env);
   const input = await body(request);
   const analysisMonth = month(input.analysisMonth);
   const revenueChannels = Array.isArray(input.revenueChannels) ? input.revenueChannels : [];

@@ -1670,8 +1670,8 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20260926-erp-supplier-r2');
-    expect(toolHtml).toContain('app.js?v=20260926-erp-supplier-r2');
+    expect(toolHtml).toContain('core.js?v=20260930-budget-approver-r1');
+    expect(toolHtml).toContain('app.js?v=20260930-budget-approver-r1');
     expect(toolHtml).toContain("新品首批採購");
     expect(toolHtml).toContain("人工匯入採購單");
     expect(toolHtml).toContain("補登已採購單");
@@ -1683,7 +1683,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260926-erp-supplier-r2");
+    expect(toolHtml).toContain("20260930-budget-approver-r1");
     expect(toolApp).toContain("state.postedOrderFiles.length && state.config?.permissions?.canApprove");
     expect(toolApp).toContain("state.parsedSources?.master");
     expect(toolApp).toContain("可直接檢查並補登，不必先產生採購建議");
@@ -1706,6 +1706,12 @@ describe("採購規劃前台與入口", () => {
     expect(procurementWorker).toContain('/api/procurement/collaboration-drafts');
     expect(toolApp).toContain("canManageCollaborationDrafts");
     expect(procurementWorker).toContain('canManageCollaborationDrafts: role === "admin" || role === "approver"');
+    expect(procurementWorker).toContain('canManageBudget: role === "admin" || role === "approver"');
+    expect(procurementWorker).toContain('async function saveMonthPlan(request: Request, env: ProcurementEnv): Promise<Response> {');
+    expect(procurementWorker).toMatch(/async function saveMonthPlan[\s\S]*?const \{ email: actor \} = await verifyApprover\(request, env\);/);
+    expect(toolApp).toContain("採購核准者或最高權限可儲存為公司共用月份快照");
+    expect(toolApp).toContain("element.disabled = !canManageBudget");
+    expect(toolHtml).toContain('id="forecast-revenue" type="number" min="0" step="1" value="0" disabled');
     expect(procurementWorker).not.toContain('只有最高權限可以移出公司共用協作草稿');
     expect(toolApp).toContain("母批次・固定置頂");
     expect(toolApp).toContain("function detachChildSharedIdentity");

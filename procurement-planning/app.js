@@ -1507,8 +1507,10 @@
         elements.sourceStatus.textContent = "Cloudflare 尚未設定 GOOGLE_OAUTH_CLIENT_ID；自動來源與郵件暫停。";
         elements.sourceStatus.classList.add("error");
       }
-      elements.saveBudget.disabled = !state.config.permissions?.canManageBudget;
-      elements.addChannel.disabled = !state.config.permissions?.canManageBudget;
+      const canManageBudget = state.config.permissions?.canManageBudget === true;
+      elements.saveBudget.disabled = !canManageBudget;
+      elements.addChannel.disabled = !canManageBudget;
+      [elements.forecastRevenue, elements.releasedBudget, elements.budgetSourceNote].forEach((element) => { element.disabled = !canManageBudget; });
       await Promise.all([loadProcurementRules(), loadLedger(), loadMonthPlan(), loadStoreShortageNeeds(), loadSharedWorkflowDrafts()]);
       await loadCostSnapshot();
     } catch (error) {
@@ -2269,7 +2271,7 @@
     state.budgetDirty = true;
     elements.budgetPlanStatus.textContent = state.config?.permissions?.canManageBudget
       ? "通路預估或月份額度有尚未儲存的變更；儲存後其他使用者才會讀到。"
-      : "目前是本頁暫算；只有siang01可儲存為公司共用月份快照。";
+      : "目前是本頁暫算；採購核准者或最高權限可儲存為公司共用月份快照。";
     renderBudget();
   }
   async function saveMonthPlan() {
