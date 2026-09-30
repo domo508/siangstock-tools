@@ -1670,8 +1670,8 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20260930-revenue-template-r2');
-    expect(toolHtml).toContain('app.js?v=20260930-revenue-template-r2');
+    expect(toolHtml).toContain('core.js?v=20260930-month-end-r1');
+    expect(toolHtml).toContain('app.js?v=20260930-month-end-r1');
     expect(toolHtml).toContain("新品首批採購");
     expect(toolHtml).toContain("人工匯入採購單");
     expect(toolHtml).toContain("補登已採購單");
@@ -1683,7 +1683,10 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260930-revenue-template-r2");
+    expect(toolHtml).toContain("20260930-month-end-r1");
+    expect(toolHtml).toContain('id="month-end-panel"');
+    expect(toolApp).toContain("執行月底結算驗證");
+    expect(toolApp).toContain("sendMonthEndReport");
     expect(toolApp).toContain("state.postedOrderFiles.length && state.config?.permissions?.canApprove");
     expect(toolApp).toContain("state.parsedSources?.master");
     expect(toolApp).toContain("可直接檢查並補登，不必先產生採購建議");
@@ -1854,6 +1857,22 @@ describe("採購規劃前台與入口", () => {
     expect(summary.pendingQuantity).toBe(20);
     expect(summary.pendingAmount).toBe(2000);
     expect(summary.duplicateRows).toBe(1);
+  });
+
+  it("月底驗證輸出七頁籤且不混入採購建議流程", () => {
+    const workbook = core.buildMonthEndWorkbook({
+      analysisMonth: "2026-09",
+      dates: { inventory: "2026-09-30", pending: "2026-09-30", transfer: "2026-09-30", sales: "2026-09-30" },
+      costSummary: { managementCostToDate: 2500000, forecastCost: 2500000, actualReceiptCost: 757723.68, directCost: 1800000, kuanmuBaseCost: 700000, kuanmuIntercompanyRevenue: 777000, currentInventoryCost: 5200000, openingInventoryCost: 6900000, supplierReturns: 0, inventoryBridgeCost: 2457723.68, maxSalesDate: "2026-09-30", warnings: [] },
+      purchaseSummary: { draftDocumentCount: 0 },
+      ledger: { totals: { committedAmount: 1841305.2, currentMonthPayment: 900000, futureMonthPayments: 941305.2 }, batches: [], reconciliations: [] },
+      validation: { dateCheck: { status: "PASS", message: "來源日期相差0天，可進行同時點判斷。" }, rows: [] }
+    }, XLSX);
+    expect(workbook.SheetNames).toEqual([
+      "01_月底結算摘要", "02_成本耗用明細", "03_採購額度與承諾", "04_庫存橋接驗證", "05_採購與ERP差異", "06_異常與待處理事項", "07_下月參考缺口"
+    ]);
+    const summaryRows = XLSX.utils.sheet_to_json(workbook.Sheets["01_月底結算摘要"], { header: 1 });
+    expect(summaryRows.flat().join("｜")).toContain("不產生採購建議");
   });
 
   it("分供應商ERP結案保留各自單號並連動協作批次", () => {

@@ -175,6 +175,55 @@
     return response.json();
   }
 
+  function bytesToBase64(bytes) {
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+    }
+    return btoa(binary);
+  }
+
+  async function sendMonthEndReport(recipient, summary, fileName, reportBytes) {
+    const boundary = `siang-month-end-${Date.now()}`;
+    const subject = `【翔仔居家】${summary.analysisMonth}月底結算驗證報表`;
+    const reportBase64 = bytesToBase64(reportBytes instanceof Uint8Array ? reportBytes : new Uint8Array(reportBytes));
+    const content = [
+      `To: ${recipient}`,
+      `Subject: =?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`,
+      "MIME-Version: 1.0",
+      `Content-Type: multipart/mixed; boundary=\"${boundary}\"`,
+      "",
+      `--${boundary}`,
+      "Content-Type: text/plain; charset=UTF-8",
+      "Content-Transfer-Encoding: 8bit",
+      "",
+      `${summary.analysisMonth}月底結算驗證已完成。`,
+      `執行者：${summary.completedBy || ""}`,
+      `資料截止日：${summary.dataAsOfDate || ""}`,
+      `本月至今成本耗用：${Number(summary.managementCostToDate || 0).toLocaleString("zh-TW", { style: "currency", currency: "TWD" })}`,
+      `整月預估成本耗用：${Number(summary.forecastCost || 0).toLocaleString("zh-TW", { style: "currency", currency: "TWD" })}`,
+      `本月實際收貨成本：${Number(summary.actualReceiptCost || 0).toLocaleString("zh-TW", { style: "currency", currency: "TWD" })}`,
+      `截至目前正式承諾：${Number(summary.committedAmount || 0).toLocaleString("zh-TW", { style: "currency", currency: "TWD" })}`,
+      `待處理警示：${Number(summary.warningCount || 0)}項`,
+      "附件為本次月底結算驗證Excel；本流程不會產生採購建議或採購批次。",
+      "",
+      `--${boundary}`,
+      "Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Transfer-Encoding: base64",
+      `Content-Disposition: attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+      "",
+      reportBase64.match(/.{1,76}/g)?.join("\r\n") || reportBase64,
+      `--${boundary}--`
+    ].join("\r\n");
+    const response = await googleFetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw: base64Url(content) })
+    });
+    return response.json();
+  }
+
   async function sha256(value) {
     const bytes = value instanceof ArrayBuffer ? value : new TextEncoder().encode(String(value));
     const digest = await global.crypto.subtle.digest("SHA-256", bytes);
@@ -313,7 +362,7 @@
 
   global.ProcurementGoogleSources = {
     initialize, authorize, verifyCompanyIdentity, loadAll, token,
-    downloadDriveFile, listDriveExcelFiles, loadLatestMaster, loadLatestApprovedModel, uploadDriveExcel, sendSeasonalModelSummary,
+    downloadDriveFile, listDriveExcelFiles, loadLatestMaster, loadLatestApprovedModel, uploadDriveExcel, sendSeasonalModelSummary, sendMonthEndReport,
     selectSpreadsheetSheetTitle
   };
 })(typeof globalThis !== "undefined" ? globalThis : window);

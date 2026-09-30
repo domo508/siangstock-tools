@@ -3581,6 +3581,91 @@
     return workbook;
   }
 
+  function buildMonthEndWorkbook(input, XLSX) {
+    const workbook = XLSX.utils.book_new();
+    const summary = input.costSummary || {};
+    const purchase = input.purchaseSummary || {};
+    const ledger = input.ledger || { totals: {}, batches: [], reconciliations: [] };
+    const validation = input.validation || { rows: [], totals: {}, dateCheck: {} };
+    const month = String(input.analysisMonth || summary.month || "");
+    const dates = input.dates || {};
+    const currency = (value) => Number(value || 0);
+    const addSheet = (name, rows, widths, summaryStyle = false) => {
+      const sheet = XLSX.utils.aoa_to_sheet(rows);
+      setColumnWidths(sheet, widths);
+      if (summaryStyle) applySummaryCis(sheet, XLSX); else { addAutoFilter(sheet); applyTableCis(sheet, XLSX); }
+      XLSX.utils.book_append_sheet(workbook, sheet, name);
+    };
+
+    addSheet("01_月底結算摘要", [
+      ["翔仔居家月底結算驗證"],
+      ["分析月份", month],
+      ["資料截止日", [dates.inventory, dates.pending, dates.transfer, dates.sales].filter(Boolean).sort().at(-1) || ""],
+      ["流程說明", "只做結算驗證與資料產出，不產生採購建議、不建立採購批次、不占用採購額度。"],
+      [],
+      ["指標", "金額／結果", "說明"],
+      ["本月至今成本耗用", currency(summary.managementCostToDate), "寬承直接成本＋寬沐供貨原始成本"],
+      ["整月預估成本耗用", currency(summary.forecastCost), "依本月實際成本日均推估"],
+      ["本月實際收貨成本", currency(summary.actualReceiptCost), "依採購單實際交貨日"],
+      ["截至目前正式承諾", currency(ledger.totals?.committedAmount), "公司共用採購台帳"],
+      ["本月預計付款", currency(ledger.totals?.currentMonthPayment), "依已核准批次付款月份"],
+      ["未來月份已承諾付款", currency(ledger.totals?.futureMonthPayments), "依已核准批次付款月份"],
+      ["來源日期檢核", validation.dateCheck?.status || "", validation.dateCheck?.message || ""]
+    ], [26, 22, 70], true);
+
+    addSheet("02_成本耗用明細", [
+      ["成本項目", "金額", "計算口徑"],
+      ["寬承直接銷售成本", currency(summary.directCost), "全部線上通路＋R00、R01"],
+      ["寬沐門市供貨原始成本", currency(summary.kuanmuBaseCost), "調撥收貨＋B3配對"],
+      ["寬承對寬沐計價參考", currency(summary.kuanmuIntercompanyRevenue), "原始成本×1.11；合併檢視時抵銷"],
+      ["本月至今成本耗用", currency(summary.managementCostToDate), "寬承直接成本＋寬沐供貨原始成本"],
+      ["整月預估成本耗用", currency(summary.forecastCost), `本月資料截至${summary.maxSalesDate || "未辨識"}`],
+      ["本月實際收貨成本", currency(summary.actualReceiptCost), "只計實際交貨日落在本月"],
+      ["目前寬承體系庫存成本", currency(summary.currentInventoryCost), "總倉＋R00＋R01"],
+      ["B3成功配對筆數", Number(summary.b3MatchedCount || 0), "來源單號＋ERP品號配對"],
+      ["寬沐調撥收貨筆數", Number(summary.transferReceivedCount || 0), "ERP狀態為收貨審核"]
+    ], [28, 20, 64]);
+
+    addSheet("03_採購額度與承諾", [
+      ["批次", "流程", "供應商", "狀態", "承諾金額", "本月付款", "未來付款", "ERP單號"],
+      ...(ledger.batches || []).map((row) => [row.id, row.workflow_type, (row.supplier_summary || []).join("、"), row.status, currency(row.approved_amount), currency(row.payment_current_month), currency(row.payment_future_months), row.erp_reference || ""]),
+      [],
+      ["台帳合計", "", "", "", currency(ledger.totals?.committedAmount), currency(ledger.totals?.currentMonthPayment), currency(ledger.totals?.futureMonthPayments), ""]
+    ], [30, 18, 34, 18, 18, 18, 18, 24]);
+
+    addSheet("04_庫存橋接驗證", [
+      ["項目", "金額", "狀態／說明"],
+      ["期初庫存成本", currency(summary.openingInventoryCost), summary.openingInventoryCost > 0 ? "已取得" : "尚缺月初庫存成本快照"],
+      ["本月實際收貨成本", currency(summary.actualReceiptCost), "加項"],
+      ["供應商退貨", currency(summary.supplierReturns), "減項"],
+      ["目前寬承體系庫存成本", currency(summary.currentInventoryCost), "減項"],
+      ["庫存公式推算成本耗用", summary.inventoryBridgeCost == null ? "待月初快照" : currency(summary.inventoryBridgeCost), "期初＋收貨－退貨－期末"],
+      ["銷售／流向管理成本", currency(summary.managementCostToDate), "寬承直接成本＋寬沐供貨原始成本"],
+      ["兩種口徑差異", summary.inventoryBridgeCost == null ? "待月初快照" : currency(summary.inventoryBridgeCost - summary.managementCostToDate), "供財務查核，不自動改帳"]
+    ], [30, 22, 68]);
+
+    addSheet("05_採購與ERP差異", [
+      ["ERP單號", "原批次", "狀態", "原承諾金額", "ERP目前金額", "差額", "差異項數", "原因"],
+      ...(ledger.reconciliations || []).map((row) => [row.erp_reference, row.batch_id, row.status, currency(row.amount_before), currency(row.amount_after), currency(row.amount_delta), Number(row.difference_count || 0), row.reason || "待確認"]),
+      ...(!(ledger.reconciliations || []).length ? [["本次沒有待確認ERP差異", "", "", "", "", "", 0, ""]] : [])
+    ], [24, 30, 16, 18, 18, 18, 14, 50]);
+
+    const warningRows = [
+      ...(summary.warnings || []).map((message) => ["成本驗證", message, "請確認後再完成月底結算"]),
+      ...(validation.dateCheck?.status !== "PASS" ? [["來源日期", validation.dateCheck?.message || "來源日期待確認", "請改用相近截止日資料"]] : []),
+      ...((ledger.reconciliations || []).map((row) => ["ERP差異", `${row.erp_reference}有${Number(row.difference_count || 0)}項差異`, "請先於ERP差異區確認"])),
+      ...(Number(purchase.draftDocumentCount || 0) > 0 ? [["採購草稿", `另有${Number(purchase.draftDocumentCount)}張新單／草稿，不計正式承諾`, "確認是否應轉主管審核"]] : [])
+    ];
+    addSheet("06_異常與待處理事項", [["類型", "內容", "建議處理"], ...(warningRows.length ? warningRows : [["無", "本次未發現阻擋性異常", "可完成月底結算"]])], [20, 72, 50]);
+
+    addSheet("07_下月參考缺口", [
+      ["ERP品號", "商品品名", "未到貨量", "目前公司庫存", "寄倉現貨", "排程後缺口", "備註"],
+      ...(validation.rows || []).filter((row) => Number(row.gapAfterSchedule || 0) > 0).map((row) => [row.sku, row.name, Number(row.pendingQty || 0), Number(row.inventoryQty || 0), Number(row.consignmentCurrentQty || 0), Number(row.gapAfterSchedule || 0), "只供下月資料準備參考；不是採購建議"]),
+      ...(!(validation.rows || []).some((row) => Number(row.gapAfterSchedule || 0) > 0) ? [["無", "本次沒有寄倉排程後缺口", "", "", "", 0, ""]] : [])
+    ], [18, 50, 14, 16, 14, 16, 48]);
+    return workbook;
+  }
+
   function recommendationSheetRows(rows, asOfDate) {
     const reportRows = rows.map((row) => {
       const storeInventoryQty = Object.values(row.storeInventoryByCode || {})
@@ -4525,6 +4610,7 @@
     validateSourceDates,
     buildAnalysis,
     buildOutputWorkbook,
+    buildMonthEndWorkbook,
     procurementWorkUnitForRow,
     listProcurementWorkUnits,
     rowMatchesProcurementWorkUnit,

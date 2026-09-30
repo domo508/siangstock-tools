@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20260930-revenue-template-r2">
+  <link rel="stylesheet" href="style.css?v=20260930-month-end-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -184,7 +184,7 @@
             <div>
               <p class="eyebrow">每次執行</p>
               <h3 id="manual-source-title">本次必要匯入</h3>
-              <p>庫存、全部狀態採購單、期間調撥單與近期銷售集中在此區；四類檔案都要選妥，才會開放產生採購建議。</p>
+              <p>庫存、全部狀態採購單、期間調撥單與近期銷售集中在此區；四類檔案都要選妥，才會開放本次計算。月底驗證只產生結算報表，不產生採購建議。</p>
             </div>
           </div>
           <div class="upload-grid procurement-sources manual-source-grid">
@@ -307,6 +307,25 @@
       <div class="result-alert warn" role="note"><strong>暫行權限例外：</strong>普優瑪與力榮寄庫表目前仍可能開放「知道連結的任何人可編輯」。因權限由供應商維護，本次先不阻擋部署；工具仍會逐次檢查來源格式、資料日期與內容雜湊，但此項尚未完成正式權限驗收。</div>
     </section>
 
+    <section id="month-end-panel" class="panel month-end-panel" aria-labelledby="month-end-title" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow"><span class="stage-number" aria-hidden="true">月底</span> 結算驗證</p><h2 id="month-end-title">月底只結算，不產生採購建議</h2></div>
+        <p>核對成本耗用、採購額度、ERP差異與庫存橋接；不建立採購批次，也不占用採購額度。</p>
+      </div>
+      <div id="month-end-summary" class="summary-grid procurement-summary" aria-live="polite"></div>
+      <div id="month-end-alert" class="result-alert" role="status">完成資料解析後，這裡會顯示月底驗證結果。</div>
+      <div class="month-end-actions">
+        <button id="month-end-download-button" class="secondary-button" type="button" disabled>下載月底結算驗證報表</button>
+        <button id="month-end-confirm-button" class="primary-button" type="button" disabled>確認結算並寄送報表</button>
+        <button id="month-end-retry-email-button" class="secondary-button" type="button" disabled>重寄月底報表</button>
+      </div>
+      <p id="month-end-status" class="main-status" role="status">請先選擇「月底驗證」並完成必要資料。</p>
+      <details class="month-end-output-list">
+        <summary>查看報表內容</summary>
+        <ol><li>月底結算摘要</li><li>成本耗用明細</li><li>採購額度與承諾</li><li>庫存橋接驗證</li><li>採購與ERP差異</li><li>異常與待處理事項</li><li>下月參考缺口</li></ol>
+      </details>
+    </section>
+
     <section id="result-panel" class="panel results stage-panel stage-two-results" aria-labelledby="result-title" hidden>
       <div class="section-heading">
         <div><p class="eyebrow"><span class="stage-number" aria-hidden="true">4</span> 建議與分批審核</p><h2 id="result-title">總部採購與工廠寄庫建議</h2></div>
@@ -360,7 +379,7 @@
       <p class="result-note">淨採購需求＝總部需求＋逐店扣除調撥後門市庫存的需求－調撥後總部可用庫存－未到貨採購。提交狀態保留調出量並預計入調入倉；發貨審核只補回調入倉在途量；收貨審核不重複調整。工廠寄倉不會被扣除。</p>
     </section>
 
-    <section class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
+    <section id="workflow-panel" class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
       <div class="section-heading"><div><p class="eyebrow"><span class="stage-number" aria-hidden="true">5</span> 回匯・核准・ERP</p><h2 id="workflow-title">人工回匯、需要時異動與正式核准</h2></div><p>可在原報表新增品號，只填ERP品號、人工量與原因；工具會以同一計算批次補齊資料。待核准階段不寄信。</p></div>
       <aside id="resume-draft-card" class="resume-draft-card" hidden>
         <div class="resume-draft-heading"><strong>採購批次續作與多人協作</strong><small>本機草稿可發布成公司共用協作草稿；授權同事能在自己的電腦查看並接續。版本衝突時會停止儲存，不會直接覆蓋別人的更新。</small></div>
@@ -458,12 +477,12 @@
 
   <script src="assets/xlsx-js-style.bundle.js"></script>
   <script src="../cost-analysis/assets/jszip.min.js"></script>
-  <script src="xlsx-style-runtime.js?v=20260930-revenue-template-r2"></script>
+  <script src="xlsx-style-runtime.js?v=20260930-month-end-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20260930-revenue-template-r2"></script>
+  <script src="core.js?v=20260930-month-end-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
-  <script src="google-sources.js?v=20260923-source-errors-r2"></script>
-  <script src="app.js?v=20260930-revenue-template-r2"></script>
+  <script src="google-sources.js?v=20260930-month-end-r1"></script>
+  <script src="app.js?v=20260930-month-end-r1"></script>
 </body>
 </html>
