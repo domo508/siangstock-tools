@@ -1221,6 +1221,9 @@
     button.disabled = true; input.disabled = true;
     try {
       const review = draftReviewForBatch(item);
+      if (!review && !item.closure_summary?.hasItemBaseline) {
+        throw new Error(`${supplier}的集中台帳與目前瀏覽器都沒有核准逐品項明細；請先從公司共用協作區開啟該批次。`);
+      }
       const approvedItems = (review?.rows || []).filter((row) => Number(row.finalQty || 0) > 0 && row.supplier === supplier).map((row) => ({
         sku: row.sku, name: row.name || "", supplier: row.supplier || "", quantity: Number(row.finalQty || 0),
         unitCost: Number(row.unitCost || 0), amount: Number(row.finalQty || 0) * Number(row.unitCost || 0)
@@ -1234,7 +1237,7 @@
         if (latest?.status === "erp_created") await persistWorkflowDraft("erp_created");
       }
       await loadLedger();
-      setWorkflowStatus(`${supplier}已連結ERP採購單${erpReference}；全部供應商完成後，批次會自動結案並移出未完成協作區。`, "success");
+      setWorkflowStatus(`${supplier}已使用集中台帳核准明細連結ERP採購單${erpReference}；全部供應商完成後，批次會自動結案並移出未完成協作區。`, "success");
     } catch (error) {
       button.disabled = false; input.disabled = false;
       setWorkflowStatus(`ERP單號回填失敗（已承諾批次${item.id}）：${error.message}`, "error");

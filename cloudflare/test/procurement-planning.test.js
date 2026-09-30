@@ -1671,7 +1671,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
     expect(toolHtml).toContain('core.js?v=20260930-month-end-r1');
-    expect(toolHtml).toContain('app.js?v=20260930-month-end-r1');
+    expect(toolHtml).toContain('app.js?v=20261001-erp-baseline-r1');
     expect(toolHtml).toContain("新品首批採購");
     expect(toolHtml).toContain("人工匯入採購單");
     expect(toolHtml).toContain("補登已採購單");
@@ -1884,6 +1884,10 @@ describe("採購規劃前台與入口", () => {
     expect(procurementWorker).toContain("各供應商ERP皆已開立");
     expect(toolApp).toContain("下載此供應商ERP檔");
     expect(toolApp).toContain("全部供應商完成後，批次會自動結案");
+    expect(procurementWorker).toContain("const approvedItems = storedItems.length ? storedItems : suppliedItems");
+    expect(procurementWorker).toContain("UPDATE procurement_batch_items SET lifecycle_status = 'ERP已開立・等待到貨'");
+    expect(procurementWorker).not.toContain('DELETE FROM procurement_batch_items WHERE batch_id = ? AND supplier = ?');
+    expect(toolApp).toContain("!review && !item.closure_summary?.hasItemBaseline");
     expect(toolApp).not.toContain("documents.forEach((document)");
   });
 });

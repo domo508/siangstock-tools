@@ -1153,8 +1153,15 @@ async function markErpCreated(request: Request, env: ProcurementEnv, batchId: st
   }
   const suppliers = parseJsonText(String(before.supplier_summary || "[]")) as string[] || [];
   if (!suppliers.includes(supplier)) throw new RequestValidationError(`${supplier}不在本批核准供應商清單內。`);
-  const approvedItems = validatedApprovedItems(input.approvedItems).filter((row) => row.supplier === supplier);
-  if (!approvedItems.length) throw new RequestValidationError(`${supplier}缺少核准逐品項明細，請由協作批次重新開啟後再回填。`);
+  const suppliedItems = validatedApprovedItems(input.approvedItems).filter((row) => row.supplier === supplier);
+  const storedItemRows = await env.DB.prepare("SELECT sku, name, supplier, approved_quantity, unit_cost, approved_amount FROM procurement_batch_items WHERE batch_id = ? AND supplier = ? ORDER BY sku").bind(batchId, supplier).all<Record<string, unknown>>();
+  const storedItems = storedItemRows.results.map((row) => ({
+    sku: String(row.sku), name: String(row.name || ""), supplier: String(row.supplier || supplier),
+    quantity: Number(row.approved_quantity || 0), unitCost: Number(row.unit_cost || 0), amount: Number(row.approved_amount || 0)
+  })).filter((row) => row.quantity > 0);
+  const approvedItems = storedItems.length ? storedItems : suppliedItems;
+  if (!approvedItems.length) throw new RequestValidationError(`${supplier}的集中台帳與協作批次都缺少核准逐品項明細；請重新開啟協作批次補回後再回填。`);
+  const backfillItems = storedItems.length ? [] : approvedItems;
   const completed = await env.DB.prepare("SELECT supplier FROM procurement_batch_erp_documents WHERE batch_id = ? AND status = 'erp_created'").bind(batchId).all<{ supplier: string }>();
   const completeAfter = new Set([...completed.results.map((row) => row.supplier), supplier]).size === suppliers.length;
   if (completeAfter) {
@@ -1164,8 +1171,8 @@ async function markErpCreated(request: Request, env: ProcurementEnv, batchId: st
   }
   const statements = [
     env.DB.prepare("INSERT INTO procurement_batch_erp_documents (batch_id, supplier, erp_reference, status, erp_created_at, erp_created_by, updated_at) VALUES (?, ?, ?, 'erp_created', ?, ?, ?) ON CONFLICT(batch_id, supplier) DO UPDATE SET erp_reference = excluded.erp_reference, status = 'erp_created', erp_created_at = excluded.erp_created_at, erp_created_by = excluded.erp_created_by, updated_at = excluded.updated_at").bind(batchId, supplier, erpReference, now, actor, now),
-    env.DB.prepare("DELETE FROM procurement_batch_items WHERE batch_id = ? AND supplier = ?").bind(batchId, supplier),
-    ...approvedItems.map((row) => env.DB.prepare("INSERT INTO procurement_batch_items (batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, remaining_quantity, lifecycle_status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ERP已開立・等待到貨', ?)").bind(batchId, row.sku, row.name, row.supplier, row.quantity, row.unitCost, row.amount, row.quantity, now))
+    env.DB.prepare("UPDATE procurement_batch_items SET lifecycle_status = 'ERP已開立・等待到貨', updated_at = ? WHERE batch_id = ? AND supplier = ?").bind(now, batchId, supplier),
+    ...backfillItems.map((row) => env.DB.prepare("INSERT INTO procurement_batch_items (batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, remaining_quantity, lifecycle_status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ERP已開立・等待到貨', ?)").bind(batchId, row.sku, row.name, row.supplier, row.quantity, row.unitCost, row.amount, row.quantity, now))
   ];
   if (completeAfter) statements.push(
     env.DB.prepare("UPDATE procurement_batches SET status = 'erp_created', erp_reference = ?, erp_created_at = ?, erp_created_by = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND status = 'approved'").bind(suppliers.length === 1 ? erpReference : `${suppliers.length}張ERP採購單`, now, actor, now, batchId),
