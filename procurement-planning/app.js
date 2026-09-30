@@ -7,6 +7,11 @@
   const MODEL_CACHE = Object.freeze({ database: "siangstock-procurement-local", store: "files", key: "seasonal-model", refreshMonths: 6 });
   const WORKFLOW_CACHE = Object.freeze({ key: "procurement-workflow-drafts", version: 1, maxRecords: 30 });
   const DEFAULT_COST_RATE = 2659538.3 / 5936068.44;
+  const CUSTOM_CHANNEL_VALUE = "__custom__";
+  const REVENUE_CHANNEL_OPTIONS = Object.freeze({
+    "寬承": Object.freeze(["官網", "MOMO", "蝦皮", "其它線上通路", "台北中山門市", "台中北屯門市"]),
+    "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
+  });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
@@ -67,6 +72,7 @@
     return `已選擇${files.length}份：${files.map((file) => file.name).join("、")}`;
   }
   function formatNumber(value) { return new Intl.NumberFormat("zh-TW", { maximumFractionDigits: 2 }).format(Number(value || 0)); }
+  function formatIntegerAmount(value) { return new Intl.NumberFormat("zh-TW", { maximumFractionDigits: 0 }).format(Number(value || 0)); }
   function formatCurrency(value) { return new Intl.NumberFormat("zh-TW", { style: "currency", currency: "TWD", maximumFractionDigits: 0 }).format(Number(value || 0)); }
   function formatCurrencyPrecise(value) { return new Intl.NumberFormat("zh-TW", { style: "currency", currency: "TWD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value || 0)); }
   function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
@@ -1348,6 +1354,14 @@
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     state.procurementRules = result.rules;
   }
+  function previousMonthValue(value) {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(value || ""));
+    if (!match) return "";
+    let year = Number(match[1]);
+    let month = Number(match[2]) - 1;
+    if (month === 0) { year -= 1; month = 12; }
+    return `${year}-${String(month).padStart(2, "0")}`;
+  }
   function applyMonthPlan(plan) {
     state.monthPlan = plan;
     state.budgetDirty = false;
@@ -1367,28 +1381,66 @@
       : `${elements.month.value}尚無已核准月份快照；目前欄位只在本頁暫存。`;
     renderChannels(); renderBudget();
   }
-  function renderChannels() {
+  function appendChannelOption(select, value, label = value) {
+    const option = document.createElement("option");
+    option.value = value; option.textContent = label; select.appendChild(option);
+  }
+  function renderChannels({ syncForecastRevenue = false } = {}) {
     const editable = state.config?.permissions?.canManageBudget === true;
     const fragment = document.createDocumentFragment();
     state.revenueChannels.forEach((item, index) => {
       const row = document.createElement("tr");
       const companyCell = document.createElement("td"); const company = document.createElement("select");
-      ["寬承", "寬沐"].forEach((name) => { const option = document.createElement("option"); option.value = name; option.textContent = name; company.appendChild(option); }); company.value = item.company; company.disabled = !editable;
-      const channelCell = document.createElement("td"); const channel = document.createElement("input"); channel.type = "text"; channel.value = item.channel || ""; channel.disabled = !editable;
-      const amountCell = document.createElement("td"); const amount = document.createElement("input"); amount.type = "number"; amount.min = "0"; amount.step = "1"; amount.value = String(item.amount || 0); amount.disabled = !editable;
+      ["寬承", "寬沐"].forEach((name) => appendChannelOption(company, name)); company.value = item.company; company.disabled = !editable;
+      const channelCell = document.createElement("td");
+      const channelWrap = document.createElement("div"); channelWrap.className = "channel-select-wrap";
+      const channel = document.createElement("select"); channel.disabled = !editable; channel.setAttribute("aria-label", "通路或門市");
+      appendChannelOption(channel, "", "請選擇通路／門市");
+      const channelOptions = REVENUE_CHANNEL_OPTIONS[item.company] || [];
+      channelOptions.forEach((name) => appendChannelOption(channel, name));
+      appendChannelOption(channel, CUSTOM_CHANNEL_VALUE, "其它－自行填寫");
+      const isCustomChannel = Boolean(item.channel) && !channelOptions.includes(item.channel);
+      channel.value = isCustomChannel ? CUSTOM_CHANNEL_VALUE : (item.channel || "");
+      const customChannel = document.createElement("input"); customChannel.type = "text"; customChannel.maxLength = 80; customChannel.placeholder = "輸入其它通路／門市名稱"; customChannel.value = isCustomChannel ? item.channel : ""; customChannel.disabled = !editable; customChannel.hidden = !isCustomChannel;
+      channelWrap.append(channel, customChannel); channelCell.append(channelWrap);
+      const amountCell = document.createElement("td"); const amount = document.createElement("input"); amount.type = "text"; amount.inputMode = "numeric"; amount.autocomplete = "off"; amount.placeholder = "待填寫"; amount.className = "money-input"; amount.value = item.amount == null || item.amount === "" ? "" : formatIntegerAmount(item.amount); amount.disabled = !editable;
       const actionCell = document.createElement("td"); const remove = document.createElement("button"); remove.type = "button"; remove.className = "table-action"; remove.textContent = "刪除"; remove.disabled = !editable;
-      const changed = () => { state.revenueChannels[index] = { company: company.value, channel: channel.value.trim(), amount: Number(amount.value || 0) }; renderChannelTotals(); markBudgetDirty(); };
-      company.addEventListener("change", changed); channel.addEventListener("input", changed); amount.addEventListener("input", changed);
-      remove.addEventListener("click", () => { state.revenueChannels.splice(index, 1); renderChannels(); markBudgetDirty(); });
-      companyCell.appendChild(company); channelCell.appendChild(channel); amountCell.appendChild(amount); actionCell.appendChild(remove); row.append(companyCell, channelCell, amountCell, actionCell); fragment.appendChild(row);
+      company.addEventListener("change", () => {
+        state.revenueChannels[index] = { ...state.revenueChannels[index], company: company.value, channel: "" };
+        renderChannels({ syncForecastRevenue: true }); markBudgetDirty();
+      });
+      channel.addEventListener("change", () => {
+        customChannel.hidden = channel.value !== CUSTOM_CHANNEL_VALUE;
+        state.revenueChannels[index].channel = channel.value === CUSTOM_CHANNEL_VALUE ? customChannel.value.trim() : channel.value;
+        if (!customChannel.hidden) customChannel.focus();
+        markBudgetDirty();
+      });
+      customChannel.addEventListener("input", () => { state.revenueChannels[index].channel = customChannel.value.trim(); markBudgetDirty(); });
+      amount.addEventListener("focus", () => { if (state.revenueChannels[index].amount != null) amount.value = String(state.revenueChannels[index].amount); });
+      amount.addEventListener("input", () => {
+        const digits = amount.value.replace(/[^\d]/g, "");
+        if (amount.value !== digits) amount.value = digits;
+        state.revenueChannels[index].amount = digits === "" ? null : Number(digits);
+        renderChannelTotals({ syncForecastRevenue: true }); markBudgetDirty();
+      });
+      amount.addEventListener("blur", () => { amount.value = state.revenueChannels[index].amount == null ? "" : formatIntegerAmount(state.revenueChannels[index].amount); });
+      remove.addEventListener("click", () => { state.revenueChannels.splice(index, 1); renderChannels({ syncForecastRevenue: true }); markBudgetDirty(); });
+      companyCell.appendChild(company); amountCell.appendChild(amount); actionCell.appendChild(remove); row.append(companyCell, channelCell, amountCell, actionCell); fragment.appendChild(row);
     });
-    elements.channelRows.replaceChildren(fragment); renderChannelTotals();
+    if (!state.revenueChannels.length) {
+      const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 4; cell.className = "channel-empty-state"; cell.textContent = editable ? "本月尚未建立通路，請按「新增營收預估通路」開始填寫。" : "本月尚未建立通路營收預估。"; row.append(cell); fragment.append(row);
+    }
+    elements.channelRows.replaceChildren(fragment); renderChannelTotals({ syncForecastRevenue });
   }
-  function renderChannelTotals() {
+  function renderChannelTotals({ syncForecastRevenue = false } = {}) {
     const subtotal = (company) => state.revenueChannels.filter((row) => row.company === company).reduce((sum, row) => sum + Number(row.amount || 0), 0);
     const kuancheng = subtotal("寬承"); const kuanmu = subtotal("寬沐");
     elements.kuanchengTotal.textContent = formatCurrency(kuancheng); elements.kuanmuTotal.textContent = formatCurrency(kuanmu);
     elements.terminalForecastRevenue.value = String(kuancheng + kuanmu);
+    if (syncForecastRevenue) {
+      elements.forecastRevenue.value = String(kuancheng);
+      updateAutomaticForecastCost();
+    }
   }
   function updateAutomaticForecastCost() {
     if (state.sharedCostSnapshot?.forecastCost >= 0) {
@@ -1403,15 +1455,37 @@
     elements.forecastCost.value = String(Math.round(revenue * state.forecastCostRate * 100) / 100);
   }
   function addRevenueChannel() {
-    state.revenueChannels.push({ company: "寬承", channel: "新通路", amount: 0 }); renderChannels(); markBudgetDirty();
+    state.revenueChannels.push({ company: "寬承", channel: "", amount: null }); renderChannels({ syncForecastRevenue: true }); markBudgetDirty();
+  }
+  function inheritedChannelRows(plan) {
+    return Array.isArray(plan?.revenueChannels)
+      ? plan.revenueChannels.filter((row) => row && ["寬承", "寬沐"].includes(row.company) && String(row.channel || "").trim()).map((row) => ({ company: row.company, channel: String(row.channel).trim(), amount: null }))
+      : [];
+  }
+  async function fetchMonthPlan(monthValue) {
+    const response = await fetch(`/api/procurement/month-plan?month=${encodeURIComponent(monthValue)}`, { headers: { Accept: "application/json" }, cache: "no-store" });
+    const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    return result.plan || null;
   }
   async function loadMonthPlan() {
     if (!state.config || !elements.month.value) return;
+    const requestedMonth = elements.month.value;
     try {
-      const response = await fetch(`/api/procurement/month-plan?month=${encodeURIComponent(elements.month.value)}`, { headers: { Accept: "application/json" }, cache: "no-store" });
-      const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-      applyMonthPlan(result.plan || null);
+      const plan = await fetchMonthPlan(requestedMonth);
+      if (elements.month.value !== requestedMonth) return;
+      if (plan) return applyMonthPlan(plan);
+      const priorMonth = previousMonthValue(requestedMonth);
+      const priorPlan = priorMonth ? await fetchMonthPlan(priorMonth) : null;
+      if (elements.month.value !== requestedMonth) return;
+      applyMonthPlan(null);
+      const inheritedRows = inheritedChannelRows(priorPlan);
+      if (inheritedRows.length) {
+        state.revenueChannels = inheritedRows;
+        state.budgetDirty = true;
+        elements.budgetPlanStatus.textContent = `已沿用${priorMonth}的公司與通路／門市，共${inheritedRows.length}列；本月預估營收金額均留白，請逐列填寫後再儲存。`;
+        renderChannels(); renderBudget();
+      }
     } catch (error) {
       state.monthPlan = null;
       state.budgetDirty = true;
@@ -2276,6 +2350,25 @@
   }
   async function saveMonthPlan() {
     if (!state.config?.permissions?.canManageBudget) return;
+    if (!state.revenueChannels.length) {
+      elements.budgetPlanStatus.textContent = "請先新增至少一個營收預估通路。";
+      return;
+    }
+    const incompleteIndex = state.revenueChannels.findIndex((row) => !["寬承", "寬沐"].includes(row.company) || !String(row.channel || "").trim() || row.amount == null || !Number.isFinite(Number(row.amount)) || Number(row.amount) < 0);
+    if (incompleteIndex >= 0) {
+      elements.budgetPlanStatus.textContent = `第${incompleteIndex + 1}列尚未完成；請選擇公司與通路／門市，並填入本月預估營收。沒有營收也要明確填0。`;
+      return;
+    }
+    const duplicateKeys = new Set();
+    const duplicateIndex = state.revenueChannels.findIndex((row) => {
+      const key = `${row.company}::${String(row.channel).trim().toLocaleLowerCase("zh-TW")}`;
+      if (duplicateKeys.has(key)) return true;
+      duplicateKeys.add(key); return false;
+    });
+    if (duplicateIndex >= 0) {
+      elements.budgetPlanStatus.textContent = `第${duplicateIndex + 1}列與前面的公司及通路／門市重複，請合併金額或刪除重複列。`;
+      return;
+    }
     elements.saveBudget.disabled = true;
     const budget = currentBudget();
     const sourceNote = elements.budgetSourceNote.value.trim() || `${elements.month.value}中性情境管理輸入`;

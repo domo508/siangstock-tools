@@ -1670,8 +1670,8 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20260930-budget-approver-r1');
-    expect(toolHtml).toContain('app.js?v=20260930-budget-approver-r1');
+    expect(toolHtml).toContain('core.js?v=20260930-revenue-template-r2');
+    expect(toolHtml).toContain('app.js?v=20260930-revenue-template-r2');
     expect(toolHtml).toContain("新品首批採購");
     expect(toolHtml).toContain("人工匯入採購單");
     expect(toolHtml).toContain("補登已採購單");
@@ -1683,7 +1683,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
     expect(toolHtml).toContain("SA、OA、SB、OB開頭品號及品名標示8×7尺的商品排除一般採購與寄庫");
-    expect(toolHtml).toContain("20260930-budget-approver-r1");
+    expect(toolHtml).toContain("20260930-revenue-template-r2");
     expect(toolApp).toContain("state.postedOrderFiles.length && state.config?.permissions?.canApprove");
     expect(toolApp).toContain("state.parsedSources?.master");
     expect(toolApp).toContain("可直接檢查並補登，不必先產生採購建議");
@@ -1745,6 +1745,16 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toMatch(/async function downloadRecommendation\(\)[\s\S]*state\.selectedWorkUnitIds = new Set\(\);[\s\S]*persistWorkflowDraft\("downloaded"\)/);
     expect(toolApp).toContain("state.selectedWorkUnitIds = new Set();\n    const restoredSuppliers");
     expect(toolApp).toContain("forecastRevenue: Number(elements.forecastRevenue.value || 0)");
+    expect(toolHtml).toContain("新增營收預估通路");
+    expect(toolHtml).toContain("空白表示尚未填寫，沒有營收請明確填0");
+    expect(toolApp).toContain("REVENUE_CHANNEL_OPTIONS");
+    expect(toolApp).toContain('"其它－自行填寫"');
+    expect(toolApp).toContain("previousMonthValue");
+    expect(toolApp).toContain("本月預估營收金額均留白");
+    expect(toolApp).toContain("amount: null");
+    expect(toolApp).toContain('amount.placeholder = "待填寫"');
+    expect(toolApp).toContain("formatIntegerAmount");
+    expect(toolApp).toContain("沒有營收也要明確填0");
     expect(toolApp).toContain('refreshMonths: 6');
     expect(toolApp).toContain('indexedDB.open(MODEL_CACHE.database, 1)');
     expect(toolApp).toContain('elements.month.value >= refreshMonth');

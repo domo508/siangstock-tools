@@ -649,6 +649,10 @@
 .channel-forecast, .approval-queue { margin-top: 1.4rem; }
 .compact-table { min-width: 720px; }
 .compact-table input, .compact-table select { width: 100%; min-width: 130px; box-sizing: border-box; }
+.channel-select-wrap { display: grid; gap: 7px; min-width: 220px; }
+.compact-table .money-input { text-align: right; font-variant-numeric: tabular-nums; }
+.compact-table .money-input::placeholder { color: #9e6d20; opacity: 1; }
+.channel-empty-state { padding: 22px 16px !important; color: var(--muted); text-align: center !important; background: #f8fbfc; }
 .compact-table tfoot th, .compact-table tfoot td { font-weight: 700; background: #f7f3ed; }
 .table-action { border: 0; background: transparent; color: #9e342b; text-decoration: underline; cursor: pointer; }
 .queue-approve { white-space: nowrap; }
