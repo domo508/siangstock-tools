@@ -246,6 +246,35 @@
     const data = await file.arrayBuffer();
     return XLSX.read(data, { type: "array", cellDates: true, cellStyles: true, nodim: true });
   }
+  function inventoryReadError(error) {
+    const message = String(error?.message || "庫存檔讀取失敗");
+    if (/庫存檔(?:缺少|重複異常)/.test(message)) return new Error(message);
+    if (/array buffer|allocation|out of memory|memory|invalid array length/i.test(message)) {
+      return new Error("庫存檔讀取容量不足：Excel展開後超過目前瀏覽器可用記憶體。請關閉其它大型分頁後重試；若仍失敗，再將報表依月份或店倉拆分，請勿刪除門市店倉資料。");
+    }
+    return new Error(`庫存檔讀取失敗：${message}`);
+  }
+  async function parseInventoryFile(file) {
+    if (typeof Worker === "function") {
+      return new Promise((resolve, reject) => {
+        const worker = new Worker("inventory-reader-worker.js?v=20261002-inventory-large-r1");
+        const finish = (callback, value) => { worker.terminate(); callback(value); };
+        worker.addEventListener("message", (event) => {
+          if (event.data?.ok) finish(resolve, event.data.inventory);
+          else finish(reject, inventoryReadError(event.data));
+        }, { once: true });
+        worker.addEventListener("error", (event) => finish(reject, inventoryReadError(event.error || new Error(event.message))), { once: true });
+        worker.postMessage({ file });
+      });
+    }
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data, { type: "array", dense: true, cellDates: false, cellStyles: false });
+      return core.parseInventoryWorkbook(workbook, XLSX, { fileName: file.name || "本次庫存" });
+    } catch (error) {
+      throw inventoryReadError(error);
+    }
+  }
   async function downloadWorkbookWithManualReasonValidation(workbook, fileName) {
     const bytes = await core.buildWorkbookBytesWithManualReasonValidation(workbook, outputXlsx, globalThis.JSZip);
     const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
@@ -2191,18 +2220,19 @@
   async function resolveWorkbook(file, loaded) { return loaded || readWorkbook(file); }
   async function analyze() {
     if (!requirementsReady()) return;
-    elements.analyze.disabled = true; elements.download.disabled = true; setStatus("正在本機解析資料並套用正式採購、寄庫與付款規則…");
+    elements.analyze.disabled = true; elements.download.disabled = true; setStatus("正在以大型檔專用模式預檢庫存；門市店倉會完整保留…");
     try {
       const monthEndMode = elements.checkpoint.value === "month-end";
-      const [masterWorkbook, inventoryWorkbook, transferWorkbook, consignmentWorkbook, lirongWorkbook, modelWorkbook, pendingWorkbooks, salesWorkbooks] = await Promise.all([
-        resolveWorkbook(state.masterFile, state.masterWorkbook), readWorkbook(state.inventoryFile), readWorkbook(state.transferFile),
+      const inventory = await parseInventoryFile(state.inventoryFile);
+      setStatus("庫存預檢完成，正在解析其它資料並套用正式採購、寄庫與付款規則…");
+      const [masterWorkbook, transferWorkbook, consignmentWorkbook, lirongWorkbook, modelWorkbook, pendingWorkbooks, salesWorkbooks] = await Promise.all([
+        resolveWorkbook(state.masterFile, state.masterWorkbook), readWorkbook(state.transferFile),
         resolveWorkbook(state.consignmentFile, state.consignmentWorkbook),
         monthEndMode && !(state.lirongConsignmentFile || state.lirongConsignmentWorkbook) ? Promise.resolve(null) : resolveWorkbook(state.lirongConsignmentFile, state.lirongConsignmentWorkbook),
         monthEndMode && !state.modelFile ? Promise.resolve(null) : readWorkbook(state.modelFile),
         Promise.all(state.pendingFiles.map(readWorkbook)), Promise.all(state.salesFiles.map(readWorkbook))
       ]);
       const master = core.parseProductMasterWorkbook(masterWorkbook, XLSX, { fileName: "本次商品主檔" });
-      const inventory = core.parseInventoryWorkbook(inventoryWorkbook, XLSX, { fileName: "本次庫存" });
       const transferReport = core.parseTransferWorkbook(transferWorkbook, XLSX, { fileName: state.transferFile.name || "期間調撥單" });
       const consignment = core.parseConsignmentWorkbook(consignmentWorkbook, XLSX, { fileName: "普優瑪寄庫" });
       const lirongConsignment = lirongWorkbook ? core.parseLirongConsignmentWorkbook(lirongWorkbook, XLSX, { fileName: "力榮寄庫" }) : null;
@@ -2263,7 +2293,10 @@
       const duplicateNote = (analysis.totals.duplicateSalesRows || analysis.totals.duplicatePendingRows)
         ? ` 已自動排除重疊資料：銷售${formatNumber(analysis.totals.duplicateSalesRows || 0)}列、採購${formatNumber(analysis.totals.duplicatePendingRows || 0)}列，未重複計算。`
         : "";
-      setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。${springFestivalNote}${duplicateNote}`, "success");
+      const inventoryNote = inventory.diagnostics?.collapsedZeroDuplicateRows
+        ? ` 庫存預檢已合併${formatNumber(inventory.diagnostics.collapsedZeroDuplicateRows)}列因尺碼／條碼展開的零庫存資料；各門市店倉均保留。`
+        : " 庫存預檢完成；各門市店倉均保留。";
+      setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。${springFestivalNote}${duplicateNote}${inventoryNote}`, "success");
       await syncDetectedCustomOrders(pendingReports, master);
       await savePendingSnapshot(pendingReports);
       await syncErpReconciliations(pendingReports);

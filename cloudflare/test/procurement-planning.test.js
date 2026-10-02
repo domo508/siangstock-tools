@@ -74,6 +74,45 @@ function makeInventory() {
   return core.parseInventoryWorkbook(workbook, XLSX, { fileName: "最新庫存.xlsx" });
 }
 
+describe("大型庫存檔預檢", () => {
+  function parseRows(rows) {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["店倉編號", "店倉名稱", "貨號", "品名", "實際庫存", "實際庫存成本額"],
+      ...rows
+    ]), "乾淨商品");
+    return core.parseInventoryWorkbook(workbook, XLSX, { fileName: "大型庫存.xlsx" });
+  }
+
+  it("合併同店倉同品號的零庫存展開列，但保留不同門市", () => {
+    const inventory = parseRows([
+      ["R00", "台北中山門市", "A1", "測試品", 0, 0],
+      ["R00", "台北中山門市", "A1", "測試品", 0, 0],
+      ["R06", "文心秀泰門市", "A1", "測試品", 0, 0]
+    ]);
+    expect(inventory.records).toHaveLength(2);
+    expect(inventory.diagnostics).toMatchObject({ sourceRowCount: 3, retainedRowCount: 2, collapsedZeroDuplicateRows: 1, duplicateGroupCount: 1 });
+    expect(inventory.records.map((row) => row.warehouseCode)).toEqual(["R00", "R06"]);
+  });
+
+  it("同組只有一筆非零庫存時保留該筆並合併零庫存列", () => {
+    const inventory = parseRows([
+      ["T00", "寬承總倉", "A1", "測試品", 0, 0],
+      ["T00", "寬承總倉", "A1", "測試品", 7, 700]
+    ]);
+    expect(inventory.records).toHaveLength(1);
+    expect(inventory.records[0]).toMatchObject({ warehouseCode: "T00", sku: "A1", quantity: 7, inventoryCost: 700 });
+    expect(inventory.bySku.get("A1").quantity).toBe(7);
+  });
+
+  it("同店倉同品號有多筆非零庫存時明確阻擋", () => {
+    expect(() => parseRows([
+      ["T00", "寬承總倉", "A1", "測試品", 2, 200],
+      ["T00", "寬承總倉", "A1", "測試品", 3, 300]
+    ])).toThrow(/庫存檔重複異常.*T00／A1.*第2列=2.*第3列=3/);
+  });
+});
+
 function makePending() {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
@@ -1670,8 +1709,9 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20260930-month-end-r1');
-    expect(toolHtml).toContain('app.js?v=20261002-source-guide-r1');
+    expect(toolHtml).toContain('core.js?v=20261002-inventory-large-r1');
+    expect(toolHtml).toContain('app.js?v=20261002-inventory-large-r1');
+    expect(readFileSync("../procurement-planning/inventory-reader-worker.js", "utf8")).toContain('dense: true');
     expect(toolHtml).toContain("新品首批採購");
     expect(toolHtml).toContain("人工匯入採購單");
     expect(toolHtml).toContain("補登已採購單");

@@ -578,6 +578,50 @@
     return selected;
   }
 
+  function sheetCellValue(sheet, row, column, XLSX) {
+    const denseRows = Array.isArray(sheet) ? sheet : sheet?.["!data"];
+    const cell = denseRows ? denseRows[row]?.[column] : sheet?.[XLSX.utils.encode_cell({ r: row, c: column })];
+    if (cell == null) return "";
+    return typeof cell === "object" && Object.prototype.hasOwnProperty.call(cell, "v") ? cell.v : cell;
+  }
+
+  function inspectInventorySheet(workbook, XLSX) {
+    const candidates = workbook.SheetNames.map((name) => {
+      const sheet = workbook.Sheets[name];
+      const range = sheet?.["!ref"] ? XLSX.utils.decode_range(sheet["!ref"]) : null;
+      let headerRowIndex = range?.s.r || 0;
+      let bestScore = -1;
+      if (range) {
+        const lastHeaderRow = Math.min(range.e.r, range.s.r + 34);
+        for (let rowIndex = range.s.r; rowIndex <= lastHeaderRow; rowIndex += 1) {
+          const row = [];
+          for (let column = range.s.c; column <= range.e.c; column += 1) row[column] = sheetCellValue(sheet, rowIndex, column, XLSX);
+          const score = headerScore(row, "inventory");
+          if (score > bestScore) {
+            headerRowIndex = rowIndex;
+            bestScore = score;
+          }
+        }
+      }
+      const headers = [];
+      if (range) {
+        for (let column = range.s.c; column <= range.e.c; column += 1) {
+          headers[column] = String(sheetCellValue(sheet, headerRowIndex, column, XLSX) || `欄位${column + 1}`).trim();
+        }
+      }
+      const mapping = autoMapHeaders(headers, "inventory");
+      return { name, sheet, range, headers, mapping, headerRowIndex, score: bestScore, validation: validateMapping("inventory", mapping) };
+    });
+    candidates.sort((left, right) => Number(right.name === "乾淨商品") - Number(left.name === "乾淨商品")
+      || Number(right.validation.valid) - Number(left.validation.valid)
+      || right.score - left.score);
+    const selected = candidates[0];
+    if (!selected || !selected.validation.valid || !selected.range) {
+      throw new Error(`庫存檔缺少：${selected?.validation.missing.join("、") || "可讀取的工作表"}`);
+    }
+    return selected;
+  }
+
   function parseProductMasterWorkbook(workbook, XLSX, options = {}) {
     const selected = selectSheet(workbook, XLSX, "master");
     const listedDateIndex = selected.headers.findIndex((header) => normalizeHeader(header) === normalizeHeader("開賣日期"));
@@ -639,25 +683,69 @@
   }
 
   function parseInventoryWorkbook(workbook, XLSX, options = {}) {
-    const selected = selectSheet(workbook, XLSX, "inventory");
-    const records = [];
-    const bySku = new Map();
-    for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
-      const row = selected.rows[index];
-      const sku = normalizeSku(valueAt(row, selected.mapping, "sku"));
-      const quantity = parseNumber(valueAt(row, selected.mapping, "quantity"));
+    const selected = inspectInventorySheet(workbook, XLSX);
+    const grouped = new Map();
+    const ungrouped = [];
+    let sourceRowCount = 0;
+    for (let index = selected.headerRowIndex + 1; index <= selected.range.e.r; index += 1) {
+      const get = (field) => {
+        const column = selected.mapping[field];
+        return column == null ? "" : sheetCellValue(selected.sheet, index, column, XLSX);
+      };
+      const sku = normalizeSku(get("sku"));
+      const quantity = parseNumber(get("quantity"));
       if (!sku || quantity == null) continue;
+      sourceRowCount += 1;
       const record = {
         sourceRow: index + 1,
         sku,
-        name: String(valueAt(row, selected.mapping, "name") || "").trim(),
-        warehouseCode: normalizeSku(valueAt(row, selected.mapping, "warehouseCode")),
-        warehouseName: String(valueAt(row, selected.mapping, "warehouseName") || "").trim(),
+        name: String(get("name") || "").trim(),
+        warehouseCode: normalizeSku(get("warehouseCode")),
+        warehouseName: String(get("warehouseName") || "").trim(),
         quantity,
-        inventoryCost: parseNumber(valueAt(row, selected.mapping, "inventoryCost")) || 0
+        inventoryCost: parseNumber(get("inventoryCost")) || 0
       };
       record.procurementAvailable = !/^O0[0-6]$/.test(record.warehouseCode);
-      records.push(record);
+      if (!record.warehouseCode) {
+        ungrouped.push(record);
+        continue;
+      }
+      const key = `${record.warehouseCode}\u0000${sku}`;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(record);
+    }
+
+    const records = [...ungrouped];
+    const conflicts = [];
+    let duplicateGroupCount = 0;
+    let collapsedZeroDuplicateRows = 0;
+    for (const group of grouped.values()) {
+      if (group.length > 1) duplicateGroupCount += 1;
+      const nonzero = group.filter((record) => record.quantity !== 0);
+      if (nonzero.length > 1) {
+        conflicts.push(group);
+        continue;
+      }
+      const retained = nonzero[0] || group[0];
+      if (group.length > 1) {
+        retained.inventoryCost = group.reduce((sum, record) => sum + Number(record.inventoryCost || 0), 0);
+        collapsedZeroDuplicateRows += group.length - 1;
+      }
+      records.push(retained);
+    }
+    if (conflicts.length) {
+      const examples = conflicts.slice(0, 5).map((group) => {
+        const first = group[0];
+        const rows = group.filter((record) => record.quantity !== 0).map((record) => `第${record.sourceRow}列=${record.quantity}`).join("、");
+        return `${first.warehouseCode}／${first.sku}（${rows}）`;
+      }).join("；");
+      throw new Error(`庫存檔重複異常：同一店倉＋ERP品號有多筆非零庫存，為避免重複加總已停止。${examples}${conflicts.length > 5 ? `；另有${conflicts.length - 5}組` : ""}`);
+    }
+
+    const bySku = new Map();
+    records.sort((left, right) => left.sourceRow - right.sourceRow);
+    for (const record of records) {
+      const { sku } = record;
       if (!bySku.has(sku)) {
         bySku.set(sku, {
           sku,
@@ -680,7 +768,19 @@
         aggregated.warehouses.add(`${record.warehouseCode} ${record.warehouseName}`.trim());
       }
     }
-    return { fileName: options.fileName || "", sheetName: selected.name, records, bySku };
+    return {
+      fileName: options.fileName || "",
+      sheetName: selected.name,
+      records,
+      bySku,
+      diagnostics: {
+        sourceRowCount,
+        retainedRowCount: records.length,
+        collapsedZeroDuplicateRows,
+        duplicateGroupCount,
+        nonzeroConflictGroupCount: 0
+      }
+    };
   }
 
   function findLabelValue(rows, label) {
