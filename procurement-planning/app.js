@@ -31,6 +31,7 @@
     accountBadge: get("#account-badge"), googleConnect: get("#google-connect-button"), autoSource: get("#auto-source-button"), autoSourceLabel: get("#auto-source-label"),
     autoSourceProgress: get("#auto-source-progress"), sourceStatus: get("#source-status"),
     month: get("#analysis-month"), checkpoint: get("#checkpoint"), orderDate: get("#order-date"), inventoryDate: get("#inventory-date"),
+    salesSourceTitle: get("#sales-source-title"), salesSourcePeriod: get("#sales-source-period"),
     pendingDate: get("#pending-date"), transferDate: get("#transfer-date"), consignmentDate: get("#consignment-date"), salesDate: get("#sales-date"),
     masterFile: get("#master-file"), inventoryFile: get("#inventory-file"), pendingFiles: get("#pending-files"), transferFile: get("#transfer-file"), consignmentFile: get("#consignment-file"),
     lirongConsignmentFile: get("#lirong-consignment-file"), salesFiles: get("#sales-files"), modelFile: get("#model-file"), marketingFile: get("#marketing-file"),
@@ -1005,6 +1006,8 @@
   }
   function updateReadyState() {
     const monthEndMode = elements.checkpoint.value === "month-end";
+    elements.salesSourceTitle.textContent = monthEndMode ? "銷售明細（月底驗證）" : "銷售明細（月初、月中採購）";
+    elements.salesSourcePeriod.textContent = monthEndMode ? "本月1號至月底，共計一個月" : "本次資料截止日往前推三個月";
     elements.analyze.textContent = monthEndMode ? "執行月底結算驗證" : "產生採購建議";
     elements.workflowPanel.hidden = monthEndMode;
     if (!monthEndMode && !state.monthEndWorkbook) elements.monthEndPanel.hidden = true;

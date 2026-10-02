@@ -169,6 +169,23 @@ describe("前台導覽", () => {
     expect(worker).toContain("remainingQuantity");
   });
 
+  it("主採購必要資料卡以條列說明來源、勾選與期間，並依採購時點切換銷售期間", () => {
+    const html = readFileSync("../procurement-planning/index.html", "utf8");
+    const app = readFileSync("../procurement-planning/app.js", "utf8");
+    const style = readFileSync("../procurement-planning/style.css", "utf8");
+    for (const text of [
+      "貨品歷史庫存資料",
+      "採購單明細列表",
+      "所有調撥單明細列表",
+      "POS所有銷售資料",
+      "本次資料截止日往前推三個月"
+    ]) expect(html).toContain(text);
+    expect(html.match(/class="upload-source-details"/g)).toHaveLength(4);
+    expect(app).toContain('"銷售明細（月底驗證）"');
+    expect(app).toContain('"本月1號至月底，共計一個月"');
+    expect(style).toContain(".upload-source-details");
+  });
+
   it("週調撥允許門市與總部人工新增或移除品項並保留原因", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");

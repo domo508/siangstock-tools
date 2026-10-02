@@ -1671,7 +1671,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
     expect(toolHtml).toContain('core.js?v=20260930-month-end-r1');
-    expect(toolHtml).toContain('app.js?v=20261001-erp-baseline-r1');
+    expect(toolHtml).toContain('app.js?v=20261002-source-guide-r1');
     expect(toolHtml).toContain("新品首批採購");
     expect(toolHtml).toContain("人工匯入採購單");
     expect(toolHtml).toContain("補登已採購單");
