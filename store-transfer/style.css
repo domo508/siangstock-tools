@@ -184,8 +184,9 @@
 .display-exception-priority span { color: #647b8d; }
 .display-exception-check { display: flex !important; grid-template-columns: auto 1fr; align-items: center; }
 .display-exception-check input { width: 20px; min-height: 20px; }
-.account-controls { display: flex; align-items: center; justify-content: flex-end; gap: .65rem; flex-wrap: wrap; }
-.account-relogin { white-space: nowrap; text-decoration: none; }
+.topbar { flex-wrap: wrap; }
+.account-controls { display: flex; flex: 0 1 auto; max-width: 100%; align-items: center; justify-content: flex-end; gap: .65rem; flex-wrap: wrap; }
+.account-relogin { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; white-space: nowrap; text-decoration: none; }
 .auth-recovery { max-width: 720px; padding: 1.15rem 1.2rem; border: 1px solid #e0c98b; border-radius: 14px; color: #5e4b1f; background: #fff8e4; }
 .auth-recovery strong { display: block; margin-bottom: .4rem; color: #17324d; font-size: 1.05rem; }
 .auth-recovery p { margin: .35rem 0 .8rem; line-height: 1.65; }
