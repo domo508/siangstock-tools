@@ -21,9 +21,21 @@
     const init = { method: options.method || "GET", headers: { Accept: "application/json", ...(options.body ? { "Content-Type": "application/json" } : {}) }, cache: "no-store" };
     if (options.body) init.body = JSON.stringify(options.body);
     const response = await fetch(`/api/store-transfer${path}`, init);
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `處理失敗（HTTP ${response.status}）`);
+    const contentType = response.headers.get("Content-Type") || "";
+    const payload = /application\/json/i.test(contentType) ? await response.json().catch(() => ({})) : {};
+    if (!response.ok) {
+      const message = payload.error || (response.status === 401
+        ? "登入已失效，請重新登入或切換至本店被指派的公司帳號。"
+        : `處理失敗（HTTP ${response.status}）`);
+      throw new Error(message);
+    }
+    if (!/application\/json/i.test(contentType)) throw new Error("登入已失效，請重新登入或切換至本店被指派的公司帳號。");
     return payload;
+  }
+
+  function accountRecovery(error) {
+    const detail = String(error?.message || error || "無法確認公司帳號。");
+    return `<div class="auth-recovery" role="alert"><strong>無法完成公司帳號驗證</strong><p>${escapeHtml(detail)}</p><p>按下方按鈕會先清除目前公司工具登入狀態；完成後請重新開啟週調撥，並選擇本店被指派的公司 Google 帳號。</p><a class="primary-button" href="/cdn-cgi/access/logout">重新登入／切換帳號</a></div>`;
   }
 
   function updateReady() {
@@ -749,7 +761,7 @@
       }
       await Promise.all([loadBatches(), loadPendingPurchases(), ...(state.config.permissions?.canCollaborate ? [loadCollaborationDrafts()] : [])]);
       if (state.config.role === "store" && location.hash === "#display-exceptions") await showDisplayExceptions();
-    } catch (error) { $("account-badge").textContent = "公司帳號驗證失敗"; $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; }
+    } catch (error) { $("account-badge").textContent = "公司帳號驗證失敗"; $("batch-list").innerHTML = accountRecovery(error); }
   }
 
   document.querySelectorAll('input[type="file"]').forEach((input) => input.addEventListener("change", updateFile));

@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20260924-display-exception-r1");
+    const appIndex = html.indexOf("app.js?v=20261004-account-relogin-r1");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -134,6 +134,19 @@ describe("前台導覽", () => {
     expect(app).toContain("const outputXlsx = globalThis.ProcurementXlsxWriter || inputXlsx");
     expect(app).toContain("inputXlsx.read(data");
     expect(app).toContain("outputXlsx.writeFile");
+  });
+
+  it("週調撥提供重新登入與切換帳號入口，登入頁回應不會被誤判為成功", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const style = readFileSync("../store-transfer/style.css", "utf8");
+    expect(html).toContain('id="account-relogin"');
+    expect(html).toContain('href="/cdn-cgi/access/logout"');
+    expect(html).toContain("重新登入／切換帳號");
+    expect(app).toContain('response.headers.get("Content-Type")');
+    expect(app).toContain("登入已失效，請重新登入或切換至本店被指派的公司帳號。");
+    expect(app).toContain("accountRecovery(error)");
+    expect(style).toContain(".auth-recovery");
   });
 
   it("主採購完整呈現門市未配判斷並串接到貨與補配結案", () => {
