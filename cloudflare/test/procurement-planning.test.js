@@ -1139,6 +1139,15 @@ describe("採購建議第二階段", () => {
     expect(manualCell.s?.fill?.fgColor?.rgb).toBe("FFFFF2CC");
     expect(currentInventoryAvailableToCell.s?.fill?.fgColor?.rgb).toBe("FFE8F2F5");
     expect(decisionCell.s?.fill?.fgColor?.rgb).toBe("FFE8F2F5");
+
+    const legacyRecommendation = { ...recommendations, rows: recommendations.rows.map((item) => {
+      const { baseSuggestedPurchaseQty: _removed, ...legacyRow } = item;
+      return legacyRow;
+    }) };
+    const legacyOutput = core.buildRecommendationWorkbook(legacyRecommendation, XLSX);
+    const legacyRows = XLSX.utils.sheet_to_json(legacyOutput.Sheets["03B1_普優瑪_天絲"], { defval: "" });
+    expect(legacyRows[0]["未進位缺口（本次釋放後）"]).not.toBe("");
+    expect(legacyRows[0]["因採購單位增加"]).toBeGreaterThanOrEqual(0);
     expect(output.Sheets["03B1_普優瑪_天絲"]["!margins"]).toMatchObject({ left: 0.35, right: 0.35, top: 0.5, bottom: 0.5 });
     const styledRoundTrip = XLSX.read(XLSX.write(output, { type: "array", bookType: "xlsx", cellStyles: true }), { type: "array", cellStyles: true });
     const styledSheet = styledRoundTrip.Sheets["03B1_普優瑪_天絲"];

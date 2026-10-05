@@ -3791,6 +3791,11 @@
     const reportRows = rows.map((row) => {
       const storeInventoryQty = Object.values(row.storeInventoryByCode || {})
         .reduce((sum, quantity) => sum + Math.max(0, Number(quantity || 0)), 0);
+      const baseSuggestedPurchaseQty = row.baseSuggestedPurchaseQty != null
+        ? Math.max(0, Number(row.baseSuggestedPurchaseQty || 0))
+        : (row.releasedPurchaseQty != null
+          ? roundSuggestedQuantity(Number(row.releasedPurchaseQty || 0), Number(row.recommendationScore || 0))
+          : Math.max(0, Number(row.suggestedPurchaseQty || 0)));
       const hqCurrentInventoryAvailableDays = row.forecastDailyQty > 0
         ? Math.max(0, Number(row.inventoryQty || 0)) / row.forecastDailyQty
         : null;
@@ -3884,9 +3889,9 @@
       "單位向上量": row.packUpQty,
       "系統取整方向": row.packDirection,
       "調整前建議採購量": row.standardSuggestedPurchaseQty,
-      "未進位缺口（本次釋放後）": row.baseSuggestedPurchaseQty,
+      "未進位缺口（本次釋放後）": baseSuggestedPurchaseQty,
       "採購單位": row.packSize,
-      "因採購單位增加": Math.max(Number(row.suggestedPurchaseQty || 0) - Number(row.baseSuggestedPurchaseQty || 0), 0),
+      "因採購單位增加": Math.max(Number(row.suggestedPurchaseQty || 0) - baseSuggestedPurchaseQty, 0),
       "建議採購量": row.suggestedPurchaseQty,
       "本次新增採購量": row.suggestedPurchaseQty,
       "總倉目前庫存可售至": hqCurrentInventoryAvailableTo,
