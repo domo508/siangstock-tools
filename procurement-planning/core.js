@@ -622,6 +622,21 @@
     return selected;
   }
 
+  function identifyInventoryHeader(rows = []) {
+    let headerRowIndex = 0;
+    let bestScore = -1;
+    rows.slice(0, 35).forEach((row, index) => {
+      const score = headerScore(row, "inventory");
+      if (score > bestScore) {
+        headerRowIndex = index;
+        bestScore = score;
+      }
+    });
+    const headers = (rows[headerRowIndex] || []).map((value, index) => String(value || `欄位${index + 1}`).trim());
+    const mapping = autoMapHeaders(headers, "inventory");
+    return { headers, mapping, headerRowIndex, score: bestScore, validation: validateMapping("inventory", mapping) };
+  }
+
   function parseProductMasterWorkbook(workbook, XLSX, options = {}) {
     const selected = selectSheet(workbook, XLSX, "master");
     const listedDateIndex = selected.headers.findIndex((header) => normalizeHeader(header) === normalizeHeader("開賣日期"));
@@ -4668,6 +4683,7 @@
     isSellThroughStopName,
     parseNumber,
     inspectWorkbook,
+    identifyInventoryHeader,
     parseProductMasterWorkbook,
     parseInventoryWorkbook,
     parsePendingPurchaseWorkbook,

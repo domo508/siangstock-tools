@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261005-stale-page-r1";
+  const APP_VERSION = "20261005-inventory-stream-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -279,7 +279,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261002-inventory-large-r1");
+        const worker = new Worker("inventory-reader-worker.js?v=20261005-inventory-stream-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -2323,10 +2323,11 @@
       const duplicateNote = (analysis.totals.duplicateSalesRows || analysis.totals.duplicatePendingRows)
         ? ` 已自動排除重疊資料：銷售${formatNumber(analysis.totals.duplicateSalesRows || 0)}列、採購${formatNumber(analysis.totals.duplicatePendingRows || 0)}列，未重複計算。`
         : "";
+      const streamNote = inventory.diagnostics?.readerMode === "stream" ? " 已自動使用大型庫存串流讀取。" : "";
       const inventoryNote = inventory.diagnostics?.collapsedZeroDuplicateRows
         ? ` 庫存預檢已合併${formatNumber(inventory.diagnostics.collapsedZeroDuplicateRows)}列因尺碼／條碼展開的零庫存資料；各門市店倉均保留。`
         : " 庫存預檢完成；各門市店倉均保留。";
-      setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。${springFestivalNote}${duplicateNote}${inventoryNote}`, "success");
+      setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。${springFestivalNote}${duplicateNote}${streamNote}${inventoryNote}`, "success");
       await syncDetectedCustomOrders(pendingReports, master);
       await savePendingSnapshot(pendingReports);
       await syncErpReconciliations(pendingReports);

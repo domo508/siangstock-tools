@@ -16,6 +16,7 @@ const jszipContext = loadBrowserScript("../cost-analysis/assets/jszip.min.js", {
 const JSZip = jszipContext.JSZip;
 const core = loadBrowserScript("../procurement-planning/core.js", { XLSX }).ProcurementPlanningCore;
 const googleSources = loadBrowserScript("../procurement-planning/google-sources.js").ProcurementGoogleSources;
+const streamReader = loadBrowserScript("../procurement-planning/inventory-stream-reader.js", { Response, DecompressionStream, File }).ProcurementInventoryStreamReader;
 
 describe("固定 Google 來源頁籤選擇", () => {
   it("力榮優先使用現行下單頁籤並相容舊名", () => {
@@ -48,6 +49,24 @@ describe("固定 Google 來源頁籤選擇", () => {
     await sources.authorize();
     await expect(sources.listDriveExcelFiles("folder-id")).resolves.toEqual([]);
     expect(attempts).toBe(2);
+  });
+});
+
+describe("大型庫存串流讀取", () => {
+  it("不展開完整工作表也能保留必要庫存欄位", async () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["店倉編號", "店倉名稱", "貨號", "品名", "實際庫存", "實際庫存成本額", "不需欄位"],
+      ["T00", "總倉", "A1", "測試床包", 3, 600, "大量說明"],
+      ["R00", "台北中山門市", "A1", "測試床包", 1, 200, "大量說明"]
+    ]), "工作表1");
+    const bytes = XLSX.write(workbook, { type: "array", bookType: "xlsx", compression: true });
+    const file = new File([bytes], "大型庫存.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const inventory = await streamReader.readInventory(file, core, XLSX);
+    expect(inventory.diagnostics.readerMode).toBe("stream");
+    expect(inventory.records).toHaveLength(2);
+    expect(inventory.bySku.get("A1").quantity).toBe(4);
+    expect(inventory.bySku.get("A1").inventoryCost).toBe(800);
   });
 });
 
@@ -1709,16 +1728,18 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20261002-inventory-large-r1');
-    expect(toolHtml).toContain('app.js?v=20261005-stale-page-r1');
+    expect(toolHtml).toContain('core.js?v=20261005-inventory-stream-r1');
+    expect(toolHtml).toContain('app.js?v=20261005-inventory-stream-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261005-stale-page-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261005-inventory-stream-r1");
     expect(headers).toMatch(/\/procurement-planning\/[\s\S]*Cache-Control: no-store, max-age=0/);
     expect(headers).toMatch(/\/procurement-planning\/version\.json[\s\S]*Cache-Control: no-store, max-age=0/);
     expect(readFileSync("../procurement-planning/inventory-reader-worker.js", "utf8")).toContain('dense: true');
+    expect(readFileSync("../procurement-planning/inventory-reader-worker.js", "utf8")).toContain("STREAM_THRESHOLD_BYTES");
+    expect(readFileSync("../procurement-planning/inventory-stream-reader.js", "utf8")).toContain('DecompressionStream("deflate-raw")');
     expect(toolHtml).toContain("新品首批採購");
     expect(toolHtml).toContain("人工匯入採購單");
     expect(toolHtml).toContain("補登已採購單");
