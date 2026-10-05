@@ -1710,7 +1710,14 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
     expect(toolHtml).toContain('core.js?v=20261002-inventory-large-r1');
-    expect(toolHtml).toContain('app.js?v=20261002-inventory-large-r1');
+    expect(toolHtml).toContain('app.js?v=20261005-stale-page-r1');
+    expect(toolHtml).toContain('id="version-warning"');
+    expect(toolHtml).toContain('id="reload-latest-button"');
+    expect(toolAppSource).toContain('version.json?check=');
+    expect(toolAppSource).toContain('runtimeOutdated');
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261005-stale-page-r1");
+    expect(headers).toMatch(/\/procurement-planning\/[\s\S]*Cache-Control: no-store, max-age=0/);
+    expect(headers).toMatch(/\/procurement-planning\/version\.json[\s\S]*Cache-Control: no-store, max-age=0/);
     expect(readFileSync("../procurement-planning/inventory-reader-worker.js", "utf8")).toContain('dense: true');
     expect(toolHtml).toContain("新品首批採購");
     expect(toolHtml).toContain("人工匯入採購單");

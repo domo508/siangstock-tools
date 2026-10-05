@@ -13,6 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
+  const APP_VERSION = "20261005-stale-page-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -23,11 +24,13 @@
     baseAnalysis: null, parsedSources: null, workflowType: "system_recommendation",
     newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], storeShortagePermissions: { canDecide: false }, storeShortageRendered: false, shortageRunMode: "merge_next",
     monthEndWorkbook: null, monthEndReportBytes: null, monthEndSummary: null,
-    purchaseStatusSummary: null, costSummary: null, sharedCostSnapshot: null, draftId: "", draftStage: "", latestDraft: null, workflowDrafts: [], sharedDrafts: [], sharedDraftId: "", sharedDraftRevision: 0, parentBatchId: "", activeWorkUnit: null, selectedWorkUnitIds: new Set(), forecastCostRate: DEFAULT_COST_RATE
+    purchaseStatusSummary: null, costSummary: null, sharedCostSnapshot: null, draftId: "", draftStage: "", latestDraft: null, workflowDrafts: [], sharedDrafts: [], sharedDraftId: "", sharedDraftRevision: 0, parentBatchId: "", activeWorkUnit: null, selectedWorkUnitIds: new Set(), forecastCostRate: DEFAULT_COST_RATE,
+    runtimeOutdated: false, latestRuntimeVersion: ""
   };
 
   const get = (selector) => document.querySelector(selector);
   const elements = {
+    versionWarning: get("#version-warning"), reloadLatest: get("#reload-latest-button"),
     accountBadge: get("#account-badge"), googleConnect: get("#google-connect-button"), autoSource: get("#auto-source-button"), autoSourceLabel: get("#auto-source-label"),
     autoSourceProgress: get("#auto-source-progress"), sourceStatus: get("#source-status"),
     month: get("#analysis-month"), checkpoint: get("#checkpoint"), orderDate: get("#order-date"), inventoryDate: get("#inventory-date"),
@@ -81,6 +84,25 @@
   function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
   function sourceProof(id, metadata) { return `ID…${String(id || "").slice(-6)}・更新${metadata?.modifiedTime || "依工作表內容"}・抓取${String(metadata?.fetchedAt || "").replace("T", " ").slice(0, 19)}・SHA-256 ${String(metadata?.sha256 || "").slice(0, 12)}…`; }
   function setStatus(message, type = "") { elements.status.textContent = message; elements.status.className = `main-status ${type}`.trim(); }
+  async function checkRuntimeVersion() {
+    if (state.runtimeOutdated) return false;
+    try {
+      const response = await fetch(`version.json?check=${Date.now()}`, { cache: "no-store", credentials: "same-origin" });
+      if (!response.ok) return true;
+      const manifest = await response.json();
+      const latestVersion = String(manifest?.version || "").trim();
+      if (!latestVersion || latestVersion === APP_VERSION) return true;
+      state.runtimeOutdated = true;
+      state.latestRuntimeVersion = latestVersion;
+      elements.versionWarning.hidden = false;
+      document.body.classList.add("runtime-outdated");
+      setStatus("已有新版工具：為避免使用舊規則計算，本分頁已停止操作。請按上方「重新載入最新版」。", "error");
+      updateReadyState();
+      return false;
+    } catch (_) {
+      return true;
+    }
+  }
   function setWorkflowStatus(message, type = "") { elements.workflowStatus.textContent = message; elements.workflowStatus.className = `main-status ${type}`.trim(); }
   function clearWorkflowErrors() {
     elements.workflowErrorList.replaceChildren();
@@ -1026,6 +1048,7 @@
     const span = document.createElement("span"); span.textContent = note; card.append(small, strong, span); return card;
   }
   function requirementsReady() {
+    if (state.runtimeOutdated) return false;
     const common = Boolean(state.config && state.procurementRules && (state.masterFile || state.masterWorkbook) && state.inventoryFile && state.pendingFiles.length && state.transferFile
       && (state.consignmentFile || state.consignmentWorkbook) && state.salesFiles.length && elements.month.value
       && elements.inventoryDate.value && elements.pendingDate.value && elements.transferDate.value && elements.consignmentDate.value && elements.salesDate.value);
@@ -1082,6 +1105,12 @@
     renderBudget();
   }
   function updateSpecialWorkflowReady() {
+    if (state.runtimeOutdated) {
+      elements.newProductButton.disabled = true;
+      elements.manualDraftButton.disabled = true;
+      elements.postedOrderButton.disabled = true;
+      return;
+    }
     const hasBase = Boolean(state.baseAnalysis && state.parsedSources);
     elements.newProductButton.disabled = !(hasBase && state.newProductFile);
     elements.manualDraftButton.disabled = !(hasBase && state.manualDraftFiles.length);
@@ -2219,6 +2248,7 @@
   }
   async function resolveWorkbook(file, loaded) { return loaded || readWorkbook(file); }
   async function analyze() {
+    if (!(await checkRuntimeVersion())) return;
     if (!requirementsReady()) return;
     elements.analyze.disabled = true; elements.download.disabled = true; setStatus("正在以大型檔專用模式預檢庫存；門市店倉會完整保留…");
     try {
@@ -2785,6 +2815,13 @@
   elements.newProductButton.addEventListener("click", buildNewProductFlow);
   elements.manualDraftButton.addEventListener("click", buildManualDraftFlow);
   elements.postedOrderButton.addEventListener("click", importPostedOrders);
+  elements.reloadLatest.addEventListener("click", () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("deploy", state.latestRuntimeVersion || String(Date.now()));
+    window.location.replace(url.toString());
+  });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) checkRuntimeVersion(); });
+  window.setInterval(checkRuntimeVersion, 5 * 60 * 1000);
   bindFileInput(elements.masterFile, "masterFile", elements.masterFileName, false, "masterWorkbook");
   bindFileInput(elements.inventoryFile, "inventoryFile", elements.inventoryFileName);
   bindFileInput(elements.pendingFiles, "pendingFiles", elements.pendingFilesName, true);
@@ -2921,5 +2958,5 @@
     } catch (error) { setWorkflowStatus(`無法從報表恢復：${error.message}`, "error"); }
     finally { elements.restoreReportFile.value = ""; }
   });
-  setInitialDates(); renderChannels(); renderBudget(); renderModelStatus(); updateModelControls(); updateReadyState(); hydrateCachedModel(); hydrateWorkflowDrafts(); loadConfig();
+  setInitialDates(); renderChannels(); renderBudget(); renderModelStatus(); updateModelControls(); updateReadyState(); checkRuntimeVersion(); hydrateCachedModel(); hydrateWorkflowDrafts(); loadConfig();
 })();

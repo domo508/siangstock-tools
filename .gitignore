@@ -6,6 +6,7 @@
 *.json
 !package.json
 !tsconfig.json
+!procurement-planning/version.json
 
 # 敏感設定
 .env
