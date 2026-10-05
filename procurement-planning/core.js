@@ -1985,7 +1985,9 @@
 
   function resolveReleasedBudgetAmount(input) {
     const fullBudgetAmount = Math.max(0, Number(input.fullBudgetAmount || 0));
-    const monthStartReleasedAmount = Math.max(0, Math.min(fullBudgetAmount, Number(input.monthStartReleasedAmount || 0)));
+    const explicitMonthStartAmount = Math.max(0, Number(input.monthStartReleasedAmount || 0));
+    const defaultMonthStartAmount = Math.round(fullBudgetAmount * 0.5 * 100) / 100;
+    const monthStartReleasedAmount = Math.min(fullBudgetAmount, explicitMonthStartAmount > 0 ? explicitMonthStartAmount : defaultMonthStartAmount);
     const checkpoint = String(input.checkpoint || "month-start");
     const releasedBudgetAmount = checkpoint === "month-start" ? monthStartReleasedAmount : fullBudgetAmount;
     return {

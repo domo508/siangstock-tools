@@ -240,6 +240,9 @@ describe("採購規劃核心鎖定公式", () => {
       checkpoint: "mid-month", monthStartReleasedAmount: 1329769.15, additionalReleasedAmount: 1329769.15, releasedBudgetAmount: 2659538.3
     });
     expect(core.resolveReleasedBudgetAmount({ checkpoint: "month-end", fullBudgetAmount: 2659538.3, monthStartReleasedAmount: 1329769.15 }).releasedBudgetAmount).toBe(2659538.3);
+    expect(core.resolveReleasedBudgetAmount({ checkpoint: "month-start", fullBudgetAmount: 2244326, monthStartReleasedAmount: 0 })).toEqual({
+      checkpoint: "month-start", monthStartReleasedAmount: 1122163, additionalReleasedAmount: 0, releasedBudgetAmount: 1122163
+    });
   });
 
   it("不完整或異常驟降的成本試算不得覆蓋公司共用快照", () => {
@@ -1761,13 +1764,14 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20261005-coverage-pack-r2');
-    expect(toolHtml).toContain('app.js?v=20261005-coverage-pack-r2');
+    expect(toolHtml).toContain('core.js?v=20261005-budget-release-r1');
+    expect(toolHtml).toContain('app.js?v=20261005-budget-release-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261005-coverage-pack-r2");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261005-budget-release-r1");
+    expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
     expect(toolHtml.indexOf('id="google-connect-button"')).toBeLessThan(toolHtml.indexOf('id="source-title"'));

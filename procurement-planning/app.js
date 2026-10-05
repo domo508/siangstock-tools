@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261005-coverage-pack-r2";
+  const APP_VERSION = "20261005-budget-release-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -1492,7 +1492,12 @@
     elements.targetEndingCost.value = String(plan?.targetEndingInventoryCost ?? 0);
     elements.openingCost.value = String(plan?.openingInventoryCost ?? 0);
     elements.supplierReturns.value = String(plan?.expectedSupplierReturns ?? 0);
-    elements.releasedBudget.value = String(plan?.releasedBudgetAmount ?? plan?.budgetAmount ?? 0);
+    const savedRelease = core.resolveReleasedBudgetAmount({
+      checkpoint: "month-start",
+      fullBudgetAmount: Number(plan?.fullBudgetAmount || 0),
+      monthStartReleasedAmount: Number(plan?.releasedBudgetAmount ?? plan?.budgetAmount ?? 0)
+    });
+    elements.releasedBudget.value = String(savedRelease.monthStartReleasedAmount);
     elements.budgetSourceNote.value = plan?.sourceNote || "";
     elements.budgetPlanStatus.textContent = plan
       ? `已同步${plan.analysisMonth}中性情境：整月額度${formatCurrency(plan.fullBudgetAmount)}・已釋放${formatCurrency(plan.releasedBudgetAmount)}・更新${String(plan.updatedAt || "").replace("T", " ").slice(0, 19)}。`
@@ -2575,7 +2580,7 @@
     elements.budgetSummary.replaceChildren(...cards);
     if (elements.costBreakdown) {
       const releaseDetails = `
-        <div><span>月初已釋放額度</span><strong>${formatCurrencyPrecise(result.monthStartReleasedAmount)}</strong><small>月份快照設定的第一階段額度</small></div>
+        <div><span>月初已釋放額度</span><strong>${formatCurrencyPrecise(result.monthStartReleasedAmount)}</strong><small>未另填正數時，自動釋放整月額度50%</small></div>
         <div><span>月中新增釋放額度</span><strong>${formatCurrencyPrecise(result.additionalReleasedAmount)}</strong><small>${elements.checkpoint.value === "month-start" ? "月中採購時才自動釋放" : "已隨使用時點自動釋放"}</small></div>
         <div><span>累計已釋放額度</span><strong>${formatCurrencyPrecise(result.releasedBudgetAmount)}</strong><small>首頁尚可承諾以此金額扣除正式承諾</small></div>`;
       elements.costBreakdown.innerHTML = summary ? `${releaseDetails}
@@ -2629,7 +2634,7 @@
         openingInventoryCost: Number(elements.openingCost.value || 0),
         expectedSupplierReturns: Number(elements.supplierReturns.value || 0),
         fullBudgetAmount: budget.fullBudgetAmount,
-        releasedBudgetAmount: Number(elements.releasedBudget.value || 0),
+        releasedBudgetAmount: budget.monthStartReleasedAmount,
         sourceNote
       }, {}, "PUT");
       applyMonthPlan(result.plan);

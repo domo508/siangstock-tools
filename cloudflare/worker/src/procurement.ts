@@ -854,6 +854,11 @@ function serializeMonthPlan(row: Record<string, unknown>) {
   const terminalForecastRevenue = Array.isArray(revenueChannels)
     ? revenueChannels.reduce((sum, item) => sum + Number(item && typeof item === "object" ? (item as Record<string, unknown>).amount || 0 : 0), 0)
     : 0;
+  const fullBudgetAmount = Number(row.full_budget_amount);
+  const storedReleasedBudgetAmount = Number(row.budget_amount);
+  const releasedBudgetAmount = Math.min(fullBudgetAmount, storedReleasedBudgetAmount > 0
+    ? storedReleasedBudgetAmount
+    : Math.round(fullBudgetAmount * 0.5 * 100) / 100);
   return {
     analysisMonth: String(row.analysis_month),
     scenario: String(row.scenario),
@@ -862,9 +867,9 @@ function serializeMonthPlan(row: Record<string, unknown>) {
     targetEndingInventoryCost: Number(row.target_ending_inventory_cost),
     openingInventoryCost: Number(row.opening_inventory_cost),
     expectedSupplierReturns: Number(row.expected_supplier_returns),
-    fullBudgetAmount: Number(row.full_budget_amount),
-    releasedBudgetAmount: Number(row.budget_amount),
-    budgetAmount: Number(row.budget_amount),
+    fullBudgetAmount,
+    releasedBudgetAmount,
+    budgetAmount: releasedBudgetAmount,
     terminalForecastRevenue: Math.round(terminalForecastRevenue * 100) / 100,
     revenueChannels,
     sourceNote: String(row.source_note),
@@ -902,7 +907,10 @@ async function saveMonthPlan(request: Request, env: ProcurementEnv): Promise<Res
   const openingInventoryCost = money(input.openingInventoryCost, "期初庫存成本");
   const expectedSupplierReturns = money(input.expectedSupplierReturns, "預計供應商退貨", true);
   const fullBudgetAmount = money(input.fullBudgetAmount, "整月預估可採購額度");
-  const releasedBudgetAmount = money(input.releasedBudgetAmount, "目前已釋放可採購額度");
+  const requestedReleasedBudgetAmount = money(input.releasedBudgetAmount, "目前已釋放可採購額度");
+  const releasedBudgetAmount = Math.min(fullBudgetAmount, requestedReleasedBudgetAmount > 0
+    ? requestedReleasedBudgetAmount
+    : Math.round(fullBudgetAmount * 0.5 * 100) / 100);
   const sourceNote = string(input.sourceNote, "額度來源註記", 500);
   const now = new Date().toISOString();
   await env.DB.prepare(
