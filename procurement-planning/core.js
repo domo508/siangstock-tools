@@ -3129,6 +3129,7 @@
         releaseRate,
         standardReleasedPurchaseQty,
         releasedPurchaseQty,
+        baseSuggestedPurchaseQty,
         packSize,
         packDownQty: packed.down,
         packUpQty: packed.up,
@@ -3275,8 +3276,11 @@
       const requestedQty = workflowType === "new_product" ? Math.max(0, Number(source.firstMonthQty || 0)) : Math.max(0, Number(source.quantity || 0));
       const rawQty = workflowType === "new_product" ? Math.max(requestedQty - inventoryQty - pendingQty, 0) : Math.max(0, Number(existing?.rawPurchaseQty || 0));
       const minimumQty = rawQty > 0 ? Math.max(rawQty, Number(masterRecord.moq || 1)) : 0;
+      const baseSuggestedPurchaseQty = workflowType === "new_product"
+        ? Math.ceil(minimumQty)
+        : Math.max(0, Number(existing?.baseSuggestedPurchaseQty ?? existing?.suggestedPurchaseQty ?? 0));
       const suggestedQty = workflowType === "new_product"
-        ? Math.ceil(minimumQty / packSize) * packSize
+        ? Math.ceil(baseSuggestedPurchaseQty / packSize) * packSize
         : Math.max(0, Number(existing?.suggestedPurchaseQty || 0));
       const unitCost = Number(masterRecord.unitCost || 0);
       const baseRow = existing || {};
@@ -3324,6 +3328,7 @@
         excludedInventoryQty: Number(existing?.excludedInventoryQty || 0),
         pendingQty,
         rawPurchaseQty: rawQty,
+        baseSuggestedPurchaseQty,
         packSize,
         packDownQty: Math.floor(suggestedQty / packSize) * packSize,
         packUpQty: Math.ceil(suggestedQty / packSize) * packSize,
@@ -3511,7 +3516,7 @@
     const headerValues = XLSX.utils.sheet_to_json(sheet, { header: 1, range: headerRow, defval: "" })[0] || [];
     const inputHeaders = new Set(options.inputHeaders || ["人工確認採購量", "人工調整原因", "人工調整原因類別", "人工調整補充說明", "二次確認採購量", "二次確認原因", "第二次異動採購量", "第二次異動原因", "第二次異動原因類別", "第二次異動補充說明"]);
     const decisionHeaders = new Set(options.decisionHeaders || [
-      "人工確認要求", "加總需求（公式）", "建議採購量", "總倉目前庫存可售至", "全公司合計庫存可售至", "全公司系統建議採購後可售至", "目前實際可採購量",
+      "人工確認要求", "加總需求（公式）", "未進位缺口（本次釋放後）", "採購單位", "因採購單位增加", "建議採購量", "總倉目前庫存可售至", "全公司合計庫存可售至", "全公司系統建議採購後可售至", "目前實際可採購量",
       "全公司人工確認後可售至", "AI判斷", "最終可核准量", "第一次覆核可核准量", "最終可核准金額", "檢核結果", "回匯檢核狀態",
       "春節備貨規則", "春節額外備貨天數", "前次春節備貨未交量", "春節額外建議量", "調整前建議採購量"
     ]);
@@ -3786,8 +3791,8 @@
     const reportRows = rows.map((row) => {
       const storeInventoryQty = Object.values(row.storeInventoryByCode || {})
         .reduce((sum, quantity) => sum + Math.max(0, Number(quantity || 0)), 0);
-      const hqCurrentInventoryAvailableDays = row.hqDailyQty > 0
-        ? Math.max(0, Number(row.inventoryQty || 0)) / row.hqDailyQty
+      const hqCurrentInventoryAvailableDays = row.forecastDailyQty > 0
+        ? Math.max(0, Number(row.inventoryQty || 0)) / row.forecastDailyQty
         : null;
       const hqCurrentInventoryAvailableTo = hqCurrentInventoryAvailableDays == null
         ? "需求為0"
@@ -3875,11 +3880,13 @@
       "前次春節備貨未交量": row.priorSpringFestivalPendingQty || 0,
       "春節額外建議量": row.springFestivalExtraSuggestedQty || 0,
       "春節額外採購金額": row.springFestivalExtraAmount || 0,
-      "箱入／採購單位": row.packSize,
       "單位向下量": row.packDownQty,
       "單位向上量": row.packUpQty,
       "系統取整方向": row.packDirection,
       "調整前建議採購量": row.standardSuggestedPurchaseQty,
+      "未進位缺口（本次釋放後）": row.baseSuggestedPurchaseQty,
+      "採購單位": row.packSize,
+      "因採購單位增加": Math.max(Number(row.suggestedPurchaseQty || 0) - Number(row.baseSuggestedPurchaseQty || 0), 0),
       "建議採購量": row.suggestedPurchaseQty,
       "本次新增採購量": row.suggestedPurchaseQty,
       "總倉目前庫存可售至": hqCurrentInventoryAvailableTo,
@@ -4407,7 +4414,7 @@
         if (productStatusPendingReview && manualBlank) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白，必須明確填寫人工確認採購量，不能直接沿用系統試算。" });
         if (productStatusPendingReview && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白，人工調整原因必填，確認後才能完成第一次覆核。" });
         validateStructuredManualReason(reasonInput, errors, { sheetName, sourceRow: index + 2, sku }, reasonRequired ? "請從固定選項填寫人工調整原因類別。" : "");
-        const packSize = Math.max(1, Number(baseline?.packSize || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
+        const packSize = Math.max(1, Number(baseline?.packSize || source["採購單位"] || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
         const reservedConsignmentQty = Math.max(0, Number(options.reservedConsignmentBySku?.get?.(sku) || 0));
         const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
         const sellThroughConsignmentAllowed = Boolean(baseline?.sellThroughStop && consignmentAvailableQty > 0);
@@ -4584,7 +4591,7 @@
       if (baseline?.productStatusPendingReview && !firstReason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白品項缺少第一次人工確認原因，請重新由第一次回匯產生確認版。" });
       validateStructuredManualReason(secondReasonInput, errors, { sheetName, sourceRow: index + 2, sku }, !confirmationBlank && finalQty !== firstFinalQty ? "第二次異動數量時必須填寫第二次異動原因類別。" : "");
       if (finalQty == null || finalQty < 0 || !Number.isInteger(finalQty)) errors.push({ sheetName, sourceRow: index + 2, sku, message: "第二次異動採購量必須為0或正整數。" });
-      const packSize = Math.max(1, Number(baseline?.packSize || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
+      const packSize = Math.max(1, Number(baseline?.packSize || source["採購單位"] || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
       const fullConsignmentReturnRequested = /普優[瑪碼]/.test(supplier) && isFullConsignmentReturnReason(reason);
       const tailBoxException = Boolean(fullConsignmentReturnRequested && Number(baseline?.currentAvailableQty || 0) > 0 && finalQty === Number(baseline.currentAvailableQty));
       if (fullConsignmentReturnRequested && finalQty !== Number(baseline?.currentAvailableQty || 0)) errors.push({

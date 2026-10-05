@@ -1100,8 +1100,8 @@ describe("採購建議第二階段", () => {
     const rows = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { defval: "" });
     expect(rows[0]["建議採購量"]).toBeGreaterThan(0);
     const recommendationRow = recommendations.rows.find((item) => item.sku === rows[0]["ERP品號"]);
-    const expectedHqAvailableDays = Number(recommendationRow.hqDailyQty) > 0
-      ? Math.floor(Number(recommendationRow.inventoryQty || 0) / Number(recommendationRow.hqDailyQty))
+    const expectedHqAvailableDays = Number(recommendationRow.forecastDailyQty) > 0
+      ? Math.floor(Number(recommendationRow.inventoryQty || 0) / Number(recommendationRow.forecastDailyQty))
       : null;
     const expectedHqAvailableTo = expectedHqAvailableDays == null
       ? "需求為0"
@@ -1113,6 +1113,9 @@ describe("採購建議第二階段", () => {
     expect(rows[0]["總倉目前庫存可售至"]).toBe(expectedHqAvailableTo);
     expect(rows[0]["全公司合計庫存可售至"]).toBe(expectedCompanyAvailableTo);
     expect(rows[0]["全公司系統建議採購後可售至"]).toMatch(/^2026-/);
+    expect(rows[0]["未進位缺口（本次釋放後）"]).toBe(recommendationRow.baseSuggestedPurchaseQty);
+    expect(rows[0]["採購單位"]).toBe(recommendationRow.packSize);
+    expect(rows[0]["因採購單位增加"]).toBe(Math.max(recommendationRow.suggestedPurchaseQty - recommendationRow.baseSuggestedPurchaseQty, 0));
     expect(rows[0]["人工確認採購量"]).toBe("");
     expect(rows[0]["全公司人工確認後可售至"]).toBe("");
     expect(rows[0]).not.toHaveProperty("總部需求（人工）");
@@ -1121,6 +1124,9 @@ describe("採購建議第二階段", () => {
     expect(output.SheetNames.every((sheetName) => !output.Sheets[sheetName]["!protect"])).toBe(true);
     const editableHeaders = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { header: 1, defval: "" })[0];
     expect(editableHeaders.indexOf("總倉目前庫存可售至") + 1).toBe(editableHeaders.indexOf("全公司合計庫存可售至"));
+    expect(editableHeaders.indexOf("未進位缺口（本次釋放後）") + 1).toBe(editableHeaders.indexOf("採購單位"));
+    expect(editableHeaders.indexOf("採購單位") + 1).toBe(editableHeaders.indexOf("因採購單位增加"));
+    expect(editableHeaders.indexOf("因採購單位增加") + 1).toBe(editableHeaders.indexOf("建議採購量"));
     expect(editableHeaders.indexOf("全公司合計庫存可售至") + 1).toBe(editableHeaders.indexOf("全公司系統建議採購後可售至"));
     const totalCell = output.Sheets["03B1_普優瑪_天絲"][XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("加總需求（公式）") })];
     const hqCell = XLSX.utils.encode_cell({ r: 1, c: editableHeaders.indexOf("總部需求（系統）") });
@@ -1746,13 +1752,18 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20261005-cx-stable-r1');
-    expect(toolHtml).toContain('app.js?v=20261005-cx-stable-r1');
+    expect(toolHtml).toContain('core.js?v=20261005-coverage-pack-r1');
+    expect(toolHtml).toContain('app.js?v=20261005-coverage-pack-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261005-cx-stable-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261005-coverage-pack-r1");
+    expect(toolHtml).toContain('id="google-auth-priority"');
+    expect(toolHtml).toContain('id="google-auth-status"');
+    expect(toolHtml.indexOf('id="google-connect-button"')).toBeLessThan(toolHtml.indexOf('id="source-title"'));
+    expect(toolAppSource).toContain("renderGoogleAuthorizationStatus");
+    expect(toolAppSource).toContain("notification_status");
     expect(headers).toMatch(/\/procurement-planning\/[\s\S]*Cache-Control: no-store, max-age=0/);
     expect(headers).toMatch(/\/procurement-planning\/version\.json[\s\S]*Cache-Control: no-store, max-age=0/);
     expect(readFileSync("../procurement-planning/inventory-reader-worker.js", "utf8")).toContain('dense: true');
@@ -1765,6 +1776,8 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="active-ledger-rows"');
     const toolApp = readFileSync("../procurement-planning/app.js", "utf8");
     const procurementWorker = readFileSync("worker/src/procurement.ts", "utf8");
+    expect(procurementWorker).toContain("notification_sent_at");
+    expect(procurementWorker).toContain("notification_error_summary");
     expect(toolApp).toContain("/api/procurement/month-plan");
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');

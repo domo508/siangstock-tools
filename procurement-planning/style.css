@@ -1,4 +1,31 @@
 .stage-panel { position: relative; }
+.topbar { align-items: flex-start; }
+.topbar-tools {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+  min-width: min(100%, 430px);
+}
+.google-auth-priority {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #d8bd78;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #fffdf7, #f8f2e4);
+  box-shadow: 0 8px 20px rgba(79, 58, 22, .08);
+}
+.google-auth-priority > div { display: grid; gap: 2px; min-width: 0; }
+.google-auth-priority strong { color: var(--navy); font-size: .88rem; }
+.google-auth-priority small { color: #755f19; line-height: 1.35; overflow-wrap: anywhere; }
+.google-auth-priority .primary-button { flex: 0 0 auto; min-height: 42px; padding: 9px 14px; white-space: nowrap; }
+.google-auth-priority[data-status="ready"] { border-color: #b9ddd1; background: var(--soft-green); box-shadow: 0 8px 20px rgba(47, 114, 91, .08); }
+.google-auth-priority[data-status="ready"] small { color: var(--green); }
+.google-auth-priority[data-status="attention"] { border-color: #df9d91; background: #fff4f1; }
+.google-auth-priority[data-status="attention"] small { color: #9e342b; }
 .stage-one {
   border-color: rgba(121, 185, 194, 0.95);
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(239, 249, 248, 0.94));
@@ -305,6 +332,11 @@
 .special-workflows > .main-status { margin-top: 14px; }
 .active-ledger { margin-top: 24px; }
 .active-ledger .procurement-table { min-width: 1180px; }
+.notification-state { display: grid; gap: 4px; margin-bottom: 7px; color: var(--muted); font-size: .78rem; line-height: 1.35; }
+.notification-state strong { color: var(--navy); font-size: .82rem; }
+.notification-state[data-status="sent"] strong { color: var(--green); }
+.notification-state[data-status="pending"] strong,
+.notification-state[data-status="failed"] strong { color: #9e342b; }
 .ledger-erp-entry { display: grid; gap: 7px; min-width: 205px; }
 .ledger-erp-entry + .ledger-erp-entry { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .ledger-erp-entry input,
@@ -698,6 +730,10 @@
 }
 
 @media (max-width: 760px) {
+  .topbar { display: grid; gap: 14px; }
+  .topbar-tools { width: 100%; min-width: 0; justify-items: stretch; }
+  .topbar-tools .privacy-badge { display: inline-flex; width: fit-content; }
+  .google-auth-priority { justify-content: space-between; }
   .procurement-sources,
   .fixed-source-control { grid-template-columns: 1fr; }
   .automatic-source-grid .upload-card:last-child,
@@ -705,6 +741,8 @@
 }
 
 @media (max-width: 620px) {
+  .google-auth-priority { display: grid; }
+  .google-auth-priority .primary-button { width: 100%; }
   .planning-context,
   .procurement-period,
   .budget-grid,

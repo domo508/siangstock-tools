@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261005-cx-stable-r1";
+  const APP_VERSION = "20261005-coverage-pack-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -31,7 +31,7 @@
   const get = (selector) => document.querySelector(selector);
   const elements = {
     versionWarning: get("#version-warning"), reloadLatest: get("#reload-latest-button"),
-    accountBadge: get("#account-badge"), googleConnect: get("#google-connect-button"), autoSource: get("#auto-source-button"), autoSourceLabel: get("#auto-source-label"),
+    accountBadge: get("#account-badge"), googleAuthPriority: get("#google-auth-priority"), googleAuthStatus: get("#google-auth-status"), googleConnect: get("#google-connect-button"), autoSource: get("#auto-source-button"), autoSourceLabel: get("#auto-source-label"),
     autoSourceProgress: get("#auto-source-progress"), sourceStatus: get("#source-status"),
     month: get("#analysis-month"), checkpoint: get("#checkpoint"), orderDate: get("#order-date"), inventoryDate: get("#inventory-date"),
     salesSourceTitle: get("#sales-source-title"), salesSourcePeriod: get("#sales-source-period"),
@@ -84,6 +84,28 @@
   function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
   function sourceProof(id, metadata) { return `ID…${String(id || "").slice(-6)}・更新${metadata?.modifiedTime || "依工作表內容"}・抓取${String(metadata?.fetchedAt || "").replace("T", " ").slice(0, 19)}・SHA-256 ${String(metadata?.sha256 || "").slice(0, 12)}…`; }
   function setStatus(message, type = "") { elements.status.textContent = message; elements.status.className = `main-status ${type}`.trim(); }
+  function pendingNotificationCount() {
+    return (state.ledger?.batches || []).filter((row) => ["pending", "failed"].includes(String(row.notification_status || ""))).length;
+  }
+  function renderGoogleAuthorizationStatus() {
+    if (!elements.googleAuthPriority || !elements.googleAuthStatus) return;
+    const pending = pendingNotificationCount();
+    if (!state.config?.googleOAuthClientId) {
+      elements.googleAuthPriority.dataset.status = "attention";
+      elements.googleAuthStatus.textContent = "Google OAuth尚未設定；自動來源與摘要寄送暫停";
+      elements.googleConnect.textContent = "Google 授權暫停";
+      return;
+    }
+    if (state.googleAuthorized) {
+      elements.googleAuthPriority.dataset.status = pending ? "attention" : "ready";
+      elements.googleAuthStatus.textContent = pending ? `已授權・仍有${pending}筆摘要待重送` : "已授權・可取得資料與寄送核准摘要";
+      elements.googleConnect.textContent = "Google 已授權";
+      return;
+    }
+    elements.googleAuthPriority.dataset.status = pending ? "attention" : "required";
+    elements.googleAuthStatus.textContent = pending ? `尚未授權・有${pending}筆摘要待重送` : "尚未授權・核准與補登摘要將無法立即寄送";
+    elements.googleConnect.textContent = pending ? `立即授權（${pending}筆待寄）` : "公司 Google 授權";
+  }
   async function checkRuntimeVersion() {
     if (state.runtimeOutdated) return false;
     try {
@@ -1146,12 +1168,14 @@
       elements.ledgerStatus.classList.remove("error");
       renderApprovalQueue();
       renderActiveLedger();
+      renderGoogleAuthorizationStatus();
       renderErpReconciliations();
       renderResumeDrafts();
       renderBudget();
     } catch (error) {
       state.ledger = null; elements.ledgerStatus.textContent = `台帳同步失敗：${error.message}；為避免錯算，正式核准前請重新整理。`;
       elements.ledgerStatus.classList.add("error");
+      renderGoogleAuthorizationStatus();
     }
   }
   function renderApprovalQueue() {
@@ -1251,7 +1275,25 @@
         revokeButton.addEventListener("click", () => revokeLedgerBatch(item, revokeButton));
         action.append(correctButton, revokeButton);
       }
-      if (state.config?.permissions?.canApprove) {
+      const notificationStatus = String(item.notification_status || "");
+      const notificationState = document.createElement("div"); notificationState.className = "notification-state"; notificationState.dataset.status = notificationStatus || "none";
+      const notificationTitle = document.createElement("strong");
+      const notificationDetail = document.createElement("small");
+      if (notificationStatus === "sent") {
+        notificationTitle.textContent = "摘要已寄送";
+        notificationDetail.textContent = item.notification_sent_at ? String(item.notification_sent_at).replace("T", " ").slice(0, 19) : "寄送紀錄已完成";
+      } else if (notificationStatus === "failed") {
+        notificationTitle.textContent = "摘要寄送失敗";
+        notificationDetail.textContent = item.notification_error_summary || "請完成Google授權後重送";
+      } else if (notificationStatus === "pending") {
+        notificationTitle.textContent = "摘要待寄送";
+        notificationDetail.textContent = "請先完成頁首Google授權";
+      } else {
+        notificationTitle.textContent = "無摘要通知";
+        notificationDetail.textContent = "歷史匯入或本事件不需寄送";
+      }
+      notificationState.append(notificationTitle, notificationDetail); action.appendChild(notificationState);
+      if (state.config?.permissions?.canApprove && ["pending", "failed"].includes(notificationStatus)) {
         const notifyButton = document.createElement("button"); notifyButton.type = "button"; notifyButton.className = "table-action"; notifyButton.textContent = "重送摘要";
         notifyButton.addEventListener("click", () => retryLedgerNotification(item.id, notifyButton));
         action.appendChild(notifyButton);
@@ -1361,6 +1403,7 @@
     try {
       const result = await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() });
       setWorkflowStatus(result.status === "sent" ? `批次${batchId}摘要已寄送。` : `批次${batchId}目前沒有待寄摘要。`, "success");
+      await loadLedger();
     } catch (error) { button.disabled = false; setWorkflowStatus(`摘要重送失敗：${error.message}`, "error"); }
   }
   async function revokeLedgerBatch(item, button) {
@@ -1656,6 +1699,7 @@
         elements.sourceStatus.textContent = "Cloudflare 尚未設定 GOOGLE_OAUTH_CLIENT_ID；自動來源與郵件暫停。";
         elements.sourceStatus.classList.add("error");
       }
+      renderGoogleAuthorizationStatus();
       const canManageBudget = state.config.permissions?.canManageBudget === true;
       elements.saveBudget.disabled = !canManageBudget;
       elements.addChannel.disabled = !canManageBudget;
@@ -1831,20 +1875,22 @@
     return { pendingCount, missing };
   }
   async function connectGoogle() {
-    elements.googleConnect.disabled = true; elements.sourceStatus.textContent = "正在等待公司 Google 授權…";
+    elements.googleConnect.disabled = true; elements.googleAuthStatus.textContent = "正在等待公司 Google 授權…"; elements.sourceStatus.textContent = "正在等待公司 Google 授權…";
     try {
       googleSources.initialize(state.config.googleOAuthClientId);
       await googleSources.authorize(); const identity = await googleSources.verifyCompanyIdentity();
       if (identity.email !== state.config.email) throw new Error("Google 授權帳號與公司登入帳號不一致。");
       state.googleAuthorized = true;
-      elements.googleConnect.textContent = "Google 已授權"; elements.autoSource.disabled = false;
+      elements.autoSource.disabled = false;
       elements.sourceStatus.textContent = "授權完成；正在確認公司共用的最新季節模型。access token只保存在目前分頁記憶體。";
       elements.sourceStatus.className = "result-alert";
       updateModelControls();
+      renderGoogleAuthorizationStatus();
       await loadApprovedSeasonalModel();
     } catch (error) {
       state.googleAuthorized = false;
       elements.sourceStatus.textContent = error.message; elements.sourceStatus.className = "result-alert error"; elements.googleConnect.disabled = false;
+      renderGoogleAuthorizationStatus();
       updateModelControls();
     }
   }
@@ -1908,9 +1954,10 @@
     } finally {
       setAutomaticSourceBusy(false, completed ? "重新取得最新資料" : "重試取得最新資料");
       if (!googleSources.token()) {
+        state.googleAuthorized = false;
         elements.autoSource.disabled = true;
         elements.googleConnect.disabled = false;
-        elements.googleConnect.textContent = "重新 Google 授權";
+        renderGoogleAuthorizationStatus();
       }
     }
   }
@@ -2435,12 +2482,14 @@
   async function importPostedReport(report, master, workflowType) {
     const payload = postedOrderPayload(report, master, workflowType);
     const result = await postJson("/api/procurement/manual-orders", payload);
-    let notificationFailed = false;
+    let notificationStatus = result.notification;
     if (!result.duplicate && result.notification === "pending" && googleSources.token()) {
-      try { await postJson(`/api/procurement/batches/${encodeURIComponent(payload.batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() }); }
-      catch { notificationFailed = true; }
+      try {
+        const sent = await postJson(`/api/procurement/batches/${encodeURIComponent(payload.batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() });
+        notificationStatus = sent.status;
+      } catch { notificationStatus = "failed"; }
     }
-    return { ...result, payload, notificationFailed };
+    return { ...result, payload, notificationStatus };
   }
   async function syncDetectedCustomOrders(reports, master) {
     const customReports = reports.filter((report) => report.records.some((row) => row.isCustomOrder && row.quantity > 0));
@@ -2468,16 +2517,28 @@
     try {
       const workbooks = await Promise.all(state.postedOrderFiles.map(readWorkbook));
       const reports = workbooks.map((workbook, index) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: state.postedOrderFiles[index].name }));
-      let added = 0; let duplicate = 0; let backfilled = 0;
+      let added = 0; let duplicate = 0; let backfilled = 0; let notificationSent = 0; let notificationPending = 0; let notificationFailed = 0;
       for (const report of reports) {
         const result = await importPostedReport(report, state.parsedSources?.master, "manual_posted");
         if (result.baselineBackfilled) backfilled += 1;
         else if (result.duplicate) duplicate += 1;
-        else added += 1;
+        else {
+          added += 1;
+          if (result.notificationStatus === "sent") notificationSent += 1;
+          else if (result.notificationStatus === "failed") notificationFailed += 1;
+          else if (result.notificationStatus === "pending") notificationPending += 1;
+        }
       }
       await loadLedger();
-      elements.specialWorkflowStatus.textContent = `補登完成：新增${added}張、補回舊版逐品項基準${backfilled}張、重複未計價${duplicate}張。新增單已納入目前額度與付款月份；補回基準不會重複占用額度。`;
-      elements.specialWorkflowStatus.className = "main-status success";
+      const notificationMessage = notificationFailed
+        ? `；其中${notificationFailed}張摘要寄送失敗，請完成頁首Google授權後在台帳重送`
+        : notificationPending
+          ? `；其中${notificationPending}張摘要待寄，請先完成頁首Google授權後在台帳重送`
+          : notificationSent
+            ? `；${notificationSent}張摘要已寄送`
+            : "";
+      elements.specialWorkflowStatus.textContent = `補登完成：新增${added}張、補回舊版逐品項基準${backfilled}張、重複未計價${duplicate}張${notificationMessage}。新增單已納入目前額度與付款月份；補回基準不會重複占用額度。`;
+      elements.specialWorkflowStatus.className = `main-status ${notificationFailed || notificationPending ? "error" : "success"}`;
     } catch (error) {
       elements.specialWorkflowStatus.textContent = `補登停止：${error.message}`;
       elements.specialWorkflowStatus.className = "main-status error";
@@ -2768,7 +2829,7 @@
       if (!token) { elements.retryNotification.disabled = false; setWorkflowStatus("已正式核准且額度台帳已寫入；郵件待目前核准帳號完成 Google 授權後重送。", "error"); return; }
       try {
         await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/notify`, {}, { "X-Google-Access-Token": token });
-        elements.retryNotification.disabled = true; setWorkflowStatus("正式核准完成，額度摘要郵件已寄送；現在可下載ERP採購檔。", "success");
+        elements.retryNotification.disabled = true; await loadLedger(); setWorkflowStatus("正式核准完成，額度摘要郵件已寄送；現在可下載ERP採購檔。", "success");
       } catch (notifyError) { elements.retryNotification.disabled = false; setWorkflowStatus(`正式核准與台帳已完成；郵件待重送：${notifyError.message}。ERP檔仍可下載。`, "error"); }
     } catch (error) { elements.approve.disabled = false; setWorkflowStatus(`核准失敗：${error.message}`, "error"); }
   }
