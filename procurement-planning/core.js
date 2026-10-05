@@ -2174,6 +2174,7 @@
   function demandTier(abcClass, xyzClass, recent6Qty, trendRatio, activeWeeks6) {
     if ((abcClass === "A" && xyzClass !== "Z") || (recent6Qty >= 12 && trendRatio >= 1.35 && activeWeeks6 >= 4)) return "熱銷";
     if ((abcClass === "A" && xyzClass === "Z") || (abcClass === "B" && xyzClass !== "Z")) return "穩定";
+    if (abcClass === "C" && xyzClass === "X" && recent6Qty >= 12 && trendRatio >= 1.2 && activeWeeks6 >= 4) return "穩定";
     return "低銷";
   }
 
@@ -4323,7 +4324,7 @@
       ["銷售需求口徑", "銷貨＋訂貨＋退貨＋退訂；排除取貨，避免總倉代出重複計算", "核心鎖定"],
       ["SKU模型", "依回測檔在近期6週與12週間選擇；類別模型只做季節需求池校正", "核心鎖定"],
       ["冬夏季模型", "強夏季／強冬季且SKU曲線可信度為中／高時，以至少兩個年度同一14天位置的歷史絕對量與近期速度季節化結果取高者；天絲寢具為四季夏偏旺、純棉寢具為四季冬偏旺，只採40%季節變化並限制於0.8～1.3倍；春節追加期間另按該段季節曲線計算", "核心鎖定"],
-      ["ABC／XYZ", "12週成本貢獻做ABC；有銷售週數與變異係數做XYZ", "第一版"],
+      ["ABC／XYZ", "12週成本貢獻做ABC；有銷售週數與變異係數做XYZ。C級若近6週至少12件、XYZ為X、近6週至少4週有銷售且成長倍率至少1.2，從低銷提高為穩定；已達熱銷門檻者仍維持熱銷", "第二版"],
       ["淨採購需求", LOCKED_RULES.netDemandFormula, "核心鎖定"],
       ["公司備貨", "目標覆蓋＝供應商檢視期＋到貨交期＋商品分級安全緩衝；90～120天依熱銷90／穩定105／低銷120；0轉人工判斷", "第三版"],
       ["普優瑪採購與寄庫", `成品製作${recommendations.appliedRules?.puyouma?.productionDays ?? 45}天；寄庫目標熱銷${recommendations.appliedRules?.puyouma?.targetDays?.["熱銷"] ?? 120}／穩定${recommendations.appliedRules?.puyouma?.targetDays?.["穩定"] ?? 105}／低銷${recommendations.appliedRules?.puyouma?.targetDays?.["低銷"] ?? 90}天`, "集中規則"],
@@ -4719,6 +4720,7 @@
     puyoumaConsignmentGroup,
     applyDemandModel,
     classifyXyz,
+    demandTier,
     resolveSupplyProfile,
     resolveSpringFestivalAdjustment,
     buildProcurementRecommendations,

@@ -70,6 +70,24 @@ describe("大型庫存串流讀取", () => {
   });
 });
 
+describe("採購商品分級", () => {
+  it("C級但近期穩定成長的X品提高為穩定品", () => {
+    expect(core.demandTier("C", "X", 12, 1.2, 4)).toBe("穩定");
+    expect(core.demandTier("C", "X", 19, 1.31, 6)).toBe("穩定");
+  });
+
+  it("缺少任一持續銷售條件時仍維持低銷", () => {
+    expect(core.demandTier("C", "X", 11, 1.2, 4)).toBe("低銷");
+    expect(core.demandTier("C", "Y", 12, 1.2, 4)).toBe("低銷");
+    expect(core.demandTier("C", "X", 12, 1.19, 4)).toBe("低銷");
+    expect(core.demandTier("C", "X", 12, 1.2, 3)).toBe("低銷");
+  });
+
+  it("原本已達熱銷門檻的品項不被降級", () => {
+    expect(core.demandTier("C", "X", 12, 1.35, 4)).toBe("熱銷");
+  });
+});
+
 function makeMaster() {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
@@ -1728,13 +1746,13 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20261005-inventory-stream-r1');
-    expect(toolHtml).toContain('app.js?v=20261005-inventory-stream-r1');
+    expect(toolHtml).toContain('core.js?v=20261005-cx-stable-r1');
+    expect(toolHtml).toContain('app.js?v=20261005-cx-stable-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261005-inventory-stream-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261005-cx-stable-r1");
     expect(headers).toMatch(/\/procurement-planning\/[\s\S]*Cache-Control: no-store, max-age=0/);
     expect(headers).toMatch(/\/procurement-planning\/version\.json[\s\S]*Cache-Control: no-store, max-age=0/);
     expect(readFileSync("../procurement-planning/inventory-reader-worker.js", "utf8")).toContain('dense: true');

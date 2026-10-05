@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261005-inventory-stream-r1";
+  const APP_VERSION = "20261005-cx-stable-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
