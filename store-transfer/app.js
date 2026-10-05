@@ -326,6 +326,30 @@
     return `<article class="batch-card${batch.status === "cancelled" ? " superseded" : ""}"><div><h3>${escapeHtml(batch.week_key || batch.id)}</h3><p class="batch-meta">${escapeHtml(batch.item_count || 0)}項・系統建議${escapeHtml(batch.suggested_quantity || 0)}件${shortage}・${escapeHtml(progress)}・更新於${escapeHtml(batch.updated_at || "")}</p></div><span class="batch-status">${escapeHtml(status)}</span><div class="batch-card-actions"><button class="secondary-button compact" type="button" data-open-batch="${escapeHtml(batch.id)}">${batch.status === "cancelled" ? "查看紀錄" : "查看／處理"}</button>${deleteButton}</div></article>`;
   }
 
+  function oneMonthAgo(now = new Date()) {
+    const cutoff = new Date(now);
+    const day = cutoff.getDate();
+    cutoff.setDate(1);
+    cutoff.setMonth(cutoff.getMonth() - 1);
+    const lastDay = new Date(cutoff.getFullYear(), cutoff.getMonth() + 1, 0).getDate();
+    cutoff.setDate(Math.min(day, lastDay));
+    return cutoff;
+  }
+
+  function isStorePendingBatch(batch) {
+    return ["open", "review"].includes(batch.status) && ["pending", "saved", "submitted"].includes(batch.store_status);
+  }
+
+  function isRecentStoreHistory(batch, now = new Date()) {
+    if (isStorePendingBatch(batch)) return false;
+    const timestamp = new Date(batch.updated_at || batch.created_at || "");
+    return !Number.isNaN(timestamp.getTime()) && timestamp >= oneMonthAgo(now);
+  }
+
+  function renderBatchCards(batches, emptyMessage) {
+    return batches.length ? batches.map(batchCard).join("") : `<p class="empty-state">${escapeHtml(emptyMessage)}</p>`;
+  }
+
   async function deleteBatchFromHistory(button) {
     const id = button.dataset.deleteBatch;
     const week = button.dataset.weekKey || id;
@@ -342,9 +366,15 @@
   async function loadBatches() {
     const query = state.config.storeCode ? `?store=${encodeURIComponent(state.config.storeCode)}` : "";
     const payload = await api(`/batches${query}`);
-    const html = payload.batches.length ? payload.batches.map(batchCard).join("") : '<p class="empty-state">目前沒有週調撥批次。</p>';
-    $("batch-list").innerHTML = html;
-    if (state.config.role === "store") $("store-batches").innerHTML = html;
+    if (state.config.role === "store") {
+      const pending = payload.batches.filter(isStorePendingBatch);
+      const history = payload.batches.filter((batch) => isRecentStoreHistory(batch));
+      $("store-batches").innerHTML = renderBatchCards(pending, "目前沒有待處理批次。");
+      $("store-history-batches").innerHTML = renderBatchCards(history, "目前沒有近一個月歷史批次。");
+      $("store-history-summary").textContent = history.length ? `共 ${history.length} 筆；預設收合，需要時再展開查閱。` : "目前沒有近一個月歷史批次。";
+      return;
+    }
+    $("batch-list").innerHTML = renderBatchCards(payload.batches, "目前沒有週調撥批次。");
   }
 
   async function loadPendingPurchases() {
@@ -749,6 +779,10 @@
       $("refresh-button").disabled = false;
       if (state.config.role === "store") {
         $("store-panel").hidden = false;
+        $("batch-list").hidden = true;
+        $("store-history").hidden = false;
+        $("history-eyebrow").textContent = "歷史紀錄";
+        $("history-title").textContent = "門市批次紀錄";
         const store = state.config.stores[state.config.storeCode];
         $("page-title").innerHTML = "本週調撥，<br>確認自己的門市就好。";
         $("hero-description").textContent = "查看系統建議、調整數量並送出總部審核；本店展示例外從固定入口另外維護。";

@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20261004-account-relogin-r1");
+    const appIndex = html.indexOf("app.js?v=20261005-store-batch-history-r1");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -147,6 +147,20 @@ describe("前台導覽", () => {
     expect(app).toContain("登入已失效，請重新登入或切換至本店被指派的公司帳號。");
     expect(app).toContain("accountRecovery(error)");
     expect(style).toContain(".auth-recovery");
+  });
+
+  it("門市上方只列待處理批次，近一個月歷史預設收合", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const style = readFileSync("../store-transfer/style.css", "utf8");
+    expect(html).toContain('<details id="store-history" class="batch-history-details" hidden>');
+    expect(html).not.toContain('<details id="store-history" class="batch-history-details" hidden open>');
+    expect(html).toContain("近一個月歷史批次");
+    expect(app).toContain('return ["open", "review"].includes(batch.status) && ["pending", "saved", "submitted"].includes(batch.store_status)');
+    expect(app).toContain("timestamp >= oneMonthAgo(now)");
+    expect(app).toContain('renderBatchCards(pending, "目前沒有待處理批次。")');
+    expect(style).toContain(".batch-list[hidden]");
+    expect(style).toContain(".batch-history-details summary:focus-visible");
   });
 
   it("主採購完整呈現門市未配判斷並串接到貨與補配結案", () => {
