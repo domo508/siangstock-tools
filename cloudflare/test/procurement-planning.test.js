@@ -1444,6 +1444,66 @@ describe("採購建議第二階段", () => {
     expect(secondRow["需求摘要"]).toContain("總部需求30.00");
   });
 
+  it("完整商品主檔會建立可人工新增目錄，無銷售品號B203088與F13060仍可由同批次補回", () => {
+    const masterBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(masterBook, XLSX.utils.aoa_to_sheet([
+      ["貨號", "品名", "供應商貨號", "供應商簡稱", "進貨價", "最小配貨數", "貨品狀態", "已下架"],
+      ["B203088", "6x7尺兩用被套 [長絨棉測試]", "P-B203088", "普優瑪", 680, 10, "尚未生產", "否"],
+      ["F13060", "無尺寸測試配件", "P-F13060", "普優瑪", 120, 1, "尚未生產", "否"]
+    ]), "工作表1");
+    const master = core.parseProductMasterWorkbook(masterBook, XLSX);
+    const catalog = core.buildManualAdditionCatalog({
+      master,
+      analysis: { rows: [] },
+      inventory: { bySku: new Map() },
+      pendingReports: [],
+      consignment: { records: [], exceptions: [], confirmedExclusions: [] },
+      lirongConsignment: { records: [], exceptions: [], confirmedExclusions: [] },
+      dataAsOfDate: "2026-10-05",
+      sourceHash: "master-hash"
+    });
+    expect(catalog).toMatchObject({ version: 1, itemCount: 2, sourceHash: "master-hash", dataAsOfDate: "2026-10-05" });
+    expect(catalog.rows.find((row) => row.sku === "B203088")).toMatchObject({ supplier: "普優瑪", purchaseTab: "長絨棉", unitCost: 680, packSize: 10, sourceInAnalysis: false });
+    expect(catalog.rows.find((row) => row.sku === "F13060")).toMatchObject({ supplier: "普優瑪", purchaseTab: "無尺寸品項", unitCost: 120, packSize: 1, sourceInAnalysis: false });
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "人工確認採購量", "人工調整原因類別"],
+      ["B203088", 10, "人工新增品項"]
+    ]), "03B2_普優瑪_長絨棉");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "人工確認採購量", "人工調整原因類別"],
+      ["F13060", 2, "人工新增品項"]
+    ]), "03B3_普優瑪_無尺寸");
+    const baselineBySku = new Map(catalog.rows.map((row) => [row.sku, row]));
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, {
+      baselineBySku,
+      allowedSkuSet: new Set(catalog.rows.map((row) => row.sku)),
+      exportedSkuSet: new Set(),
+      manualAdditionCatalogAvailable: true
+    });
+    expect(review.errors).toHaveLength(0);
+    expect(review.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sku: "B203088", supplier: "普優瑪", unitCost: 680, finalQty: 10, manuallyAdded: true }),
+      expect.objectContaining({ sku: "F13060", supplier: "普優瑪", unitCost: 120, finalQty: 2, manuallyAdded: true })
+    ]));
+  });
+
+  it("舊母批次沒有人工新增目錄時不使用現行主檔覆蓋歷史快照", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "人工確認採購量", "人工調整原因類別"],
+      ["F13060", 2, "人工新增品項"]
+    ]), "03B3_普優瑪_無尺寸");
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, {
+      baselineBySku: new Map(),
+      allowedSkuSet: new Set(),
+      exportedSkuSet: new Set(),
+      manualAdditionCatalogAvailable: false
+    });
+    expect(review.errors.some((error) => error.message.includes("請重新建立母批次"))).toBe(true);
+  });
+
   it("人工新增列即使帶到Excel格式或舊欄位，仍依原始匯出品號判斷並補回系統資料", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
@@ -1830,14 +1890,14 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20261006-notification-audit-r2');
+    expect(toolHtml).toContain('core.js?v=20261007-manual-addition-catalog-r1');
     expect(toolHtml).toContain('google-sources.js?v=20261006-notification-audit-r2');
-    expect(toolHtml).toContain('app.js?v=20261006-notification-audit-r2');
+    expect(toolHtml).toContain('app.js?v=20261007-manual-addition-catalog-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261006-notification-audit-r2");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261007-manual-addition-catalog-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');

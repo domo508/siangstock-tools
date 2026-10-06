@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261006-notification-audit-r2";
+  const APP_VERSION = "20261007-manual-addition-catalog-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -1999,6 +1999,15 @@
   function workUnitRows(unit, rows = state.analysis?.suggestedRows || []) {
     return rows.filter((row) => core.rowMatchesProcurementWorkUnit(row, unit));
   }
+  function analysisBaselineRows(analysis = state.analysis) {
+    const bySku = new Map();
+    (analysis?.manualAdditionCatalog?.rows || []).forEach((row) => bySku.set(core.normalizeSku(row?.sku), row));
+    (analysis?.rows || []).forEach((row) => bySku.set(core.normalizeSku(row?.sku), row));
+    return [...bySku.values()];
+  }
+  function workUnitBaselineRows(unit, analysis = state.analysis) {
+    return analysisBaselineRows(analysis).filter((row) => core.rowMatchesProcurementWorkUnit(row, unit));
+  }
   function workUnitMemberIds(unit) {
     if (!unit) return [];
     return Array.isArray(unit.memberIds) && unit.memberIds.length ? unit.memberIds : (unit.id ? [unit.id] : []);
@@ -2007,7 +2016,7 @@
     const selectedIds = workUnitMemberIds(draft?.activeWorkUnit);
     const reviewRows = draft?.review?.rows || draft?.firstReview?.rows;
     if (!Array.isArray(reviewRows)) return selectedIds;
-    return core.procurementWorkUnitIdsForReview(reviewRows, draft?.analysis?.rows || []);
+    return core.procurementWorkUnitIdsForReview(reviewRows, analysisBaselineRows(draft?.analysis));
   }
   function ledgerStage(batch) {
     return ({ pending_approval: "pending_approval", approved: "approved", erp_created: "erp_created", received: "erp_created" })[batch?.status] || "analysis";
@@ -2385,6 +2394,20 @@
       analysis.lirongConsignmentRows = core.buildLirongConsignmentRecommendations(analysis, lirongConsignment, {
         orderDate: elements.orderDate.value, purchaseUnitRules: state.procurementRules?.purchaseUnits, consignmentRules: state.procurementRules?.consignment
       });
+      analysis.manualAdditionCatalog = core.buildManualAdditionCatalog({
+        master,
+        analysis,
+        inventory,
+        pendingReports,
+        consignment,
+        lirongConsignment,
+        blacklist: blacklistEntries(),
+        supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
+        purchaseUnitRules: state.procurementRules?.purchaseUnits,
+        sourceHash: state.sourceMetadata?.master?.metadata?.sha256 || "",
+        sourceModifiedTime: state.sourceMetadata?.master?.metadata?.modifiedTime || "",
+        dataAsOfDate: elements.inventoryDate.value
+      });
       analysis.meta = {
         month: elements.month.value, checkpoint: elements.checkpoint.value, sourceMode: state.consignmentWorkbook ? "Google自動" : "手動備援",
         seasonalModel: state.modelMetadata ? { ...state.modelMetadata, refreshMonth: modelRefreshMonth(), status: "本次沿用／已更新" } : null,
@@ -2729,16 +2752,17 @@
     if (!state.reviewFile || !state.analysis || !state.returnScope) return;
     elements.reviewButton.disabled = true; setWorkflowStatus("正在重新檢查人工數量、力榮10件規則、可售至、付款月份與額度…");
     try {
-      const baselineRows = state.analysis.rows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
+      const baselineRows = workUnitBaselineRows(state.activeWorkUnit);
       const exportedRows = state.analysis.suggestedRows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
       const reservedConsignmentBySku = await activeConsignmentReservations();
       state.firstReview = core.reviewReturnedWorkbook(state.reviewWorkbook || await readWorkbook(state.reviewFile), XLSX, {
         asOfDate: elements.salesDate.value || today(),
         orderDate: elements.orderDate.value,
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
-        baselineBySku: new Map(state.analysis.rows.map((row) => [row.sku, row])),
+        baselineBySku: new Map(analysisBaselineRows().map((row) => [row.sku, row])),
         allowedSkuSet: new Set(baselineRows.map((row) => row.sku)),
         exportedSkuSet: new Set(exportedRows.map((row) => row.sku)),
+        manualAdditionCatalogAvailable: Boolean(state.analysis.manualAdditionCatalog?.rows?.length),
         reservedConsignmentBySku
       });
       const t = state.firstReview.totals;
@@ -2816,7 +2840,7 @@
     }).filter((row) => row.quantity > 0);
     return {
       batchId: state.batchId, analysisMonth: elements.month.value, checkpoint: elements.checkpoint.value,
-      parentBatchId: state.parentBatchId, workUnitIds: core.procurementWorkUnitIdsForReview(state.review.rows, state.analysis?.rows || []),
+      parentBatchId: state.parentBatchId, workUnitIds: core.procurementWorkUnitIdsForReview(state.review.rows, analysisBaselineRows()),
       supplierSummary: [...new Set(state.review.rows.filter((row) => row.finalQty > 0).map((row) => row.supplier))],
       workflowType: state.workflowType,
       suggestedAmount: state.review.totals.suggestedAmount, manualAmount: state.review.totals.manualAmount, blockedAmount: state.review.totals.blockedAmount,
@@ -2953,7 +2977,7 @@
     setWorkflowStatus(`正在讀取${state.reviewFile.name}並整理需要填寫原因的品項…`);
     try {
       state.reviewWorkbook = await readWorkbook(state.reviewFile);
-      const baselineRows = state.analysis.rows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
+      const baselineRows = workUnitBaselineRows(state.activeWorkUnit);
       const exportedRows = state.analysis.suggestedRows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
       state.manualReasonCandidates = core.listManualReasonCandidates(state.reviewWorkbook, XLSX, {
         baselineBySku: new Map(baselineRows.map((row) => [row.sku, row])),

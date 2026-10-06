@@ -1898,6 +1898,102 @@
     return matched && Number.isInteger(Number(matched.quantity)) && Number(matched.quantity) > 0 ? Number(matched.quantity) : confirmedPuyoumaUnit;
   }
 
+  function buildManualAdditionCatalog(input = {}) {
+    const master = input.master || { records: [], bySku: new Map(), bySupplierSku: new Map(), byExactName: new Map() };
+    const analysisBySku = new Map((input.analysis?.rows || []).map((row) => [normalizeSku(row?.sku), row]));
+    const pending = aggregatePendingReports(input.pendingReports || []);
+    const puyoumaConsignment = resolveConsignment(input.consignment, master, input.blacklist || []);
+    const lirongConsignment = resolveConsignment(input.lirongConsignment, master, input.blacklist || []);
+    const blacklist = normalizeBlacklist(input.blacklist || []);
+    const seen = new Set();
+    const rows = [];
+    for (const masterRecord of master.records || []) {
+      const sku = normalizeSku(masterRecord?.sku);
+      if (!sku || seen.has(sku)) continue;
+      seen.add(sku);
+      const existing = analysisBySku.get(sku);
+      const supplier = String(masterRecord.supplier || existing?.supplier || "").trim();
+      const supplierRule = findSupplierRule(supplier, input.supplierRules || []);
+      const name = String(masterRecord.name || existing?.name || "").trim();
+      const inventory = input.inventory?.bySku?.get?.(sku);
+      const pendingRow = pending.bySku.get(sku);
+      const resolvedConsignment = /力榮/.test(normalizeText(supplier)) ? lirongConsignment : puyoumaConsignment;
+      const consignment = resolvedConsignment.bySku.get(sku);
+      const purchaseTab = /普優[瑪碼]/.test(normalizeText(supplier))
+        ? classifyPuyoumaPurchaseTab(masterRecord, name)
+        : "";
+      const customerCustom = isCustomerCustomItem(sku, name);
+      const combination = CONFIRMED_COMBINATION_SKUS.has(sku);
+      const eightBySeven = isEightBySevenCustomItem(name);
+      const gift = /贈品/.test(`${name} ${masterRecord.stockType || ""}`);
+      const blacklisted = Boolean(blacklistMatch({
+        sku,
+        supplierSku: masterRecord.supplierSku || "",
+        name,
+        labelName: "",
+        spec: ""
+      }, blacklist));
+      const packSize = purchaseUnitFromRules(supplier, masterRecord, name, input.purchaseUnitRules);
+      rows.push({
+        sku,
+        name,
+        supplierSku: String(masterRecord.supplierSku || existing?.supplierSku || "").trim(),
+        supplier,
+        supplierCountry: supplierRule?.country || existing?.supplierCountry || "待確認",
+        unitCost: Math.max(0, Number(masterRecord.unitCost ?? existing?.unitCost ?? 0)),
+        packSize: Math.max(1, Number(packSize || existing?.packSize || 1)),
+        moq: Math.max(0, Number(masterRecord.moq || 0)),
+        purchaseTab,
+        materialCategory: existing?.materialCategory || inferMaterialCategory(masterRecord, name),
+        sizeGroup: String(masterRecord.sizeGroup || "").trim(),
+        size: String(masterRecord.size || "").trim(),
+        mainCategory: String(masterRecord.mainCategory || "").trim(),
+        style1: String(masterRecord.style1 || "").trim(),
+        style2: String(masterRecord.style2 || "").trim(),
+        productStatus: String(masterRecord.productStatus || "").trim(),
+        productStatusPendingReview: !String(masterRecord.productStatus || "").trim(),
+        sellThroughStop: Boolean(masterRecord.sellThroughStop),
+        discontinued: Boolean(masterRecord.discontinued),
+        externalPurchaseBlocked: Boolean(masterRecord.externalPurchaseBlocked || customerCustom || combination || eightBySeven || gift || blacklisted || supplierRule?.automaticPurchase === false),
+        automaticExclusionReason: masterRecord.discontinuedReason
+          || (customerCustom || combination || eightBySeven ? customerCustomExclusionReason(sku, name) : "")
+          || (gift ? "贈品排除一般自動採購" : "")
+          || (blacklisted ? "人工黑名單" : "")
+          || (supplierRule?.automaticPurchase === false ? supplierRule.exclusionReason : ""),
+        inventoryQty: Math.max(0, Number(existing?.inventoryQty ?? inventory?.availableQuantity ?? inventory?.quantity ?? 0)),
+        companyInventoryQty: Math.max(0, Number(inventory?.quantity || 0)),
+        excludedInventoryQty: Math.max(0, Number(existing?.excludedInventoryQty ?? inventory?.excludedQuantity ?? 0)),
+        pendingQty: Math.max(0, Number(existing?.pendingQty ?? pendingRow?.quantity ?? 0)),
+        effectivePendingQty: Math.max(0, Number(existing?.effectivePendingQty ?? pendingRow?.quantity ?? 0)),
+        consignmentCurrentQty: Math.max(0, Number(existing?.consignmentCurrentQty ?? consignment?.currentQty ?? 0)),
+        consignmentScheduledQty: Math.max(0, Number(existing?.consignmentScheduledQty ?? consignment?.scheduledQty ?? 0)),
+        forecastDailyQty: Math.max(0, Number(existing?.forecastDailyQty || 0)),
+        hqDemandQty: Math.max(0, Number(existing?.hqDemandQty || 0)),
+        storeDemandQty: Math.max(0, Number(existing?.storeDemandQty || 0)),
+        storeInventoryByCode: existing?.storeInventoryByCode || {},
+        suggestedPurchaseQty: Math.max(0, Number(existing?.suggestedPurchaseQty || 0)),
+        sourceInAnalysis: Boolean(existing),
+        ruleFlags: {
+          customerCustom,
+          combination,
+          eightBySeven,
+          gift,
+          blacklisted,
+          sellThroughStop: Boolean(masterRecord.sellThroughStop),
+          discontinued: Boolean(masterRecord.discontinued)
+        }
+      });
+    }
+    return {
+      version: 1,
+      sourceHash: String(input.sourceHash || ""),
+      sourceModifiedTime: String(input.sourceModifiedTime || ""),
+      dataAsOfDate: parseDateValue(input.dataAsOfDate) || "",
+      itemCount: rows.length,
+      rows
+    };
+  }
+
   function addDays(dateValue, days) {
     const key = parseDateValue(dateValue);
     if (!key) return "";
@@ -4442,7 +4538,14 @@
         const confirmedQty = manualBlank ? defaultConfirmedQty : parseNumber(manualCell);
         const unitCost = manuallyAdded ? Number(baseline.unitCost || 0) : sourceUnitCost;
         const productStatusPendingReview = Boolean(baseline?.productStatusPendingReview);
-        if (options.baselineBySku && !baseline) errors.push({ sheetName, sourceRow: index + 2, sku, message: "ERP品號不在本次計算批次，無法補回供應商、進貨價、庫存、需求及寄庫資料。" });
+        if (options.baselineBySku && !baseline) errors.push({
+          sheetName,
+          sourceRow: index + 2,
+          sku,
+          message: options.manualAdditionCatalogAvailable === false
+            ? "此母批次建立時尚未保存可人工新增品項目錄；為避免用現行主檔覆蓋舊快照，請重新建立母批次後再新增本品號。"
+            : "ERP品號不在本次母批次的可人工新增品項目錄，無法補回供應商、進貨價、庫存、需求及寄庫資料。"
+        });
         if (baseline && !inCurrentScope) errors.push({ sheetName, sourceRow: index + 2, sku, message: `ERP品號屬於「${procurementWorkUnitForRow(baseline)?.label || baseline.supplier || "其它採購範圍"}」，不可加入目前的採購批次。` });
         if (baseline) {
           if (!manuallyAdded && normalizeText(supplier) !== normalizeText(baseline.supplier)) errors.push({ sheetName, sourceRow: index + 2, sku, message: `供應商與本次計算結果不同；此品號應屬「${baseline.supplier}」。` });
@@ -4759,6 +4862,7 @@
     roundByPack,
     puyoumaPackSize,
     purchaseUnitFromRules,
+    buildManualAdditionCatalog,
     findSupplierRule,
     supplierSelectionCatalog,
     calculatePaymentSchedule,
