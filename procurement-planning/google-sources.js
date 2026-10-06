@@ -359,9 +359,10 @@
   }
 
   function token() { return accessToken; }
+  function clearAuthorization() { accessToken = ""; }
 
   global.ProcurementGoogleSources = {
-    initialize, authorize, verifyCompanyIdentity, loadAll, token,
+    initialize, authorize, verifyCompanyIdentity, loadAll, token, clearAuthorization,
     downloadDriveFile, listDriveExcelFiles, loadLatestMaster, loadLatestApprovedModel, uploadDriveExcel, sendSeasonalModelSummary, sendMonthEndReport,
     selectSpreadsheetSheetTitle
   };

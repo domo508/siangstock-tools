@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261005-budget-release-r1";
+  const APP_VERSION = "20261006-notification-audit-r2";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -1281,13 +1281,13 @@
       const notificationDetail = document.createElement("small");
       if (notificationStatus === "sent") {
         notificationTitle.textContent = "摘要已寄送";
-        notificationDetail.textContent = item.notification_sent_at ? String(item.notification_sent_at).replace("T", " ").slice(0, 19) : "寄送紀錄已完成";
+        notificationDetail.textContent = `${item.notification_recipient || "未記錄收件人"}・${item.notification_sent_at ? String(item.notification_sent_at).replace("T", " ").slice(0, 19) : "寄送紀錄已完成"}`;
       } else if (notificationStatus === "failed") {
         notificationTitle.textContent = "摘要寄送失敗";
-        notificationDetail.textContent = item.notification_error_summary || "請完成Google授權後重送";
+        notificationDetail.textContent = `${item.notification_error_summary || "請完成Google授權後重送"}${item.notification_last_attempt_at ? `・最後嘗試${String(item.notification_last_attempt_at).replace("T", " ").slice(0, 19)}` : ""}${Number(item.notification_retry_count || 0) ? `・共${Number(item.notification_retry_count)}次` : ""}`;
       } else if (notificationStatus === "pending") {
         notificationTitle.textContent = "摘要待寄送";
-        notificationDetail.textContent = "請先完成頁首Google授權";
+        notificationDetail.textContent = `${item.notification_recipient || "收件人待確認"}・尚未完成Gmail寄送`;
       } else {
         notificationTitle.textContent = "無摘要通知";
         notificationDetail.textContent = "歷史匯入或本事件不需寄送";
@@ -1404,7 +1404,18 @@
       const result = await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() });
       setWorkflowStatus(result.status === "sent" ? `批次${batchId}摘要已寄送。` : `批次${batchId}目前沒有待寄摘要。`, "success");
       await loadLedger();
-    } catch (error) { button.disabled = false; setWorkflowStatus(`摘要重送失敗：${error.message}`, "error"); }
+    } catch (error) {
+      if ([401, 403].includes(Number(error.status || 0))) {
+        googleSources.clearAuthorization?.();
+        state.googleAuthorized = false;
+        elements.googleConnect.disabled = false;
+        elements.autoSource.disabled = true;
+        renderGoogleAuthorizationStatus();
+      }
+      await loadLedger().catch(() => false);
+      button.disabled = false;
+      setWorkflowStatus(`摘要重送失敗：${error.message}`, "error");
+    }
   }
   async function revokeLedgerBatch(item, button) {
     const reason = globalThis.prompt(`請輸入撤銷批次${item.id}的原因（撤銷後會沖回${formatCurrency(item.approved_amount)}）：`, "");

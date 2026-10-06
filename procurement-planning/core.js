@@ -256,16 +256,15 @@
   const SELL_THROUGH_RESTART_REASON = "商品主檔已取消S／確認恢復採購，等待同步";
   const OTHER_MANUAL_REASON = "其他";
   const MANUAL_REASON_OPTIONS = Object.freeze([
-    "沿用系統建議",
     "需求增加，人工提高數量",
     "庫存／銷售風險，人工降低數量",
     "本次不採購",
     "人工新增品項",
-    FULL_CONSIGNMENT_RETURN_REASON,
     SELL_THROUGH_RESTART_REASON,
     "列入黑名單／一次性採購排除",
     OTHER_MANUAL_REASON
   ]);
+  const LEGACY_OPTIONAL_MANUAL_REASONS = Object.freeze(new Set(["沿用系統建議", FULL_CONSIGNMENT_RETURN_REASON]));
   const LEGACY_FULL_CONSIGNMENT_RETURN_REASONS = Object.freeze(new Set(["最後剩餘數量"]));
 
   function isFullConsignmentReturnReason(value) {
@@ -289,7 +288,7 @@
       if (requiredMessage) errors.push({ ...location, message: requiredMessage });
       return;
     }
-    if (!MANUAL_REASON_OPTIONS.includes(reasonInput.category)) {
+    if (!MANUAL_REASON_OPTIONS.includes(reasonInput.category) && !LEGACY_OPTIONAL_MANUAL_REASONS.has(reasonInput.category)) {
       errors.push({ ...location, message: "人工調整原因類別不在固定選項內；請使用「09_人工調整原因」所列選項。" });
     }
     if (reasonInput.category === OTHER_MANUAL_REASON && !reasonInput.detail) {
@@ -299,12 +298,10 @@
 
   function appendManualReasonSheet(workbook, XLSX) {
     appendJsonSheet(workbook, XLSX, "09_人工調整原因", [
-      { "原因類別": "沿用系統建議", "使用時機": "人工量與系統建議相同，仍需留下明確確認時", "補充說明": "可不填" },
       { "原因類別": "需求增加，人工提高數量", "使用時機": "人工量高於系統建議", "補充說明": "建議填寫活動、客戶或供應資訊" },
       { "原因類別": "庫存／銷售風險，人工降低數量", "使用時機": "人工量低於系統建議", "補充說明": "建議填寫降量依據" },
       { "原因類別": "本次不採購", "使用時機": "人工量改為0", "補充說明": "建議填寫本次不採購原因" },
       { "原因類別": "人工新增品項", "使用時機": "在原報表新增本次未輸出的品號", "補充說明": "建議填寫新增依據" },
-      { "原因類別": FULL_CONSIGNMENT_RETURN_REASON, "使用時機": "普優瑪尾箱／剩餘現貨全部清回", "補充說明": "人工量須等於本批可清回量" },
       { "原因類別": SELL_THROUGH_RESTART_REASON, "使用時機": "主檔仍顯示S，但已確認恢復採購或等待主檔同步", "補充說明": "只放寬本批；仍檢核供應商、進貨價、採購單位與額度" },
       { "原因類別": "列入黑名單／一次性採購排除", "使用時機": "確認本品不應進入一般採購", "補充說明": "建議填寫排除依據" },
       { "原因類別": OTHER_MANUAL_REASON, "使用時機": "以上皆不適用", "補充說明": "必填" }
@@ -335,10 +332,19 @@
           detailHeader: "人工調整補充說明",
           legacyHeaders: ["人工調整原因", "原因"]
         });
-        const changed = !manualBlank && manualQty !== suggestedQty;
+        const supplier = String(source["供應商"] || baseline?.supplier || "").trim();
+        const packSize = Math.max(1, Number(baseline?.packSize || source["採購單位"] || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
+        const reservedConsignmentQty = Math.max(0, Number(options.reservedConsignmentBySku?.get?.(sku) || 0));
+        const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
+        const automaticTailBoxQty = isAutomaticConsignmentTailBox({
+          suggestedQty, availableQty: consignmentAvailableQty, packSize, confirmedQty: consignmentAvailableQty
+        }) ? consignmentAvailableQty : null;
+        const defaultQty = automaticTailBoxQty ?? suggestedQty;
+        const changed = !manualBlank && manualQty !== defaultQty;
         const pendingStatus = Boolean(baseline?.productStatusPendingReview);
         const sellThroughException = Boolean(baseline?.sellThroughStop && Number(manualQty || 0) > 0);
-        if (!changed && !manuallyAdded && !pendingStatus && !sellThroughException && !reasonInput.reason) continue;
+        const optionalLegacyReason = LEGACY_OPTIONAL_MANUAL_REASONS.has(reasonInput.category || reasonInput.legacy);
+        if (!changed && !manuallyAdded && !pendingStatus && !sellThroughException && (!reasonInput.reason || optionalLegacyReason)) continue;
         let type = "已填原因";
         if (manuallyAdded) type = "人工新增品項";
         else if (sellThroughException) type = "S品人工例外";
@@ -440,6 +446,16 @@
     const currentQty = Math.max(0, Number(baseline?.consignmentCurrentQty ?? source?.["寄倉現貨"] ?? 0));
     const pendingOccupancy = Math.max(0, Number(baseline?.pendingQty ?? source?.["已採購未到貨"] ?? 0));
     return Math.max(0, currentQty - pendingOccupancy - Math.max(0, Number(reservedQty || 0)));
+  }
+
+  function isAutomaticConsignmentTailBox({ suggestedQty, availableQty, packSize, confirmedQty }) {
+    const normalizedSuggestedQty = Math.max(0, Number(suggestedQty || 0));
+    const normalizedAvailableQty = Math.max(0, Number(availableQty || 0));
+    const normalizedPackSize = Math.max(1, Number(packSize || 1));
+    return normalizedAvailableQty > 0
+      && normalizedAvailableQty < normalizedPackSize
+      && normalizedAvailableQty < normalizedSuggestedQty
+      && Number(confirmedQty) === normalizedAvailableQty;
   }
 
   function normalizeHeader(value) {
@@ -4404,7 +4420,14 @@
         const supplier = manuallyAdded ? String(baseline.supplier || "").trim() : sourceSupplier;
         const name = manuallyAdded ? String(baseline.name || "").trim() : sourceName;
         const suggestedQty = manuallyAdded ? Math.max(0, Number(baseline.suggestedPurchaseQty || 0)) : sourceSuggestedQty;
-        const confirmedQty = manualBlank ? Math.max(0, suggestedQty || 0) : parseNumber(manualCell);
+        const packSize = Math.max(1, Number(baseline?.packSize || source["採購單位"] || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
+        const reservedConsignmentQty = Math.max(0, Number(options.reservedConsignmentBySku?.get?.(sku) || 0));
+        const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
+        const automaticTailBoxQty = isAutomaticConsignmentTailBox({
+          suggestedQty, availableQty: consignmentAvailableQty, packSize, confirmedQty: consignmentAvailableQty
+        }) ? consignmentAvailableQty : null;
+        const defaultConfirmedQty = automaticTailBoxQty ?? Math.max(0, suggestedQty || 0);
+        const confirmedQty = manualBlank ? defaultConfirmedQty : parseNumber(manualCell);
         const unitCost = manuallyAdded ? Number(baseline.unitCost || 0) : sourceUnitCost;
         const productStatusPendingReview = Boolean(baseline?.productStatusPendingReview);
         if (options.baselineBySku && !baseline) errors.push({ sheetName, sourceRow: index + 2, sku, message: "ERP品號不在本次計算批次，無法補回供應商、進貨價、庫存、需求及寄庫資料。" });
@@ -4415,15 +4438,12 @@
           if (Math.abs(Number(suggestedQty || 0) - Number(baseline.suggestedPurchaseQty || 0)) >= 0.01) errors.push({ sheetName, sourceRow: index + 2, sku, message: "系統建議量已被修改，請只填人工欄位。" });
         }
         if (confirmedQty == null || confirmedQty < 0 || !Number.isInteger(confirmedQty)) errors.push({ sheetName, sourceRow: index + 2, sku, message: "人工確認採購量必須為0或正整數。" });
-        const reasonRequired = manuallyAdded || (!manualBlank && confirmedQty !== suggestedQty) || productStatusPendingReview;
+        const reasonRequired = manuallyAdded || (!manualBlank && confirmedQty !== defaultConfirmedQty) || productStatusPendingReview;
         if (manuallyAdded && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "人工新增品項必須填寫新增原因。" });
-        if (!manualBlank && confirmedQty !== suggestedQty && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "修改採購量時必須填人工調整原因。" });
+        if (!manualBlank && confirmedQty !== defaultConfirmedQty && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "修改採購量時必須填人工調整原因。" });
         if (productStatusPendingReview && manualBlank) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白，必須明確填寫人工確認採購量，不能直接沿用系統試算。" });
         if (productStatusPendingReview && !reason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "貨品狀態空白，人工調整原因必填，確認後才能完成第一次覆核。" });
         validateStructuredManualReason(reasonInput, errors, { sheetName, sourceRow: index + 2, sku }, reasonRequired ? "請從固定選項填寫人工調整原因類別。" : "");
-        const packSize = Math.max(1, Number(baseline?.packSize || source["採購單位"] || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
-        const reservedConsignmentQty = Math.max(0, Number(options.reservedConsignmentBySku?.get?.(sku) || 0));
-        const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
         const sellThroughConsignmentAllowed = Boolean(baseline?.sellThroughStop && consignmentAvailableQty > 0);
         const sellThroughRestartException = Boolean(
           baseline?.sellThroughStop
@@ -4435,8 +4455,9 @@
           && baseline?.externalPurchaseBlocked
           && /售完即停|S品[－：-].*寄庫現貨已用罄/.test(String(baseline?.supplyStatus || baseline?.automaticExclusionReason || ""))
         );
-        const fullConsignmentReturnRequested = /普優[瑪碼]/.test(supplier) && isFullConsignmentReturnReason(reason);
-        const tailBoxException = Boolean(fullConsignmentReturnRequested && consignmentAvailableQty > 0 && confirmedQty === consignmentAvailableQty);
+        const fullConsignmentReturnRequested = isFullConsignmentReturnReason(reason);
+        const automaticTailBoxException = isAutomaticConsignmentTailBox({ suggestedQty, availableQty: consignmentAvailableQty, packSize, confirmedQty });
+        const tailBoxException = Boolean(automaticTailBoxException || (fullConsignmentReturnRequested && consignmentAvailableQty > 0 && confirmedQty === consignmentAvailableQty));
         const existingSellThroughConsignmentPull = Boolean(baseline?.sellThroughStop && consignmentAvailableQty > 0 && confirmedQty > 0 && confirmedQty <= consignmentAvailableQty);
         if (fullConsignmentReturnRequested && confirmedQty !== consignmentAvailableQty) errors.push({
           sheetName, sourceRow: index + 2, sku,
@@ -4599,8 +4620,11 @@
       validateStructuredManualReason(secondReasonInput, errors, { sheetName, sourceRow: index + 2, sku }, !confirmationBlank && finalQty !== firstFinalQty ? "第二次異動數量時必須填寫第二次異動原因類別。" : "");
       if (finalQty == null || finalQty < 0 || !Number.isInteger(finalQty)) errors.push({ sheetName, sourceRow: index + 2, sku, message: "第二次異動採購量必須為0或正整數。" });
       const packSize = Math.max(1, Number(baseline?.packSize || source["採購單位"] || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
-      const fullConsignmentReturnRequested = /普優[瑪碼]/.test(supplier) && isFullConsignmentReturnReason(reason);
-      const tailBoxException = Boolean(fullConsignmentReturnRequested && Number(baseline?.currentAvailableQty || 0) > 0 && finalQty === Number(baseline.currentAvailableQty));
+      const fullConsignmentReturnRequested = isFullConsignmentReturnReason(reason);
+      const automaticTailBoxException = isAutomaticConsignmentTailBox({
+        suggestedQty, availableQty: Number(baseline?.currentAvailableQty || 0), packSize, confirmedQty: finalQty
+      });
+      const tailBoxException = Boolean(automaticTailBoxException || (fullConsignmentReturnRequested && Number(baseline?.currentAvailableQty || 0) > 0 && finalQty === Number(baseline.currentAvailableQty)));
       if (fullConsignmentReturnRequested && finalQty !== Number(baseline?.currentAvailableQty || 0)) errors.push({
         sheetName, sourceRow: index + 2, sku,
         message: `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，第二次異動量必須維持第一次覆核確認的可清回量${Number(baseline?.currentAvailableQty || 0)}件。`

@@ -1201,14 +1201,30 @@ function encodeBase64Url(value: string): string {
 async function notify(request: Request, env: ProcurementEnv, batchId: string): Promise<Response> {
   requireSameOrigin(request, env);
   const access = await verifyApprover(request, env);
-  const token = request.headers.get("X-Google-Access-Token") || "";
-  if (!token || token.length > 4096) throw new RequestValidationError("需要重新完成公司 Google 授權。", 401);
-  const identityResponse = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${token}` } });
-  const identity = identityResponse.ok ? await identityResponse.json<{ email?: string }>() : {};
-  const sender = (identity.email || "").toLocaleLowerCase("en-US");
-  if (sender !== access.email) throw new RequestValidationError("Google 授權帳號必須與目前公司登入帳號相同。", 403);
-  const row = await env.DB.prepare("SELECT n.id notification_id, n.event_type, n.retry_count, e.amount_before event_amount_before, e.amount_delta event_amount_delta, e.amount_after event_amount_after, e.reason event_reason, e.created_at event_created_at, e.created_by event_created_by, b.* FROM procurement_notifications n JOIN procurement_events e ON e.id = n.event_id JOIN procurement_batches b ON b.id = n.batch_id WHERE n.batch_id = ? AND n.status != 'sent' ORDER BY n.id DESC LIMIT 1").bind(batchId).first<Record<string, unknown>>();
+  const row = await env.DB.prepare("SELECT n.id notification_id, n.event_type, n.retry_count, n.recipient notification_recipient, e.amount_before event_amount_before, e.amount_delta event_amount_delta, e.amount_after event_amount_after, e.reason event_reason, e.created_at event_created_at, e.created_by event_created_by, b.* FROM procurement_notifications n JOIN procurement_events e ON e.id = n.event_id JOIN procurement_batches b ON b.id = n.batch_id WHERE n.batch_id = ? AND n.status != 'sent' ORDER BY n.id DESC LIMIT 1").bind(batchId).first<Record<string, unknown>>();
   if (!row) return json({ status: "sent_or_not_required" });
+  const fail = async (stage: string, message: string, status: number) => {
+    const now = new Date().toISOString();
+    const error = `${stage}：${message}`.slice(0, 500);
+    await env.DB.prepare("UPDATE procurement_notifications SET status = 'failed', retry_count = retry_count + 1, last_attempt_at = ?, error_summary = ? WHERE id = ?").bind(now, error, row.notification_id).run();
+    return json({ status: "failed", stage, error, lastAttemptAt: now }, status);
+  };
+  const token = request.headers.get("X-Google-Access-Token") || "";
+  if (!token || token.length > 4096) return fail("Google授權檢查", "授權資料不存在或已失效，請重新完成公司 Google 授權。", 401);
+  let identityResponse: Response;
+  try {
+    identityResponse = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${token}` } });
+  } catch (error) {
+    return fail("Google授權檢查", `無法連線至Google帳號驗證服務（${error instanceof Error ? error.message : "連線失敗"}）。`, 502);
+  }
+  if (!identityResponse.ok) {
+    return fail("Google授權檢查", identityResponse.status === 401
+      ? "授權已過期，請重新完成公司 Google 授權。"
+      : `Google帳號驗證失敗（HTTP ${identityResponse.status}）。`, identityResponse.status === 401 ? 401 : 502);
+  }
+  const identity: { email?: string } = await identityResponse.json<{ email?: string }>().catch(() => ({}));
+  const sender = (identity.email || "").toLocaleLowerCase("en-US");
+  if (sender !== access.email) return fail("Google授權檢查", "Google授權帳號必須與目前公司登入帳號相同。", 403);
   const eventLabels: Record<string, string> = { approved: "正式核准", revoked: "核准撤銷", corrected: "核准更正" };
   const eventLabel = eventLabels[String(row.event_type)] || "額度異動";
   const amountBefore = Number(row.event_amount_before || 0);
@@ -1224,7 +1240,7 @@ async function notify(request: Request, env: ProcurementEnv, batchId: string): P
   const usageRate = Number(row.budget_amount) > 0 ? committedAfter / Number(row.budget_amount) * 100 : 0;
   const subject = `[翔仔居家採購] ${eventLabel}｜${batchId}`;
   const message = [
-    `From: ${sender}`, `To: ${String(row.recipient || access.settings.notificationRecipient)}`, `Subject: =?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`,
+    `From: ${sender}`, `To: ${String(row.notification_recipient || access.settings.notificationRecipient)}`, `Subject: =?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`,
     "Content-Type: text/plain; charset=UTF-8", "", `翔仔居家採購${eventLabel}摘要`, `批次編號：${batchId}`,
     `供應商：${(parseJsonText(String(row.supplier_summary)) as string[] || []).join("、") || "未提供"}`,
     `核准人：${String(row.approved_by || "")}`, `核准時間：${String(row.approved_at || "")}`,
@@ -1238,19 +1254,22 @@ async function notify(request: Request, env: ProcurementEnv, batchId: string): P
     `本月預計付款：${currentPayment.toFixed(2)}`, `下月以後已承諾付款：${futurePayments.toFixed(2)}`,
     `警示：${String(row.warning_summary || "無")}`
   ].join("\r\n");
-  const send = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
-    method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ raw: encodeBase64Url(message) })
-  });
-  const response = await send.json<{ id?: string; error?: { message?: string } }>();
+  let send: Response;
+  try {
+    send = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ raw: encodeBase64Url(message) })
+    });
+  } catch (error) {
+    return fail("Gmail寄送", `無法連線至Gmail寄送服務（${error instanceof Error ? error.message : "連線失敗"}）。`, 502);
+  }
+  const response: { id?: string; error?: { message?: string } } = await send.json<{ id?: string; error?: { message?: string } }>().catch(() => ({}));
   const now = new Date().toISOString();
   if (send.ok && response.id) {
     await env.DB.prepare("UPDATE procurement_notifications SET status = 'sent', provider_message_id = ?, retry_count = retry_count + 1, last_attempt_at = ?, sent_at = ?, error_summary = NULL WHERE id = ?").bind(response.id, now, now, row.notification_id).run();
     return json({ status: "sent", sentAt: now });
   }
-  const error = String(response.error?.message || `Gmail HTTP ${send.status}`).slice(0, 500);
-  await env.DB.prepare("UPDATE procurement_notifications SET status = 'failed', retry_count = retry_count + 1, last_attempt_at = ?, error_summary = ? WHERE id = ?").bind(now, error, row.notification_id).run();
-  return json({ status: "failed", error }, 502);
+  return fail("Gmail寄送", String(response.error?.message || `Gmail HTTP ${send.status}`), 502);
 }
 
 export async function procurementRoute(request: Request, env: ProcurementEnv): Promise<Response | null> {

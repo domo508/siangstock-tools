@@ -1489,6 +1489,64 @@ describe("採購建議第二階段", () => {
     expect(core.puyoumaPackSize({ name: "60天絲5尺床包" })).toBe(20);
   });
 
+  it("所有供應商尾箱可留白沿用實際可採購量，填相同數量也不要求原因", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "供應商", "商品品名", "建議採購量", "採購單位", "進貨價", "人工確認採購量", "人工調整原因類別"],
+      ["A43398", "普優瑪寢具有限公司", "6尺床包組", 20, 20, 500, "", ""],
+      ["A41396", "普優瑪寢具有限公司", "3.5尺床包組", 10, 10, 450, 6, "沿用系統建議"],
+      ["A42399", "普優瑪寢具有限公司", "5尺床包組", 20, 20, 480, "", ""]
+    ]), "03B1_普優瑪_天絲");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "供應商", "商品品名", "建議採購量", "採購單位", "進貨價", "人工確認採購量", "人工調整原因"],
+      ["L41031", "上林", "毛巾", 10, 10, 120, "", ""],
+      ["A42347-A", "力榮", "5尺床包", 10, 10, 300, 7, ""]
+    ]), "03A_其它供應商");
+    const baselines = [
+      { sku: "A43398", supplier: "普優瑪寢具有限公司", name: "6尺床包組", unitCost: 500, suggestedPurchaseQty: 20, packSize: 20, pendingQty: 0, consignmentCurrentQty: 14 },
+      { sku: "A41396", supplier: "普優瑪寢具有限公司", name: "3.5尺床包組", unitCost: 450, suggestedPurchaseQty: 10, packSize: 10, pendingQty: 0, consignmentCurrentQty: 6 },
+      { sku: "A42399", supplier: "普優瑪寢具有限公司", name: "5尺床包組", unitCost: 480, suggestedPurchaseQty: 20, packSize: 20, pendingQty: 0, consignmentCurrentQty: 40 },
+      { sku: "L41031", supplier: "上林", name: "毛巾", unitCost: 120, suggestedPurchaseQty: 10, packSize: 10, pendingQty: 0, consignmentCurrentQty: 8 },
+      { sku: "A42347-A", supplier: "力榮", name: "5尺床包", unitCost: 300, suggestedPurchaseQty: 10, packSize: 10, pendingQty: 0, consignmentCurrentQty: 7 }
+    ];
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, {
+      baselineBySku: new Map(baselines.map((row) => [row.sku, row])),
+      allowedSkuSet: new Set(baselines.map((row) => row.sku))
+    });
+    const reasonCandidates = core.listManualReasonCandidates(workbook, XLSX, {
+      baselineBySku: new Map(baselines.map((row) => [row.sku, row])),
+      exportedSkuSet: new Set(baselines.map((row) => row.sku))
+    });
+    expect(reasonCandidates).toHaveLength(0);
+    expect(review.errors).toHaveLength(0);
+    expect(review.rows.map((row) => ({ sku: row.sku, confirmedQty: row.confirmedQty, finalQty: row.finalQty, fullConsignmentReturn: row.fullConsignmentReturn }))).toEqual([
+      { sku: "A43398", confirmedQty: 14, finalQty: 14, fullConsignmentReturn: true },
+      { sku: "A41396", confirmedQty: 6, finalQty: 6, fullConsignmentReturn: true },
+      { sku: "A42399", confirmedQty: 20, finalQty: 20, fullConsignmentReturn: false },
+      { sku: "L41031", confirmedQty: 8, finalQty: 8, fullConsignmentReturn: true },
+      { sku: "A42347-A", confirmedQty: 7, finalQty: 7, fullConsignmentReturn: true }
+    ]);
+
+    const second = core.buildSecondReviewWorkbook(review, XLSX);
+    const confirmed = core.reviewSecondApprovalWorkbook(second, XLSX, { baselineBySku: new Map(review.rows.map((row) => [row.sku, row])) });
+    expect(confirmed.errors).toHaveLength(0);
+    expect(confirmed.rows.map((row) => row.finalQty)).toEqual([14, 6, 20, 8, 7]);
+  });
+
+  it("普優瑪尾箱若改成非預設量，仍要求原因並維持採購單位檢核", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "供應商", "商品品名", "建議採購量", "採購單位", "進貨價", "人工確認採購量", "人工調整原因"],
+      ["A43398", "普優瑪寢具有限公司", "6尺床包組", 20, 20, 500, 13, ""]
+    ]), "03B1_普優瑪_天絲");
+    const baseline = { sku: "A43398", supplier: "普優瑪寢具有限公司", name: "6尺床包組", unitCost: 500, suggestedPurchaseQty: 20, packSize: 20, pendingQty: 0, consignmentCurrentQty: 14 };
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, {
+      baselineBySku: new Map([[baseline.sku, baseline]]), allowedSkuSet: new Set([baseline.sku])
+    });
+    expect(review.errors.some((error) => error.message === "修改採購量時必須填人工調整原因。")).toBe(true);
+    expect(review.errors.some((error) => error.message.includes("人工量必須填0或20的倍數"))).toBe(true);
+  });
+
   it("普優瑪可用指定原因精確清回全部寄庫現貨，粉紅排程不計入且二次覆核沿用", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
@@ -1631,6 +1689,8 @@ describe("採購建議第二階段", () => {
   });
 
   it("新下載的人工審核與異動確認表包含可點選的固定原因下拉選單", async () => {
+    expect(core.MANUAL_REASON_OPTIONS).not.toContain("沿用系統建議");
+    expect(core.MANUAL_REASON_OPTIONS).not.toContain("全部寄庫現貨清回");
     const recommendations = core.buildProcurementRecommendations({
       master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
       salesReports: [makeSales()], model: makeForecastModel(), blacklist: ["一次性代工品"], asOfDate: "2026-08-28"
@@ -1639,7 +1699,7 @@ describe("採購建議第二階段", () => {
     const bytes = await core.buildWorkbookBytesWithManualReasonValidation(workbook, XLSX, JSZip);
     const archive = await JSZip.loadAsync(bytes);
     const worksheetXml = await Promise.all(Object.keys(archive.files).filter((path) => /^xl\/worksheets\/sheet\d+\.xml$/.test(path)).map((path) => archive.file(path).async("string")));
-    expect(worksheetXml.some((xml) => xml.includes("<dataValidations") && xml.includes("'09_人工調整原因'!$A$2:$A$10"))).toBe(true);
+    expect(worksheetXml.some((xml) => xml.includes("<dataValidations") && xml.includes("'09_人工調整原因'!$A$2:$A$8"))).toBe(true);
 
     const firstSheet = workbook.Sheets["03B1_普優瑪_天絲"];
     const headers = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: "" })[0];
@@ -1650,7 +1710,7 @@ describe("採購建議第二階段", () => {
     const secondBytes = await core.buildWorkbookBytesWithManualReasonValidation(second, XLSX, JSZip);
     const secondArchive = await JSZip.loadAsync(secondBytes);
     const secondXml = await Promise.all(Object.keys(secondArchive.files).filter((path) => /^xl\/worksheets\/sheet\d+\.xml$/.test(path)).map((path) => secondArchive.file(path).async("string")));
-    expect(secondXml.some((xml) => xml.includes("<dataValidations") && xml.includes("'09_人工調整原因'!$A$2:$A$10"))).toBe(true);
+    expect(secondXml.some((xml) => xml.includes("<dataValidations") && xml.includes("'09_人工調整原因'!$A$2:$A$8"))).toBe(true);
   });
 
   it("第一次回匯可找出需填原因品項並批次寫回原因與補充說明", () => {
@@ -1764,19 +1824,23 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20261005-budget-release-r1');
-    expect(toolHtml).toContain('app.js?v=20261005-budget-release-r1');
+    expect(toolHtml).toContain('core.js?v=20261006-notification-audit-r2');
+    expect(toolHtml).toContain('google-sources.js?v=20261006-notification-audit-r2');
+    expect(toolHtml).toContain('app.js?v=20261006-notification-audit-r2');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261005-budget-release-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261006-notification-audit-r2");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
     expect(toolHtml.indexOf('id="google-connect-button"')).toBeLessThan(toolHtml.indexOf('id="source-title"'));
     expect(toolAppSource).toContain("renderGoogleAuthorizationStatus");
     expect(toolAppSource).toContain("notification_status");
+    expect(toolAppSource).toContain("摘要重送失敗");
+    expect(toolAppSource).toContain("clearAuthorization");
+    expect(toolAppSource).toContain("notification_last_attempt_at");
     expect(headers).toMatch(/\/procurement-planning\/[\s\S]*Cache-Control: no-store, max-age=0/);
     expect(headers).toMatch(/\/procurement-planning\/version\.json[\s\S]*Cache-Control: no-store, max-age=0/);
     expect(readFileSync("../procurement-planning/inventory-reader-worker.js", "utf8")).toContain('dense: true');
@@ -1791,6 +1855,10 @@ describe("採購規劃前台與入口", () => {
     const procurementWorker = readFileSync("worker/src/procurement.ts", "utf8");
     expect(procurementWorker).toContain("notification_sent_at");
     expect(procurementWorker).toContain("notification_error_summary");
+    expect(procurementWorker).toContain('const fail = async (stage: string, message: string, status: number)');
+    expect(procurementWorker).toContain('return fail("Google授權檢查"');
+    expect(procurementWorker).toContain('return fail("Gmail寄送"');
+    expect(procurementWorker).toContain("n.recipient notification_recipient");
     expect(toolApp).toContain("/api/procurement/month-plan");
     expect(toolApp).toContain("/api/procurement/cost-snapshot");
     expect(toolHtml).toContain('id="cost-snapshot-status"');
