@@ -372,7 +372,7 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
   await verifyCompanyUser(request, procurementAccess(env));
   const requestedMonth = month(new URL(request.url).searchParams.get("month"));
   const rows = await env.DB.prepare(
-    "SELECT b.id, b.analysis_month, b.workflow_type, b.erp_reference, b.supplier_summary, b.status, b.suggested_amount, b.manual_amount, b.blocked_amount, b.approved_amount, b.adjustment_amount, b.budget_amount, b.payment_current_month, b.payment_future_months, b.payment_schedule, b.warning_summary, b.created_at, b.created_by, b.approved_at, b.approved_by, b.erp_created_at, b.erp_created_by, b.updated_at, b.revision, (SELECT n.status FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_status, (SELECT n.recipient FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_recipient, (SELECT n.retry_count FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_retry_count, (SELECT n.last_attempt_at FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_last_attempt_at, (SELECT n.sent_at FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_sent_at, (SELECT n.error_summary FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_error_summary FROM procurement_batches b WHERE b.analysis_month = ? ORDER BY b.updated_at DESC LIMIT 200"
+    "SELECT b.id, b.analysis_month, b.checkpoint, b.parent_batch_id, b.work_unit_ids, b.workflow_type, b.erp_reference, b.supplier_summary, b.status, b.suggested_amount, b.manual_amount, b.blocked_amount, b.approved_amount, b.adjustment_amount, b.budget_amount, b.payment_current_month, b.payment_future_months, b.payment_schedule, b.warning_summary, b.created_at, b.created_by, b.approved_at, b.approved_by, b.erp_created_at, b.erp_created_by, b.updated_at, b.revision, (SELECT n.status FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_status, (SELECT n.recipient FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_recipient, (SELECT n.retry_count FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_retry_count, (SELECT n.last_attempt_at FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_last_attempt_at, (SELECT n.sent_at FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_sent_at, (SELECT n.error_summary FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_error_summary FROM procurement_batches b WHERE b.analysis_month = ? ORDER BY b.updated_at DESC LIMIT 200"
   ).bind(requestedMonth).all<Record<string, unknown>>();
   const batchIds = rows.results.map((row) => String(row.id));
   const itemSummaryRows = batchIds.length
@@ -408,6 +408,7 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
     });
     return {
       ...row,
+      work_unit_ids: parseJsonText(String(row.work_unit_ids || "[]")) || [],
       supplier_summary: suppliers,
       erp_documents: documents,
       payment_schedule: parseJsonText(String(row.payment_schedule || "[]")),
@@ -654,6 +655,8 @@ function serializeCollaborationDraft(row: Record<string, unknown>, includePayloa
     batchId: String(row.batch_id || ""),
     stage: String(row.stage),
     workUnitLabel: String(row.work_unit_label || ""),
+    parentBatchId: String(row.parent_batch_id || ""),
+    workUnitIds: parseJsonText(String(row.work_unit_ids || "[]")) || [],
     supplierSummary: parseJsonText(String(row.supplier_summary || "[]")) || [],
     amount: Number(row.amount || 0),
     revision: Number(row.revision || 1),
@@ -674,7 +677,7 @@ async function listCollaborationDrafts(request: Request, env: ProcurementEnv): P
   await verifyCompanyUser(request, procurementAccess(env));
   const requestedMonth = month(new URL(request.url).searchParams.get("month"));
   const rows = await env.DB.prepare(
-    "SELECT id, analysis_month, checkpoint, workflow_type, batch_id, stage, work_unit_label, supplier_summary, amount, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE analysis_month = ? AND stage != 'erp_created' AND removed_at IS NULL ORDER BY CASE WHEN stage = 'analysis' AND (work_unit_label = '' OR work_unit_label = '尚未選擇審核單位') THEN 0 ELSE 1 END, updated_at DESC LIMIT 100"
+    "SELECT id, analysis_month, checkpoint, workflow_type, batch_id, stage, work_unit_label, parent_batch_id, work_unit_ids, supplier_summary, amount, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE analysis_month = ? AND stage != 'erp_created' AND removed_at IS NULL ORDER BY CASE WHEN stage = 'analysis' AND (work_unit_label = '' OR work_unit_label = '尚未選擇審核單位') THEN 0 ELSE 1 END, updated_at DESC LIMIT 100"
   ).bind(requestedMonth).all<Record<string, unknown>>();
   return json({ month: requestedMonth, drafts: rows.results.map((row) => serializeCollaborationDraft(row)) });
 }
@@ -683,7 +686,7 @@ async function getCollaborationDraft(request: Request, env: ProcurementEnv, draf
   await verifyCompanyUser(request, procurementAccess(env));
   const id = string(draftId, "協作草稿編號", 100);
   const row = await env.DB.prepare(
-    "SELECT id, analysis_month, checkpoint, workflow_type, batch_id, stage, work_unit_label, supplier_summary, amount, payload_encoding, payload, payload_sha256, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE id = ? AND removed_at IS NULL"
+    "SELECT id, analysis_month, checkpoint, workflow_type, batch_id, stage, work_unit_label, parent_batch_id, work_unit_ids, supplier_summary, amount, payload_encoding, payload, payload_sha256, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE id = ? AND removed_at IS NULL"
   ).bind(id).first<Record<string, unknown>>();
   if (!row) throw new RequestValidationError("找不到這筆公司共用協作草稿。", 404);
   return json({ draft: serializeCollaborationDraft(row, true) });
@@ -703,6 +706,10 @@ async function saveCollaborationDraft(request: Request, env: ProcurementEnv, dra
   if (!COLLABORATION_STAGES.has(stage)) throw new RequestValidationError("草稿階段格式錯誤。");
   const workUnitLabel = String(input.workUnitLabel || "").normalize("NFKC").trim();
   if (workUnitLabel.length > 300) throw new RequestValidationError("審核單位名稱過長。");
+  const parentBatchId = input.parentBatchId ? string(input.parentBatchId, "母批次編號", 120) : "";
+  const workUnitIdsInput = input.workUnitIds == null ? [] : input.workUnitIds;
+  if (!Array.isArray(workUnitIdsInput) || workUnitIdsInput.length > 100 || workUnitIdsInput.some((value) => typeof value !== "string" || !value.trim() || value.length > 300)) throw new RequestValidationError("審核單位範圍格式錯誤。");
+  const workUnitIds = JSON.stringify([...new Set(workUnitIdsInput.map((value) => value.trim()))]);
   const suppliers = input.supplierSummary == null ? [] : input.supplierSummary;
   if (!Array.isArray(suppliers) || suppliers.length > 100 || suppliers.some((value) => typeof value !== "string" || !value.trim() || value.trim().length > 120)) {
     throw new RequestValidationError("供應商摘要格式錯誤。");
@@ -729,17 +736,17 @@ async function saveCollaborationDraft(request: Request, env: ProcurementEnv, dra
   if (!existing) {
     if (expectedRevision !== 0) throw new RequestValidationError("協作草稿已不存在或版本已改變，請重新整理。", 409);
     await env.DB.prepare(
-      "INSERT INTO procurement_collaboration_drafts (id, analysis_month, checkpoint, workflow_type, batch_id, stage, work_unit_label, supplier_summary, amount, payload_encoding, payload, payload_sha256, revision, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)"
-    ).bind(id, analysisMonth, checkpoint, workflowType, batchId || null, stage, workUnitLabel, supplierSummary, amount, payloadEncoding, payload, payloadSha256, now, actor, now, actor).run();
+      "INSERT INTO procurement_collaboration_drafts (id, analysis_month, checkpoint, workflow_type, batch_id, stage, work_unit_label, parent_batch_id, work_unit_ids, supplier_summary, amount, payload_encoding, payload, payload_sha256, revision, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)"
+    ).bind(id, analysisMonth, checkpoint, workflowType, batchId || null, stage, workUnitLabel, parentBatchId || null, workUnitIds, supplierSummary, amount, payloadEncoding, payload, payloadSha256, now, actor, now, actor).run();
   } else {
     if (Number(existing.revision) !== expectedRevision) throw new RequestValidationError("這筆協作草稿已由其他同事更新，為避免覆蓋，請重新開啟公司共用最新版。", 409);
     const updated = await env.DB.prepare(
-      "UPDATE procurement_collaboration_drafts SET analysis_month = ?, checkpoint = ?, workflow_type = ?, batch_id = ?, stage = ?, work_unit_label = ?, supplier_summary = ?, amount = ?, payload_encoding = ?, payload = ?, payload_sha256 = ?, revision = revision + 1, updated_at = ?, updated_by = ? WHERE id = ? AND revision = ?"
-    ).bind(analysisMonth, checkpoint, workflowType, batchId || null, stage, workUnitLabel, supplierSummary, amount, payloadEncoding, payload, payloadSha256, now, actor, id, expectedRevision).run();
+      "UPDATE procurement_collaboration_drafts SET analysis_month = ?, checkpoint = ?, workflow_type = ?, batch_id = ?, stage = ?, work_unit_label = ?, parent_batch_id = ?, work_unit_ids = ?, supplier_summary = ?, amount = ?, payload_encoding = ?, payload = ?, payload_sha256 = ?, revision = revision + 1, updated_at = ?, updated_by = ? WHERE id = ? AND revision = ?"
+    ).bind(analysisMonth, checkpoint, workflowType, batchId || null, stage, workUnitLabel, parentBatchId || null, workUnitIds, supplierSummary, amount, payloadEncoding, payload, payloadSha256, now, actor, id, expectedRevision).run();
     if (Number(updated.meta.changes || 0) !== 1) throw new RequestValidationError("這筆協作草稿已由其他同事更新，為避免覆蓋，請重新開啟公司共用最新版。", 409);
   }
   const saved = await env.DB.prepare(
-    "SELECT id, analysis_month, checkpoint, workflow_type, batch_id, stage, work_unit_label, supplier_summary, amount, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE id = ?"
+    "SELECT id, analysis_month, checkpoint, workflow_type, batch_id, stage, work_unit_label, parent_batch_id, work_unit_ids, supplier_summary, amount, revision, created_at, created_by, updated_at, updated_by FROM procurement_collaboration_drafts WHERE id = ?"
   ).bind(id).first<Record<string, unknown>>();
   return json({ draft: serializeCollaborationDraft(saved || {}) }, existing ? 200 : 201);
 }
@@ -976,8 +983,14 @@ function validatedBatch(input: Record<string, unknown>, actor: string) {
     return { storeCode: string(row.storeCode, "門市代碼", 5), sku: string(row.sku, "ERP品號", 80), quantity: Math.round(money(row.quantity, "門市未配量")) };
   });
   const normalizedItems = validatedApprovedItems(input.approvedItems, approved);
+  const checkpoint = input.checkpoint ? string(input.checkpoint, "使用時點", 20) : "";
+  if (checkpoint && !["month-start", "mid-month", "month-end"].includes(checkpoint)) throw new RequestValidationError("使用時點格式錯誤。");
+  const parentBatchId = input.parentBatchId ? string(input.parentBatchId, "母批次編號", 120) : "";
+  const workUnitIdsInput = input.workUnitIds == null ? [] : input.workUnitIds;
+  if (!Array.isArray(workUnitIdsInput) || workUnitIdsInput.length > 100 || workUnitIdsInput.some((value) => typeof value !== "string" || !value.trim() || value.length > 300)) throw new RequestValidationError("實際核准審核單位格式錯誤。");
+  const workUnitIds = JSON.stringify([...new Set(workUnitIdsInput.map((value) => value.trim()))]);
   return {
-    id: string(input.batchId, "批次編號", 80), analysisMonth: month(input.analysisMonth), supplierSummary,
+    id: string(input.batchId, "批次編號", 80), analysisMonth: month(input.analysisMonth), checkpoint, parentBatchId, workUnitIds, supplierSummary,
     suggested, manual, blocked, approved, adjustment, budget: money(input.budgetAmount, "整月預估額度"),
     currentPayment, futurePayments, paymentSchedule, warning: typeof input.warningSummary === "string" ? input.warningSummary.trim().slice(0, 1024) : "",
     idempotencyKey: string(input.idempotencyKey, "冪等鍵", 120), workflowType, storeNeeds: normalizedStoreNeeds, approvedItems: normalizedItems, now, actor
@@ -990,8 +1003,8 @@ async function submit(request: Request, env: ProcurementEnv): Promise<Response> 
   const item = validatedBatch(await body(request), actor);
   try {
     await env.DB.batch([
-      env.DB.prepare("INSERT INTO procurement_batches (id, analysis_month, workflow_type, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, updated_at, idempotency_key) VALUES (?, ?, ?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(item.id, item.analysisMonth, item.workflowType, item.supplierSummary, item.suggested, item.manual, item.blocked, item.approved, item.adjustment, item.budget, item.currentPayment, item.futurePayments, item.paymentSchedule, item.warning, item.now, actor, item.now, item.idempotencyKey),
+      env.DB.prepare("INSERT INTO procurement_batches (id, analysis_month, checkpoint, parent_batch_id, work_unit_ids, workflow_type, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, updated_at, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(item.id, item.analysisMonth, item.checkpoint, item.parentBatchId, item.workUnitIds, item.workflowType, item.supplierSummary, item.suggested, item.manual, item.blocked, item.approved, item.adjustment, item.budget, item.currentPayment, item.futurePayments, item.paymentSchedule, item.warning, item.now, actor, item.now, item.idempotencyKey),
       env.DB.prepare("INSERT INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) VALUES (?, 'submitted', 0, ?, ?, '第二次回匯完成，待正式核准', ?, ?, ?)")
         .bind(item.id, item.approved, item.approved, item.now, actor, `${item.idempotencyKey}:event`),
       ...item.storeNeeds.map((row) => env.DB.prepare("INSERT INTO procurement_batch_store_needs (batch_id, store_code, sku, covered_quantity, created_at) VALUES (?, ?, ?, ?, ?)").bind(item.id, row.storeCode, row.sku, row.quantity, item.now)),

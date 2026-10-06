@@ -4109,6 +4109,18 @@
     return memberIds.length ? memberIds.includes(rowUnit.id) : rowUnit.id === workUnit.id;
   }
 
+  function procurementWorkUnitIdsForReview(reviewRows, analysisRows = []) {
+    const baselineBySku = new Map((analysisRows || []).map((row) => [normalizeSku(row?.sku), row]));
+    const ids = new Set();
+    for (const row of reviewRows || []) {
+      if (!(Number(row?.finalQty || 0) > 0)) continue;
+      const baseline = baselineBySku.get(normalizeSku(row?.sku));
+      const unit = procurementWorkUnitForRow(baseline || row);
+      if (unit?.id) ids.add(unit.id);
+    }
+    return [...ids];
+  }
+
   function buildRecommendationWorkbook(recommendations, XLSX, options = {}) {
     const workbook = XLSX.utils.book_new();
     const budget = options.budget || null;
@@ -4770,6 +4782,7 @@
     procurementWorkUnitForRow,
     listProcurementWorkUnits,
     rowMatchesProcurementWorkUnit,
+    procurementWorkUnitIdsForReview,
     buildRecommendationWorkbook,
     MANUAL_REASON_OPTIONS,
     listManualReasonCandidates,

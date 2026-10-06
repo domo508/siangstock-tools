@@ -682,6 +682,8 @@
       batchId: draft.batchId || "",
       stage: draft.stage || "analysis",
       workUnitLabel: draft.activeWorkUnit?.label || "尚未選擇審核單位",
+      parentBatchId: draft.parentBatchId || draft.id,
+      workUnitIds: effectiveDraftWorkUnitIds(draft),
       supplierSummary: sharedDraftSuppliers(draft),
       amount: sharedDraftAmount(draft),
       ...encoded,
@@ -2001,8 +2003,22 @@
     if (!unit) return [];
     return Array.isArray(unit.memberIds) && unit.memberIds.length ? unit.memberIds : (unit.id ? [unit.id] : []);
   }
+  function effectiveDraftWorkUnitIds(draft) {
+    const selectedIds = workUnitMemberIds(draft?.activeWorkUnit);
+    const reviewRows = draft?.review?.rows || draft?.firstReview?.rows;
+    if (!Array.isArray(reviewRows)) return selectedIds;
+    return core.procurementWorkUnitIdsForReview(reviewRows, draft?.analysis?.rows || []);
+  }
+  function ledgerStage(batch) {
+    return ({ pending_approval: "pending_approval", approved: "approved", erp_created: "erp_created", received: "erp_created" })[batch?.status] || "analysis";
+  }
   function workUnitDraft(unit) {
-    return state.workflowDrafts.find((row) => row.parentBatchId === state.parentBatchId && workUnitMemberIds(row.activeWorkUnit).includes(unit.id)) || null;
+    const local = state.workflowDrafts.find((row) => row.parentBatchId === state.parentBatchId && effectiveDraftWorkUnitIds(row).includes(unit.id));
+    if (local) return local;
+    const shared = state.sharedDrafts.find((row) => row.parentBatchId === state.parentBatchId && (row.workUnitIds || []).includes(unit.id));
+    if (shared) return { ...shared, sharedMetadataOnly: true, activeWorkUnit: { id: unit.id, memberIds: [unit.id], label: unit.label } };
+    const ledger = (state.ledger?.batches || []).find((row) => row.parent_batch_id === state.parentBatchId && (row.work_unit_ids || []).includes(unit.id) && row.status !== "revoked");
+    return ledger ? { id: ledger.id, batchId: ledger.id, stage: ledgerStage(ledger), activeWorkUnit: { id: unit.id, memberIds: [unit.id], label: unit.label } } : null;
   }
   function combinedWorkUnit(units) {
     const sorted = [...units].sort((left, right) => left.label.localeCompare(right.label, "zh-Hant"));
@@ -2045,10 +2061,15 @@
         updateSupplierChecks(); resetReviewWorkflow("已更新分批範圍；確認勾選後，可直接在此下載本批Excel。"); renderWorkUnitDashboard();
       });
       card.append(heading, detail, status);
-      if (draft) {
+      if (draft && !draft.sharedMetadataOnly && draft.analysis) {
         const button = document.createElement("button"); button.type = "button"; button.className = activeIds.has(unit.id) ? "primary-button" : "secondary-button";
         button.textContent = "開啟此批次";
         button.addEventListener("click", () => restoreWorkflowDraft(draft));
+        card.append(button);
+      } else if (draft?.sharedMetadataOnly) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "secondary-button";
+        button.textContent = "開啟此批次";
+        button.addEventListener("click", async () => { try { await openSharedWorkflowDraft(draft.id); } catch (error) { setWorkflowStatus(`無法開啟公司共用批次：${error.message}`, "error"); } });
         card.append(button);
       }
       fragment.appendChild(card);
@@ -2794,7 +2815,9 @@
       return { storeCode: row.store_code, sku: row.sku, quantity };
     }).filter((row) => row.quantity > 0);
     return {
-      batchId: state.batchId, analysisMonth: elements.month.value, supplierSummary: [...new Set(state.review.rows.filter((row) => row.finalQty > 0).map((row) => row.supplier))],
+      batchId: state.batchId, analysisMonth: elements.month.value, checkpoint: elements.checkpoint.value,
+      parentBatchId: state.parentBatchId, workUnitIds: core.procurementWorkUnitIdsForReview(state.review.rows, state.analysis?.rows || []),
+      supplierSummary: [...new Set(state.review.rows.filter((row) => row.finalQty > 0).map((row) => row.supplier))],
       workflowType: state.workflowType,
       suggestedAmount: state.review.totals.suggestedAmount, manualAmount: state.review.totals.manualAmount, blockedAmount: state.review.totals.blockedAmount,
       approvedAmount: state.review.totals.approvedAmount, adjustmentAmount: state.review.totals.adjustmentAmount, budgetAmount: currentBudget().availableBudget,

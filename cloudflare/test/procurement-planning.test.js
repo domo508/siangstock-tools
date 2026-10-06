@@ -1288,6 +1288,12 @@ describe("採購建議第二階段", () => {
     const groupedOutput = core.buildRecommendationWorkbook(recommendations, XLSX, { selectedSuppliers: ["測試廠商甲", "測試廠商乙"], workUnit: grouped });
     const groupedRows = XLSX.utils.sheet_to_json(groupedOutput.Sheets["03D_其它供應商"], { defval: "" });
     expect(groupedRows.map((row) => row["ERP品號"])).toEqual(["O-1", "O-2"]);
+
+    expect(core.procurementWorkUnitIdsForReview([
+      { sku: "P-T", finalQty: 20 },
+      { sku: "P-C", finalQty: 0 },
+      { sku: "P-N", finalQty: 0 }
+    ], rows)).toEqual([units.find((unit) => unit.purchaseTab === "天絲＋天絲棉").id]);
   });
 
   it("人工回匯後產生可售至、AI判斷、付款月份與ERP核准門檻", () => {
