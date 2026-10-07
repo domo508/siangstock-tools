@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261007-manual-addition-catalog-r1";
+  const APP_VERSION = "20261007-shopee-holiday-consignment-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -2330,11 +2330,13 @@
     const fragment = document.createDocumentFragment();
     rows.forEach((item) => {
       const row = document.createElement("tr");
+      if (item.shopeeProtectionApplied) row.classList.add("shopee-protection-row");
       [item.supplier, item.sku, item.name, `${item.tier}・${item.abcClass}${item.xyzClass}`, item.supplyProfileLabel,
         item.supplierLeadDays, item.targetCoverageDays, item.recent6Qty, item.recent12Qty, item.forecastDailyQty,
         item.inventoryQty, item.pendingQty, item.transferSubmittedQty, item.transferInTransitQty, item.suggestedPurchaseQty, formatCurrency(item.suggestedPurchaseAmount),
+        item.recommendationSource || "一般需求", item.shopeeProtectionAdditionalQty || 0, item.holidayProtectionAdditionalQty || 0,
         item.springFestivalExtraSuggestedQty, formatCurrency(item.springFestivalExtraAmount),
-        item.consignmentCurrentQty, item.suggestedConsignmentQty, item.supplyStatus].forEach((value, index) => appendCell(row, typeof value === "number" ? formatNumber(value) : value, index === 19 && item.immediateConsignmentGap > 0 ? "negative" : ""));
+        item.consignmentCurrentQty, item.suggestedConsignmentQty, item.supplyStatus].forEach((value, index) => appendCell(row, typeof value === "number" ? formatNumber(value) : value, index === 22 && item.immediateConsignmentGap > 0 ? "negative" : ""));
       fragment.appendChild(row);
     });
     elements.resultRows.replaceChildren(fragment);

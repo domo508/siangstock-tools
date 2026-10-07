@@ -863,3 +863,6 @@
   .version-warning { align-items: stretch; flex-direction: column; padding: 14px 18px; }
   .version-warning .primary-button { width: 100%; }
 }
+.procurement-table tbody tr.shopee-protection-row td {
+  background: #fff7d6;
+}

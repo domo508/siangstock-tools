@@ -336,13 +336,11 @@
         const packSize = Math.max(1, Number(baseline?.packSize || source["採購單位"] || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
         const reservedConsignmentQty = Math.max(0, Number(options.reservedConsignmentBySku?.get?.(sku) || 0));
         const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
-        const automaticTailBoxQty = isAutomaticConsignmentTailBox({
-          suggestedQty, availableQty: consignmentAvailableQty, packSize, confirmedQty: consignmentAvailableQty
-        }) ? consignmentAvailableQty : null;
-        const defaultQty = automaticTailBoxQty ?? suggestedQty;
+        const consignmentSupplier = /普優[瑪碼]|力榮/.test(normalizeText(supplier)) || consignmentAvailableQty > 0;
+        const defaultQty = consignmentSupplier ? Math.min(Math.max(0, Number(suggestedQty || 0)), consignmentAvailableQty) : suggestedQty;
         const changed = !manualBlank && manualQty !== defaultQty;
         const pendingStatus = Boolean(baseline?.productStatusPendingReview);
-        const sellThroughException = Boolean(baseline?.sellThroughStop && Number(manualQty || 0) > 0);
+        const sellThroughException = Boolean(baseline?.sellThroughStop && Number(manualQty || 0) > consignmentAvailableQty);
         const optionalLegacyReason = LEGACY_OPTIONAL_MANUAL_REASONS.has(reasonInput.category || reasonInput.legacy);
         if (!changed && !manuallyAdded && !pendingStatus && !sellThroughException && (!reasonInput.reason || optionalLegacyReason)) continue;
         let type = "已填原因";
@@ -2002,6 +2000,45 @@
     return date.toISOString().slice(0, 10);
   }
 
+  function holidayCoverageAdjustment(asOfDate, nominalDays, storeInventoryRules = {}) {
+    const nominalDate = addDays(asOfDate, nominalDays);
+    const configuredHolidays = new Set((storeInventoryRules?.workdayHolidays || []).map(parseDateValue).filter(Boolean));
+    if (!nominalDate || !configuredHolidays.size) return { nominalDate, adjustedDate: nominalDate, extraDays: 0, holidays: [] };
+    const isWeekend = (dateValue) => {
+      const day = new Date(`${dateValue}T00:00:00Z`).getUTCDay();
+      return day === 0 || day === 6;
+    };
+    const isClosed = (dateValue) => configuredHolidays.has(dateValue) || isWeekend(dateValue);
+    const relevantHolidays = [...configuredHolidays].filter((dateValue) => dateValue > asOfDate && dateValue <= nominalDate).sort();
+    if (!relevantHolidays.length) return { nominalDate, adjustedDate: nominalDate, extraDays: 0, holidays: [] };
+    const closureDates = new Set();
+    for (const holiday of relevantHolidays) {
+      let closureStart = holiday;
+      for (let step = 0; step < 14; step += 1) {
+        const previous = addDays(closureStart, -1);
+        if (!previous || previous <= asOfDate || !isClosed(previous)) break;
+        closureStart = previous;
+      }
+      let cursor = closureStart;
+      for (let step = 0; step < 14 && cursor <= nominalDate && isClosed(cursor); step += 1) {
+        closureDates.add(cursor);
+        cursor = addDays(cursor, 1);
+      }
+    }
+    let extraDays = closureDates.size;
+    let adjustedDate = addDays(nominalDate, extraDays);
+    for (let step = 0; step < 14 && isClosed(adjustedDate); step += 1) {
+      adjustedDate = addDays(adjustedDate, 1);
+      extraDays += 1;
+    }
+    return {
+      nominalDate,
+      adjustedDate,
+      extraDays,
+      holidays: relevantHolidays
+    };
+  }
+
   function findSupplierRule(supplier, suppliedRules = []) {
     const normalized = normalizeText(supplier);
     return [...suppliedRules, ...SUPPLIER_RULES].find((row) => {
@@ -2910,7 +2947,12 @@
       const supplierLeadDays = supplyProfile.leadDays;
       const reviewDays = supplyProfile.reviewDays;
       const safetyBufferDays = supplyProfile.safetyBufferDays[row.tier];
-      const targetCoverageDays = reviewDays + supplierLeadDays + safetyBufferDays;
+      const nominalTargetCoverageDays = reviewDays + supplierLeadDays + safetyBufferDays;
+      const arrivalHolidayAdjustment = holidayCoverageAdjustment(asOfDate, supplierLeadDays, input.storeInventoryRules);
+      const coverageHolidayAdjustment = holidayCoverageAdjustment(asOfDate, nominalTargetCoverageDays, input.storeInventoryRules);
+      const holidayProtectionDays = Math.max(arrivalHolidayAdjustment.extraDays, coverageHolidayAdjustment.extraDays);
+      const effectiveSupplierLeadDays = supplierLeadDays + arrivalHolidayAdjustment.extraDays;
+      const targetCoverageDays = nominalTargetCoverageDays + coverageHolidayAdjustment.extraDays;
       const seasonalProfile = seasonalProfileForRow(input.model, row);
       const seasonalAdjustment = horizonSeasonalAdjustment(seasonalProfile, asOfMs, targetCoverageDays);
       const seasonalMode = seasonalDemandMode(row);
@@ -2955,7 +2997,8 @@
       }
       const storeDailyQty = Object.values(storeDailyByCode).reduce((sum, quantity) => sum + Number(quantity || 0), 0);
       const channelAdjustedDaily = hqDailyQty + storeDailyQty;
-      const horizonDays = reviewDays + supplierLeadDays;
+      const nominalHorizonDays = reviewDays + supplierLeadDays;
+      const horizonDays = nominalHorizonDays + holidayProtectionDays;
       const springFestival = resolveSpringFestivalAdjustment({
         asOfDate,
         supplierCountry: supplierRule?.country || "待確認",
@@ -3051,6 +3094,7 @@
         pendingPurchaseQty: effectivePendingQty,
         factoryConsignmentQty: supplierConsignment.bySku.get(row.demand.sku)?.currentQty || 0
       });
+      const holidayProtectionRawQty = holidayProtectionDays > 0 ? channelAdjustedDaily * holidayProtectionDays : 0;
       const springFestivalAdjustedRawPurchaseQty = springFestival.active
         ? calculateNetProcurementDemand({
           forecastDemandQty: hqDemandQty + storeDemandQty + springFestivalExtraDailyQty * springFestival.extraDays,
@@ -3099,8 +3143,14 @@
       }
       const manualSupplierReview = Boolean(supplyProfile.manualReview);
       const releaseRate = purchaseReleaseRate(row.tier, checkpoint);
-      const standardReleasedPurchaseQty = rawPurchaseQty * releaseRate;
-      const releasedPurchaseQty = standardReleasedPurchaseQty + springFestivalExtraRawQty;
+      const ordinaryRawPurchaseQty = Math.max(rawPurchaseQty - holidayProtectionRawQty, 0);
+      const standardReleasedPurchaseQty = ordinaryRawPurchaseQty * releaseRate;
+      const holidayReleasedPurchaseQty = standardReleasedPurchaseQty + holidayProtectionRawQty;
+      const shopeeProtectionRawQty = inventoryQty < 3 && hqDailyQty > 0
+        ? Math.max(3 + hqDailyQty * effectiveSupplierLeadDays - inventoryQty - effectivePendingQty, 0)
+        : 0;
+      const releasedBeforeShopeeQty = holidayReleasedPurchaseQty + springFestivalExtraRawQty;
+      const releasedPurchaseQty = Math.max(releasedBeforeShopeeQty, shopeeProtectionRawQty);
       const baseSuggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview ? 0 : roundSuggestedQuantity(releasedPurchaseQty, score);
       const standardBaseSuggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview ? 0 : roundSuggestedQuantity(standardReleasedPurchaseQty, score);
       const unitCost = Math.max(0, Number(row.masterRecord?.unitCost || 0));
@@ -3119,7 +3169,27 @@
       const suggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview
         ? 0
         : (sellThroughConsignmentAllowed ? Math.min(packed.quantity, sellThroughConsignmentAvailableQty) : packed.quantity);
-      const springFestivalExtraSuggestedQty = Math.max(suggestedPurchaseQty - standardSuggestedPurchaseQty, 0);
+      const holidayBaseSuggestedQty = externalPurchaseBlocked || manualSupplierReview
+        ? 0
+        : roundSuggestedQuantity(holidayReleasedPurchaseQty, score);
+      const holidayDownQty = Math.floor(holidayBaseSuggestedQty / packSize) * packSize;
+      const holidayCoverageWithDown = channelAdjustedDaily > 0 ? (inventoryQty + effectivePendingQty + holidayDownQty) / channelAdjustedDaily : 9999;
+      const holidayPacked = roundByPack(holidayBaseSuggestedQty, packSize, holidayCoverageWithDown, minimumCoverageDays);
+      const holidaySuggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview
+        ? 0
+        : (sellThroughConsignmentAllowed ? Math.min(holidayPacked.quantity, sellThroughConsignmentAvailableQty) : holidayPacked.quantity);
+      const preShopeeBaseSuggestedQty = externalPurchaseBlocked || manualSupplierReview
+        ? 0
+        : roundSuggestedQuantity(releasedBeforeShopeeQty, score);
+      const preShopeeDownQty = Math.floor(preShopeeBaseSuggestedQty / packSize) * packSize;
+      const preShopeeCoverageWithDown = channelAdjustedDaily > 0 ? (inventoryQty + effectivePendingQty + preShopeeDownQty) / channelAdjustedDaily : 9999;
+      const preShopeePacked = roundByPack(preShopeeBaseSuggestedQty, packSize, preShopeeCoverageWithDown, minimumCoverageDays);
+      const preShopeeSuggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview
+        ? 0
+        : (sellThroughConsignmentAllowed ? Math.min(preShopeePacked.quantity, sellThroughConsignmentAvailableQty) : preShopeePacked.quantity);
+      const shopeeProtectionAdditionalQty = Math.max(suggestedPurchaseQty - preShopeeSuggestedPurchaseQty, 0);
+      const holidayProtectionAdditionalQty = Math.max(holidaySuggestedPurchaseQty - standardSuggestedPurchaseQty, 0);
+      const springFestivalExtraSuggestedQty = Math.max(preShopeeSuggestedPurchaseQty - holidaySuggestedPurchaseQty, 0);
       const factoryPullQty = pendingQty + suggestedPurchaseQty;
       const consignmentCurrentQty = consignment?.currentQty || 0;
       const consignmentScheduledQty = consignment?.scheduledQty || 0;
@@ -3228,9 +3298,14 @@
         pendingArrivalStatus,
         pendingArrivalGap,
         reviewDays,
+        effectiveSupplierLeadDays,
         safetyDays: safetyBufferDays,
         safetyBufferDays,
         targetCoverageDays,
+        nominalTargetCoverageDays,
+        holidayProtectionDays,
+        holidayProtectionDates: [...new Set([...arrivalHolidayAdjustment.holidays, ...coverageHolidayAdjustment.holidays])].sort(),
+        holidayProtectionAdditionalQty,
         forecastFutureQty,
         safetyStockQty,
         inventoryQty,
@@ -3252,6 +3327,10 @@
         standardSuggestedPurchaseQty,
         suggestedPurchaseQty,
         suggestedPurchaseAmount: suggestedPurchaseQty * unitCost,
+        recommendationSource: shopeeProtectionAdditionalQty > 0 ? "蝦皮3件保護" : (holidayProtectionAdditionalQty > 0 ? "連假保障" : "一般需求"),
+        shopeeProtectionApplied: shopeeProtectionAdditionalQty > 0,
+        shopeeProtectionRawQty,
+        shopeeProtectionAdditionalQty,
         springFestivalApplied: springFestival.active && springFestivalExtraSuggestedQty > 0,
         springFestivalClosureStart: springFestival.closureStart,
         springFestivalRecoveryDate: springFestival.recoveryDate,
@@ -3331,6 +3410,11 @@
         demandLocations: { hqInventoryCodes: ["T00", "R19", "R09"], activeStoreCodes: [...activeStoreCodes], channelRevenueApplied: plannedRevenueByChannel.size > 0 },
         releaseRates: checkpoint === "month-start" ? { "熱銷": 0.7, "穩定": 0.5, "低銷": 0 } : { "熱銷": 1, "穩定": 1, "低銷": 1 },
         springFestival: { ...(input.springFestivalRule || DEFAULT_SPRING_FESTIVAL_RULE) },
+        holidayCoverage: {
+          source: input.storeInventoryRules?.calendarSource || "公司規則管理的休假日設定",
+          holidays: [...(input.storeInventoryRules?.workdayHolidays || [])],
+          policy: "只延後補貨與保障截止日，不放大日需求"
+        },
         kuanMuManagementTarget: "寬沐通路預估營收×45%，只顯示管理差額，不自動加進基本採購建議"
       },
       model: input.model,
@@ -3342,6 +3426,9 @@
         springFestivalSkuCount: rows.filter((row) => row.springFestivalApplied).length,
         springFestivalExtraQty: rows.reduce((sum, row) => sum + Number(row.springFestivalExtraSuggestedQty || 0), 0),
         springFestivalExtraAmount: rows.reduce((sum, row) => sum + Number(row.springFestivalExtraAmount || 0), 0),
+        shopeeProtectionSkuCount: rows.filter((row) => row.shopeeProtectionApplied).length,
+        shopeeProtectionExtraQty: rows.reduce((sum, row) => sum + Number(row.shopeeProtectionAdditionalQty || 0), 0),
+        holidayProtectionSkuCount: rows.filter((row) => Number(row.holidayProtectionAdditionalQty || 0) > 0).length,
         hotSkuCount: rows.filter((row) => row.tier === "熱銷").length,
         stableSkuCount: rows.filter((row) => row.tier === "穩定").length,
         lowSkuCount: rows.filter((row) => row.tier === "低銷").length,
@@ -3648,14 +3735,19 @@
       sheet[address].s = headerStyle;
     }
     for (let row = headerRow + 1; row <= range.e.r; row += 1) {
+      const recommendationSourceColumn = headerValues.indexOf("建議來源");
+      const recommendationSource = recommendationSourceColumn >= 0
+        ? String(sheet[XLSX.utils.encode_cell({ r: row, c: range.s.c + recommendationSourceColumn })]?.v ?? "")
+        : "";
+      const shopeeProtectionRow = recommendationSource.includes("蝦皮3件保護");
       for (let column = range.s.c; column <= range.e.c; column += 1) {
         const address = XLSX.utils.encode_cell({ r: row, c: column });
         if (!sheet[address]) sheet[address] = { t: "s", v: "" };
         const header = String(headerValues[column - range.s.c] || "");
         const value = String(sheet[address].v ?? "");
-        let fill = null;
+        let fill = shopeeProtectionRow ? EXCEL_CIS.input : null;
         if (inputHeaders.has(header)) fill = EXCEL_CIS.input;
-        else if (decisionHeaders.has(header)) fill = EXCEL_CIS.softBlue;
+        else if (decisionHeaders.has(header) && !shopeeProtectionRow) fill = EXCEL_CIS.softBlue;
         if ((header === "AI判斷" || header === "回匯檢核狀態" || header === "檢核結果") && /合理|通過|可送正式核准/.test(value)) fill = EXCEL_CIS.success;
         if ((header === "AI判斷" || header === "回匯檢核狀態" || header === "人工確認要求") && /偏高|偏低|待補|必須|待人工/.test(value)) fill = EXCEL_CIS.warning;
         if ((header === "AI判斷" || header === "回匯檢核狀態" || header === "規則阻擋原因") && /阻擋|排除|轉頁/.test(value)) fill = EXCEL_CIS.excluded;
@@ -3968,9 +4060,12 @@
       "預估日需求": row.forecastDailyQty,
       "供應交期類型": row.supplyProfileLabel,
       "到貨交期天數": row.supplierLeadDays,
+      "連假調整後到貨天數": row.effectiveSupplierLeadDays ?? row.supplierLeadDays,
       "檢視頻率天數": row.reviewDays,
       "安全緩衝天數": row.safetyBufferDays,
       "目標覆蓋天數": row.targetCoverageDays,
+      "連假保障天數": row.holidayProtectionDays || 0,
+      "連假日期": (row.holidayProtectionDates || []).join("、"),
       "檢視週期＋到貨交期需求": row.forecastFutureQty,
       "安全庫存量": row.safetyStockQty,
       "總部需求（系統）": row.hqDemandQty,
@@ -4007,6 +4102,9 @@
       "採購單位": row.packSize,
       "因採購單位增加": Math.max(Number(row.suggestedPurchaseQty || 0) - baseSuggestedPurchaseQty, 0),
       "建議採購量": row.suggestedPurchaseQty,
+      "建議來源": row.recommendationSource || "一般需求",
+      "蝦皮3件保護增加量": row.shopeeProtectionAdditionalQty || 0,
+      "連假保障增加量": row.holidayProtectionAdditionalQty || 0,
       "本次新增採購量": row.suggestedPurchaseQty,
       "總倉目前庫存可售至": hqCurrentInventoryAvailableTo,
       "全公司合計庫存可售至": companyCurrentInventoryAvailableTo,
@@ -4014,7 +4112,9 @@
       "寄倉現貨": row.consignmentCurrentQty,
       "粉紅排程": row.consignmentScheduledQty,
       "寄倉缺口": Math.max(row.suggestedPurchaseQty - row.consignmentCurrentQty - row.consignmentScheduledQty, 0),
-      "目前實際可採購量": /普優[瑪碼]|力榮/.test(row.supplier) ? Math.min(row.suggestedPurchaseQty, row.consignmentCurrentQty) : row.suggestedPurchaseQty,
+      "目前實際可採購量": /普優[瑪碼]|力榮/.test(row.supplier)
+        ? Math.min(row.suggestedPurchaseQty, Math.max(Number(row.consignmentCurrentQty || 0) - Number(row.pendingQty || 0), 0))
+        : row.suggestedPurchaseQty,
       "人工確認採購量": row.initialManualQty ?? "",
       "人工調整原因類別": row.initialManualReason ? (MANUAL_REASON_OPTIONS.includes(row.initialManualReason) ? row.initialManualReason : OTHER_MANUAL_REASON) : "",
       "人工調整補充說明": row.initialManualReason && !MANUAL_REASON_OPTIONS.includes(row.initialManualReason) ? row.initialManualReason : "",
@@ -4531,10 +4631,10 @@
         const packSize = Math.max(1, Number(baseline?.packSize || source["採購單位"] || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
         const reservedConsignmentQty = Math.max(0, Number(options.reservedConsignmentBySku?.get?.(sku) || 0));
         const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
-        const automaticTailBoxQty = isAutomaticConsignmentTailBox({
-          suggestedQty, availableQty: consignmentAvailableQty, packSize, confirmedQty: consignmentAvailableQty
-        }) ? consignmentAvailableQty : null;
-        const defaultConfirmedQty = automaticTailBoxQty ?? Math.max(0, suggestedQty || 0);
+        const consignmentSupplier = /普優[瑪碼]|力榮/.test(normalizeText(supplier)) || consignmentAvailableQty > 0;
+        const defaultConfirmedQty = consignmentSupplier
+          ? Math.min(Math.max(0, Number(suggestedQty || 0)), consignmentAvailableQty)
+          : Math.max(0, Number(suggestedQty || 0));
         const confirmedQty = manualBlank ? defaultConfirmedQty : parseNumber(manualCell);
         const unitCost = manuallyAdded ? Number(baseline.unitCost || 0) : sourceUnitCost;
         const productStatusPendingReview = Boolean(baseline?.productStatusPendingReview);

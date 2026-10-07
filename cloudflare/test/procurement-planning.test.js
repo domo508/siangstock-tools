@@ -1797,6 +1797,73 @@ describe("採購建議第二階段", () => {
     expect(row["人工調整原因類別"]).toBe("商品主檔已取消S／確認恢復採購，等待同步");
     expect(row["人工調整補充說明"]).toBe("廠商確認餘料可生產");
   });
+
+  it("S品人工量未超過既有寄庫可採量時不要求移出S品原因", () => {
+    const baseline = { sku: "S-AVAILABLE", supplier: "力榮", name: "測試床包(S)", unitCost: 300, suggestedPurchaseQty: 10, packSize: 10, pendingQty: 0, consignmentCurrentQty: 10, sellThroughStop: true, externalPurchaseBlocked: false };
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "供應商", "商品品名", "建議採購量", "採購單位", "進貨價", "人工確認採購量", "人工調整原因類別"],
+      [baseline.sku, baseline.supplier, baseline.name, 10, 10, 300, 10, ""]
+    ]), "03A_力榮採購");
+    const options = { baselineBySku: new Map([[baseline.sku, baseline]]), exportedSkuSet: new Set([baseline.sku]) };
+    expect(core.listManualReasonCandidates(workbook, XLSX, options)).toHaveLength(0);
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, options);
+    expect(review.errors).toHaveLength(0);
+    expect(review.rows[0]).toMatchObject({ confirmedQty: 10, finalQty: 10, sellThroughRestartException: false });
+  });
+
+  it("S品人工量超過既有寄庫可採量時仍須明確確認恢復採購", () => {
+    const baseline = { sku: "S-EMPTY", supplier: "力榮", name: "測試床包(S)", unitCost: 300, suggestedPurchaseQty: 10, packSize: 10, pendingQty: 0, consignmentCurrentQty: 0, sellThroughStop: true, externalPurchaseBlocked: true, supplyStatus: "S品－寄庫現貨已用罄" };
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "供應商", "商品品名", "建議採購量", "採購單位", "進貨價", "人工確認採購量", "人工調整原因類別"],
+      [baseline.sku, baseline.supplier, baseline.name, 10, 10, 300, 10, ""]
+    ]), "03A_力榮採購");
+    const options = { baselineBySku: new Map([[baseline.sku, baseline]]), exportedSkuSet: new Set([baseline.sku]) };
+    expect(core.listManualReasonCandidates(workbook, XLSX, options)[0]).toMatchObject({ type: "S品人工例外" });
+    const blocked = core.reviewReturnedWorkbook(workbook, XLSX, options);
+    expect(blocked.errors.some((error) => error.message.includes("修改採購量時必須填人工調整原因"))).toBe(true);
+  });
+
+  it("蝦皮3件保護可讓低銷品產生建議並在Excel整列標淡黃", () => {
+    const inventoryBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(inventoryBook, XLSX.utils.aoa_to_sheet([
+      ["店倉編號", "店倉名稱", "貨號", "品名", "實際庫存", "實際庫存成本額"],
+      ["T00", "寬承總倉", "A1", "60天絲測試床包", 0, 0]
+    ]), "乾淨商品");
+    const salesBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(salesBook, XLSX.utils.aoa_to_sheet([
+      ["銷別", "結帳時間", "貨號", "品名", "銷售量", "實收金額", "開單倉編號", "開單倉名稱"],
+      ["銷貨", "2026-08-27", "A1", "60天絲測試床包", 1, 1000, "T00", "寬承總倉"]
+    ]), "工作表1");
+    const analysis = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: core.parseInventoryWorkbook(inventoryBook, XLSX), pendingReports: [], consignment: makeConsignment(),
+      salesReports: [core.parseSalesWorkbook(salesBook, XLSX)], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", checkpoint: "month-start"
+    });
+    const row = analysis.rows.find((item) => item.sku === "A1");
+    expect(row).toMatchObject({ shopeeProtectionApplied: true, recommendationSource: "蝦皮3件保護" });
+    expect(row.suggestedPurchaseQty).toBeGreaterThan(0);
+    const output = core.buildRecommendationWorkbook(analysis, XLSX, { selectedSuppliers: ["普優瑪"] });
+    const sheet = output.Sheets["03B1_普優瑪_天絲"];
+    const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })[0];
+    expect(sheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("ERP品號") })].s.fill.fgColor.rgb).toBe("FFFFF2CC");
+  });
+
+  it("連假只延後保障期限，不改變日需求", () => {
+    const source = {
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [], consignment: makeConsignment(), salesReports: [makeSales()],
+      model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", checkpoint: "mid-month"
+    };
+    const ordinary = core.buildProcurementRecommendations(source).rows.find((row) => row.sku === "A1");
+    const holiday = core.buildProcurementRecommendations({
+      ...source,
+      storeInventoryRules: { workdayHolidays: ["2026-09-02"], calendarSource: "測試行事曆" }
+    }).rows.find((row) => row.sku === "A1");
+    expect(holiday.forecastDailyQty).toBe(ordinary.forecastDailyQty);
+    expect(holiday.effectiveSupplierLeadDays).toBeGreaterThan(holiday.supplierLeadDays);
+    expect(holiday.holidayProtectionDays).toBeGreaterThan(0);
+    expect(holiday.targetCoverageDays).toBeGreaterThanOrEqual(ordinary.targetCoverageDays);
+  });
 });
 
 describe("採購規劃前台與入口", () => {
@@ -1890,14 +1957,14 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20261007-manual-addition-catalog-r1');
+    expect(toolHtml).toContain('core.js?v=20261007-shopee-holiday-consignment-r1');
     expect(toolHtml).toContain('google-sources.js?v=20261006-notification-audit-r2');
-    expect(toolHtml).toContain('app.js?v=20261007-manual-addition-catalog-r1');
+    expect(toolHtml).toContain('app.js?v=20261007-shopee-holiday-consignment-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261007-manual-addition-catalog-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261007-shopee-holiday-consignment-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');

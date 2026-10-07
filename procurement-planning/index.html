@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20261005-google-notification-r1">
+  <link rel="stylesheet" href="style.css?v=20261007-shopee-holiday-consignment-r1">
 </head>
 <body>
   <section id="version-warning" class="version-warning" role="alert" hidden>
@@ -403,11 +403,11 @@
       </details>
       <div class="result-table-wrap">
         <table class="procurement-table">
-          <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>狀態</th><th>供應交期類型</th><th>到貨天數</th><th>目標覆蓋天數</th><th>近6週</th><th>近12週</th><th>日需求</th><th>調撥後可用庫存</th><th>未到貨</th><th>調撥提交中</th><th>發貨在途</th><th>建議採購量</th><th>建議金額</th><th>春節加量</th><th>春節增加金額</th><th>寄倉現貨</th><th>建議寄庫</th><th>供貨狀態</th></tr></thead>
+          <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>狀態</th><th>供應交期類型</th><th>到貨天數</th><th>目標覆蓋天數</th><th>近6週</th><th>近12週</th><th>日需求</th><th>調撥後可用庫存</th><th>未到貨</th><th>調撥提交中</th><th>發貨在途</th><th>建議採購量</th><th>建議金額</th><th>建議來源</th><th>蝦皮3件保護增加量</th><th>連假保障增加量</th><th>春節加量</th><th>春節增加金額</th><th>寄倉現貨</th><th>建議寄庫</th><th>供貨狀態</th></tr></thead>
           <tbody id="result-rows"></tbody>
         </table>
       </div>
-      <p class="result-note">淨採購需求＝總部需求＋逐店扣除調撥後門市庫存的需求－調撥後總部可用庫存－未到貨採購。提交狀態保留調出量並預計入調入倉；發貨審核只補回調入倉在途量；收貨審核不重複調整。工廠寄倉不會被扣除。</p>
+      <p class="result-note">淨採購需求＝總部需求＋逐店扣除調撥後門市庫存的需求－調撥後總部可用庫存－未到貨採購。蝦皮保護會在總倉低於3件時補足至到貨前需求並保留3件；淡黃列表示此規則確實增加建議量。連假只延後保障截止日，不放大日需求。提交狀態保留調出量並預計入調入倉；發貨審核只補回調入倉在途量；收貨審核不重複調整。工廠寄倉不會被扣除。</p>
     </section>
 
     <section id="workflow-panel" class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
@@ -511,9 +511,9 @@
   <script src="xlsx-style-runtime.js?v=20260930-month-end-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20261007-manual-addition-catalog-r1"></script>
+  <script src="core.js?v=20261007-shopee-holiday-consignment-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
   <script src="google-sources.js?v=20261006-notification-audit-r2"></script>
-  <script src="app.js?v=20261007-manual-addition-catalog-r1"></script>
+  <script src="app.js?v=20261007-shopee-holiday-consignment-r1"></script>
 </body>
 </html>
