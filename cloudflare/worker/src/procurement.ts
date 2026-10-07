@@ -297,9 +297,34 @@ function validateProcurementRules(value: unknown): Record<string, unknown> {
   if (featuredSuppliers.some((supplier) => !supplier || !supplierNames.has(supplier))) throw new RequestValidationError("主要供應商顯示名單只能選擇已建立的供應商。");
   if (new Set(featuredSuppliers).size !== featuredSuppliers.length) throw new RequestValidationError("主要供應商顯示名單不可重複。");
   rules.featuredSuppliers = featuredSuppliers;
+  const purchaseUnitSizes: Record<string, string[]> = {
+    "床包": ["3.5尺", "5尺", "6尺", "7尺", "其它尺寸"],
+    "薄被套": ["4.5×6.5尺", "6×7尺", "其它尺寸"],
+    "兩用被套": ["4.5×6.5尺", "6×7尺", "其它尺寸"],
+    "枕套": ["無尺寸"],
+    "抱枕套": ["無尺寸"],
+    "枕頭／枕芯": ["無尺寸"],
+    "其它配件": ["有尺寸", "無尺寸", "全部規格"],
+    "其它品項": ["全部規格"]
+  };
+  const enabledPurchaseUnitKeys = new Set<string>();
   for (const unit of rules.purchaseUnits as Record<string, unknown>[]) {
     if (!String(unit.supplier || "").trim() || !String(unit.ruleName || "").trim()) throw new RequestValidationError("採購單位的供應商與規則名稱不可空白。");
+    if (!supplierNames.has(String(unit.supplier || "").trim())) throw new RequestValidationError("採購單位只能選擇已建立的供應商。");
     if (unit.quantity !== null && unit.quantity !== "" && (!Number.isInteger(Number(unit.quantity)) || Number(unit.quantity) < 1 || Number(unit.quantity) > 10000)) throw new RequestValidationError("箱入／採購單位須留白或填1至10000的整數。");
+    if (unit.conditionMode != null) {
+      if (unit.conditionMode !== "structured") throw new RequestValidationError("採購單位的判斷模式錯誤。");
+      const productCategory = String(unit.productCategory || "").trim();
+      const sizeOption = String(unit.sizeOption || "").trim();
+      if (!purchaseUnitSizes[productCategory]) throw new RequestValidationError("採購單位的品類不在目前分類選項中。");
+      if (!purchaseUnitSizes[productCategory].includes(sizeOption)) throw new RequestValidationError(`${productCategory}的尺寸／規格選項不正確。`);
+      if (unit.enabled !== false) {
+        if (!Number.isInteger(Number(unit.quantity)) || Number(unit.quantity) < 1) throw new RequestValidationError("已啟用的採購單位規則必須填寫正整數數量。");
+        const key = `${String(unit.supplier).trim()}||${productCategory}||${sizeOption}`;
+        if (enabledPurchaseUnitKeys.has(key)) throw new RequestValidationError(`採購單位規則重複：${String(unit.supplier).trim()}／${productCategory}／${sizeOption}。`);
+        enabledPurchaseUnitKeys.add(key);
+      }
+    }
   }
   const encoded = JSON.stringify(rules);
   if (new TextEncoder().encode(encoded).byteLength > 60000) throw new RequestValidationError("採購規則超過60 KB上限。", 413);

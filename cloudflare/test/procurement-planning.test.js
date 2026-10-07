@@ -546,9 +546,32 @@ describe("採購規劃核心鎖定公式", () => {
     expect(foreign.entries.reduce((sum, row) => sum + row.amount, 0)).toBe(100000);
   });
 
-  it("力榮逐品號使用10件單位，不跨品號湊數", () => {
+  it("力榮依集中規則套用不同尺寸，特定規格優先於其它品項", () => {
+    const rules = [
+      { supplier: "力榮", conditionMode: "structured", productCategory: "床包", sizeOption: "5尺", ruleName: "床包5尺", matchText: "床包|5尺", quantity: 20, enabled: true },
+      { supplier: "力榮", conditionMode: "structured", productCategory: "床包", sizeOption: "6尺", ruleName: "床包6尺", matchText: "床包|6尺", quantity: 20, enabled: true },
+      { supplier: "力榮", conditionMode: "structured", productCategory: "其它品項", sizeOption: "全部規格", ruleName: "其它品項", matchText: "", quantity: 10, enabled: true }
+    ];
+    expect(core.purchaseUnitFromRules("力榮", { name: "5尺床包 [楷嶼 A]" }, "", rules)).toBe(20);
+    expect(core.purchaseUnitFromRules("力榮", { name: "6尺床包 [楷嶼 A]" }, "", rules)).toBe(20);
+    expect(core.purchaseUnitFromRules("力榮", { name: "3.5尺床包 [楷嶼 A]" }, "", rules)).toBe(10);
+    expect(core.purchaseUnitFromRules("力榮", { name: "一般配件" }, "", rules)).toBe(10);
     expect(core.roundByPack(14, 10, 20, 14)).toMatchObject({ down: 10, up: 20, quantity: 10, direction: "向下" });
     expect(core.roundByPack(14, 10, 10, 14)).toMatchObject({ down: 10, up: 20, quantity: 20, direction: "向上" });
+  });
+
+  it("力榮寄庫逐品號讀取各自採購單位", () => {
+    const rules = [
+      { supplier: "力榮", conditionMode: "structured", productCategory: "床包", sizeOption: "5尺", ruleName: "床包5尺", matchText: "床包|5尺", quantity: 20, enabled: true },
+      { supplier: "力榮", conditionMode: "structured", productCategory: "其它品項", sizeOption: "全部規格", ruleName: "其它品項", matchText: "", quantity: 10, enabled: true }
+    ];
+    const recommendations = { asOfDate: "2026-10-07", rows: [
+      { sku: "A42346-A", supplier: "力榮", name: "5尺床包 [楷嶼 A]", tier: "穩定", forecastDailyQty: 0.2, unitCost: 100, externalPurchaseBlocked: false },
+      { sku: "X1", supplier: "力榮", name: "一般配件", tier: "穩定", forecastDailyQty: 0.2, unitCost: 100, externalPurchaseBlocked: false }
+    ] };
+    const rows = core.buildLirongConsignmentRecommendations(recommendations, { bySku: new Map() }, { purchaseUnitRules: rules });
+    expect(rows[0].upQty % 20).toBe(0);
+    expect(rows[1].upQty % 10).toBe(0);
   });
 
   it("集中採購單位可覆寫普優瑪箱入數，未確認的其它品項回到單件", () => {
@@ -1158,7 +1181,7 @@ describe("採購建議第二階段", () => {
     expect(styledSheet["!margins"]).toMatchObject({ left: 0.35, right: 0.35, top: 0.5, bottom: 0.5 });
     const rules = XLSX.utils.sheet_to_json(output.Sheets["08_核心規則"], { header: 1, defval: "" });
     expect(rules.some((row) => row[0] === "普優瑪採購與寄庫" && String(row[1]).includes("120／穩定105／低銷90天"))).toBe(true);
-    expect(rules.some((row) => row[0] === "力榮採購與寄庫" && String(row[1]).includes("每品號0或10的倍數"))).toBe(true);
+    expect(rules.some((row) => row[0] === "力榮採購與寄庫" && String(row[1]).includes("依規則管理的品類與尺寸套用採購單位"))).toBe(true);
     expect(rules.some((row) => row[0] === "上林檢視期" && String(row[1]).includes("固定28天"))).toBe(true);
     const summary = XLSX.utils.sheet_to_json(output.Sheets["01_採購摘要"], { header: 1, defval: "" });
     expect(summary.some((row) => row[0] === "五來源日期檢核" && row[1] === "未提供")).toBe(true);
@@ -2103,13 +2126,20 @@ describe("採購規劃前台與入口", () => {
     expect(rulesAdminHtml).toContain("未列入、新增後尚未列入或由資料臨時辨識到的供應商");
     expect(rulesAdminHtml).toContain('id="spring-festival-extra-days"');
     expect(rulesAdminHtml).toContain("預設53天，可在45～60天內調整");
+    expect(rulesAdminHtml).toContain("供應商＋品類＋尺寸");
+    expect(rulesAdminHtml).not.toContain("品名比對（以 | 分隔且皆須命中）");
     expect(rulesAdminApp).toContain("featuredSuppliers");
     expect(rulesAdminApp).toContain("springFestival");
+    expect(rulesAdminApp).toContain("UNIT_CATEGORIES");
+    expect(rulesAdminApp).toContain("sizeOption");
     const supplierMigration = readFileSync("worker/migrations/0009_restore_supplier_review_periods.sql", "utf8");
     expect(supplierMigration).toContain("featuredSuppliers");
     expect(supplierMigration).toContain('["普優瑪寢具有限公司","力榮","上林","潤泰羽絨","泰能脊康"]');
     const springFestivalMigration = readFileSync("worker/migrations/0010_foreign_supplier_spring_festival.sql", "utf8");
     expect(springFestivalMigration).toContain('"extraDays":53');
+    const structuredUnitsMigration = readFileSync("worker/migrations/0031_structured_purchase_unit_rules.sql", "utf8");
+    expect(structuredUnitsMigration).toContain('"supplier":"力榮","conditionMode":"structured","productCategory":"床包","sizeOption":"5尺"');
+    expect(structuredUnitsMigration).toContain('"supplier":"力榮","conditionMode":"structured","productCategory":"其它品項","sizeOption":"全部規格"');
   });
 
   it("9月歷史接續資料固定為可追溯月份快照且不補寄舊通知", () => {

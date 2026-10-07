@@ -8,7 +8,7 @@
   <title>採購規則管理｜翔仔居家</title>
   <link rel="stylesheet" href="../../cost-analysis/style.css">
   <link rel="stylesheet" href="../style.css?v=20260914-rules-r2">
-  <link rel="stylesheet" href="style.css?v=20260916-structured-store-rules-r1">
+  <link rel="stylesheet" href="style.css?v=20261007-structured-purchase-units-r1">
 </head>
 <body>
   <main class="page-shell">
@@ -52,8 +52,9 @@
     </section>
 
     <section class="panel" aria-labelledby="unit-title">
-      <div class="section-heading compact"><div><p class="eyebrow">箱入數／採購倍數</p><h2 id="unit-title">採購單位</h2><p>普優瑪其它品項若尚無箱入數可留白；日後可新增並填入。</p></div><button id="add-unit" class="secondary-button" type="button">新增品項規則</button></div>
-      <div class="result-table-wrap"><table class="rules-table"><thead><tr><th>啟用</th><th>供應商</th><th>規則名稱</th><th>品名比對（以 | 分隔且皆須命中）</th><th>數量／倍數</th><th></th></tr></thead><tbody id="unit-rows"></tbody></table></div>
+      <div class="section-heading compact"><div><p class="eyebrow">箱入數／採購倍數</p><h2 id="unit-title">採購單位</h2><p>供應商、品類及尺寸使用連動選單；特定尺寸優先於「其它品項」，避免名稱輸入不同而未套用。</p></div><button id="add-unit" class="secondary-button" type="button">新增品項規則</button></div>
+      <div class="rule-condition-help"><strong>套用順序</strong><span>供應商＋品類＋尺寸 → 供應商＋品類 → 其它品項。新增規則預設停用，填妥採購單位後再啟用。</span></div>
+      <div class="result-table-wrap"><table class="rules-table purchase-unit-rules-table"><thead><tr><th>啟用</th><th>供應商</th><th>品類</th><th>尺寸／規格</th><th>數量／倍數</th><th>套用說明</th><th></th></tr></thead><tbody id="unit-rows"></tbody></table></div>
     </section>
 
     <section id="store-inventory" class="panel" aria-labelledby="store-title">
@@ -83,6 +84,6 @@
     <section class="panel save-panel"><label class="wide-field">本次修改原因＊<input id="change-reason" type="text" maxlength="500" placeholder="例如：修正兩類商品的可售最低庫存"></label><button id="save-rules" class="primary-button" type="button" disabled>儲存全部採購規則</button><p id="save-status" class="main-status">尚未修改。</p></section>
     <footer><p>每次儲存都會建立新版本，保留修改人、時間與原因。</p></footer>
   </main>
-  <script src="admin.js?v=20260921-transfer-access-r1"></script>
+  <script src="admin.js?v=20261007-structured-purchase-units-r1"></script>
 </body>
 </html>

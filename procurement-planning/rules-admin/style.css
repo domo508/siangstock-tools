@@ -1,6 +1,7 @@
 .compact-hero { min-height: auto; padding-bottom: 1rem; }
 .compact-hero h1 { font-size: clamp(2.2rem, 5vw, 4.5rem); }
 .rules-table { width: 100%; border-collapse: collapse; min-width: 1100px; }
+.purchase-unit-rules-table { min-width: 980px; }
 .store-rules-table { min-width: 1420px; }
 .rules-table th, .rules-table td { border-bottom: 1px solid var(--line, #ddd); padding: .65rem; text-align: left; vertical-align: top; }
 .rules-table input, .rules-table select, .rule-form-grid input, .rule-form-grid textarea, .wide-field input, .wide-field textarea { width: 100%; box-sizing: border-box; }
@@ -40,6 +41,7 @@
 #access-status { margin-left: 1rem; }
 .rule-condition-help { display: flex; gap: .65rem; align-items: baseline; margin: .9rem 0; padding: .8rem 1rem; border: 1px solid #c9dde3; border-radius: 14px; color: var(--navy, #153f63); background: #f3f9f9; }
 .rule-condition-help span { color: var(--muted, #64778a); line-height: 1.6; }
+.unit-scope-label { display: inline-flex; align-items: center; min-height: 42px; padding: .35rem .65rem; border-radius: 10px; color: var(--navy, #153f63); background: #edf7f7; font-weight: 700; line-height: 1.45; }
 
 @media (max-width: 760px) {
   .featured-supplier-manager { grid-template-columns: 1fr; }

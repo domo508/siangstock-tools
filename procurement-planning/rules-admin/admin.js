@@ -2,6 +2,17 @@
   "use strict";
 
   const state = { config: null, version: 0, rules: null, dirty: false };
+  const UNIT_CATEGORIES = ["床包", "薄被套", "兩用被套", "枕套", "抱枕套", "枕頭／枕芯", "其它配件", "其它品項"];
+  const UNIT_SIZES = {
+    "床包": ["3.5尺", "5尺", "6尺", "7尺", "其它尺寸"],
+    "薄被套": ["4.5×6.5尺", "6×7尺", "其它尺寸"],
+    "兩用被套": ["4.5×6.5尺", "6×7尺", "其它尺寸"],
+    "枕套": ["無尺寸"],
+    "抱枕套": ["無尺寸"],
+    "枕頭／枕芯": ["無尺寸"],
+    "其它配件": ["有尺寸", "無尺寸", "全部規格"],
+    "其它品項": ["全部規格"]
+  };
   const get = (selector) => document.querySelector(selector);
   const elements = {
     account: get("#account-badge"), pageStatus: get("#page-status"), suppliers: get("#supplier-rows"), units: get("#unit-rows"), stores: get("#store-rows"),
@@ -40,6 +51,57 @@
   function select(value, choices, onChange) {
     const control = document.createElement("select"); choices.forEach((choice) => { const option = document.createElement("option"); option.value = choice; option.textContent = choice; control.appendChild(option); }); control.value = value;
     control.addEventListener("change", () => { onChange(control.value); markDirty(); }); return control;
+  }
+  function inferUnitCategory(item) {
+    if (UNIT_CATEGORIES.includes(item.productCategory)) return item.productCategory;
+    const text = `${item.ruleName || ""} ${item.matchText || ""}`;
+    if (/兩用被套/.test(text)) return "兩用被套";
+    if (/薄被套/.test(text)) return "薄被套";
+    if (/床包/.test(text)) return "床包";
+    if (/抱枕套/.test(text)) return "抱枕套";
+    if (/枕套/.test(text)) return "枕套";
+    if (/(枕頭|枕芯)/.test(text)) return "枕頭／枕芯";
+    if (/配件/.test(text)) return "其它配件";
+    return "其它品項";
+  }
+  function inferUnitSize(item, category) {
+    if ((UNIT_SIZES[category] || []).includes(item.sizeOption)) return item.sizeOption;
+    const text = `${item.ruleName || ""} ${item.matchText || ""}`.replace(/[＊*]/g, "×");
+    if (/3\.5尺/.test(text)) return "3.5尺";
+    if (/4\.5×6\.5尺|單人/.test(text)) return "4.5×6.5尺";
+    if (/6×7尺|雙人/.test(text)) return "6×7尺";
+    if (/(?:^|[^\d.])5尺/.test(text)) return "5尺";
+    if (/(?:^|[^\d.])6尺/.test(text)) return "6尺";
+    if (/(?:^|[^\d.])7尺/.test(text)) return "7尺";
+    return UNIT_SIZES[category]?.[0] || "全部規格";
+  }
+  function unitRuleName(category, sizeOption) {
+    if (category === "其它品項") return "其它品項";
+    if (sizeOption === "全部規格") return category;
+    if (category === "薄被套") return `${sizeOption === "4.5×6.5尺" ? "單人" : sizeOption === "6×7尺" ? "雙人" : ""}${category}${sizeOption}`;
+    if (category === "兩用被套") return `${sizeOption === "4.5×6.5尺" ? "單人" : sizeOption === "6×7尺" ? "雙人" : ""}${category}${sizeOption}`;
+    return `${category}${sizeOption === "無尺寸" ? "" : sizeOption}`;
+  }
+  function unitMatchText(category, sizeOption) {
+    if (category === "其它品項") return "";
+    if (["薄被套", "兩用被套"].includes(category) && sizeOption === "4.5×6.5尺") return `單人${category}`;
+    if (["薄被套", "兩用被套"].includes(category) && sizeOption === "6×7尺") return `雙人${category}`;
+    if (["全部規格", "無尺寸", "有尺寸"].includes(sizeOption)) return category;
+    return `${category}|${sizeOption}`;
+  }
+  function synchronizeUnitRule(item) {
+    const productCategory = inferUnitCategory(item);
+    const sizeOption = inferUnitSize(item, productCategory);
+    item.conditionMode = "structured";
+    item.productCategory = productCategory;
+    item.sizeOption = sizeOption;
+    item.ruleName = unitRuleName(productCategory, sizeOption);
+    item.matchText = unitMatchText(productCategory, sizeOption);
+    return item;
+  }
+  function unitScopeLabel(item) {
+    if (item.productCategory === "其它品項") return "未命中特定規格時才套用";
+    return `${item.productCategory}・${item.sizeOption}`;
   }
   function removeButton(callback) { const button = document.createElement("button"); button.type = "button"; button.className = "table-action"; button.textContent = "刪除"; button.addEventListener("click", () => { callback(); markDirty(); render(); }); return button; }
   function ensureFeaturedSuppliers() {
@@ -105,10 +167,16 @@
   function renderUnits() {
     const fragment = document.createDocumentFragment();
     state.rules.purchaseUnits.forEach((item, index) => {
+      synchronizeUnitRule(item);
+      const supplierChoices = [...new Set([...(state.rules.suppliers || []).map((supplier) => String(supplier.name || "").trim()).filter(Boolean), item.supplier].filter(Boolean))];
       const row = document.createElement("tr");
-      row.append(cell(input("checkbox", item.enabled !== false, (value) => item.enabled = value)), cell(input("text", item.supplier, (value) => item.supplier = value)),
-        cell(input("text", item.ruleName, (value) => item.ruleName = value)), cell(input("text", item.matchText || "", (value) => item.matchText = value, { placeholder: "可留白表示全品項" })),
-        cell(input("number", item.quantity ?? "", (value) => item.quantity = value === "" ? null : Number(value), { min: 1, step: 1, placeholder: "尚未確認可留白" })), cell(removeButton(() => state.rules.purchaseUnits.splice(index, 1))));
+      const scope = document.createElement("span"); scope.className = "unit-scope-label"; scope.textContent = unitScopeLabel(item);
+      row.append(cell(input("checkbox", item.enabled !== false, (value) => item.enabled = value)),
+        cell(select(item.supplier, supplierChoices, (value) => item.supplier = value)),
+        cell(select(item.productCategory, UNIT_CATEGORIES, (value) => { item.productCategory = value; item.sizeOption = UNIT_SIZES[value][0]; synchronizeUnitRule(item); renderUnits(); })),
+        cell(select(item.sizeOption, UNIT_SIZES[item.productCategory], (value) => { item.sizeOption = value; synchronizeUnitRule(item); renderUnits(); })),
+        cell(input("number", item.quantity ?? "", (value) => item.quantity = value === "" ? null : Number(value), { min: 1, step: 1, placeholder: "停用時可留白" })),
+        cell(scope), cell(removeButton(() => state.rules.purchaseUnits.splice(index, 1))));
       fragment.appendChild(row);
     }); elements.units.replaceChildren(fragment);
   }
@@ -186,7 +254,7 @@
 
   elements.addSupplier.addEventListener("click", () => { state.rules.suppliers.push({ name: "新供應商", aliases: [], country: "國內", leadDays: 14, reviewDays: 14, automaticPurchase: true, exclusionReason: "" }); markDirty(); render(); });
   elements.addFeaturedSupplier.addEventListener("click", () => { const name = elements.featuredSupplierSelect.value; if (!name) return; ensureFeaturedSuppliers().push(name); markDirty(); renderFeaturedSuppliers(); });
-  elements.addUnit.addEventListener("click", () => { state.rules.purchaseUnits.push({ supplier: "普優瑪寢具有限公司", ruleName: "其它品項", matchText: "", quantity: null, enabled: true }); markDirty(); render(); });
+  elements.addUnit.addEventListener("click", () => { state.rules.purchaseUnits.push({ supplier: state.rules.suppliers?.[0]?.name || "普優瑪寢具有限公司", conditionMode: "structured", productCategory: "床包", sizeOption: "3.5尺", ruleName: "床包3.5尺", matchText: "床包|3.5尺", quantity: null, enabled: false }); markDirty(); render(); });
   elements.addStore.addEventListener("click", () => { state.rules.storeInventory.rules.push({ name: "新門市規則", enabled: false, scope: "R00、R06", conditionMode: "structured", exactSkus: "", productCategory: "全部", sizeAttribute: "全部", itemTypeKeywords: "", matchText: "", inventoryRole: "可售最低庫存", quantity: 1, priority: 50 }); markDirty(); render(); });
   elements.springFestivalEnabled.addEventListener("change", () => { ensureSpringFestivalRule().enabled = elements.springFestivalEnabled.checked; markDirty(); });
   elements.springFestivalStart.addEventListener("input", () => { ensureSpringFestivalRule().closureStart = elements.springFestivalStart.value; markDirty(); });

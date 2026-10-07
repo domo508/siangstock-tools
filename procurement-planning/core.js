@@ -1553,8 +1553,8 @@
     const deliveryAfterProductionDays = Math.max(0, Number(lirongRules.deliveryAfterProductionDays ?? PROCUREMENT_POLICY.lirongDeliveryAfterProductionDays));
     const earliestDeliveryDays = productionDays + deliveryAfterProductionDays;
     const targetRules = lirongRules.targetDays || PROCUREMENT_POLICY.lirongFactoryTargetDays;
-    const packSize = purchaseUnitFromRules("力榮", null, "", options.purchaseUnitRules);
     return recommendations.rows.filter((row) => /力榮/.test(row.supplier)).map((row) => {
+      const packSize = purchaseUnitFromRules("力榮", row, row.masterName || row.name || "", options.purchaseUnitRules);
       const consignment = lirongConsignment.bySku.get(row.sku);
       const currentQty = consignment?.currentQty || 0;
       const scheduledQty = consignment?.scheduledQty || 0;
@@ -1880,20 +1880,94 @@
     return 1;
   }
 
+  const PURCHASE_UNIT_CATEGORY_OPTIONS = ["床包", "薄被套", "兩用被套", "枕套", "抱枕套", "枕頭／枕芯", "其它配件", "其它品項"];
+  function inferPurchaseUnitCategory(masterRecord, fallbackName = "") {
+    const text = normalizeText([masterRecord?.mainCategory, masterRecord?.style1, masterRecord?.style2, masterRecord?.name, fallbackName].filter(Boolean).join(" "));
+    if (/兩用被套/.test(text)) return "兩用被套";
+    if (/薄被套/.test(text)) return "薄被套";
+    if (/床包/.test(text)) return "床包";
+    if (/抱枕套/.test(text)) return "抱枕套";
+    if (/枕套/.test(text)) return "枕套";
+    if (/(枕頭|枕芯)/.test(text)) return "枕頭／枕芯";
+    if (/配件/.test(text)) return "其它配件";
+    return "其它品項";
+  }
+
+  function inferPurchaseUnitSize(masterRecord, fallbackName = "", category = "") {
+    const text = [masterRecord?.size, masterRecord?.sizeGroup, masterRecord?.name, fallbackName]
+      .filter(Boolean).join(" ").normalize("NFKC").replace(/[×＊*]/g, "x").replace(/\s+/g, "");
+    if (/3\.5尺/.test(text)) return "3.5尺";
+    if (/4\.5x6\.5尺/.test(text) || (["薄被套", "兩用被套"].includes(category) && /單人/.test(text))) return "4.5×6.5尺";
+    if (/6x7尺/.test(text) || (["薄被套", "兩用被套"].includes(category) && /雙人/.test(text))) return "6×7尺";
+    if (/(?:^|[^\d.])5尺/.test(text)) return "5尺";
+    if (/(?:^|[^\d.])6尺/.test(text)) return "6尺";
+    if (/(?:^|[^\d.])7尺/.test(text)) return "7尺";
+    if (["枕套", "抱枕套", "枕頭／枕芯"].includes(category)) return "無尺寸";
+    if (category === "其它配件") return /(\d+(?:\.\d+)?(?:x|公分|cm|尺)|[smlx]{1,3})/i.test(text) ? "有尺寸" : "無尺寸";
+    if (["床包", "薄被套", "兩用被套"].includes(category)) return "其它尺寸";
+    return "全部規格";
+  }
+
+  function normalizedPurchaseUnitRule(rule) {
+    if (!rule || typeof rule !== "object") return null;
+    if (rule.conditionMode === "structured" && PURCHASE_UNIT_CATEGORY_OPTIONS.includes(String(rule.productCategory || ""))) {
+      return { ...rule, productCategory: String(rule.productCategory), sizeOption: String(rule.sizeOption || "全部規格") };
+    }
+    const text = normalizeText(`${rule.ruleName || ""} ${rule.matchText || ""}`);
+    let productCategory = "其它品項";
+    if (/兩用被套/.test(text)) productCategory = "兩用被套";
+    else if (/薄被套/.test(text)) productCategory = "薄被套";
+    else if (/床包/.test(text)) productCategory = "床包";
+    else if (/抱枕套/.test(text)) productCategory = "抱枕套";
+    else if (/枕套/.test(text)) productCategory = "枕套";
+    else if (/(枕頭|枕芯)/.test(text)) productCategory = "枕頭／枕芯";
+    else if (/配件/.test(text)) productCategory = "其它配件";
+    let sizeOption = "全部規格";
+    if (/3\.5尺/.test(text)) sizeOption = "3.5尺";
+    else if (/4\.5(?:x|×)6\.5尺|單人/.test(text)) sizeOption = "4.5×6.5尺";
+    else if (/6(?:x|×)7尺|雙人/.test(text)) sizeOption = "6×7尺";
+    else if (/(?:^|[^\d.])5尺/.test(text)) sizeOption = "5尺";
+    else if (/(?:^|[^\d.])6尺/.test(text)) sizeOption = "6尺";
+    else if (/(?:^|[^\d.])7尺/.test(text)) sizeOption = "7尺";
+    else if (["枕套", "抱枕套", "枕頭／枕芯"].includes(productCategory)) sizeOption = "無尺寸";
+    return { ...rule, productCategory, sizeOption, legacyMatchText: productCategory === "其它品項" ? String(rule.matchText || "").trim() : "" };
+  }
+
+  function structuredPurchaseUnitRuleMatches(rule, masterRecord, fallbackName = "") {
+    if (rule.legacyMatchText) {
+      const productText = normalizeText([masterRecord?.name, masterRecord?.size, masterRecord?.sizeGroup, fallbackName].filter(Boolean).join(" "));
+      return rule.legacyMatchText.split("|").map(normalizeText).filter(Boolean).every((part) => productText.includes(part));
+    }
+    const category = inferPurchaseUnitCategory(masterRecord, fallbackName);
+    if (rule.productCategory !== "其它品項" && rule.productCategory !== category) return false;
+    if (["全部規格", ""].includes(rule.sizeOption)) return true;
+    return inferPurchaseUnitSize(masterRecord, fallbackName, category) === rule.sizeOption;
+  }
+
+  function resolvePurchaseUnitRule(supplier, masterRecord, fallbackName, suppliedRules) {
+    if (!Array.isArray(suppliedRules)) return null;
+    const supplierText = normalizeText(supplier);
+    const candidates = suppliedRules.map((raw, index) => ({ raw, rule: normalizedPurchaseUnitRule(raw), index })).filter(({ raw, rule }) => {
+      const ruleSupplier = normalizeText(raw?.supplier);
+      return rule && raw?.enabled !== false && ruleSupplier && supplierText
+        && (supplierText === ruleSupplier || supplierText.includes(ruleSupplier) || ruleSupplier.includes(supplierText));
+    }).filter(({ rule }) => structuredPurchaseUnitRuleMatches(rule, masterRecord, fallbackName));
+    candidates.sort((left, right) => {
+      const categoryScore = (item) => item.rule.productCategory === "其它品項" && !item.rule.legacyMatchText ? 0 : 100;
+      const sizeScore = (item) => item.rule.sizeOption === "全部規格" ? 0 : 10;
+      return (categoryScore(right) + sizeScore(right)) - (categoryScore(left) + sizeScore(left)) || left.index - right.index;
+    });
+    return candidates[0]?.raw || null;
+  }
+
   function purchaseUnitFromRules(supplier, masterRecord, fallbackName, suppliedRules) {
     const supplierText = normalizeText(supplier);
-    if (/力榮/.test(supplierText)) return 10;
+    const matched = resolvePurchaseUnitRule(supplier, masterRecord, fallbackName, suppliedRules);
+    if (matched && Number.isInteger(Number(matched.quantity)) && Number(matched.quantity) > 0) return Number(matched.quantity);
     const confirmedPuyoumaUnit = /普優[瑪碼]/.test(supplierText) ? puyoumaPackSize(masterRecord, fallbackName) : 1;
     if (confirmedPuyoumaUnit > 1) return confirmedPuyoumaUnit;
-    if (!Array.isArray(suppliedRules)) return confirmedPuyoumaUnit;
-    const productText = normalizeText([masterRecord?.name, masterRecord?.size, masterRecord?.sizeGroup, fallbackName].filter(Boolean).join(" "));
-    const candidates = suppliedRules.filter((rule) => {
-      const ruleSupplier = normalizeText(rule?.supplier);
-      return rule?.enabled !== false && ruleSupplier && supplierText && (supplierText === ruleSupplier || supplierText.includes(ruleSupplier) || ruleSupplier.includes(supplierText));
-    });
-    const matched = candidates.find((rule) => String(rule.matchText || "").split("|").map(normalizeText).filter(Boolean).every((part) => productText.includes(part)))
-      || candidates.find((rule) => !String(rule.matchText || "").trim());
-    return matched && Number.isInteger(Number(matched.quantity)) && Number(matched.quantity) > 0 ? Number(matched.quantity) : confirmedPuyoumaUnit;
+    if (!Array.isArray(suppliedRules) && /力榮/.test(supplierText)) return 10;
+    return confirmedPuyoumaUnit;
   }
 
   function buildManualAdditionCatalog(input = {}) {
@@ -4566,7 +4640,7 @@
       ["淨採購需求", LOCKED_RULES.netDemandFormula, "核心鎖定"],
       ["公司備貨", "目標覆蓋＝供應商檢視期＋到貨交期＋商品分級安全緩衝；90～120天依熱銷90／穩定105／低銷120；0轉人工判斷", "第三版"],
       ["普優瑪採購與寄庫", `成品製作${recommendations.appliedRules?.puyouma?.productionDays ?? 45}天；寄庫目標熱銷${recommendations.appliedRules?.puyouma?.targetDays?.["熱銷"] ?? 120}／穩定${recommendations.appliedRules?.puyouma?.targetDays?.["穩定"] ?? 105}／低銷${recommendations.appliedRules?.puyouma?.targetDays?.["低銷"] ?? 90}天`, "集中規則"],
-      ["力榮採購與寄庫", `製作${recommendations.appliedRules?.lirong?.productionDays ?? 14}天；寄庫熱銷${recommendations.appliedRules?.lirong?.targetDays?.["熱銷"] ?? 90}／穩定${recommendations.appliedRules?.lirong?.targetDays?.["穩定"] ?? 60}／低銷${recommendations.appliedRules?.lirong?.targetDays?.["低銷"] ?? 60}天；初始為每品號0或10的倍數，可由集中規則變更`, "集中規則"],
+      ["力榮採購與寄庫", `製作${recommendations.appliedRules?.lirong?.productionDays ?? 14}天；寄庫熱銷${recommendations.appliedRules?.lirong?.targetDays?.["熱銷"] ?? 90}／穩定${recommendations.appliedRules?.lirong?.targetDays?.["穩定"] ?? 60}／低銷${recommendations.appliedRules?.lirong?.targetDays?.["低銷"] ?? 60}天；逐品號依規則管理的品類與尺寸套用採購單位`, "集中規則"],
       ["上林檢視期", "固定28天；另加到貨交期與分級安全緩衝；總部／門市／加總需求保留公式", "已確認"],
       ["Excel編輯", "匯出檔不啟用工作表密碼保護；流程上只填人工欄位，系統欄位如被改動會在回匯時拒絕", "已確認"],
       ["付款認列", "國內預計到貨100%；國外下單30%、預計出貨70%；付款分配合計必須等於核准總額", "已確認"],
@@ -4962,6 +5036,7 @@
     roundByPack,
     puyoumaPackSize,
     purchaseUnitFromRules,
+    resolvePurchaseUnitRule,
     buildManualAdditionCatalog,
     findSupplierRule,
     supplierSelectionCatalog,
