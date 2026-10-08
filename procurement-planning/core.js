@@ -3101,6 +3101,7 @@
       const forecastFutureQty = channelAdjustedDaily * horizonDays;
       const hqSafetyStockQty = hqDailyQty * safetyBufferDays;
       let storeDemandQty = 0;
+      let standardStoreDemandQty = 0;
       let modelStoreDemandQty = 0;
       let storeSafetyStockQty = 0;
       const storeDemandByCode = {};
@@ -3111,8 +3112,10 @@
         const storeDaily = Math.max(0, Number(storeDailyByCode[storeCode] || 0));
         const currentStoreInventory = Math.max(0, Number(projectedInventoryBySkuWarehouse.get(compositeKey(row.demand.sku, storeCode)) || 0));
         const storeSafety = storeTargetQty(storeDaily, row.tier);
+        const standardModelStoreNeed = Math.max(storeDaily * nominalHorizonDays + storeSafety - currentStoreInventory, 0);
         const modelStoreNeed = Math.max(storeDaily * horizonDays + storeSafety - currentStoreInventory, 0);
         const confirmedNeed = storeTransferNeedBySkuStore.get(compositeKey(row.demand.sku, storeCode));
+        const standardStoreNeed = Math.max(standardModelStoreNeed, Number(confirmedNeed?.quantity || 0));
         const storeNeed = Math.max(modelStoreNeed, Number(confirmedNeed?.quantity || 0));
         storeInventoryByCode[storeCode] = currentStoreInventory;
         storeDemandByCode[storeCode] = storeNeed;
@@ -3120,8 +3123,10 @@
         if (confirmedNeed?.neededBy && (!earliestStoreNeedDate || confirmedNeed.neededBy < earliestStoreNeedDate)) earliestStoreNeedDate = confirmedNeed.neededBy;
         storeSafetyStockQty += storeSafety;
         modelStoreDemandQty += modelStoreNeed;
+        standardStoreDemandQty += standardStoreNeed;
         storeDemandQty += storeNeed;
       }
+      const standardHqDemandQty = hqDailyQty * nominalHorizonDays + hqSafetyStockQty;
       const hqDemandQty = hqDailyQty * horizonDays + hqSafetyStockQty;
       const safetyStockQty = hqSafetyStockQty + storeSafetyStockQty;
       const hqUsableCodes = ["T00", "R19", "R09"];
@@ -3161,6 +3166,13 @@
         }
       }
       const transfer = transfers.bySku.get(row.demand.sku);
+      const standardRawPurchaseQty = calculateNetProcurementDemand({
+        forecastDemandQty: standardHqDemandQty + standardStoreDemandQty,
+        safetyStockQty: 0,
+        availableInventoryQty: inventoryQty,
+        pendingPurchaseQty: effectivePendingQty,
+        factoryConsignmentQty: supplierConsignment.bySku.get(row.demand.sku)?.currentQty || 0
+      });
       const rawPurchaseQty = calculateNetProcurementDemand({
         forecastDemandQty: hqDemandQty + storeDemandQty,
         safetyStockQty: 0,
@@ -3168,7 +3180,9 @@
         pendingPurchaseQty: effectivePendingQty,
         factoryConsignmentQty: supplierConsignment.bySku.get(row.demand.sku)?.currentQty || 0
       });
-      const holidayProtectionRawQty = holidayProtectionDays > 0 ? channelAdjustedDaily * holidayProtectionDays : 0;
+      const holidayProtectionRawQty = holidayProtectionDays > 0
+        ? Math.max(rawPurchaseQty - standardRawPurchaseQty, 0)
+        : 0;
       const springFestivalAdjustedRawPurchaseQty = springFestival.active
         ? calculateNetProcurementDemand({
           forecastDemandQty: hqDemandQty + storeDemandQty + springFestivalExtraDailyQty * springFestival.extraDays,
@@ -3217,8 +3231,7 @@
       }
       const manualSupplierReview = Boolean(supplyProfile.manualReview);
       const releaseRate = purchaseReleaseRate(row.tier, checkpoint);
-      const ordinaryRawPurchaseQty = Math.max(rawPurchaseQty - holidayProtectionRawQty, 0);
-      const standardReleasedPurchaseQty = ordinaryRawPurchaseQty * releaseRate;
+      const standardReleasedPurchaseQty = standardRawPurchaseQty * releaseRate;
       const holidayReleasedPurchaseQty = standardReleasedPurchaseQty + holidayProtectionRawQty;
       const shopeeProtectionRawQty = inventoryQty < 3 && hqDailyQty > 0
         ? Math.max(3 + hqDailyQty * effectiveSupplierLeadDays - inventoryQty - effectivePendingQty, 0)
@@ -3379,6 +3392,7 @@
         nominalTargetCoverageDays,
         holidayProtectionDays,
         holidayProtectionDates: [...new Set([...arrivalHolidayAdjustment.holidays, ...coverageHolidayAdjustment.holidays])].sort(),
+        holidayProtectionRawQty,
         holidayProtectionAdditionalQty,
         forecastFutureQty,
         safetyStockQty,
@@ -3388,6 +3402,7 @@
         effectivePendingQty,
         transferSubmittedQty: transfer?.submittedQty || 0,
         transferInTransitQty: transfer?.shippedQty || 0,
+        standardRawPurchaseQty,
         rawPurchaseQty,
         releaseRate,
         standardReleasedPurchaseQty,

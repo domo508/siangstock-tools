@@ -1886,6 +1886,26 @@ describe("採購建議第二階段", () => {
     expect(holiday.effectiveSupplierLeadDays).toBeGreaterThan(holiday.supplierLeadDays);
     expect(holiday.holidayProtectionDays).toBeGreaterThan(0);
     expect(holiday.targetCoverageDays).toBeGreaterThanOrEqual(ordinary.targetCoverageDays);
+    expect(holiday.holidayProtectionRawQty).toBeCloseTo(Math.max(holiday.rawPurchaseQty - holiday.standardRawPurchaseQty, 0), 8);
+  });
+
+  it("現有庫存可支撐連假後到貨日時不重複增加連假需求", () => {
+    const inventoryBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(inventoryBook, XLSX.utils.aoa_to_sheet([
+      ["店倉編號", "店倉名稱", "貨號", "品名", "實際庫存", "實際庫存成本額"],
+      ["T00", "寬承總倉", "A1", "60天絲測試床包", 100, 50000]
+    ]), "乾淨商品");
+    const holiday = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: core.parseInventoryWorkbook(inventoryBook, XLSX), pendingReports: [], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", checkpoint: "mid-month",
+      storeInventoryRules: { workdayHolidays: ["2026-09-02"], calendarSource: "測試行事曆" }
+    }).rows.find((row) => row.sku === "A1");
+    expect(holiday.holidayProtectionDays).toBeGreaterThan(0);
+    expect(holiday.standardRawPurchaseQty).toBe(0);
+    expect(holiday.rawPurchaseQty).toBe(0);
+    expect(holiday.holidayProtectionRawQty).toBe(0);
+    expect(holiday.holidayProtectionAdditionalQty).toBe(0);
+    expect(holiday.suggestedPurchaseQty).toBe(0);
   });
 });
 
@@ -1980,14 +2000,14 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20261007-shopee-holiday-consignment-r1');
+    expect(toolHtml).toContain('core.js?v=20261008-holiday-net-gap-r1');
     expect(toolHtml).toContain('google-sources.js?v=20261006-notification-audit-r2');
-    expect(toolHtml).toContain('app.js?v=20261007-shopee-holiday-consignment-r1');
+    expect(toolHtml).toContain('app.js?v=20261008-holiday-net-gap-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261007-shopee-holiday-consignment-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261008-holiday-net-gap-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
