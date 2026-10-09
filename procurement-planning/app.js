@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261008-holiday-net-gap-r1";
+  const APP_VERSION = "20261009-parent-version-guard-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -440,6 +440,37 @@
     return Number.isNaN(date.getTime()) ? "時間未記錄" : new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(date);
   }
 
+  function parentCreatedAt(draft) {
+    if (draft?._parentCreatedAt) return draft._parentCreatedAt;
+    const match = String(draft?.parentBatchId || draft?.id || "").match(/^PLAN-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})-/);
+    if (!match) return draft?.createdAt || draft?.updatedAt || "";
+    const [, year, month, day, hour, minute, second] = match;
+    return `${year}-${month}-${day}T${hour}:${minute}:${second}Z`;
+  }
+
+  function draftDataAsOf(draft) {
+    return draft?._sourceAsOfDate || draft?.controls?.salesDate || draft?.analysis?.asOfDate || draft?.analysis?.meta?.dataAsOfDate || "";
+  }
+
+  function parentDraftKey(draft) {
+    return `${draft?.analysisMonth || draft?.controls?.month || ""}::${draft?.checkpoint || draft?.controls?.checkpoint || ""}`;
+  }
+
+  function latestParentIds(drafts) {
+    const latest = new Map();
+    drafts.filter(isParentWorkflowDraft).forEach((draft) => {
+      const key = parentDraftKey(draft);
+      const current = latest.get(key);
+      if (!current || String(parentCreatedAt(draft)).localeCompare(String(parentCreatedAt(current))) > 0) latest.set(key, draft);
+    });
+    return new Set([...latest.values()].map((draft) => draft.id));
+  }
+
+  function parentVersionSummary(draft) {
+    const cutoff = draftDataAsOf(draft);
+    return `資料截止${cutoff || "未記錄"}・母批次建立${taipeiDateTime(parentCreatedAt(draft))}`;
+  }
+
   function newParentBatchId() {
     const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
     return `PLAN-${stamp}-${Math.random().toString(36).slice(2, 7)}`;
@@ -491,18 +522,24 @@
     const drafts = state.workflowDrafts.filter(isUnfinishedWorkflowDraft);
     elements.resumeDraftCard.hidden = drafts.length === 0 && state.sharedDrafts.length === 0;
     const fragment = document.createDocumentFragment();
+    const newestParentIds = latestParentIds(drafts);
     drafts.forEach((draft) => {
       const checkpoint = ({ "month-start": "月初採購", "mid-month": "月中採購", "month-end": "月底驗證" })[draft.controls?.checkpoint] || "採購";
-      const item = document.createElement("article"); item.className = "resume-draft-item";
+      const parentDraft = isParentWorkflowDraft(draft);
+      const supersededParent = parentDraft && !newestParentIds.has(draft.id);
+      const item = document.createElement("article"); item.className = `resume-draft-item${parentDraft ? " is-parent" : ""}${supersededParent ? " is-superseded" : ""}`;
       const copy = document.createElement("div");
       const title = document.createElement("strong"); title.textContent = `${draft.controls?.month || "月份未標示"}・${checkpoint}`;
       const summary = document.createElement("p");
       const amount = sharedDraftAmount(draft);
-      summary.textContent = `${draft.activeWorkUnit?.label || "尚未選擇審核單位"}・${workflowStageLabel(draft.stage)}${amount > 0 ? `・${formatCurrency(amount)}` : ""}・最後保存${taipeiDateTime(draft.updatedAt)}`;
+      summary.textContent = `${supersededParent ? "舊版母批次・已被新版取代・" : parentDraft ? "目前母批次・" : ""}${draft.activeWorkUnit?.label || "尚未選擇審核單位"}・${workflowStageLabel(draft.stage)}${amount > 0 ? `・${formatCurrency(amount)}` : ""}・${parentVersionSummary(draft)}・最後保存${taipeiDateTime(draft.updatedAt)}`;
       copy.append(title, summary);
       const actions = document.createElement("div"); actions.className = "resume-draft-actions";
       const resume = document.createElement("button"); resume.type = "button"; resume.className = "primary-button"; resume.textContent = "繼續操作";
-      resume.addEventListener("click", async () => { try { if (draft.sharedDraftId) await openSharedWorkflowDraft(draft.sharedDraftId); else restoreWorkflowDraft(draft); } catch (error) { setWorkflowStatus(`無法恢復：${error.message}`, "error"); } });
+      resume.addEventListener("click", async () => {
+        if (supersededParent && !globalThis.confirm(`這是已被新版取代的舊母批次（${parentVersionSummary(draft)}）。\n\n只建議查閱；若繼續操作，系統仍會在分批前再次阻擋。確定開啟？`)) return;
+        try { if (draft.sharedDraftId) await openSharedWorkflowDraft(draft.sharedDraftId); else restoreWorkflowDraft(draft); } catch (error) { setWorkflowStatus(`無法恢復：${error.message}`, "error"); }
+      });
       const redownload = document.createElement("button"); redownload.type = "button"; redownload.className = "secondary-button"; redownload.textContent = "重新下載本批報表";
       redownload.addEventListener("click", async () => { try { restoreWorkflowDraft(draft); await downloadRecommendation(); } catch (error) { setWorkflowStatus(`無法重新下載：${error.message}`, "error"); } });
       const publish = document.createElement("button"); publish.type = "button"; publish.className = "secondary-button"; publish.textContent = draft.sharedDraftId ? "更新協作草稿" : "發布協作草稿";
@@ -744,19 +781,25 @@
     if (!elements.sharedDraftList || !elements.sharedDraftStatus) return;
     const fragment = document.createDocumentFragment();
     const isParentDraft = (draft) => draft.stage === "analysis" && (!draft.workUnitLabel || draft.workUnitLabel === "尚未選擇審核單位");
-    const drafts = [...state.sharedDrafts].sort((left, right) => Number(isParentDraft(right)) - Number(isParentDraft(left)) || String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+    const parentDrafts = state.sharedDrafts.filter(isParentDraft);
+    const newestParentIds = latestParentIds(parentDrafts);
+    const drafts = [...state.sharedDrafts].sort((left, right) => Number(isParentDraft(right)) - Number(isParentDraft(left)) || String(parentCreatedAt(right)).localeCompare(String(parentCreatedAt(left))) || String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
     drafts.forEach((draft) => {
       const parentDraft = isParentDraft(draft);
-      const item = document.createElement("article"); item.className = `resume-draft-item is-shared${parentDraft ? " is-parent" : ""}`;
+      const supersededParent = parentDraft && !newestParentIds.has(draft.id);
+      const item = document.createElement("article"); item.className = `resume-draft-item is-shared${parentDraft ? " is-parent" : ""}${supersededParent ? " is-superseded" : ""}`;
       const copy = document.createElement("div");
       const checkpoint = ({ "month-start": "月初採購", "mid-month": "月中採購", "month-end": "月底驗證" })[draft.checkpoint] || "採購";
       const title = document.createElement("strong"); title.textContent = `${draft.analysisMonth}・${checkpoint}・${draft.workUnitLabel || "尚未選擇審核單位"}`;
       const summary = document.createElement("p");
-      summary.textContent = `${parentDraft ? "母批次・固定置頂・" : ""}${workflowStageLabel(draft.stage)}・${formatCurrency(draft.amount)}・第${draft.revision}版・${draft.updatedBy}更新於${taipeiDateTime(draft.updatedAt)}`;
+      summary.textContent = `${supersededParent ? "舊版母批次・已被新版取代・僅供查閱・" : parentDraft ? "目前母批次・固定置頂・" : ""}${workflowStageLabel(draft.stage)}・${formatCurrency(draft.amount)}・第${draft.revision}版・${parentVersionSummary(draft)}・${draft.updatedBy}更新於${taipeiDateTime(draft.updatedAt)}`;
       copy.append(title, summary);
       const actions = document.createElement("div"); actions.className = "resume-draft-actions";
-      const open = document.createElement("button"); open.type = "button"; open.className = "primary-button"; open.textContent = "接續操作";
-      open.addEventListener("click", async () => { open.disabled = true; try { await openSharedWorkflowDraft(draft.id); } catch (error) { setWorkflowStatus(`無法開啟協作草稿：${error.message}`, "error"); } finally { open.disabled = false; } });
+      const open = document.createElement("button"); open.type = "button"; open.className = "primary-button"; open.textContent = supersededParent ? "查看舊版" : "接續操作";
+      open.addEventListener("click", async () => {
+        if (supersededParent && !globalThis.confirm(`這是已被新版取代的舊母批次（${parentVersionSummary(draft)}）。\n\n只建議查閱；若繼續操作，系統仍會在分批前再次阻擋。確定開啟？`)) return;
+        open.disabled = true; try { await openSharedWorkflowDraft(draft.id); } catch (error) { setWorkflowStatus(`無法開啟協作草稿：${error.message}`, "error"); } finally { open.disabled = false; }
+      });
       actions.append(open);
       if (state.config?.permissions?.canManageCollaborationDrafts && !parentDraft && !["pending_approval", "approved", "erp_created"].includes(draft.stage)) {
         const remove = document.createElement("button"); remove.type = "button"; remove.className = "secondary-button"; remove.textContent = "移出協作區";
@@ -792,6 +835,16 @@
       const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
       if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
       state.sharedDrafts = result.drafts || [];
+      await Promise.all(state.sharedDrafts.filter((draft) => draft.stage === "analysis" && (!draft.workUnitLabel || draft.workUnitLabel === "尚未選擇審核單位")).map(async (metadata) => {
+        try {
+          const fullDraft = await fetchSharedWorkflowDraft(metadata.id);
+          const snapshot = await decodeSharedSnapshot(fullDraft);
+          metadata._sourceAsOfDate = draftDataAsOf(snapshot);
+          metadata._parentCreatedAt = parentCreatedAt(snapshot);
+        } catch (error) {
+          console.warn("母批次版本摘要讀取失敗", metadata.id, error);
+        }
+      }));
       renderSharedDrafts();
     } catch (error) {
       state.sharedDrafts = [];
@@ -2029,6 +2082,42 @@
     const ledger = (state.ledger?.batches || []).find((row) => row.parent_batch_id === state.parentBatchId && (row.work_unit_ids || []).includes(unit.id) && row.status !== "revoked");
     return ledger ? { id: ledger.id, batchId: ledger.id, stage: ledgerStage(ledger), activeWorkUnit: { id: unit.id, memberIds: [unit.id], label: unit.label } } : null;
   }
+  function matchingDraftWorkUnitIds(draft) {
+    const ids = draft?.workUnitIds || effectiveDraftWorkUnitIds(draft);
+    return Array.isArray(ids) ? ids : [];
+  }
+  function existingDraftForSelectedUnits(units) {
+    const selectedIds = new Set(units.map((unit) => unit.id));
+    const overlaps = (draft) => matchingDraftWorkUnitIds(draft).some((id) => selectedIds.has(id));
+    const local = state.workflowDrafts.find((draft) => draft.parentBatchId === state.parentBatchId && overlaps(draft));
+    if (local) return local;
+    const shared = state.sharedDrafts.find((draft) => draft.parentBatchId === state.parentBatchId && overlaps(draft));
+    return shared ? { ...shared, sharedMetadataOnly: true } : null;
+  }
+  function newestParentForCurrentPeriod() {
+    const currentKey = `${elements.month.value}::${elements.checkpoint.value}`;
+    const parents = [
+      ...state.workflowDrafts.filter(isParentWorkflowDraft),
+      ...state.sharedDrafts.filter((draft) => draft.stage === "analysis" && (!draft.workUnitLabel || draft.workUnitLabel === "尚未選擇審核單位"))
+    ].filter((draft) => parentDraftKey(draft) === currentKey);
+    return parents.sort((left, right) => String(parentCreatedAt(right)).localeCompare(String(parentCreatedAt(left))))[0] || null;
+  }
+  function sharedParentsForCurrentPeriod() {
+    const currentKey = `${elements.month.value}::${elements.checkpoint.value}`;
+    return state.sharedDrafts.filter((draft) => draft.stage === "analysis"
+      && (!draft.workUnitLabel || draft.workUnitLabel === "尚未選擇審核單位")
+      && parentDraftKey(draft) === currentKey);
+  }
+  function crossParentWorkUnitDraft(units) {
+    const selectedIds = new Set(units.map((unit) => unit.id));
+    const currentPeriod = `${elements.month.value}::${elements.checkpoint.value}`;
+    const drafts = [...state.workflowDrafts, ...state.sharedDrafts].filter((draft) => {
+      if (!draft || isParentWorkflowDraft(draft) || draft.parentBatchId === state.parentBatchId) return false;
+      if (parentDraftKey(draft) !== currentPeriod) return false;
+      return matchingDraftWorkUnitIds(draft).some((id) => selectedIds.has(id));
+    });
+    return drafts.sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")))[0] || null;
+  }
   function combinedWorkUnit(units) {
     const sorted = [...units].sort((left, right) => left.label.localeCompare(right.label, "zh-Hant"));
     const memberIds = sorted.map((unit) => unit.id);
@@ -2095,6 +2184,45 @@
   async function startSelectedWorkUnits() {
     const units = core.listProcurementWorkUnits(state.analysis).filter((unit) => state.selectedWorkUnitIds.has(unit.id));
     if (!units.length) return;
+    const existing = existingDraftForSelectedUnits(units);
+    if (existing) {
+      setWorkflowStatus(`同一母批次的${existing.workUnitLabel || existing.activeWorkUnit?.label || "審核單位"}已存在，已改為開啟原批次，未重複建立。`, "warning");
+      if (existing.sharedMetadataOnly) await openSharedWorkflowDraft(existing.id);
+      else restoreWorkflowDraft(existing);
+      return;
+    }
+    const sharedParents = sharedParentsForCurrentPeriod();
+    const currentParentIsShared = sharedParents.some((draft) => draft.id === state.parentBatchId);
+    if (!currentParentIsShared && sharedParents.length) {
+      const priorSharedParent = sharedParents.sort((left, right) => String(parentCreatedAt(right)).localeCompare(String(parentCreatedAt(left))))[0];
+      const currentParent = state.workflowDrafts.find((draft) => draft.id === state.parentBatchId) || workflowSnapshot("analysis");
+      const publishCurrent = globalThis.confirm(`公司共用區目前仍是另一個母批次：\n${parentVersionSummary(priorSharedParent)}\n\n你現在使用的是新版母批次：\n${parentVersionSummary(currentParent)}\n\n若直接分批，其他同事仍可能開到舊金額。按「確定」先將本次母批次發布為公司目前版本，再建立子批次；按「取消」則停止。`);
+      if (!publishCurrent) {
+        setWorkflowStatus("已停止建立：本次新版母批次尚未發布到公司協作區，其他同事仍可能看到舊版。", "error");
+        return;
+      }
+      await publishWorkflowDraft(currentParent);
+    }
+    const newestParent = newestParentForCurrentPeriod();
+    if (newestParent && newestParent.id !== state.parentBatchId && String(parentCreatedAt(newestParent)).localeCompare(String(parentCreatedAt({ id: state.parentBatchId }))) > 0) {
+      const currentParent = state.workflowDrafts.find((draft) => draft.id === state.parentBatchId) || { id: state.parentBatchId, controls: { salesDate: elements.salesDate.value } };
+      setWorkflowStatus(`已停止建立：目前開啟的是舊版母批次（${parentVersionSummary(currentParent)}）；公司／本機已有較新的母批次（${parentVersionSummary(newestParent)}）。請回到協作區開啟「目前母批次」後再操作。`, "error");
+      elements.resumeDraftCard?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    const priorDraft = crossParentWorkUnitDraft(units);
+    if (priorDraft) {
+      const currentAmount = units.reduce((sum, unit) => sum + Number(unit.amount || 0), 0);
+      const currentSkus = units.reduce((sum, unit) => sum + Number(unit.skuCount || 0), 0);
+      const priorAmount = Number(priorDraft.amount || priorDraft.activeWorkUnit?.amount || 0);
+      const priorSkus = Number(priorDraft.activeWorkUnit?.skuCount || 0);
+      const currentParent = state.workflowDrafts.find((draft) => draft.id === state.parentBatchId) || { id: state.parentBatchId, controls: { salesDate: elements.salesDate.value } };
+      const message = `同月份另一個母批次已有「${priorDraft.workUnitLabel || priorDraft.activeWorkUnit?.label || "相同審核單位"}」。\n\n先前：${priorSkus ? `${formatNumber(priorSkus)}個SKU・` : ""}${formatCurrency(priorAmount)}・${parentVersionSummary(priorDraft)}\n本次：${formatNumber(currentSkus)}個SKU・${formatCurrency(currentAmount)}・${parentVersionSummary(currentParent)}\n\n確認資料截止日與版本不同後，才可建立本次新批次。是否繼續？`;
+      if (!globalThis.confirm(message)) {
+        setWorkflowStatus("已取消建立新子批次；原有批次與母批次都沒有變更。", "warning");
+        return;
+      }
+    }
     const unitRows = units.flatMap((unit) => workUnitRows(unit));
     const missingPaymentRules = selectedPaymentSummary(unitRows).reviewSuppliers;
     if (missingPaymentRules.length) {
@@ -2422,6 +2550,7 @@
       };
       state.analysis = analysis; state.baseAnalysis = analysis; state.workflowType = state.shortageRunMode === "new_order" ? "store_shortage_replenishment" : "system_recommendation";
       state.parentBatchId = newParentBatchId(); state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set(); state.draftId = state.parentBatchId;
+      state.sharedDraftId = ""; state.sharedDraftRevision = 0;
       state.parsedSources = { master, inventory, pendingReports, transferReports: [transferReport], consignment, lirongConsignment, salesReports, model };
       state.consignmentSource = consignment; state.returnScope = null; renderSummary(analysis, consignment);
       elements.resultPanel.hidden = false;
