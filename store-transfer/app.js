@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261013-store-transfer-r8";
+  const APP_VERSION = "20261013-store-transfer-r9";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -585,6 +585,28 @@
     return transferCore.projectedSellThroughDate(item.calculation_date, item.base_quantity, sellableAddition, item.daily_usage);
   }
 
+  function storeFacingSystemReason(reason, suggested = 0) {
+    const value = String(reason || "").normalize("NFKC").trim();
+    if (!value) return Number(suggested || 0) > 0 ? "本輪系統建議需求已滿足" : "本批次依現行規則未形成補貨需求";
+    if (/總[倉部]|安全庫存|可釋出|可供應|14[／/]42[／/]84|最高日速|部分供應|未供應/.test(value)) return "受本輪供應條件限制，系統未建議追加";
+    if (/系統已足額建議/.test(value)) return "本輪系統建議需求已滿足";
+    return value;
+  }
+
+  function quantityProjectionText(row, quantity) {
+    const item = {
+      item_type: row.dataset.itemType,
+      calculation_date: row.dataset.calculationDate,
+      base_quantity: Number(row.dataset.base || 0),
+      daily_usage: Number(row.dataset.daily || 0),
+      display_gap: Number(row.dataset.displayGap || 0),
+      system_projection: row.dataset.systemProjection || "",
+      manual: row.dataset.manual === "true"
+    };
+    const stage = state.config.role === "store" ? "人工申請" : "總部核准";
+    return `${stage}${quantity}件後，預估可售至：${rowProjection(item, quantity)}`;
+  }
+
   function detailId(prefix, row) {
     return `${prefix}-${row.storeCode || row.store_code || "store"}-${row.sku || "item"}-${row.itemType || row.item_type || "regular"}`.replace(/[^A-Za-z0-9_-]/g, "-");
   }
@@ -893,7 +915,8 @@
       const approved = item.hq_approved_quantity ?? confirmed;
       const manual = Number(item.suggested_quantity) === 0 && /人工新增/.test(String(item.rule_summary || ""));
       const projectionItem = { ...item, manual };
-      const systemReason = item.system_reason || (manual ? "舊批次未保存系統未建議原因，請重新建立批次" : item.rule_summary || "系統已提出調撥建議");
+      const internalSystemReason = item.system_reason || (manual ? "舊批次未保存系統未建議原因，請重新建立批次" : item.rule_summary || "系統已提出調撥建議");
+      const systemReason = state.config.role === "store" ? storeFacingSystemReason(internalSystemReason, item.suggested_quantity) : internalSystemReason;
       const id = detailId("batch", item);
       const snapshot = savedDecisionSnapshot(item);
       const hasSnapshot = Object.keys(snapshot).length > 0;
@@ -910,7 +933,7 @@
         hasSnapshot ? evidence("待發貨／在途", `${Number(snapshot.pendingSubmittedQuantity || 0)}／${Number(snapshot.inTransitQuantity || 0)}件`) : evidence("待發貨／在途", "舊批次未保存"),
         hasSnapshot ? evidence("目標／不可售展示", `${Number(snapshot.targetQuantity || 0)}／${Number(snapshot.displayQuantity || 0)}件`) : evidence("不可售展示缺口", `${Number(item.display_gap || 0)}件`),
         hasSnapshot ? evidence("本批／下一輪到店", `${snapshot.currentArrivalDate || "—"}／${snapshot.nextArrivalDate || "—"}`) : evidence("計算日期", item.calculation_date || "舊批次未保存"),
-        supplyKnown ? evidence("總倉可用／安全保留／本批可供應", `${Number(snapshot.hqAvailable || 0)}／${Number(snapshot.hqReserve || 0)}／${supplyCeiling}件`) : evidence("總倉供應快照", "舊批次未保存"),
+        ...(state.config.role !== "store" ? [supplyKnown ? evidence("總倉可用／安全保留／本批可供應", `${Number(snapshot.hqAvailable || 0)}／${Number(snapshot.hqReserve || 0)}／${supplyCeiling}件`) : evidence("總倉供應快照", "舊批次未保存")] : []),
         evidence("系統判斷", systemReason, true),
         ...(!hasSnapshot ? [evidence("批次快照", "舊批次未保存完整判斷明細；原建議、確認量及可售至仍可正常查閱", true)] : [])
       ].join("");
@@ -920,7 +943,7 @@
     const storeOptions = payload.storeStatuses.map((row) => `<option value="${row.store_code}">${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</option>`).join("");
     const manualForm = canChangeItems ? `<section class="result-section manual-item-section"><h3>人工新增品項</h3><p>輸入完整ERP品號後，系統會帶入品名、「系統未建議原因」與「申請後預估可售至」。推估沿用本批次建立時的門市庫存、待發貨／在途及近42天現場銷售基準；送出後總部覆核會看到相同欄位。移除既有品項仍會保留稽核紀錄。</p><div class="manual-item-form">${state.config.role !== "store" ? `<label><span>門市</span><select data-manual-store>${storeOptions}</select></label>` : ""}<label><span>品項類型</span><select data-manual-type><option value="regular">一般必要補貨</option><option value="special_stock">建議調撥</option><option value="activity_gift">活動／贈品</option><option value="consumable">提袋耗材</option></select></label><label><span>ERP品號</span><input data-manual-sku maxlength="80" autocomplete="off"></label><label><span>品名（自動帶入）</span><input data-manual-name maxlength="300" readonly></label><label><span>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</span><input data-manual-quantity type="number" min="1" step="1"></label><label><span>${state.config.role === "store" ? "申請後" : "核准後"}預估可售至</span><output data-manual-projection>請先輸入品號與數量</output></label><label class="manual-system-reason-field"><span>系統未建議原因</span><output data-manual-system-reason>請先輸入品號</output></label><label class="manual-reason-field"><span>新增原因</span><input data-manual-reason maxlength="300" autocomplete="off"></label><button class="secondary-button" type="button" data-local-action="add-item">加入確認清單</button></div><p class="manual-supply-warning" data-manual-supply-warning role="alert" hidden></p><p class="status-line" data-manual-status></p><div class="result-table-wrap"><table class="transfer-table manual-item-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>類型</th><th>系統建議</th><th>系統未建議原因</th><th>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</th><th>${state.config.role === "store" ? "申請後" : "核准後"}預估可售至</th><th>原因</th><th>操作</th></tr></thead><tbody data-manual-rows></tbody></table></div></section>` : "";
     const shortages = payload.shortages || [];
-    const shortageTable = shortages.length ? `<section class="result-section shortage-section" data-store-section><h3>缺貨未配與後續補貨狀態</h3><p>這些數量不會加入門市確認量或ERP檔；用來說明總倉為何未能配足，並保留後續回拋主採購的狀態。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>需求量</th><th>已配量</th><th>未配不足量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody>${shortages.map((row) => `<tr data-store-row data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"><td>${escapeHtml(row.store_code)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${row.demand_quantity}</td><td>${row.allocated_quantity}</td><td>${row.unfilled_quantity}</td><td>${escapeHtml(row.reason)}</td><td>${escapeHtml(row.follow_up_status)}</td></tr>`).join("")}</tbody></table></div></section>` : "";
+    const shortageTable = shortages.length ? `<section class="result-section shortage-section" data-store-section><h3>缺貨未配與後續補貨狀態</h3><p>這些數量不會加入門市確認量或ERP檔；用來說明總倉為何未能配足，並保留後續回拋主採購的狀態。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>需求量</th><th>已配量</th><th>未配不足量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody>${shortages.map((row) => `<tr data-store-row data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"><td>${escapeHtml(row.store_code)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${row.demand_quantity}</td><td>${row.allocated_quantity}</td><td>${row.unfilled_quantity}</td><td>${escapeHtml(state.config.role === "store" ? storeFacingSystemReason(row.reason, row.allocated_quantity) : row.reason)}</td><td>${escapeHtml(row.follow_up_status)}</td></tr>`).join("")}</tbody></table></div></section>` : "";
     return [
       table(payload.items.filter((item) => item.item_type === "regular"), "一般週補貨（必要調撥）"),
       table(payload.items.filter((item) => item.item_type === "special_stock"), "建議調撥（非必要）", "單人被套各材質前2名花色；可依現場判斷填0。"),
@@ -956,23 +979,29 @@
       const otherAllocated = state.config.role === "store" ? Number(row.dataset.otherAllocated || 0) : 0;
       const total = Number(totals.get(row.dataset.sku) || 0) + otherAllocated;
       const extra = Math.max(0, quantity - suggested);
+      const projectionText = quantityProjectionText(row, quantity);
       let tone = "", title = "", copy = "";
       if (supplyKnown && total > ceiling) {
         tone = "danger"; blocking += 1;
-        title = `總倉數量不足：${row.dataset.sku} 超過本批可供應量 ${total - ceiling} 件`;
-        copy = `總倉本批最多可供應 ${ceiling} 件${otherAllocated ? `，其他門市已占用 ${otherAllocated} 件` : ""}；目前合計 ${total} 件。請修改數量，超出部分不會轉入缺貨未配。`;
+        if (state.config.role === "store") {
+          title = `總倉供應量不足：${row.dataset.sku} 無法以目前數量送出`;
+          copy = "請降低申請量後再送出；修改後系統會重新估算可售至，超出部分不會轉入缺貨未配。";
+        } else {
+          title = `總倉數量不足：${row.dataset.sku} 超過本批可供應量 ${total - ceiling} 件`;
+          copy = `總倉本批最多可供應 ${ceiling} 件；目前各門市合計 ${total} 件。請修改數量，超出部分不會轉入缺貨未配。`;
+        }
       } else if (quantity !== comparisonBase && !reason) {
         tone = "danger"; blocking += 1;
         title = quantity > comparisonBase ? "人工追加量尚未填寫原因" : "人工減量尚未填寫原因";
-        copy = "請填寫具體調整原因後再暫存、送出或核准。";
+        copy = `請填寫具體調整原因後再暫存、送出或核准；${projectionText}。`;
       } else if (extra > 0) {
         tone = "warning";
         title = `系統未建議追加量：${extra} 件`;
-        copy = `${row.dataset.systemReason || `本輪系統需求為 ${suggested} 件`}；目前仍在總倉可供應範圍內。`;
+        copy = `${row.dataset.systemReason || `本輪系統需求為 ${suggested} 件`}；${projectionText}。`;
       } else if (row.dataset.manual === "true") {
         tone = "info";
         title = "人工新增品項的系統未建議原因";
-        copy = row.dataset.systemReason || "本批次依現行規則未形成補貨需求。";
+        copy = `${row.dataset.systemReason || "本批次依現行規則未形成補貨需求"}；${projectionText}。`;
       }
       warning.hidden = !tone;
       warning.className = `decision-warning-row${tone ? ` ${tone}` : ""}`;
@@ -995,7 +1024,11 @@
     const projectionQuantity = supplyExceeded ? maximum : quantity;
     output.textContent = quantity > 0 ? `${supplyExceeded ? "依可供應上限" : state.config.role === "store" ? "申請後" : "核准後"}預估可售至：${rowProjection(item, projectionQuantity)}` : "請輸入本次數量";
     warning.hidden = !supplyExceeded;
-    warning.textContent = supplyExceeded ? `總倉數量不足：本店目前最多可申請 ${maximum} 件，輸入 ${quantity} 件；請修改數量後再加入。` : "";
+    warning.textContent = supplyExceeded
+      ? state.config.role === "store"
+        ? `總倉供應量不足：${skuInput.dataset.lookupSku}無法以目前數量加入，請降低申請量後重試。`
+        : `總倉數量不足：本店目前最多可核准 ${maximum} 件，輸入 ${quantity} 件；請修改數量後再加入。`
+      : "";
     addButton.disabled = supplyExceeded;
   }
 
@@ -1015,7 +1048,7 @@
       if (skuInput.value !== sku || (state.config.role !== "store" && detail.querySelector("[data-manual-store]").value !== storeCode)) return null;
       nameInput.value = fact.productName;
       Object.assign(skuInput.dataset, { lookupSku: fact.sku, lookupStore: fact.storeCode, calculationDate: fact.calculationDate, base: String(fact.baseQuantity), daily: String(fact.dailyUsage), displayGap: String(fact.displayGap), systemProjection: fact.systemProjection || "", systemReason: fact.systemReason || "", hqAvailable: String(fact.hqAvailable || 0), hqReserve: String(fact.hqReserve || 0), hqReleasable: String(fact.hqReleasable || 0), supplyKnown: String(fact.supplyKnown === true), otherAllocated: String(fact.otherAllocated || 0) });
-      systemReasonOutput.textContent = fact.systemReason || "本批次未保存系統未建議原因";
+      systemReasonOutput.textContent = state.config.role === "store" ? storeFacingSystemReason(fact.systemReason, 0) : fact.systemReason || "本批次未保存系統未建議原因";
       status.textContent = `${fact.storeCode}／${fact.sku} 已帶入批次建立時的庫存、近42天銷售及總倉可供應基準。`;
       updateManualFormProjection();
       return fact;
@@ -1044,13 +1077,17 @@
     if (!sku || !productName || !Number.isSafeInteger(quantity) || quantity <= 0 || !reason) { status.textContent = "請填妥ERP品號、品名、1以上整數數量與新增原因。"; return; }
     if (type === "consumable" && quantity % 100 !== 0) { status.textContent = "提袋耗材數量須為100的倍數。"; return; }
     const maximum = Math.max(0, Number(skuInput.dataset.hqReleasable || 0) - Number(skuInput.dataset.otherAllocated || 0));
-    if (skuInput.dataset.supplyKnown === "true" && quantity > maximum) { status.textContent = `總倉數量不足，本店目前最多可申請${maximum}件；請修改數量。`; return; }
+    if (skuInput.dataset.supplyKnown === "true" && quantity > maximum) {
+      status.textContent = state.config.role === "store" ? `${sku}總倉供應量不足，無法以目前數量加入；請降低申請量。` : `${sku}總倉數量不足，本店目前最多可核准${maximum}件；請修改數量。`;
+      return;
+    }
     const duplicate = [...detail.querySelectorAll("tbody tr")].some((row) => row.dataset.store === storeCode && row.dataset.sku === sku && row.dataset.itemType === type);
     if (duplicate) { status.textContent = `${storeCode}／${sku}已在清單中，請直接修改該列數量。`; return; }
     const labels = { regular: "一般必要補貨", special_stock: "建議調撥", activity_gift: "活動／贈品", consumable: "提袋耗材" };
     const row = document.createElement("tr");
     const projectionItem = { item_type: type, calculation_date: skuInput.dataset.calculationDate, base_quantity: Number(skuInput.dataset.base || 0), daily_usage: Number(skuInput.dataset.daily || 0), display_gap: Number(skuInput.dataset.displayGap || 0), system_projection: skuInput.dataset.systemProjection || "", manual: true };
-    const systemReason = skuInput.dataset.systemReason || "本批次未保存系統未建議原因";
+    const internalSystemReason = skuInput.dataset.systemReason || "本批次未保存系統未建議原因";
+    const systemReason = state.config.role === "store" ? storeFacingSystemReason(internalSystemReason, 0) : internalSystemReason;
     row.dataset.storeRow = ""; row.dataset.store = storeCode; row.dataset.sku = sku; row.dataset.suggested = "0"; row.dataset.reviewBase = "0"; row.dataset.supplyKnown = skuInput.dataset.supplyKnown || "false"; row.dataset.supplyCeiling = skuInput.dataset.hqReleasable || "0"; row.dataset.otherAllocated = skuInput.dataset.otherAllocated || "0"; row.dataset.allocationRow = ""; row.dataset.allocationQuantity = String(quantity); row.dataset.productName = productName; row.dataset.itemType = type; row.dataset.calculationDate = projectionItem.calculation_date; row.dataset.base = String(projectionItem.base_quantity); row.dataset.daily = String(projectionItem.daily_usage); row.dataset.displayGap = String(projectionItem.display_gap); row.dataset.systemProjection = projectionItem.system_projection; row.dataset.systemReason = systemReason; row.dataset.manual = "true";
     row.innerHTML = `<td>${storeCode}</td><td>${escapeHtml(sku)}<span class="manual-item-badge">尚未儲存</span></td><td>${escapeHtml(productName)}</td><td>${labels[type]}</td><td>0</td><td class="decision-reason-cell">${escapeHtml(systemReason)}</td><td>${state.config.role === "store" ? `<input data-confirmed type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">` : `<input data-confirmed type="number" value="0" disabled><input data-approved type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">`}</td><td data-${state.config.role === "store" ? "confirmed" : "approved"}-projection>${state.config.role === "store" ? "申請後" : "核准後"}預估可售至：${escapeHtml(rowProjection(projectionItem, quantity))}</td><td>${state.config.role === "store" ? `<input data-reason class="reason-input" value="${escapeHtml(reason)}">` : `<input data-reason type="hidden" value=""><input data-hq-reason class="reason-input" value="${escapeHtml(reason)}">`}</td><td><button class="secondary-button compact remove-item-button" type="button" data-remove-unsaved>取消新增</button></td>`;
     const warning = document.createElement("tr"); warning.className = "decision-warning-row"; warning.dataset.quantityWarning = ""; warning.hidden = true; warning.innerHTML = '<td colspan="10"></td>';

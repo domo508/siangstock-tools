@@ -131,6 +131,14 @@ function visibleStore(requested: string | null, role: Role, ownStore: StoreCode 
   return requested as StoreCode;
 }
 
+function storeFacingReason(value: unknown, suggested = 0): string {
+  const reason = String(value || "").normalize("NFKC").trim();
+  if (!reason) return Number(suggested || 0) > 0 ? "本輪系統建議需求已滿足" : "本批次依現行規則未形成補貨需求";
+  if (/總[倉部]|安全庫存|可釋出|可供應|14[／/]42[／/]84|最高日速|部分供應|未供應/.test(reason)) return "受本輪供應條件限制，系統未建議追加";
+  if (/系統已足額建議/.test(reason)) return "本輪系統建議需求已滿足";
+  return reason;
+}
+
 function parseJson(value: unknown): Record<string, unknown> {
   try {
     const parsed = JSON.parse(String(value || "{}"));
@@ -421,7 +429,13 @@ async function detail(request: Request, env: StoreTransferEnv, batchId: string):
     if (scope && String(row.store_code) !== scope) current.otherAllocated += value;
     supplyUsage.set(sku, current);
   });
-  return json({ batch, items: items.results, shortages: shortages.results, storeStatuses: statuses.results, events: events.results, scope, supplyUsage: Object.fromEntries(supplyUsage) });
+  const visibleItems = who.role === "store" ? items.results.map((row) => ({
+    ...row,
+    rule_summary: /人工新增/.test(String(row.rule_summary || "")) ? String(row.rule_summary) : "門市週調撥系統判斷",
+    system_reason: storeFacingReason(row.system_reason || row.rule_summary, Number(row.suggested_quantity || 0))
+  })) : items.results;
+  const visibleShortages = who.role === "store" ? shortages.results.map((row) => ({ ...row, reason: storeFacingReason(row.reason, Number(row.allocated_quantity || 0)) })) : shortages.results;
+  return json({ batch, items: visibleItems, shortages: visibleShortages, storeStatuses: statuses.results, events: events.results, scope, supplyUsage: Object.fromEntries(supplyUsage) });
 }
 
 async function manualItemFact(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
@@ -447,7 +461,7 @@ async function manualItemFact(request: Request, env: StoreTransferEnv, batchId: 
     storeCode: String(row.store_code), sku: String(row.sku), productName: String(row.product_name),
     calculationDate: String(row.calculation_date), baseQuantity: Number(row.base_quantity || 0),
     displayGap: Number(row.display_gap || 0), dailyUsage: Number(row.daily_usage || 0), systemProjection: String(row.system_projection || ""),
-    systemReason: String(row.system_reason || ""), hqAvailable: Number(row.hq_available || 0),
+    systemReason: who.role === "store" ? storeFacingReason(row.system_reason, 0) : String(row.system_reason || ""), hqAvailable: Number(row.hq_available || 0),
     hqReserve: Number(row.hq_reserve || 0), hqReleasable: Number(row.hq_releasable || 0), supplyKnown: row.hq_releasable != null, otherAllocated
   });
 }
@@ -779,7 +793,12 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
     if (!supplyCeilingBySku.has(sku)) continue;
     const ceiling = Number(supplyCeilingBySku.get(sku) || 0);
     const occupied = Number(otherStoreAllocationBySku.get(sku) || 0);
-    if (occupied + requested > ceiling) throw new RequestValidationError(`${sku}總倉本批可供應${ceiling}件，其他門市已占用${occupied}件，本店最多可申請${Math.max(0, ceiling - occupied)}件；請修改數量後再送出。`, 409);
+    if (occupied + requested > ceiling) {
+      const message = who.role === "store"
+        ? `${sku}總倉供應量不足，無法以目前申請量送出；請降低數量後重試。`
+        : `${sku}總倉本批可供應${ceiling}件，其他門市已占用${occupied}件，本店最多可申請${Math.max(0, ceiling - occupied)}件；請修改數量後再送出。`;
+      throw new RequestValidationError(message, 409);
+    }
   }
   for (const key of suggested.keys()) if (!seen.has(key)) throw new RequestValidationError("確認明細不完整；移除品項請使用移除按鈕，系統會保留稽核紀錄。", 409);
   const status = submit ? "submitted" : "saved";
