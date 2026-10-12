@@ -1907,6 +1907,36 @@ describe("採購建議第二階段", () => {
     expect(holiday.holidayProtectionAdditionalQty).toBe(0);
     expect(holiday.suggestedPurchaseQty).toBe(0);
   });
+
+  it("大活動可用直接倍率增加保障期間需求，且不永久改寫日需求", () => {
+    const source = {
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [], consignment: makeConsignment(), salesReports: [makeSales()],
+      model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", analysisMonth: "2026-08", checkpoint: "mid-month"
+    };
+    const ordinary = core.buildProcurementRecommendations(source).rows.find((row) => row.sku === "A1");
+    const activity = core.buildProcurementRecommendations({
+      ...source,
+      activityDemand: { enabled: true, name: "檔期測試", startDate: "2026-08-29", endDate: "2026-08-31", scope: "all", method: "multiplier", multiplier: 2 }
+    });
+    const row = activity.rows.find((item) => item.sku === "A1");
+    expect(row.forecastDailyQty).toBe(ordinary.forecastDailyQty);
+    expect(row.activityDemandApplied).toBe(true);
+    expect(row.activityDemandCoverageDays).toBe(3);
+    expect(row.activityDemandMultiplier).toBe(2);
+    expect(row.activityDemandAdditionalRawQty).toBeGreaterThan(0);
+    expect(activity.appliedRules.activityDemand).toMatchObject({ enabled: true, method: "multiplier", methodLabel: "需求加乘倍數" });
+  });
+
+  it("大活動目標營業額會依本月通路營收換算倍率", () => {
+    const analysis = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [], consignment: makeConsignment(), salesReports: [makeSales()],
+      model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", analysisMonth: "2026-08", checkpoint: "mid-month",
+      revenueChannels: [{ company: "寬承", name: "官網", amount: 310000 }],
+      activityDemand: { enabled: true, name: "營收檔期", startDate: "2026-08-29", endDate: "2026-08-31", scope: "all", method: "revenue", targetRevenue: 60000 }
+    });
+    expect(analysis.appliedRules.activityDemand).toMatchObject({ enabled: true, method: "revenue", methodLabel: "活動營業額換算", baselineRevenue: 30000, multiplier: 2 });
+    expect(analysis.totals.activityDemandAdditionalRawQty).toBeGreaterThan(0);
+  });
 });
 
 describe("採購規劃前台與入口", () => {
@@ -2000,14 +2030,14 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20261008-holiday-net-gap-r1');
+    expect(toolHtml).toContain('core.js?v=20261012-activity-demand-r1');
     expect(toolHtml).toContain('google-sources.js?v=20261006-notification-audit-r2');
-    expect(toolHtml).toContain('app.js?v=20261009-parent-version-guard-r1');
+    expect(toolHtml).toContain('app.js?v=20261012-activity-demand-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261009-parent-version-guard-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261012-activity-demand-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2079,7 +2109,10 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261009-parent-version-guard-r1");
+    expect(toolHtml).toContain("app.js?v=20261012-activity-demand-r1");
+    expect(toolHtml).toContain('id="activity-demand-card"');
+    expect(toolHtml).toContain("活動期間預計營業額");
+    expect(toolHtml).toContain("需求加乘倍數");
     expect(toolApp).toContain("function detachChildSharedIdentity");
     expect(toolApp).toContain("state.sharedDraftId = \"\"; state.sharedDraftRevision = 0;");
     expect(toolApp).toContain("function repairOverwrittenParentDraft");

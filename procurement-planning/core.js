@@ -2629,6 +2629,88 @@
     return 0;
   }
 
+  function activityDemandScopeLabel(scope) {
+    return ({
+      all: "全部一般採購品項",
+      "puyouma-tencel": "普優瑪－天絲／天絲棉",
+      "puyouma-long-staple": "普優瑪－長絨棉",
+      "puyouma-no-size": "普優瑪－無尺寸",
+      "supplier-lirong": "力榮",
+      "supplier-shanglin": "上林",
+      "supplier-runtai": "潤泰羽絨",
+      "supplier-taineng": "泰能脊康"
+    })[scope] || "全部一般採購品項";
+  }
+
+  function normalizeActivityDemandSettings(settings, context = {}) {
+    const disabled = !settings?.enabled;
+    const result = {
+      enabled: !disabled,
+      name: String(settings?.name || "").trim(),
+      startDate: parseDateValue(settings?.startDate),
+      endDate: parseDateValue(settings?.endDate),
+      method: settings?.method === "multiplier" ? "multiplier" : "revenue",
+      scope: String(settings?.scope || "all"),
+      scopeLabel: activityDemandScopeLabel(String(settings?.scope || "all")),
+      targetRevenue: Math.max(0, Number(settings?.targetRevenue || 0)),
+      requestedMultiplier: Math.max(1, Number(settings?.multiplier || 1)),
+      baselineRevenue: 0,
+      multiplier: 1,
+      activityDays: 0,
+      methodLabel: settings?.method === "multiplier" ? "需求加乘倍數" : "活動營業額換算"
+    };
+    if (disabled) return result;
+    if (!result.name) throw new Error("已啟用大活動需求，但尚未填寫活動名稱。");
+    const startMs = dateToUtcMs(result.startDate);
+    const endMs = dateToUtcMs(result.endDate);
+    if (startMs == null || endMs == null || endMs < startMs) throw new Error("大活動日期不完整，或活動結束日早於開始日。");
+    const analysisMonth = String(context.analysisMonth || "");
+    if (analysisMonth && (!result.startDate.startsWith(analysisMonth) || !result.endDate.startsWith(analysisMonth))) {
+      throw new Error("第一版大活動需求須設定在本次分析月份內；跨月活動請依月份分開設定，避免營收基準混用。");
+    }
+    result.activityDays = Math.floor((endMs - startMs) / 86400000) + 1;
+    if (result.method === "revenue") {
+      const monthlyRevenue = (context.revenueChannels || []).reduce((sum, row) => sum + Math.max(0, Number(row.amount || 0)), 0);
+      const monthDate = /^\d{4}-\d{2}$/.test(analysisMonth) ? new Date(`${analysisMonth}-01T00:00:00Z`) : null;
+      const daysInMonth = monthDate && !Number.isNaN(monthDate.getTime())
+        ? new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 0)).getUTCDate()
+        : 30;
+      result.baselineRevenue = monthlyRevenue / daysInMonth * result.activityDays;
+      if (!(result.targetRevenue > 0)) throw new Error("活動營業額換算模式必須填入大於0的預計營業額。");
+      if (!(result.baselineRevenue > 0)) throw new Error("本月通路營收尚未完整設定，無法換算大活動倍率；請先儲存本月通路營收，或改用需求加乘倍數。");
+      result.multiplier = Math.max(1, Math.min(3, result.targetRevenue / result.baselineRevenue));
+    } else {
+      if (!(result.requestedMultiplier >= 1 && result.requestedMultiplier <= 3)) throw new Error("大活動需求加乘倍數須介於1.0至3.0倍。");
+      result.multiplier = result.requestedMultiplier;
+    }
+    return result;
+  }
+
+  function activityDemandApplies(activity, supplier, purchaseTab) {
+    if (!activity?.enabled || !(activity.multiplier > 1)) return false;
+    const normalizedSupplier = normalizeText(supplier);
+    if (activity.scope === "all") return true;
+    if (activity.scope === "puyouma-tencel") return /普優[瑪碼]/.test(normalizedSupplier) && purchaseTab === "天絲＋天絲棉";
+    if (activity.scope === "puyouma-long-staple") return /普優[瑪碼]/.test(normalizedSupplier) && purchaseTab === "長絨棉";
+    if (activity.scope === "puyouma-no-size") return /普優[瑪碼]/.test(normalizedSupplier) && purchaseTab === "無尺寸品項";
+    if (activity.scope === "supplier-lirong") return /力榮/.test(normalizedSupplier);
+    if (activity.scope === "supplier-shanglin") return /上林/.test(normalizedSupplier);
+    if (activity.scope === "supplier-runtai") return /潤泰羽絨/.test(normalizedSupplier);
+    if (activity.scope === "supplier-taineng") return /泰能脊康/.test(normalizedSupplier);
+    return false;
+  }
+
+  function activityDaysWithinCoverage(activity, asOfDate, coverageDays) {
+    if (!activity?.enabled || !(activity.multiplier > 1) || !(coverageDays > 0)) return 0;
+    const coverageStart = dateToUtcMs(addDays(asOfDate, 1));
+    const coverageEnd = dateToUtcMs(addDays(asOfDate, Math.max(1, Math.floor(coverageDays))));
+    const activityStart = dateToUtcMs(activity.startDate);
+    const activityEnd = dateToUtcMs(activity.endDate);
+    const start = Math.max(coverageStart || 0, activityStart || 0);
+    const end = Math.min(coverageEnd || 0, activityEnd || 0);
+    return end >= start ? Math.floor((end - start) / 86400000) + 1 : 0;
+  }
+
   function buildProcurementRecommendations(input) {
     const puyoumaRules = input.consignmentRules?.puyouma || {};
     const lirongRules = input.consignmentRules?.lirong || {};
@@ -2669,6 +2751,10 @@
     const asOfDate = parseDateValue(input.asOfDate) || maxSalesDate;
     const asOfMs = dateToUtcMs(asOfDate);
     if (!asOfMs) throw new Error("無法判斷銷售資料截止日，請確認結帳時間與銷售截止日。");
+    const activityDemand = normalizeActivityDemandSettings(input.activityDemand, {
+      analysisMonth: input.analysisMonth || asOfDate.slice(0, 7),
+      revenueChannels: input.revenueChannels || []
+    });
     const maxSalesMs = dateToUtcMs(maxSalesDate);
     const salesDateGapDays = maxSalesMs == null ? null : Math.abs(Math.round((asOfMs - maxSalesMs) / 86400000));
     const priorYearDate = new Date(asOfMs);
@@ -3015,6 +3101,7 @@
     const rows = preliminary.map((row) => {
       const pool = categoryPools.get(`${row.categoryKey}||${row.categoryModel}`);
       const supplier = row.masterRecord?.supplier || "未辨識供應商";
+      const purchaseTab = classifyPuyoumaPurchaseTab(row.masterRecord, row.demand.name);
       const supplierConsignment = /力榮/.test(normalizeText(supplier)) ? resolvedLirongConsignment : resolvedConsignment;
       const supplierRule = findSupplierRule(supplier, input.supplierRules || []);
       const supplyProfile = resolveSupplyProfile(supplier, input.supplierRules || [], row.tier);
@@ -3073,6 +3160,11 @@
       const channelAdjustedDaily = hqDailyQty + storeDailyQty;
       const nominalHorizonDays = reviewDays + supplierLeadDays;
       const horizonDays = nominalHorizonDays + holidayProtectionDays;
+      const activityApplies = activityDemandApplies(activityDemand, supplier, purchaseTab);
+      const standardActivityCoverageDays = activityApplies ? activityDaysWithinCoverage(activityDemand, asOfDate, nominalHorizonDays) : 0;
+      const activityCoverageDays = activityApplies ? activityDaysWithinCoverage(activityDemand, asOfDate, horizonDays) : 0;
+      const standardActivityAdditionalRawQty = channelAdjustedDaily * Math.max(activityDemand.multiplier - 1, 0) * standardActivityCoverageDays;
+      const activityAdditionalRawQty = channelAdjustedDaily * Math.max(activityDemand.multiplier - 1, 0) * activityCoverageDays;
       const springFestival = resolveSpringFestivalAdjustment({
         asOfDate,
         supplierCountry: supplierRule?.country || "待確認",
@@ -3098,7 +3190,7 @@
         const channelMultiplier = adjustedDaily > 0 ? channelAdjustedDaily / adjustedDaily : 1;
         springFestivalExtraDailyQty = extraBaseDaily * channelMultiplier;
       }
-      const forecastFutureQty = channelAdjustedDaily * horizonDays;
+      const forecastFutureQty = channelAdjustedDaily * horizonDays + activityAdditionalRawQty;
       const hqSafetyStockQty = hqDailyQty * safetyBufferDays;
       let storeDemandQty = 0;
       let standardStoreDemandQty = 0;
@@ -3166,15 +3258,29 @@
         }
       }
       const transfer = transfers.bySku.get(row.demand.sku);
-      const standardRawPurchaseQty = calculateNetProcurementDemand({
+      const standardRawPurchaseQtyWithoutActivity = calculateNetProcurementDemand({
         forecastDemandQty: standardHqDemandQty + standardStoreDemandQty,
         safetyStockQty: 0,
         availableInventoryQty: inventoryQty,
         pendingPurchaseQty: effectivePendingQty,
         factoryConsignmentQty: supplierConsignment.bySku.get(row.demand.sku)?.currentQty || 0
       });
-      const rawPurchaseQty = calculateNetProcurementDemand({
+      const rawPurchaseQtyWithoutActivity = calculateNetProcurementDemand({
         forecastDemandQty: hqDemandQty + storeDemandQty,
+        safetyStockQty: 0,
+        availableInventoryQty: inventoryQty,
+        pendingPurchaseQty: effectivePendingQty,
+        factoryConsignmentQty: supplierConsignment.bySku.get(row.demand.sku)?.currentQty || 0
+      });
+      const standardRawPurchaseQty = calculateNetProcurementDemand({
+        forecastDemandQty: standardHqDemandQty + standardStoreDemandQty + standardActivityAdditionalRawQty,
+        safetyStockQty: 0,
+        availableInventoryQty: inventoryQty,
+        pendingPurchaseQty: effectivePendingQty,
+        factoryConsignmentQty: supplierConsignment.bySku.get(row.demand.sku)?.currentQty || 0
+      });
+      const rawPurchaseQty = calculateNetProcurementDemand({
+        forecastDemandQty: hqDemandQty + storeDemandQty + activityAdditionalRawQty,
         safetyStockQty: 0,
         availableInventoryQty: inventoryQty,
         pendingPurchaseQty: effectivePendingQty,
@@ -3185,7 +3291,7 @@
         : 0;
       const springFestivalAdjustedRawPurchaseQty = springFestival.active
         ? calculateNetProcurementDemand({
-          forecastDemandQty: hqDemandQty + storeDemandQty + springFestivalExtraDailyQty * springFestival.extraDays,
+          forecastDemandQty: hqDemandQty + storeDemandQty + activityAdditionalRawQty + springFestivalExtraDailyQty * springFestival.extraDays,
           safetyStockQty: 0,
           availableInventoryQty: inventoryQty,
           pendingPurchaseQty: effectivePendingQty,
@@ -3193,6 +3299,19 @@
         })
         : rawPurchaseQty;
       const springFestivalUncoveredRawQty = Math.max(springFestivalAdjustedRawPurchaseQty - rawPurchaseQty, 0);
+      const holidayProtectionRawQtyWithoutActivity = holidayProtectionDays > 0
+        ? Math.max(rawPurchaseQtyWithoutActivity - standardRawPurchaseQtyWithoutActivity, 0)
+        : 0;
+      const springFestivalAdjustedRawPurchaseQtyWithoutActivity = springFestival.active
+        ? calculateNetProcurementDemand({
+          forecastDemandQty: hqDemandQty + storeDemandQty + springFestivalExtraDailyQty * springFestival.extraDays,
+          safetyStockQty: 0,
+          availableInventoryQty: inventoryQty,
+          pendingPurchaseQty: effectivePendingQty,
+          factoryConsignmentQty: supplierConsignment.bySku.get(row.demand.sku)?.currentQty || 0
+        })
+        : rawPurchaseQtyWithoutActivity;
+      const springFestivalUncoveredRawQtyWithoutActivity = Math.max(springFestivalAdjustedRawPurchaseQtyWithoutActivity - rawPurchaseQtyWithoutActivity, 0);
       const springFestivalCycleStart = springFestival.closureStart ? addDays(springFestival.closureStart, -horizonDays) : "";
       const priorSpringFestivalPendingQty = springFestival.active
         ? Math.min(effectivePendingQty, (row.purchase?.orders || []).reduce((sum, order) => {
@@ -3202,6 +3321,7 @@
         }, 0))
         : 0;
       const springFestivalExtraRawQty = Math.max(springFestivalUncoveredRawQty - priorSpringFestivalPendingQty, 0);
+      const springFestivalExtraRawQtyWithoutActivity = Math.max(springFestivalUncoveredRawQtyWithoutActivity - priorSpringFestivalPendingQty, 0);
       const score = recommendationScore(row.tier, row.xyzClass, row.activeWeeks6);
       const sellThroughStop = Boolean(row.masterRecord?.sellThroughStop || isSellThroughStopName(row.masterRecord?.name || row.demand.name));
       const isGift = /贈品/.test(`${row.masterRecord?.name || row.demand.name} ${row.masterRecord?.stockType || ""}`);
@@ -3231,13 +3351,15 @@
       }
       const manualSupplierReview = Boolean(supplyProfile.manualReview);
       const releaseRate = purchaseReleaseRate(row.tier, checkpoint);
-      const standardReleasedPurchaseQty = standardRawPurchaseQty * releaseRate;
+      const standardReleasedPurchaseQty = standardRawPurchaseQtyWithoutActivity * releaseRate + Math.max(standardRawPurchaseQty - standardRawPurchaseQtyWithoutActivity, 0);
       const holidayReleasedPurchaseQty = standardReleasedPurchaseQty + holidayProtectionRawQty;
       const shopeeProtectionRawQty = inventoryQty < 3 && hqDailyQty > 0
         ? Math.max(3 + hqDailyQty * effectiveSupplierLeadDays - inventoryQty - effectivePendingQty, 0)
         : 0;
       const releasedBeforeShopeeQty = holidayReleasedPurchaseQty + springFestivalExtraRawQty;
       const releasedPurchaseQty = Math.max(releasedBeforeShopeeQty, shopeeProtectionRawQty);
+      const releasedWithoutActivityBeforeShopeeQty = standardRawPurchaseQtyWithoutActivity * releaseRate + holidayProtectionRawQtyWithoutActivity + springFestivalExtraRawQtyWithoutActivity;
+      const releasedPurchaseQtyWithoutActivity = Math.max(releasedWithoutActivityBeforeShopeeQty, shopeeProtectionRawQty);
       const baseSuggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview ? 0 : roundSuggestedQuantity(releasedPurchaseQty, score);
       const standardBaseSuggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview ? 0 : roundSuggestedQuantity(standardReleasedPurchaseQty, score);
       const unitCost = Math.max(0, Number(row.masterRecord?.unitCost || 0));
@@ -3256,6 +3378,14 @@
       const suggestedPurchaseQty = externalPurchaseBlocked || manualSupplierReview
         ? 0
         : (sellThroughConsignmentAllowed ? Math.min(packed.quantity, sellThroughConsignmentAvailableQty) : packed.quantity);
+      const baseSuggestedQtyWithoutActivity = externalPurchaseBlocked || manualSupplierReview ? 0 : roundSuggestedQuantity(releasedPurchaseQtyWithoutActivity, score);
+      const downQtyWithoutActivity = Math.floor(baseSuggestedQtyWithoutActivity / packSize) * packSize;
+      const coverageWithDownWithoutActivity = channelAdjustedDaily > 0 ? (inventoryQty + effectivePendingQty + downQtyWithoutActivity) / channelAdjustedDaily : 9999;
+      const packedWithoutActivity = roundByPack(baseSuggestedQtyWithoutActivity, packSize, coverageWithDownWithoutActivity, minimumCoverageDays);
+      const suggestedPurchaseQtyWithoutActivity = externalPurchaseBlocked || manualSupplierReview
+        ? 0
+        : (sellThroughConsignmentAllowed ? Math.min(packedWithoutActivity.quantity, sellThroughConsignmentAvailableQty) : packedWithoutActivity.quantity);
+      const activityAdditionalSuggestedQty = Math.max(suggestedPurchaseQty - suggestedPurchaseQtyWithoutActivity, 0);
       const holidayBaseSuggestedQty = externalPurchaseBlocked || manualSupplierReview
         ? 0
         : roundSuggestedQuantity(holidayReleasedPurchaseQty, score);
@@ -3336,7 +3466,7 @@
         productStatus: String(row.masterRecord?.productStatus || "").trim(),
         productStatusPendingReview,
         materialCategory: row.materialCategory,
-        purchaseTab: classifyPuyoumaPurchaseTab(row.masterRecord, row.demand.name),
+        purchaseTab,
         sizeGroup: row.masterRecord?.sizeGroup || "",
         size: row.masterRecord?.size || "",
         mainCategory: row.masterRecord?.mainCategory || "",
@@ -3371,6 +3501,14 @@
         seasonalDataReady: Boolean(seasonalProfile) || (row.skuSeasonalDataReady && (pool?.seasonalDataReady ?? true)),
         forecastDailyQty: channelAdjustedDaily,
         baseForecastDailyQty: adjustedDaily,
+        activityDemandApplied: activityAdditionalRawQty > 0,
+        activityDemandName: activityDemand.enabled ? activityDemand.name : "",
+        activityDemandMethod: activityDemand.enabled ? activityDemand.methodLabel : "",
+        activityDemandScope: activityDemand.enabled ? activityDemand.scopeLabel : "",
+        activityDemandMultiplier: activityDemand.enabled ? activityDemand.multiplier : 1,
+        activityDemandCoverageDays: activityCoverageDays,
+        activityDemandAdditionalRawQty: activityAdditionalRawQty,
+        activityDemandAdditionalSuggestedQty: activityAdditionalSuggestedQty,
         hqDailyQty,
         storeDailyQty,
         storeDailyByCode,
@@ -3416,7 +3554,11 @@
         standardSuggestedPurchaseQty,
         suggestedPurchaseQty,
         suggestedPurchaseAmount: suggestedPurchaseQty * unitCost,
-        recommendationSource: shopeeProtectionAdditionalQty > 0 ? "蝦皮3件保護" : (holidayProtectionAdditionalQty > 0 ? "連假保障" : "一般需求"),
+        recommendationSource: [
+          activityAdditionalSuggestedQty > 0 ? "大活動需求" : "",
+          shopeeProtectionAdditionalQty > 0 ? "蝦皮3件保護" : "",
+          holidayProtectionAdditionalQty > 0 ? "連假保障" : ""
+        ].filter(Boolean).join("＋") || "一般需求",
         shopeeProtectionApplied: shopeeProtectionAdditionalQty > 0,
         shopeeProtectionRawQty,
         shopeeProtectionAdditionalQty,
@@ -3504,6 +3646,20 @@
           holidays: [...(input.storeInventoryRules?.workdayHolidays || [])],
           policy: "只延後補貨與保障截止日，不放大日需求"
         },
+        activityDemand: activityDemand.enabled ? {
+          enabled: true,
+          name: activityDemand.name,
+          startDate: activityDemand.startDate,
+          endDate: activityDemand.endDate,
+          method: activityDemand.method,
+          methodLabel: activityDemand.methodLabel,
+          scope: activityDemand.scope,
+          scopeLabel: activityDemand.scopeLabel,
+          targetRevenue: activityDemand.targetRevenue,
+          baselineRevenue: activityDemand.baselineRevenue,
+          multiplier: activityDemand.multiplier,
+          policy: "同一活動擇一估算；只增加活動日在各品項保障期內的需求，不與連假需求重複加乘"
+        } : { enabled: false },
         kuanMuManagementTarget: "寬沐通路預估營收×45%，只顯示管理差額，不自動加進基本採購建議"
       },
       model: input.model,
@@ -3518,6 +3674,10 @@
         shopeeProtectionSkuCount: rows.filter((row) => row.shopeeProtectionApplied).length,
         shopeeProtectionExtraQty: rows.reduce((sum, row) => sum + Number(row.shopeeProtectionAdditionalQty || 0), 0),
         holidayProtectionSkuCount: rows.filter((row) => Number(row.holidayProtectionAdditionalQty || 0) > 0).length,
+        activityDemandSkuCount: rows.filter((row) => Number(row.activityDemandAdditionalRawQty || 0) > 0).length,
+        activityDemandAdditionalRawQty: rows.reduce((sum, row) => sum + Number(row.activityDemandAdditionalRawQty || 0), 0),
+        activityDemandAdditionalSuggestedQty: rows.reduce((sum, row) => sum + Number(row.activityDemandAdditionalSuggestedQty || 0), 0),
+        activityDemandAdditionalAmount: rows.reduce((sum, row) => sum + Number(row.activityDemandAdditionalSuggestedQty || 0) * Number(row.unitCost || 0), 0),
         hotSkuCount: rows.filter((row) => row.tier === "熱銷").length,
         stableSkuCount: rows.filter((row) => row.tier === "穩定").length,
         lowSkuCount: rows.filter((row) => row.tier === "低銷").length,
@@ -4147,6 +4307,13 @@
       "季節需求基準": row.seasonalDemandBasis || "近期速度",
       "同季歷史日均需求": row.seasonalHistoricalDailyQty ?? "",
       "預估日需求": row.forecastDailyQty,
+      "大活動名稱": row.activityDemandName || "",
+      "大活動估算方式": row.activityDemandMethod || "",
+      "大活動適用範圍": row.activityDemandScope || "",
+      "大活動需求倍率": row.activityDemandApplied ? row.activityDemandMultiplier : "",
+      "大活動涵蓋天數": row.activityDemandCoverageDays || 0,
+      "大活動原始增加需求": row.activityDemandAdditionalRawQty || 0,
+      "大活動增加建議量": row.activityDemandAdditionalSuggestedQty || 0,
       "供應交期類型": row.supplyProfileLabel,
       "到貨交期天數": row.supplierLeadDays,
       "連假調整後到貨天數": row.effectiveSupplierLeadDays ?? row.supplierLeadDays,
@@ -4434,7 +4601,10 @@
       sellThroughStopExcludedCount: selectedRows.filter((row) => row.sellThroughStop).length,
       springFestivalSkuCount: selectedRows.filter((row) => row.springFestivalApplied).length,
       springFestivalExtraQty: selectedRows.reduce((sum, row) => sum + Number(row.springFestivalExtraSuggestedQty || 0), 0),
-      springFestivalExtraAmount: selectedRows.reduce((sum, row) => sum + Number(row.springFestivalExtraAmount || 0), 0)
+      springFestivalExtraAmount: selectedRows.reduce((sum, row) => sum + Number(row.springFestivalExtraAmount || 0), 0),
+      activityDemandSkuCount: selectedRows.filter((row) => Number(row.activityDemandAdditionalRawQty || 0) > 0).length,
+      activityDemandAdditionalSuggestedQty: selectedRows.reduce((sum, row) => sum + Number(row.activityDemandAdditionalSuggestedQty || 0), 0),
+      activityDemandAdditionalAmount: selectedRows.reduce((sum, row) => sum + Number(row.activityDemandAdditionalSuggestedQty || 0) * Number(row.unitCost || 0), 0)
     };
     selectedTotals.productStatusPendingCount = selectedSuggestedRows.filter((row) => row.productStatusPendingReview).length;
     selectedTotals.productStatusPendingAmount = selectedSuggestedRows.filter((row) => row.productStatusPendingReview).reduce((sum, row) => sum + Number(row.suggestedPurchaseAmount || 0), 0);
@@ -4466,6 +4636,11 @@
       ["春節停工備貨影響SKU", selectedTotals.springFestivalSkuCount],
       ["春節額外建議量", selectedTotals.springFestivalExtraQty],
       ["春節額外採購金額", selectedTotals.springFestivalExtraAmount, "已包含在建議採購金額與額度影響內"],
+      ["大活動需求設定", recommendations.appliedRules?.activityDemand?.enabled === false ? "未啟用" : `${recommendations.appliedRules?.activityDemand?.name || "未命名活動"}・${recommendations.appliedRules?.activityDemand?.methodLabel || ""}・${recommendations.appliedRules?.activityDemand?.multiplier || 1}倍`],
+      ["大活動適用期間／範圍", recommendations.appliedRules?.activityDemand?.enabled === false ? "—" : `${recommendations.appliedRules?.activityDemand?.startDate || ""}～${recommendations.appliedRules?.activityDemand?.endDate || ""}・${recommendations.appliedRules?.activityDemand?.scopeLabel || ""}`],
+      ["大活動影響SKU", selectedTotals.activityDemandSkuCount],
+      ["大活動增加建議量", selectedTotals.activityDemandAdditionalSuggestedQty],
+      ["大活動增加採購金額", selectedTotals.activityDemandAdditionalAmount, "已包含在建議採購金額；未與連假需求重複加乘"],
       ["熱銷／穩定／低銷", `${selectedTotals.hotSkuCount}／${selectedTotals.stableSkuCount}／${selectedTotals.lowSkuCount}`],
       ["寄倉現貨不足SKU", selectedTotals.immediateShortageSkuCount],
       ["需新增寄庫SKU", selectedTotals.consignmentSuggestionSkuCount],

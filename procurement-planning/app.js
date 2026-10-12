@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261009-parent-version-guard-r1";
+  const APP_VERSION = "20261012-activity-demand-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -53,6 +53,7 @@
     supplierReturns: get("#supplier-returns"), releasedBudget: get("#released-budget"), purchasedToDate: get("#purchased-to-date"), budgetSourceNote: get("#budget-source-note"),
     saveBudget: get("#save-budget-button"), budgetPlanStatus: get("#budget-plan-status"), budgetSummary: get("#budget-summary"), ledgerStatus: get("#ledger-status"), costBreakdown: get("#cost-breakdown"), costSnapshotStatus: get("#cost-snapshot-status"),
     channelRows: get("#channel-rows"), kuanchengTotal: get("#kuancheng-total"), kuanmuTotal: get("#kuanmu-total"), addChannel: get("#add-channel-button"),
+    activityCard: get("#activity-demand-card"), activityEnabled: get("#activity-enabled"), activityFields: get("#activity-demand-fields"), activityName: get("#activity-name"), activityStartDate: get("#activity-start-date"), activityEndDate: get("#activity-end-date"), activityScope: get("#activity-scope"), activityRevenueFields: get("#activity-revenue-fields"), activityMultiplierFields: get("#activity-multiplier-fields"), activityTargetRevenue: get("#activity-target-revenue"), activityMultiplier: get("#activity-multiplier"), activityBaselineRevenue: get("#activity-baseline-revenue"), activityPreview: get("#activity-demand-preview"),
     reviewFile: get("#review-file"), reviewButton: get("#review-button"), secondReviewFile: get("#second-review-file"), confirmReview: get("#confirm-review-button"),
     submitApproval: get("#submit-approval-button"), approve: get("#approve-button"), retryNotification: get("#retry-notification-button"),
     erp: get("#erp-button"), workflowStatus: get("#workflow-status"), workflowSummary: get("#workflow-summary"),
@@ -488,7 +489,7 @@
       selectedSuppliers: [...state.selectedSuppliers], returnScope: state.returnScope ? [...state.returnScope] : null,
       firstReview: state.firstReview, review: state.review, purchaseStatusSummary: state.purchaseStatusSummary, costSummary: state.costSummary,
       consignmentStyleAudit: state.consignmentSource?.styleAudit || { pinkDetected: false, pinkCells: 0 },
-      controls: { month: elements.month.value, checkpoint: elements.checkpoint.value, orderDate: elements.orderDate.value, inventoryDate: elements.inventoryDate.value, pendingDate: elements.pendingDate.value, transferDate: elements.transferDate.value, consignmentDate: elements.consignmentDate.value, salesDate: elements.salesDate.value }
+      controls: { month: elements.month.value, checkpoint: elements.checkpoint.value, orderDate: elements.orderDate.value, inventoryDate: elements.inventoryDate.value, pendingDate: elements.pendingDate.value, transferDate: elements.transferDate.value, consignmentDate: elements.consignmentDate.value, salesDate: elements.salesDate.value, activityDemand: activitySettings() }
     };
   }
 
@@ -559,9 +560,26 @@
   function restoreWorkflowDraft(draft) {
     if (!draft?.analysis) throw new Error("續作資料缺少採購建議內容，請重新產生建議。");
     Object.entries(draft.controls || {}).forEach(([key, value]) => {
+      if (key === "activityDemand") return;
       const target = ({ month: elements.month, checkpoint: elements.checkpoint, orderDate: elements.orderDate, inventoryDate: elements.inventoryDate, pendingDate: elements.pendingDate, transferDate: elements.transferDate, consignmentDate: elements.consignmentDate, salesDate: elements.salesDate })[key];
       if (target && value) target.value = value;
     });
+    const activity = draft.controls?.activityDemand || draft.analysis?.appliedRules?.activityDemand;
+    if (activity) {
+      elements.activityEnabled.checked = activity.enabled !== false;
+      elements.activityName.value = activity.name || "";
+      elements.activityStartDate.value = activity.startDate || "";
+      elements.activityEndDate.value = activity.endDate || "";
+      elements.activityScope.value = activity.scope || "all";
+      const method = activity.method === "multiplier" ? "multiplier" : "revenue";
+      const methodInput = document.querySelector(`input[name="activity-method"][value="${method}"]`);
+      if (methodInput) methodInput.checked = true;
+      elements.activityTargetRevenue.value = activity.targetRevenue ? formatIntegerAmount(activity.targetRevenue) : "";
+      elements.activityMultiplier.value = activity.requestedMultiplier || activity.multiplier || 1.3;
+    } else {
+      elements.activityEnabled.checked = false;
+    }
+    renderActivityControls();
     state.analysis = draft.analysis; state.baseAnalysis = draft.baseAnalysis || draft.analysis; state.workflowType = draft.workflowType || "system_recommendation";
     state.parentBatchId = draft.parentBatchId || draft.id; state.activeWorkUnit = draft.activeWorkUnit || null; state.sharedDraftId = draft.sharedDraftId || ""; state.sharedDraftRevision = Number(draft.sharedDraftRevision || 0);
     state.selectedWorkUnitIds = new Set();
@@ -1140,6 +1158,7 @@
     elements.analyze.textContent = monthEndMode ? "執行月底結算驗證" : "產生採購建議";
     elements.workflowPanel.hidden = monthEndMode;
     if (!monthEndMode && !state.monthEndWorkbook) elements.monthEndPanel.hidden = true;
+    renderActivityControls();
     renderModelStatus();
     elements.analyze.disabled = !requirementsReady();
     elements.runShortageOrder.disabled = !requirementsReady() || !state.storeShortageNeeds.some((row) => row.handling_mode === "new_order" && Number(row.unfilled_quantity || 0) > Number(row.covered_quantity || 0));
@@ -1630,6 +1649,65 @@
       elements.forecastRevenue.value = String(kuancheng);
       updateAutomaticForecastCost();
     }
+    renderActivityControls();
+  }
+  function selectedActivityMethod() {
+    return document.querySelector('input[name="activity-method"]:checked')?.value || "revenue";
+  }
+  function activitySettings() {
+    return {
+      enabled: Boolean(elements.activityEnabled.checked),
+      name: elements.activityName.value.trim(),
+      startDate: elements.activityStartDate.value,
+      endDate: elements.activityEndDate.value,
+      scope: elements.activityScope.value,
+      method: selectedActivityMethod(),
+      targetRevenue: Number(elements.activityTargetRevenue.value.replace(/[^\d]/g, "") || 0),
+      multiplier: Number(elements.activityMultiplier.value || 1)
+    };
+  }
+  function activityBaselineRevenue(settings = activitySettings()) {
+    if (!settings.startDate || !settings.endDate || settings.endDate < settings.startDate) return 0;
+    const start = new Date(`${settings.startDate}T00:00:00Z`);
+    const end = new Date(`${settings.endDate}T00:00:00Z`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+    const activityDays = Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+    const monthMatch = /^(\d{4})-(\d{2})$/.exec(elements.month.value);
+    const daysInMonth = monthMatch ? new Date(Date.UTC(Number(monthMatch[1]), Number(monthMatch[2]), 0)).getUTCDate() : 30;
+    const monthlyRevenue = state.revenueChannels.reduce((sum, row) => sum + Math.max(0, Number(row.amount || 0)), 0);
+    return monthlyRevenue / daysInMonth * activityDays;
+  }
+  function renderActivityControls() {
+    if (!elements.activityCard) return;
+    const monthEndMode = elements.checkpoint.value === "month-end";
+    elements.activityCard.hidden = monthEndMode;
+    if (monthEndMode) return;
+    const settings = activitySettings();
+    elements.activityFields.hidden = !settings.enabled;
+    elements.activityRevenueFields.hidden = settings.method !== "revenue";
+    elements.activityMultiplierFields.hidden = settings.method !== "multiplier";
+    if (!settings.enabled) return;
+    const baseline = activityBaselineRevenue(settings);
+    elements.activityBaselineRevenue.textContent = baseline > 0 ? formatCurrency(baseline) : "待完成本月營收與活動日期";
+    let message = "完成日期與估算方式後，這裡會先顯示活動倍率；實際影響SKU與增加採購量會在產生建議後列出。";
+    let warning = false;
+    if (settings.startDate && settings.endDate && (!settings.startDate.startsWith(elements.month.value) || !settings.endDate.startsWith(elements.month.value))) {
+      message = "活動日期須落在本次分析月份；跨月活動請依月份分開設定。";
+      warning = true;
+    } else if (settings.method === "revenue" && settings.targetRevenue > 0 && baseline > 0) {
+      const factor = Math.max(1, Math.min(3, settings.targetRevenue / baseline));
+      message = `一般情況約${formatCurrency(baseline)}；活動目標${formatCurrency(settings.targetRevenue)}，本次將以${factor.toFixed(2)}倍試算活動期間需求。`;
+    } else if (settings.method === "multiplier" && settings.multiplier >= 1 && settings.multiplier <= 3) {
+      message = `本次將以${settings.multiplier.toFixed(2)}倍試算活動期間需求；一般期間仍維持原日需求。`;
+    } else if (settings.method === "revenue") {
+      message = "請先完成本月通路營收、活動日期及活動期間預計營業額。";
+      warning = true;
+    } else {
+      message = "需求加乘倍數須介於1.0至3.0倍。";
+      warning = true;
+    }
+    elements.activityPreview.textContent = message;
+    elements.activityPreview.classList.toggle("is-warning", warning);
   }
   function updateAutomaticForecastCost() {
     if (state.sharedCostSnapshot?.forecastCost >= 0) {
@@ -2294,6 +2372,9 @@
     const springFestivalRows = rows.filter((row) => row.springFestivalApplied);
     const springFestivalExtraQty = springFestivalRows.reduce((sum, row) => sum + Number(row.springFestivalExtraSuggestedQty || 0), 0);
     const springFestivalExtraAmount = springFestivalRows.reduce((sum, row) => sum + Number(row.springFestivalExtraAmount || 0), 0);
+    const activityRows = rows.filter((row) => Number(row.activityDemandAdditionalSuggestedQty || 0) > 0);
+    const activityExtraQty = activityRows.reduce((sum, row) => sum + Number(row.activityDemandAdditionalSuggestedQty || 0), 0);
+    const activityExtraAmount = activityRows.reduce((sum, row) => sum + Number(row.activityDemandAdditionalSuggestedQty || 0) * Number(row.unitCost || 0), 0);
       elements.summaryCards.replaceChildren(
       createSummaryCard("已選供應商", formatNumber(state.selectedSuppliers.size), "可逐家查看與匯出"),
       createSummaryCard("建議採購SKU", formatNumber(rows.length), "只計本次勾選範圍"),
@@ -2301,6 +2382,7 @@
       createSummaryCard("建議採購金額", formatCurrency(amount), "依最新商品主檔", "currency"),
       createSummaryCard("期間調撥", formatNumber(state.analysis.totals.activeTransferDocumentCount || 0), `有效單據・提交${formatNumber(state.analysis.totals.transferSubmittedQty || 0)}件・發貨在途${formatNumber(state.analysis.totals.transferInTransitQty || 0)}件`),
       createSummaryCard("春節停工備貨", formatCurrency(springFestivalExtraAmount), `${formatNumber(springFestivalRows.length)}個SKU・額外${formatNumber(springFestivalExtraQty)}件；已含在建議金額`, "currency"),
+      createSummaryCard("大活動需求", formatCurrency(activityExtraAmount), activityRows.length ? `${formatNumber(activityRows.length)}個SKU・增加${formatNumber(activityExtraQty)}件；已含在建議金額` : "本次未增加採購量", "currency"),
       createSummaryCard("預計本月付款", formatCurrency(payments.current), "依下單日與付款規則", "currency"),
       createSummaryCard("預計未來付款", formatCurrency(payments.future), "依平均採購週期", "currency"),
       createSummaryCard("採購後尚可承諾", formatCurrency(remainingAfter), remainingAfter < 0 ? "超出目前已釋放額度" : "已釋放額度扣除已承諾與本批", `currency ${remainingAfter < 0 ? "negative" : ""}`),
@@ -2355,7 +2437,11 @@
   function renderSummary(analysis, consignmentSource) {
     elements.dateCheck.textContent = `銷售截止日：${analysis.asOfDate}｜檔案最新：${analysis.sourceMaxSalesDate}`;
     const styleNote = consignmentSource.styleAudit.pinkDetected ? `已辨識${formatNumber(consignmentSource.styleAudit.pinkCells)}個粉紅排程格。` : "未辨識粉紅排程。";
-    elements.resultAlert.textContent = `${analysis.validation.dateCheck.message} ${styleNote} 上林採28天檢視；普優瑪與力榮採購／寄庫分頁處理。`;
+    const activityRule = analysis.appliedRules?.activityDemand;
+    const activityNote = activityRule?.enabled === false || !activityRule
+      ? "本次未啟用大活動需求。"
+      : `大活動「${activityRule.name}」採${activityRule.methodLabel}、${Number(activityRule.multiplier || 1).toFixed(2)}倍，影響${formatNumber(analysis.totals.activityDemandSkuCount || 0)}個SKU、增加建議${formatNumber(analysis.totals.activityDemandAdditionalSuggestedQty || 0)}件。`;
+    elements.resultAlert.textContent = `${analysis.validation.dateCheck.message} ${styleNote} ${activityNote} 上林採28天檢視；普優瑪與力榮採購／寄庫分頁處理。`;
     elements.resultAlert.className = `result-alert ${analysis.validation.dateCheck.status === "PASS" && consignmentSource.styleAudit.pinkDetected ? "" : "warn"}`.trim();
     renderSupplierFilters(analysis);
     renderWorkUnitDashboard();
@@ -2461,10 +2547,11 @@
       if (item.shopeeProtectionApplied) row.classList.add("shopee-protection-row");
       [item.supplier, item.sku, item.name, `${item.tier}・${item.abcClass}${item.xyzClass}`, item.supplyProfileLabel,
         item.supplierLeadDays, item.targetCoverageDays, item.recent6Qty, item.recent12Qty, item.forecastDailyQty,
+        item.activityDemandApplied ? item.activityDemandName : "—", item.activityDemandApplied ? `${Number(item.activityDemandMultiplier || 1).toFixed(2)}倍` : "—", item.activityDemandAdditionalSuggestedQty || 0,
         item.inventoryQty, item.pendingQty, item.transferSubmittedQty, item.transferInTransitQty, item.suggestedPurchaseQty, formatCurrency(item.suggestedPurchaseAmount),
         item.recommendationSource || "一般需求", item.shopeeProtectionAdditionalQty || 0, item.holidayProtectionAdditionalQty || 0,
         item.springFestivalExtraSuggestedQty, formatCurrency(item.springFestivalExtraAmount),
-        item.consignmentCurrentQty, item.suggestedConsignmentQty, item.supplyStatus].forEach((value, index) => appendCell(row, typeof value === "number" ? formatNumber(value) : value, index === 22 && item.immediateConsignmentGap > 0 ? "negative" : ""));
+        item.consignmentCurrentQty, item.suggestedConsignmentQty, item.supplyStatus].forEach((value, index) => appendCell(row, typeof value === "number" ? formatNumber(value) : value, index === 25 && item.immediateConsignmentGap > 0 ? "negative" : ""));
       fragment.appendChild(row);
     });
     elements.resultRows.replaceChildren(fragment);
@@ -2514,6 +2601,7 @@
       const uncoveredStoreShortageNeeds = selectedStoreShortageNeeds.map((row) => ({ ...row, unfilledQuantity: Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.covered_quantity || 0)) }));
       const analysis = core.buildProcurementRecommendations({ master, inventory, pendingReports, transferReports: [transferReport], inventoryDate: elements.inventoryDate.value, consignment, lirongConsignment, salesReports, model,
         blacklist: blacklistEntries(), asOfDate: elements.salesDate.value, checkpoint: elements.checkpoint.value,
+        analysisMonth: elements.month.value, activityDemand: activitySettings(),
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
         springFestivalRule: state.procurementRules?.springFestival,
         purchaseUnitRules: state.procurementRules?.purchaseUnits,
@@ -3152,6 +3240,23 @@
     if (state.analysis || state.monthEndWorkbook) invalidateAnalysis();
     state.sharedCostSnapshot = null; renderCostSnapshotStatus(); renderModelStatus(); updateReadyState();
     Promise.all([loadLedger(), loadMonthPlan(), loadSharedWorkflowDrafts()]).then(loadCostSnapshot);
+  });
+  const activityControls = [elements.activityEnabled, elements.activityName, elements.activityStartDate, elements.activityEndDate, elements.activityScope, elements.activityMultiplier, ...document.querySelectorAll('input[name="activity-method"]')];
+  activityControls.forEach((element) => element.addEventListener(element === elements.activityName || element === elements.activityMultiplier ? "input" : "change", () => {
+    if (state.analysis) invalidateAnalysis();
+    renderActivityControls();
+  }));
+  elements.activityTargetRevenue.addEventListener("focus", () => { elements.activityTargetRevenue.value = elements.activityTargetRevenue.value.replace(/[^\d]/g, ""); });
+  elements.activityTargetRevenue.addEventListener("input", () => {
+    const digits = elements.activityTargetRevenue.value.replace(/[^\d]/g, "");
+    if (elements.activityTargetRevenue.value !== digits) elements.activityTargetRevenue.value = digits;
+    if (state.analysis) invalidateAnalysis();
+    renderActivityControls();
+  });
+  elements.activityTargetRevenue.addEventListener("blur", () => {
+    const value = Number(elements.activityTargetRevenue.value.replace(/[^\d]/g, "") || 0);
+    elements.activityTargetRevenue.value = value > 0 ? formatIntegerAmount(value) : "";
+    renderActivityControls();
   });
   elements.forecastRevenue.addEventListener("input", () => { updateAutomaticForecastCost(); markBudgetDirty(); });
   elements.releasedBudget.addEventListener("input", markBudgetDirty);
