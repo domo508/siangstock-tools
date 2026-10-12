@@ -178,7 +178,7 @@ async function config(request: Request, env: StoreTransferEnv): Promise<Response
     googleOAuthClientId: env.GOOGLE_OAUTH_CLIENT_ID || "",
     fixedSources: { marketingDriveFileId: FIXED_SOURCES.marketingDriveFileId, productMasterFolderId: FIXED_SOURCES.productMasterFolderId },
     storeInventoryRules: inventoryRules, displayExceptions,
-    permissions: { canCreate: who.role !== "store", canApprove: who.role !== "store", canReviewAll: who.role !== "store", canManageRules: who.role !== "store", canManageDisplayExceptions: who.role === "store", canDeleteBatch: who.role !== "store", canCollaborate: who.role !== "store", canFinalizeCollaboration: COLLABORATION_FINALIZERS.has(who.email) } });
+    permissions: { canCreate: who.role !== "store", canApprove: who.role !== "store", canReviewAll: who.role !== "store", canManageRules: who.role !== "store", canManageDisplayExceptions: who.role === "store", canDeleteBatch: who.role !== "store", canDeleteCollaboration: who.role !== "store", canCollaborate: who.role !== "store", canFinalizeCollaboration: COLLABORATION_FINALIZERS.has(who.email) } });
 }
 
 async function listDisplayExceptions(request: Request, env: StoreTransferEnv): Promise<Response> {
@@ -330,14 +330,14 @@ function collaborationPayload(value: unknown): Record<string, unknown> {
 
 async function listCollaborationDrafts(request: Request, env: StoreTransferEnv): Promise<Response> {
   const who = await actor(request, env); assertHq(who.role);
-  const rows = await env.DB.prepare("SELECT id, week_key, proposal_date, status, store_codes, item_count, difference_count, revision, finalized_batch_id, created_at, created_by, updated_at, updated_by FROM store_transfer_collaboration_drafts ORDER BY updated_at DESC LIMIT 100").all<Record<string, unknown>>();
+  const rows = await env.DB.prepare("SELECT id, week_key, proposal_date, status, store_codes, item_count, difference_count, revision, finalized_batch_id, created_at, created_by, updated_at, updated_by FROM store_transfer_collaboration_drafts WHERE removed_at IS NULL ORDER BY updated_at DESC LIMIT 100").all<Record<string, unknown>>();
   return json({ drafts: rows.results.map((row) => collaborationSummary(row)) });
 }
 
 async function getCollaborationDraft(request: Request, env: StoreTransferEnv, draftId: string): Promise<Response> {
   const who = await actor(request, env); assertHq(who.role);
   const id = text(draftId, "協作批次編號", 100);
-  const row = await env.DB.prepare("SELECT * FROM store_transfer_collaboration_drafts WHERE id = ?").bind(id).first<Record<string, unknown>>();
+  const row = await env.DB.prepare("SELECT * FROM store_transfer_collaboration_drafts WHERE id = ? AND removed_at IS NULL").bind(id).first<Record<string, unknown>>();
   if (!row) throw new RequestValidationError("找不到此A/B協作批次。", 404);
   return json({ draft: collaborationSummary(row, true) });
 }
@@ -372,22 +372,37 @@ async function saveCollaborationDraft(request: Request, env: StoreTransferEnv, d
   const rows = reports.flatMap((report) => report.rows as unknown[]);
   const differenceCount = rows.filter((row) => Number((row as Record<string, unknown>).difference || 0) !== 0).length;
   const now = new Date().toISOString();
-  const existing = await env.DB.prepare("SELECT revision, status FROM store_transfer_collaboration_drafts WHERE id = ?").bind(id).first<Record<string, unknown>>();
-  const otherActive = await env.DB.prepare("SELECT id FROM store_transfer_collaboration_drafts WHERE week_key = ? AND status = 'draft' AND id <> ?").bind(weekKey, id).first();
+  const existing = await env.DB.prepare("SELECT revision, status, removed_at FROM store_transfer_collaboration_drafts WHERE id = ?").bind(id).first<Record<string, unknown>>();
+  const otherActive = await env.DB.prepare("SELECT id FROM store_transfer_collaboration_drafts WHERE week_key = ? AND status = 'draft' AND removed_at IS NULL AND id <> ?").bind(weekKey, id).first();
   if (otherActive) throw new RequestValidationError("本週已有進行中的A/B協作批次，請開啟最新版接續，不要重複建立。", 409);
   if (!existing) {
     if (expectedRevision !== 0) throw new RequestValidationError("協作批次版本已改變，請重新整理。", 409);
     await env.DB.prepare("INSERT INTO store_transfer_collaboration_drafts (id, week_key, proposal_date, status, store_codes, item_count, difference_count, payload, payload_sha256, revision, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)")
       .bind(id, weekKey, proposalDate, JSON.stringify(storeCodes), rows.length, differenceCount, storedPayload, payloadSha256, now, who.email, now, who.email).run();
   } else {
+    if (existing.removed_at) throw new RequestValidationError("此A/B協作批次已由總部移出前台；如需重新協作，請發布新的批次。", 409);
     if (String(existing.status) !== "draft") throw new RequestValidationError("此協作批次已轉為正式批次，不能再修改。", 409);
     if (Number(existing.revision) !== expectedRevision) throw new RequestValidationError("這筆協作批次已由其他同事更新，請重新開啟最新版，避免覆蓋。", 409);
-    const updated = await env.DB.prepare("UPDATE store_transfer_collaboration_drafts SET proposal_date = ?, store_codes = ?, item_count = ?, difference_count = ?, payload = ?, payload_sha256 = ?, revision = revision + 1, updated_at = ?, updated_by = ? WHERE id = ? AND status = 'draft' AND revision = ?")
+    const updated = await env.DB.prepare("UPDATE store_transfer_collaboration_drafts SET proposal_date = ?, store_codes = ?, item_count = ?, difference_count = ?, payload = ?, payload_sha256 = ?, revision = revision + 1, updated_at = ?, updated_by = ? WHERE id = ? AND status = 'draft' AND revision = ? AND removed_at IS NULL")
       .bind(proposalDate, JSON.stringify(storeCodes), rows.length, differenceCount, storedPayload, payloadSha256, now, who.email, id, expectedRevision).run();
     if (Number(updated.meta.changes || 0) !== 1) throw new RequestValidationError("這筆協作批次已由其他同事更新，請重新開啟最新版，避免覆蓋。", 409);
   }
-  const saved = await env.DB.prepare("SELECT id, week_key, proposal_date, status, store_codes, item_count, difference_count, revision, finalized_batch_id, created_at, created_by, updated_at, updated_by FROM store_transfer_collaboration_drafts WHERE id = ?").bind(id).first<Record<string, unknown>>();
+  const saved = await env.DB.prepare("SELECT id, week_key, proposal_date, status, store_codes, item_count, difference_count, revision, finalized_batch_id, created_at, created_by, updated_at, updated_by FROM store_transfer_collaboration_drafts WHERE id = ? AND removed_at IS NULL").bind(id).first<Record<string, unknown>>();
   return json({ draft: collaborationSummary(saved || {}) }, existing ? 200 : 201);
+}
+
+async function deleteCollaborationDraft(request: Request, env: StoreTransferEnv, draftId: string): Promise<Response> {
+  requireSameOrigin(request, env);
+  const who = await actor(request, env); assertHq(who.role);
+  const id = text(draftId, "協作批次編號", 100);
+  const draft = await env.DB.prepare("SELECT status, week_key, revision, finalized_batch_id FROM store_transfer_collaboration_drafts WHERE id = ? AND removed_at IS NULL").bind(id).first<Record<string, unknown>>();
+  if (!draft) throw new RequestValidationError("找不到此A/B協作批次，可能已由其他同事刪除。", 404);
+  if (String(draft.status) !== "draft" || draft.finalized_batch_id) throw new RequestValidationError("已轉為正式批次的A/B協作紀錄不能刪除。", 409);
+  const now = new Date().toISOString();
+  const removed = await env.DB.prepare("UPDATE store_transfer_collaboration_drafts SET removed_at = ?, removed_by = ?, updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ? AND status = 'draft' AND finalized_batch_id IS NULL AND revision = ? AND removed_at IS NULL")
+    .bind(now, who.email, now, who.email, id, Number(draft.revision)).run();
+  if (Number(removed.meta.changes || 0) !== 1) throw new RequestValidationError("此A/B協作批次已由其他同事更新，請重新整理後再試。", 409);
+  return json({ id, weekKey: String(draft.week_key), deleted: true, retainedMonths: 12 });
 }
 
 async function pendingPurchases(request: Request, env: StoreTransferEnv): Promise<Response> {
@@ -476,7 +491,7 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   if (collaborationId) {
     assertCollaborationFinalizer(who.email);
     if (collaborationId.length > 100 || !Number.isInteger(collaborationRevision) || collaborationRevision < 1) throw new RequestValidationError("A/B協作批次版本格式錯誤。");
-    collaboration = await env.DB.prepare("SELECT id, week_key, status, revision, finalized_batch_id FROM store_transfer_collaboration_drafts WHERE id = ?").bind(collaborationId).first<Record<string, unknown>>();
+    collaboration = await env.DB.prepare("SELECT id, week_key, status, revision, finalized_batch_id FROM store_transfer_collaboration_drafts WHERE id = ? AND removed_at IS NULL").bind(collaborationId).first<Record<string, unknown>>();
     if (!collaboration) throw new RequestValidationError("找不到此A/B協作批次。", 404);
     if (String(collaboration.status) !== "draft" || collaboration.finalized_batch_id) throw new RequestValidationError("此A/B協作批次已轉成正式批次，不能重複建立。", 409);
     if (Number(collaboration.revision) !== collaborationRevision) throw new RequestValidationError("A/B協作批次已由其他同事更新，請重新開啟最新版。", 409);
@@ -611,11 +626,16 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
     SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.systemProjection'), json_extract(value, '$.systemReason'), json_extract(value, '$.hqAvailable'), json_extract(value, '$.hqReserve'), json_extract(value, '$.hqReleasable'), ?3 FROM json_each(?2)`;
   const manualItemCatalogInsertSql = `INSERT INTO store_transfer_batch_product_catalog (batch_id, sku, product_name, hq_available, hq_reserve, hq_releasable, created_at)
     SELECT ?1, json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.hqAvailable'), json_extract(value, '$.hqReserve'), json_extract(value, '$.hqReleasable'), ?3 FROM json_each(?2)`;
+  const batchInsert = collaborationId
+    ? env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, arrival_schedule, source_collaboration_id, created_at, created_by, updated_at, updated_by) SELECT ?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM store_transfer_collaboration_drafts WHERE id = ? AND status = 'draft' AND revision = ? AND removed_at IS NULL)")
+      .bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), arrivalSchedule, collaborationId, now, who.email, now, who.email, collaborationId, collaborationRevision)
+    : env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, arrival_schedule, source_collaboration_id, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, NULL, ?, ?, ?, ?)")
+      .bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), arrivalSchedule, now, who.email, now, who.email);
   const statements = [
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) SELECT id, 'cancelled', ?, ?, ? FROM store_transfer_batches WHERE week_key = ? AND status IN ('open', 'review') AND deleted_at IS NULL AND id <> ?").bind(`已由新版批次${id}取代，僅供查閱`, now, who.email, weekKey, id),
     env.DB.prepare("UPDATE store_transfer_batches SET status = 'cancelled', updated_at = ?, updated_by = ?, revision = revision + 1 WHERE week_key = ? AND status IN ('open', 'review') AND deleted_at IS NULL AND id <> ?").bind(now, who.email, weekKey, id),
-    env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, arrival_schedule, source_collaboration_id, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)").bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), arrivalSchedule, collaborationId || null, now, who.email, now, who.email),
-    ...(collaborationId ? [env.DB.prepare("UPDATE store_transfer_collaboration_drafts SET status = 'finalized', finalized_batch_id = ?, revision = revision + 1, updated_at = ?, updated_by = ? WHERE id = ? AND status = 'draft' AND revision = ?").bind(id, now, who.email, collaborationId, collaborationRevision)] : []),
+    batchInsert,
+    ...(collaborationId ? [env.DB.prepare("UPDATE store_transfer_collaboration_drafts SET status = 'finalized', finalized_batch_id = ?, revision = revision + 1, updated_at = ?, updated_by = ? WHERE id = ? AND status = 'draft' AND revision = ? AND removed_at IS NULL").bind(id, now, who.email, collaborationId, collaborationRevision)] : []),
     ...chunks(normalized).map((rows) => env.DB.prepare(itemInsertSql).bind(id, JSON.stringify(rows), now, who.email)),
     ...chunks(normalizedShortages).map((rows) => env.DB.prepare(shortageInsertSql).bind(id, JSON.stringify(rows), now)),
     ...chunks(normalizedManualItemFacts).map((rows) => env.DB.prepare(manualItemFactInsertSql).bind(id, JSON.stringify(rows), now)),
@@ -709,14 +729,18 @@ async function sendBatchNotifications(request: Request, env: StoreTransferEnv, b
 async function deleteBatch(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  const batch = await env.DB.prepare("SELECT status, week_key FROM store_transfer_batches WHERE id = ? AND deleted_at IS NULL").bind(batchId).first<Record<string, unknown>>();
+  const batch = await env.DB.prepare("SELECT status, week_key, revision, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = store_transfer_batches.id AND s.status = 'approved') approved_store_count FROM store_transfer_batches WHERE id = ? AND deleted_at IS NULL").bind(batchId).first<Record<string, unknown>>();
   if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
-  if (String(batch.status) !== "cancelled") throw new RequestValidationError("目前作業或已完成批次不能直接刪除；請只刪除已取代／已取消批次。", 409);
+  const status = String(batch.status);
+  const waitingForStores = status === "open" && Number(batch.approved_store_count || 0) === 0;
+  if (status !== "cancelled" && !waitingForStores) throw new RequestValidationError("只能刪除已取代／已取消批次，或仍在等待門市且尚無任何門市核准的批次。", 409);
   const now = new Date().toISOString();
-  await env.DB.batch([
-    env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'cancelled', ?, ?, ?)").bind(batchId, `總部將${String(batch.week_key)}批次移出前台清單；資料保留12個月`, now, who.email),
-    env.DB.prepare("UPDATE store_transfer_batches SET deleted_at = ?, deleted_by = ?, updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ? AND status = 'cancelled' AND deleted_at IS NULL").bind(now, who.email, now, who.email, batchId)
+  const summary = waitingForStores ? `總部刪除${String(batch.week_key)}等待門市批次；尚無門市核准，資料保留12個月` : `總部將${String(batch.week_key)}批次移出前台清單；資料保留12個月`;
+  const result = await env.DB.batch([
+    env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'cancelled', ?, ?, ?)").bind(batchId, summary, now, who.email),
+    env.DB.prepare("UPDATE store_transfer_batches SET deleted_at = ?, deleted_by = ?, updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ? AND revision = ? AND deleted_at IS NULL AND (status = 'cancelled' OR (status = 'open' AND NOT EXISTS (SELECT 1 FROM store_transfer_store_status s WHERE s.batch_id = store_transfer_batches.id AND s.status = 'approved')))").bind(now, who.email, now, who.email, batchId, Number(batch.revision))
   ]);
+  if (Number(result[1].meta.changes || 0) !== 1) throw new RequestValidationError("批次狀態已由其他同事更新，請重新整理後再試。", 409);
   return json({ id: batchId, deleted: true, retainedMonths: 12 });
 }
 
@@ -1011,6 +1035,7 @@ export async function storeTransferRoute(request: Request, env: StoreTransferEnv
   const collaborationMatch = url.pathname.match(/^\/api\/store-transfer\/collaboration-drafts\/([^/]+)$/);
   if (collaborationMatch && request.method === "GET") return getCollaborationDraft(request, env, decodeURIComponent(collaborationMatch[1]));
   if (collaborationMatch && request.method === "PUT") return saveCollaborationDraft(request, env, decodeURIComponent(collaborationMatch[1]));
+  if (collaborationMatch && request.method === "DELETE") return deleteCollaborationDraft(request, env, decodeURIComponent(collaborationMatch[1]));
   if (url.pathname === "/api/store-transfer/batches" && request.method === "GET") return listBatches(request, env);
   if (url.pathname === "/api/store-transfer/batches" && request.method === "POST") return createBatch(request, env);
   const manualItemFactMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/manual-item-fact$/);

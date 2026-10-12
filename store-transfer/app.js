@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261013-store-transfer-r9";
+  const APP_VERSION = "20261013-store-transfer-r10";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -274,7 +274,23 @@
   function collaborationCard(draft) {
     const finalized = draft.status === "finalized";
     const status = finalized ? `已轉正式${draft.finalizedBatchId ? `・${draft.finalizedBatchId}` : ""}` : "協作中";
-    return `<article class="batch-card collaboration-card${finalized ? " superseded" : ""}"><div><h3>${escapeHtml(draft.weekKey)} A/B協作</h3><p class="batch-meta">${escapeHtml(draft.storeCodes.join("、"))}・${draft.itemCount}項・${draft.differenceCount}項有差異・版本${draft.revision}・${escapeHtml(draft.updatedBy)}更新</p></div><span class="batch-status">${escapeHtml(status)}</span><div class="batch-card-actions"><button class="secondary-button compact" type="button" data-open-collaboration="${escapeHtml(draft.id)}">查看${finalized ? "紀錄" : "／協作"}</button></div></article>`;
+    const deleteButton = !finalized && state.config.permissions?.canDeleteCollaboration
+      ? `<button class="secondary-button compact delete-batch-button" type="button" data-delete-collaboration="${escapeHtml(draft.id)}" data-week-key="${escapeHtml(draft.weekKey)}" data-item-count="${escapeHtml(draft.itemCount)}">刪除協作批次</button>` : "";
+    return `<article class="batch-card collaboration-card${finalized ? " superseded" : ""}"><div><h3>${escapeHtml(draft.weekKey)} A/B協作</h3><p class="batch-meta">${escapeHtml(draft.storeCodes.join("、"))}・${draft.itemCount}項・${draft.differenceCount}項有差異・版本${draft.revision}・${escapeHtml(draft.updatedBy)}更新</p></div><span class="batch-status">${escapeHtml(status)}</span><div class="batch-card-actions"><button class="secondary-button compact" type="button" data-open-collaboration="${escapeHtml(draft.id)}">查看${finalized ? "紀錄" : "／協作"}</button>${deleteButton}</div></article>`;
+  }
+
+  async function deleteCollaborationDraft(button) {
+    const id = button.dataset.deleteCollaboration;
+    const week = button.dataset.weekKey || id;
+    const itemCount = button.dataset.itemCount || 0;
+    if (!confirm(`確定要刪除 ${week} 的A/B協作批次嗎？\n\n協作編號：${id}\n品項數：${itemCount}\n\n刪除後前台不再顯示，但稽核資料會保留12個月；已轉正式的批次不能刪除。`)) return;
+    button.disabled = true;
+    try {
+      await api(`/collaboration-drafts/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (state.activeCollaboration?.draft?.id === id) { $("collaboration-dialog").close(); state.activeCollaboration = null; }
+      $("collaboration-status").textContent = `已刪除${week}的A/B協作批次；稽核資料仍保留12個月。`;
+      await loadCollaborationDrafts();
+    } finally { button.disabled = false; }
   }
 
   async function loadCollaborationDrafts() {
@@ -470,8 +486,10 @@
     const status = batchStatusLabel(batch.status);
     const ownStatus = { pending: "尚未處理", saved: "已暫存", submitted: "已送出", approved: "已核准", closed: "已完成" }[batch.store_status] || batch.store_status;
     const progress = batch.status === "cancelled" ? "新版批次已建立，本批不再接受修改或送出" : batch.store_total == null ? (ownStatus ? `本店：${ownStatus}` : "") : `門市已送出 ${Number(batch.store_submitted || 0) + Number(batch.store_approved || 0)}/${batch.store_total}・ERP ${batch.store_erp_created || 0}/${batch.store_total}`;
-    const deleteButton = batch.status === "cancelled" && state.config.permissions?.canDeleteBatch
-      ? `<button class="secondary-button compact delete-batch-button" type="button" data-delete-batch="${escapeHtml(batch.id)}" data-week-key="${escapeHtml(batch.week_key)}" data-item-count="${escapeHtml(batch.item_count || 0)}">刪除批次</button>` : "";
+    const canDeleteWaiting = batch.status === "open" && Number(batch.store_approved || 0) === 0;
+    const canDelete = state.config.permissions?.canDeleteBatch && (batch.status === "cancelled" || canDeleteWaiting);
+    const deleteButton = canDelete
+      ? `<button class="secondary-button compact delete-batch-button" type="button" data-delete-batch="${escapeHtml(batch.id)}" data-week-key="${escapeHtml(batch.week_key)}" data-item-count="${escapeHtml(batch.item_count || 0)}" data-delete-kind="${canDeleteWaiting ? "waiting" : "history"}">${canDeleteWaiting ? "刪除待確認批次" : "刪除批次"}</button>` : "";
     const shortage = Number(batch.shortage_count || 0) ? `・缺貨未配${escapeHtml(batch.shortage_count)}項／${escapeHtml(batch.unfilled_quantity || 0)}件` : "";
     const notificationTotal = Number(batch.notification_total || 0), notificationSent = Number(batch.notification_sent || 0), notificationFailed = Number(batch.notification_failed || 0);
     const notificationText = notificationTotal ? `・門市通知${notificationSent}/${notificationTotal}${notificationFailed ? `（${notificationFailed}封失敗）` : ""}` : "";
@@ -516,11 +534,13 @@
     const id = button.dataset.deleteBatch;
     const week = button.dataset.weekKey || id;
     const itemCount = button.dataset.itemCount || 0;
-    if (!confirm(`確定要刪除 ${week} 的這筆已取代批次嗎？\n\n批次編號：${id}\n品項數：${itemCount}\n\n刪除後前台不再顯示，但稽核資料會保留12個月。`)) return;
+    const waiting = button.dataset.deleteKind === "waiting";
+    const target = waiting ? "這筆仍在等待門市的批次" : "這筆已取代批次";
+    if (!confirm(`確定要刪除 ${week} 的${target}嗎？\n\n批次編號：${id}\n品項數：${itemCount}\n\n${waiting ? "刪除後門市將無法再回覆，已寄出的通知連結也不再顯示此批次。\n" : ""}前台不再顯示，但稽核資料會保留12個月。`)) return;
     button.disabled = true;
     try {
       await api(`/batches/${encodeURIComponent(id)}`, { method: "DELETE" });
-      $("hq-status").textContent = `已刪除${week}的舊批次；稽核資料仍保留12個月。`;
+      $("hq-status").textContent = `已刪除${week}的${waiting ? "待確認" : "舊"}批次；稽核資料仍保留12個月。`;
       await loadBatches();
     } finally { button.disabled = false; }
   }
@@ -1280,6 +1300,8 @@
     if (button) openBatch(button.dataset.openBatch).catch((error) => { $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; });
     const collaborationButton = event.target.closest("[data-open-collaboration]");
     if (collaborationButton) openCollaboration(collaborationButton.dataset.openCollaboration).catch((error) => { $("collaboration-status").textContent = error.message; });
+    const deleteCollaborationButton = event.target.closest("[data-delete-collaboration]");
+    if (deleteCollaborationButton) deleteCollaborationDraft(deleteCollaborationButton).catch((error) => { $("collaboration-status").textContent = error.message; });
   });
   $("batch-detail").addEventListener("click", handleDialog);
   $("batch-detail").addEventListener("input", (event) => {

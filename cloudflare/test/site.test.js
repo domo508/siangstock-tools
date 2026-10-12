@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20261013-store-transfer-r9");
+    const appIndex = html.indexOf("app.js?v=20261013-store-transfer-r10");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -165,7 +165,7 @@ describe("前台導覽", () => {
     expect(rulesHtml).toContain('id="version-warning"');
     expect(rulesApp).toContain(`const APP_VERSION = "${rulesVersion.version}"`);
     expect(rulesApp).toContain("version.json?check=${Date.now()}");
-    expect(rulesApp).toContain("../../store-transfer/?deploy=20261013-store-transfer-r9");
+    expect(rulesApp).toContain("../../store-transfer/?deploy=20261013-store-transfer-r10");
     expect(transferApp).toContain('window.addEventListener("focus", checkRuntimeVersion)');
     expect(rulesApp).toContain('window.addEventListener("focus", checkRuntimeVersion)');
     expect(headers).toContain("/store-transfer/index.html\n  Cache-Control: no-store, max-age=0, must-revalidate");
@@ -316,16 +316,19 @@ describe("前台導覽", () => {
     expect(worker).not.toContain("'superseded'");
   });
 
-  it("總部只可將已取代批次安全移出前台並保留12個月稽核", () => {
+  it("總部可刪除等待門市且尚未核准的批次，並保留12個月稽核", () => {
     const html = readFileSync("../store-transfer/index.html", "utf8");
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
     const migration = readFileSync("../cloudflare/worker/migrations/0015_store_transfer_batch_soft_delete.sql", "utf8");
-    expect(html).toContain("刪除舊批次");
+    expect(html).toContain("刪除批次");
     expect(app).toContain("data-delete-batch");
+    expect(app).toContain("刪除待確認批次");
     expect(app).toContain("稽核資料會保留12個月");
     expect(worker).toContain("canDeleteBatch");
-    expect(worker).toContain("String(batch.status) !== \"cancelled\"");
+    expect(worker).toContain('status === "open" && Number(batch.approved_store_count || 0) === 0');
+    expect(worker).toContain("仍在等待門市且尚無任何門市核准");
+    expect(worker).toContain("s.status = 'approved'");
     expect(worker).toContain("request.method === \"DELETE\"");
     expect(worker).toContain("deleted_at IS NULL");
     expect(migration).toContain("ADD COLUMN deleted_at");
@@ -509,6 +512,20 @@ describe("前台導覽", () => {
     expect(migration).toContain('store_transfer_collaboration_one_active_week');
     expect(migration).toContain('source_collaboration_id');
     expect(migration).toContain('store_transfer_batches_source_collaboration');
+  });
+
+  it("尚未轉正式的A/B協作批次可安全刪除並保留12個月稽核", () => {
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    const migration = readFileSync("../cloudflare/worker/migrations/0036_store_transfer_removable_pending_batches.sql", "utf8");
+    expect(app).toContain("data-delete-collaboration");
+    expect(app).toContain("已轉正式的批次不能刪除");
+    expect(worker).toContain("deleteCollaborationDraft");
+    expect(worker).toContain("已轉為正式批次的A/B協作紀錄不能刪除");
+    expect(worker).toContain('request.method === "DELETE"');
+    expect(worker).toContain("removed_at IS NULL");
+    expect(migration).toContain("ADD COLUMN removed_at");
+    expect(migration).toContain("status = 'draft' AND removed_at IS NULL");
   });
 
   it("門市有獨立展示例外頁，且只能維護自己的精準ERP品號", () => {
