@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261012-store-transfer-r7";
+  const APP_VERSION = "20261013-store-transfer-r8";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -234,7 +234,9 @@
         physicalInventory: row.physicalInventory, pendingSubmittedQuantity: row.pendingSubmittedQuantity,
         inTransitQuantity: row.inTransitQuantity, targetQuantity: row.targetQuantity,
         displayQuantity: row.displayQuantity, currentArrivalDate: row.currentArrivalDate,
-        nextArrivalDate: row.nextArrivalDate, preArrivalStockoutRisk: Boolean(row.preArrivalStockoutRisk)
+        nextArrivalDate: row.nextArrivalDate, preArrivalStockoutRisk: Boolean(row.preArrivalStockoutRisk),
+        hqAvailable: row.hqAvailable, hqReserve: row.hqReserve, hqReleasable: row.hqReleasable,
+        hqSupplyCeiling: row.hqSupplyCeiling ?? row.hqReleasable ?? row.hqAvailable
       }
     }));
   }
@@ -253,13 +255,14 @@
       storeCode: row.storeCode, sku: row.sku, productName: row.productName,
       calculationDate: row.calculationDate, baseQuantity: row.baseQuantity,
       displayGap: row.displayGap, dailyUsage: row.dailyUsage, systemProjection: row.systemProjection,
-      systemReason: row.systemReason
+      systemReason: row.systemReason, hqAvailable: row.hqAvailable,
+      hqReserve: row.hqReserve, hqReleasable: row.hqReleasable
     }));
   }
 
   function compactManualItemCatalog(rows) {
     const bySku = new Map();
-    (rows || []).forEach((row) => { if (!bySku.has(row.sku)) bySku.set(row.sku, { sku: row.sku, productName: row.productName }); });
+    (rows || []).forEach((row) => { if (!bySku.has(row.sku)) bySku.set(row.sku, { sku: row.sku, productName: row.productName, hqAvailable: row.hqAvailable, hqReserve: row.hqReserve, hqReleasable: row.hqReleasable }); });
     return [...bySku.values()];
   }
 
@@ -549,21 +552,24 @@
     const match = String(weekKey || "").match(/^(\d{4})-W(\d{2})$/); if (!match) return;
     const jan4 = new Date(Number(match[1]), 0, 4, 12), jan4Offset = (jan4.getDay() + 6) % 7;
     const monday = new Date(jan4); monday.setDate(jan4.getDate() - jan4Offset + (Number(match[2]) - 1) * 7);
-    const friday = new Date(monday); friday.setDate(monday.getDate() + 4);
-    const nextMonday = new Date(monday); nextMonday.setDate(monday.getDate() + 7);
+    const tuesday = new Date(monday); tuesday.setDate(monday.getDate() + 1);
     const iso = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
     const holidays = state.config.storeInventoryRules?.config?.workdayHolidays || [];
-    const proposal = transferCore.previousWorkingDay(iso(friday), holidays);
-    const lock = transferCore.nextWorkingDay(iso(nextMonday), holidays);
+    const proposal = transferCore.nextWorkingDay(iso(monday), holidays);
+    let lock = transferCore.nextWorkingDay(iso(tuesday), holidays);
+    if (lock <= proposal) {
+      const following = new Date(`${proposal}T12:00:00`); following.setDate(following.getDate() + 1);
+      lock = transferCore.nextWorkingDay(iso(following), holidays);
+    }
     $("proposal-date").value = proposal; $("lock-at").value = `${lock}T09:00`;
   }
 
   function defaults() {
     const today = new Date(), offset = (today.getDay() + 6) % 7;
     const monday = new Date(today); monday.setDate(today.getDate() - offset);
-    const friday = new Date(monday); friday.setDate(monday.getDate() + 4);
-    const start = new Date(friday.getFullYear(), 0, 1), days = Math.floor((friday - start) / 86400000);
-    $("week-key").value = `${friday.getFullYear()}-W${String(Math.ceil((days + start.getDay() + 1) / 7)).padStart(2, "0")}`;
+    const thursday = new Date(monday); thursday.setDate(monday.getDate() + 3);
+    const start = new Date(thursday.getFullYear(), 0, 1), days = Math.floor((thursday - start) / 86400000);
+    $("week-key").value = `${thursday.getFullYear()}-W${String(Math.ceil((days + start.getDay() + 1) / 7)).padStart(2, "0")}`;
     applyScheduleForWeek($("week-key").value);
   }
 
@@ -589,6 +595,10 @@
 
   function detailRow(id, colspan, content) {
     return `<tr id="${escapeHtml(id)}" class="decision-detail-row" data-decision-detail hidden><td colspan="${colspan}"><div class="decision-evidence-grid">${content}</div></td></tr>`;
+  }
+
+  function warningRow(id, colspan) {
+    return `<tr id="${escapeHtml(id)}-warning" class="decision-warning-row" data-quantity-warning hidden><td colspan="${colspan}"></td></tr>`;
   }
 
   function evidence(label, value, wide = false) {
@@ -888,23 +898,27 @@
       const snapshot = savedDecisionSnapshot(item);
       const hasSnapshot = Object.keys(snapshot).length > 0;
       const identity = `${itemIdentity(item)}${manual ? '<span class="manual-item-badge">人工新增</span>' : ""}`;
-      const systemCell = `<strong class="decision-quantity">${item.suggested_quantity}</strong><small>${escapeHtml(item.system_projection || rowProjection(projectionItem, item.suggested_quantity))}</small>`;
-      const confirmedCell = `<input data-confirmed type="number" min="0" step="${step}" value="${confirmed}" ${editable ? "" : "disabled"}><small data-confirmed-projection>${escapeHtml(rowProjection(projectionItem, confirmed))}</small>`;
-      const approvedCell = `<input data-approved type="number" min="0" step="${step}" value="${approved}" ${hqEditable ? "" : "disabled"}><small data-approved-projection>${escapeHtml(rowProjection(projectionItem, approved))}</small>`;
+      const systemCell = `<strong class="decision-quantity">${item.suggested_quantity}</strong><small>系統建議後可售至：${escapeHtml(item.system_projection || rowProjection(projectionItem, item.suggested_quantity))}</small>`;
+      const confirmedCell = `<input data-confirmed type="number" min="0" step="${step}" value="${confirmed}" ${editable ? "" : "disabled"}><small data-confirmed-projection>申請後預估可售至：${escapeHtml(rowProjection(projectionItem, confirmed))}</small>`;
+      const approvedCell = `<input data-approved type="number" min="0" step="${step}" value="${approved}" ${hqEditable ? "" : "disabled"}><small data-approved-projection>核准後預估可售至：${escapeHtml(rowProjection(projectionItem, approved))}</small>`;
+      const supplyKnown = Object.prototype.hasOwnProperty.call(snapshot, "hqSupplyCeiling");
+      const supplyCeiling = Number(snapshot.hqSupplyCeiling ?? snapshot.hqReleasable ?? snapshot.hqAvailable ?? 0);
+      const otherAllocated = Number(payload.supplyUsage?.[item.sku]?.otherAllocated || 0);
       const evidenceContent = [
         hasSnapshot ? evidence("近42天現場／B3銷售", `${Number(snapshot.localSales42 || 0)}／${Number(snapshot.b3Sales42 || 0)}件`) : evidence("近42天推估", Number(item.daily_usage || 0) > 0 ? `約${(Number(item.daily_usage) * 42).toFixed(1)}件` : "舊批次未保存"),
         hasSnapshot ? evidence("現有實體庫存", `${Number(snapshot.physicalInventory || 0)}件`) : evidence("調撥前可售基準", `${Number(item.base_quantity || 0).toFixed(1)}件`),
         hasSnapshot ? evidence("待發貨／在途", `${Number(snapshot.pendingSubmittedQuantity || 0)}／${Number(snapshot.inTransitQuantity || 0)}件`) : evidence("待發貨／在途", "舊批次未保存"),
         hasSnapshot ? evidence("目標／不可售展示", `${Number(snapshot.targetQuantity || 0)}／${Number(snapshot.displayQuantity || 0)}件`) : evidence("不可售展示缺口", `${Number(item.display_gap || 0)}件`),
         hasSnapshot ? evidence("本批／下一輪到店", `${snapshot.currentArrivalDate || "—"}／${snapshot.nextArrivalDate || "—"}`) : evidence("計算日期", item.calculation_date || "舊批次未保存"),
+        supplyKnown ? evidence("總倉可用／安全保留／本批可供應", `${Number(snapshot.hqAvailable || 0)}／${Number(snapshot.hqReserve || 0)}／${supplyCeiling}件`) : evidence("總倉供應快照", "舊批次未保存"),
         evidence("系統判斷", systemReason, true),
         ...(!hasSnapshot ? [evidence("批次快照", "舊批次未保存完整判斷明細；原建議、確認量及可售至仍可正常查閱", true)] : [])
       ].join("");
       const columns = (state.config.role !== "store" ? 7 : 4) + (canChangeItems ? 1 : 0) + 1;
-      return `<tr data-store-row data-store="${item.store_code}" data-sku="${escapeHtml(item.sku)}" data-allocation-row data-allocation-quantity="${approved}" data-product-name="${escapeHtml(item.product_name)}" data-item-type="${item.item_type || "regular"}" data-calculation-date="${escapeHtml(item.calculation_date)}" data-base="${Number(item.base_quantity || 0)}" data-daily="${Number(item.daily_usage || 0)}" data-display-gap="${Number(item.display_gap || 0)}" data-system-projection="${escapeHtml(item.system_projection || "")}" data-system-reason="${escapeHtml(systemReason)}" data-manual="${manual ? "true" : "false"}"><td class="decision-toggle-cell" data-label="判斷依據">${detailButton(id)}</td>${state.config.role !== "store" ? `<td data-label="門市"><strong>${escapeHtml(item.store_code)}</strong><small>${escapeHtml(state.config.stores[item.store_code]?.name || "")}</small></td>` : ""}<td data-label="品項">${identity}</td><td data-label="系統建議" class="decision-stage-cell">${systemCell}</td><td data-label="門市確認" class="decision-stage-cell">${confirmedCell}</td><td data-label="門市原因"><input data-reason class="reason-input" value="${escapeHtml(item.store_reason || "")}" ${editable ? "" : "disabled"} placeholder="未調整可留白"></td>${state.config.role !== "store" ? `<td data-label="總部核准" class="decision-stage-cell">${approvedCell}</td><td data-label="總部原因"><input data-hq-reason class="reason-input" value="${escapeHtml(item.hq_reason || "")}" ${hqEditable ? "" : "disabled"} placeholder="未調整可留白"></td>` : ""}${canChangeItems ? `<td data-label="品項操作"><button class="secondary-button compact remove-item-button" type="button" data-remove-item data-mode="${state.config.role === "store" ? "store" : "hq"}">移除此品項</button></td>` : ""}</tr>${detailRow(id, columns, evidenceContent)}`;
+      return `<tr data-store-row data-store="${item.store_code}" data-sku="${escapeHtml(item.sku)}" data-suggested="${Number(item.suggested_quantity || 0)}" data-review-base="${Number(confirmed || 0)}" data-supply-known="${supplyKnown ? "true" : "false"}" data-supply-ceiling="${supplyCeiling}" data-other-allocated="${otherAllocated}" data-allocation-row data-allocation-quantity="${approved}" data-product-name="${escapeHtml(item.product_name)}" data-item-type="${item.item_type || "regular"}" data-calculation-date="${escapeHtml(item.calculation_date)}" data-base="${Number(item.base_quantity || 0)}" data-daily="${Number(item.daily_usage || 0)}" data-display-gap="${Number(item.display_gap || 0)}" data-system-projection="${escapeHtml(item.system_projection || "")}" data-system-reason="${escapeHtml(systemReason)}" data-manual="${manual ? "true" : "false"}"><td class="decision-toggle-cell" data-label="判斷依據">${detailButton(id)}</td>${state.config.role !== "store" ? `<td data-label="門市"><strong>${escapeHtml(item.store_code)}</strong><small>${escapeHtml(state.config.stores[item.store_code]?.name || "")}</small></td>` : ""}<td data-label="品項">${identity}</td><td data-label="系統建議" class="decision-stage-cell">${systemCell}</td><td data-label="門市確認" class="decision-stage-cell">${confirmedCell}</td><td data-label="門市原因"><input data-reason class="reason-input" value="${escapeHtml(item.store_reason || "")}" ${editable ? "" : "disabled"} placeholder="未調整可留白"></td>${state.config.role !== "store" ? `<td data-label="總部核准" class="decision-stage-cell">${approvedCell}</td><td data-label="總部原因"><input data-hq-reason class="reason-input" value="${escapeHtml(item.hq_reason || "")}" ${hqEditable ? "" : "disabled"} placeholder="未調整可留白"></td>` : ""}${canChangeItems ? `<td data-label="品項操作"><button class="secondary-button compact remove-item-button" type="button" data-remove-item data-mode="${state.config.role === "store" ? "store" : "hq"}">移除此品項</button></td>` : ""}</tr>${warningRow(id, columns)}${detailRow(id, columns, evidenceContent)}`;
     }).join("")}</tbody></table></div></section>` : "";
     const storeOptions = payload.storeStatuses.map((row) => `<option value="${row.store_code}">${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</option>`).join("");
-    const manualForm = canChangeItems ? `<section class="result-section manual-item-section"><h3>人工新增品項</h3><p>輸入完整ERP品號後，系統會帶入品名、「系統未建議原因」與「加入本次數量後可售至」。推估沿用本批次建立時的門市庫存、待發貨／在途及近42天現場銷售基準；送出後總部覆核會看到相同欄位。移除既有品項仍會保留稽核紀錄。</p><div class="manual-item-form">${state.config.role !== "store" ? `<label><span>門市</span><select data-manual-store>${storeOptions}</select></label>` : ""}<label><span>品項類型</span><select data-manual-type><option value="regular">一般必要補貨</option><option value="special_stock">建議調撥</option><option value="activity_gift">活動／贈品</option><option value="consumable">提袋耗材</option></select></label><label><span>ERP品號</span><input data-manual-sku maxlength="80" autocomplete="off"></label><label><span>品名（自動帶入）</span><input data-manual-name maxlength="300" readonly></label><label><span>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</span><input data-manual-quantity type="number" min="1" step="1"></label><label><span>加入後可售至</span><output data-manual-projection>請先輸入品號與數量</output></label><label class="manual-system-reason-field"><span>系統未建議原因</span><output data-manual-system-reason>請先輸入品號</output></label><label class="manual-reason-field"><span>新增原因</span><input data-manual-reason maxlength="300" autocomplete="off"></label><button class="secondary-button" type="button" data-local-action="add-item">加入確認清單</button></div><p class="status-line" data-manual-status></p><div class="result-table-wrap"><table class="transfer-table manual-item-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>類型</th><th>系統建議</th><th>系統未建議原因</th><th>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</th><th>加入後可售至</th><th>原因</th><th>操作</th></tr></thead><tbody data-manual-rows></tbody></table></div></section>` : "";
+    const manualForm = canChangeItems ? `<section class="result-section manual-item-section"><h3>人工新增品項</h3><p>輸入完整ERP品號後，系統會帶入品名、「系統未建議原因」與「申請後預估可售至」。推估沿用本批次建立時的門市庫存、待發貨／在途及近42天現場銷售基準；送出後總部覆核會看到相同欄位。移除既有品項仍會保留稽核紀錄。</p><div class="manual-item-form">${state.config.role !== "store" ? `<label><span>門市</span><select data-manual-store>${storeOptions}</select></label>` : ""}<label><span>品項類型</span><select data-manual-type><option value="regular">一般必要補貨</option><option value="special_stock">建議調撥</option><option value="activity_gift">活動／贈品</option><option value="consumable">提袋耗材</option></select></label><label><span>ERP品號</span><input data-manual-sku maxlength="80" autocomplete="off"></label><label><span>品名（自動帶入）</span><input data-manual-name maxlength="300" readonly></label><label><span>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</span><input data-manual-quantity type="number" min="1" step="1"></label><label><span>${state.config.role === "store" ? "申請後" : "核准後"}預估可售至</span><output data-manual-projection>請先輸入品號與數量</output></label><label class="manual-system-reason-field"><span>系統未建議原因</span><output data-manual-system-reason>請先輸入品號</output></label><label class="manual-reason-field"><span>新增原因</span><input data-manual-reason maxlength="300" autocomplete="off"></label><button class="secondary-button" type="button" data-local-action="add-item">加入確認清單</button></div><p class="manual-supply-warning" data-manual-supply-warning role="alert" hidden></p><p class="status-line" data-manual-status></p><div class="result-table-wrap"><table class="transfer-table manual-item-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>類型</th><th>系統建議</th><th>系統未建議原因</th><th>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</th><th>${state.config.role === "store" ? "申請後" : "核准後"}預估可售至</th><th>原因</th><th>操作</th></tr></thead><tbody data-manual-rows></tbody></table></div></section>` : "";
     const shortages = payload.shortages || [];
     const shortageTable = shortages.length ? `<section class="result-section shortage-section" data-store-section><h3>缺貨未配與後續補貨狀態</h3><p>這些數量不會加入門市確認量或ERP檔；用來說明總倉為何未能配足，並保留後續回拋主採購的狀態。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>需求量</th><th>已配量</th><th>未配不足量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody>${shortages.map((row) => `<tr data-store-row data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"><td>${escapeHtml(row.store_code)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${row.demand_quantity}</td><td>${row.allocated_quantity}</td><td>${row.unfilled_quantity}</td><td>${escapeHtml(row.reason)}</td><td>${escapeHtml(row.follow_up_status)}</td></tr>`).join("")}</tbody></table></div></section>` : "";
     return [
@@ -918,12 +932,71 @@
   }
 
   let manualLookupTimer = 0;
+  function refreshDialogQuantityWarnings() {
+    const detail = $("batch-detail");
+    const rows = [...detail.querySelectorAll("tr[data-item-type]")];
+    const inputSelector = state.config.role === "store" ? "[data-confirmed]" : "[data-approved]";
+    const reasonSelector = state.config.role === "store" ? "[data-reason]" : "[data-hq-reason]";
+    const totals = new Map();
+    rows.forEach((row) => {
+      const input = row.querySelector(inputSelector);
+      if (!input) return;
+      totals.set(row.dataset.sku, (totals.get(row.dataset.sku) || 0) + Math.max(0, Number(input.value || 0)));
+    });
+    let blocking = 0;
+    rows.forEach((row) => {
+      const input = row.querySelector(inputSelector), warning = row.nextElementSibling?.matches("[data-quantity-warning]") ? row.nextElementSibling : null;
+      if (!input || !warning) return;
+      const quantity = Math.max(0, Number(input.value || 0));
+      const suggested = Number(row.dataset.suggested || 0);
+      const comparisonBase = state.config.role === "store" ? suggested : Number(row.dataset.reviewBase || 0);
+      const reason = row.querySelector(reasonSelector)?.value.trim() || "";
+      const supplyKnown = row.dataset.supplyKnown === "true";
+      const ceiling = Number(row.dataset.supplyCeiling || 0);
+      const otherAllocated = state.config.role === "store" ? Number(row.dataset.otherAllocated || 0) : 0;
+      const total = Number(totals.get(row.dataset.sku) || 0) + otherAllocated;
+      const extra = Math.max(0, quantity - suggested);
+      let tone = "", title = "", copy = "";
+      if (supplyKnown && total > ceiling) {
+        tone = "danger"; blocking += 1;
+        title = `總倉數量不足：${row.dataset.sku} 超過本批可供應量 ${total - ceiling} 件`;
+        copy = `總倉本批最多可供應 ${ceiling} 件${otherAllocated ? `，其他門市已占用 ${otherAllocated} 件` : ""}；目前合計 ${total} 件。請修改數量，超出部分不會轉入缺貨未配。`;
+      } else if (quantity !== comparisonBase && !reason) {
+        tone = "danger"; blocking += 1;
+        title = quantity > comparisonBase ? "人工追加量尚未填寫原因" : "人工減量尚未填寫原因";
+        copy = "請填寫具體調整原因後再暫存、送出或核准。";
+      } else if (extra > 0) {
+        tone = "warning";
+        title = `系統未建議追加量：${extra} 件`;
+        copy = `${row.dataset.systemReason || `本輪系統需求為 ${suggested} 件`}；目前仍在總倉可供應範圍內。`;
+      } else if (row.dataset.manual === "true") {
+        tone = "info";
+        title = "人工新增品項的系統未建議原因";
+        copy = row.dataset.systemReason || "本批次依現行規則未形成補貨需求。";
+      }
+      warning.hidden = !tone;
+      warning.className = `decision-warning-row${tone ? ` ${tone}` : ""}`;
+      warning.querySelector("td").innerHTML = tone ? `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(copy)}</span>` : "";
+    });
+    detail.querySelectorAll('[data-action="save"], [data-action="submit"], [data-action="approve"]').forEach((button) => { button.disabled = blocking > 0; });
+    const status = detail.querySelector("#dialog-status");
+    if (status && blocking > 0) status.textContent = `尚有 ${blocking} 筆數量或原因未通過檢核。`;
+    else if (status && /尚有 \d+ 筆數量或原因未通過檢核/.test(status.textContent)) status.textContent = "數量檢核完成，可以繼續操作。";
+  }
+
   function updateManualFormProjection() {
     const detail = $("batch-detail"), skuInput = detail.querySelector("[data-manual-sku]"), output = detail.querySelector("[data-manual-projection]");
     if (!skuInput || !output || !skuInput.dataset.lookupSku) return;
     const quantity = Number(detail.querySelector("[data-manual-quantity]").value || 0);
     const item = { item_type: detail.querySelector("[data-manual-type]").value, calculation_date: skuInput.dataset.calculationDate, base_quantity: Number(skuInput.dataset.base || 0), daily_usage: Number(skuInput.dataset.daily || 0), display_gap: Number(skuInput.dataset.displayGap || 0), system_projection: skuInput.dataset.systemProjection || "", manual: true };
-    output.textContent = quantity > 0 ? rowProjection(item, quantity) : "請輸入本次數量";
+    const warning = detail.querySelector("[data-manual-supply-warning]"), addButton = detail.querySelector('[data-local-action="add-item"]');
+    const maximum = Math.max(0, Number(skuInput.dataset.hqReleasable || 0) - Number(skuInput.dataset.otherAllocated || 0));
+    const supplyExceeded = skuInput.dataset.supplyKnown === "true" && quantity > maximum;
+    const projectionQuantity = supplyExceeded ? maximum : quantity;
+    output.textContent = quantity > 0 ? `${supplyExceeded ? "依可供應上限" : state.config.role === "store" ? "申請後" : "核准後"}預估可售至：${rowProjection(item, projectionQuantity)}` : "請輸入本次數量";
+    warning.hidden = !supplyExceeded;
+    warning.textContent = supplyExceeded ? `總倉數量不足：本店目前最多可申請 ${maximum} 件，輸入 ${quantity} 件；請修改數量後再加入。` : "";
+    addButton.disabled = supplyExceeded;
   }
 
   async function lookupManualItemFact() {
@@ -932,16 +1005,18 @@
     const skuInput = detail.querySelector("[data-manual-sku]"), nameInput = detail.querySelector("[data-manual-name]"), output = detail.querySelector("[data-manual-projection]"), systemReasonOutput = detail.querySelector("[data-manual-system-reason]");
     const sku = skuInput.value.normalize("NFKC").trim().toUpperCase();
     skuInput.value = sku;
-    ["lookupSku", "lookupStore", "calculationDate", "base", "daily", "displayGap", "systemProjection", "systemReason"].forEach((key) => { delete skuInput.dataset[key]; });
+    ["lookupSku", "lookupStore", "calculationDate", "base", "daily", "displayGap", "systemProjection", "systemReason", "hqAvailable", "hqReserve", "hqReleasable", "supplyKnown", "otherAllocated"].forEach((key) => { delete skuInput.dataset[key]; });
+    const supplyWarning = detail.querySelector("[data-manual-supply-warning]"); supplyWarning.hidden = true; supplyWarning.textContent = "";
+    detail.querySelector('[data-local-action="add-item"]').disabled = false;
     nameInput.value = ""; output.textContent = "正在查找批次基準…"; systemReasonOutput.textContent = "正在查找系統判斷…";
     if (!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) { output.textContent = "請輸入完整ERP品號"; systemReasonOutput.textContent = "請先輸入完整ERP品號"; return null; }
     try {
       const fact = await api(`/batches/${encodeURIComponent(state.activeBatch.batch.id)}/manual-item-fact?store=${encodeURIComponent(storeCode)}&sku=${encodeURIComponent(sku)}`);
       if (skuInput.value !== sku || (state.config.role !== "store" && detail.querySelector("[data-manual-store]").value !== storeCode)) return null;
       nameInput.value = fact.productName;
-      Object.assign(skuInput.dataset, { lookupSku: fact.sku, lookupStore: fact.storeCode, calculationDate: fact.calculationDate, base: String(fact.baseQuantity), daily: String(fact.dailyUsage), displayGap: String(fact.displayGap), systemProjection: fact.systemProjection || "", systemReason: fact.systemReason || "" });
+      Object.assign(skuInput.dataset, { lookupSku: fact.sku, lookupStore: fact.storeCode, calculationDate: fact.calculationDate, base: String(fact.baseQuantity), daily: String(fact.dailyUsage), displayGap: String(fact.displayGap), systemProjection: fact.systemProjection || "", systemReason: fact.systemReason || "", hqAvailable: String(fact.hqAvailable || 0), hqReserve: String(fact.hqReserve || 0), hqReleasable: String(fact.hqReleasable || 0), supplyKnown: String(fact.supplyKnown === true), otherAllocated: String(fact.otherAllocated || 0) });
       systemReasonOutput.textContent = fact.systemReason || "本批次未保存系統未建議原因";
-      status.textContent = `${fact.storeCode}／${fact.sku} 已帶入批次建立時的庫存與近42天銷售基準。`;
+      status.textContent = `${fact.storeCode}／${fact.sku} 已帶入批次建立時的庫存、近42天銷售及總倉可供應基準。`;
       updateManualFormProjection();
       return fact;
     } catch (error) {
@@ -968,18 +1043,22 @@
     const quantity = Number(quantityInput.value), reason = reasonInput.value.normalize("NFKC").trim();
     if (!sku || !productName || !Number.isSafeInteger(quantity) || quantity <= 0 || !reason) { status.textContent = "請填妥ERP品號、品名、1以上整數數量與新增原因。"; return; }
     if (type === "consumable" && quantity % 100 !== 0) { status.textContent = "提袋耗材數量須為100的倍數。"; return; }
+    const maximum = Math.max(0, Number(skuInput.dataset.hqReleasable || 0) - Number(skuInput.dataset.otherAllocated || 0));
+    if (skuInput.dataset.supplyKnown === "true" && quantity > maximum) { status.textContent = `總倉數量不足，本店目前最多可申請${maximum}件；請修改數量。`; return; }
     const duplicate = [...detail.querySelectorAll("tbody tr")].some((row) => row.dataset.store === storeCode && row.dataset.sku === sku && row.dataset.itemType === type);
     if (duplicate) { status.textContent = `${storeCode}／${sku}已在清單中，請直接修改該列數量。`; return; }
     const labels = { regular: "一般必要補貨", special_stock: "建議調撥", activity_gift: "活動／贈品", consumable: "提袋耗材" };
     const row = document.createElement("tr");
     const projectionItem = { item_type: type, calculation_date: skuInput.dataset.calculationDate, base_quantity: Number(skuInput.dataset.base || 0), daily_usage: Number(skuInput.dataset.daily || 0), display_gap: Number(skuInput.dataset.displayGap || 0), system_projection: skuInput.dataset.systemProjection || "", manual: true };
     const systemReason = skuInput.dataset.systemReason || "本批次未保存系統未建議原因";
-    row.dataset.storeRow = ""; row.dataset.store = storeCode; row.dataset.sku = sku; row.dataset.allocationRow = ""; row.dataset.allocationQuantity = String(quantity); row.dataset.productName = productName; row.dataset.itemType = type; row.dataset.calculationDate = projectionItem.calculation_date; row.dataset.base = String(projectionItem.base_quantity); row.dataset.daily = String(projectionItem.daily_usage); row.dataset.displayGap = String(projectionItem.display_gap); row.dataset.systemProjection = projectionItem.system_projection; row.dataset.systemReason = systemReason; row.dataset.manual = "true";
-    row.innerHTML = `<td>${storeCode}</td><td>${escapeHtml(sku)}<span class="manual-item-badge">尚未儲存</span></td><td>${escapeHtml(productName)}</td><td>${labels[type]}</td><td>0</td><td class="decision-reason-cell">${escapeHtml(systemReason)}</td><td>${state.config.role === "store" ? `<input data-confirmed type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">` : `<input data-confirmed type="number" value="0" disabled><input data-approved type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">`}</td><td data-${state.config.role === "store" ? "confirmed" : "approved"}-projection>${escapeHtml(rowProjection(projectionItem, quantity))}</td><td>${state.config.role === "store" ? `<input data-reason class="reason-input" value="${escapeHtml(reason)}">` : `<input data-reason type="hidden" value=""><input data-hq-reason class="reason-input" value="${escapeHtml(reason)}">`}</td><td><button class="secondary-button compact remove-item-button" type="button" data-remove-unsaved>取消新增</button></td>`;
-    detail.querySelector("[data-manual-rows]").append(row);
+    row.dataset.storeRow = ""; row.dataset.store = storeCode; row.dataset.sku = sku; row.dataset.suggested = "0"; row.dataset.reviewBase = "0"; row.dataset.supplyKnown = skuInput.dataset.supplyKnown || "false"; row.dataset.supplyCeiling = skuInput.dataset.hqReleasable || "0"; row.dataset.otherAllocated = skuInput.dataset.otherAllocated || "0"; row.dataset.allocationRow = ""; row.dataset.allocationQuantity = String(quantity); row.dataset.productName = productName; row.dataset.itemType = type; row.dataset.calculationDate = projectionItem.calculation_date; row.dataset.base = String(projectionItem.base_quantity); row.dataset.daily = String(projectionItem.daily_usage); row.dataset.displayGap = String(projectionItem.display_gap); row.dataset.systemProjection = projectionItem.system_projection; row.dataset.systemReason = systemReason; row.dataset.manual = "true";
+    row.innerHTML = `<td>${storeCode}</td><td>${escapeHtml(sku)}<span class="manual-item-badge">尚未儲存</span></td><td>${escapeHtml(productName)}</td><td>${labels[type]}</td><td>0</td><td class="decision-reason-cell">${escapeHtml(systemReason)}</td><td>${state.config.role === "store" ? `<input data-confirmed type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">` : `<input data-confirmed type="number" value="0" disabled><input data-approved type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">`}</td><td data-${state.config.role === "store" ? "confirmed" : "approved"}-projection>${state.config.role === "store" ? "申請後" : "核准後"}預估可售至：${escapeHtml(rowProjection(projectionItem, quantity))}</td><td>${state.config.role === "store" ? `<input data-reason class="reason-input" value="${escapeHtml(reason)}">` : `<input data-reason type="hidden" value=""><input data-hq-reason class="reason-input" value="${escapeHtml(reason)}">`}</td><td><button class="secondary-button compact remove-item-button" type="button" data-remove-unsaved>取消新增</button></td>`;
+    const warning = document.createElement("tr"); warning.className = "decision-warning-row"; warning.dataset.quantityWarning = ""; warning.hidden = true; warning.innerHTML = '<td colspan="10"></td>';
+    detail.querySelector("[data-manual-rows]").append(row, warning);
     applyResultFilters("batch");
     skuInput.value = ""; nameInput.value = ""; quantityInput.value = ""; reasonInput.value = ""; detail.querySelector("[data-manual-projection]").textContent = "請先輸入品號與數量"; detail.querySelector("[data-manual-system-reason]").textContent = "請先輸入品號";
     status.textContent = `${storeCode}／${sku}已加入畫面；按暫存、送出或核准後才會正式保存。`;
+    refreshDialogQuantityWarnings();
   }
 
   function removeDialogItem(button) {
@@ -1000,7 +1079,8 @@
     const row = input.closest("tr");
     const item = { item_type: row.dataset.itemType, calculation_date: row.dataset.calculationDate, base_quantity: Number(row.dataset.base), daily_usage: Number(row.dataset.daily), display_gap: Number(row.dataset.displayGap), system_projection: row.dataset.systemProjection, manual: row.dataset.manual === "true" };
     const target = input.matches("[data-approved]") ? row.querySelector("[data-approved-projection]") : row.querySelector("[data-confirmed-projection]");
-    if (target) target.textContent = rowProjection(item, Number(input.value || 0));
+    if (target) target.textContent = `${input.matches("[data-approved]") ? "核准後" : "申請後"}預估可售至：${rowProjection(item, Number(input.value || 0))}`;
+    refreshDialogQuantityWarnings();
   }
 
   function detailActions(payload) {
@@ -1031,6 +1111,7 @@
     $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${skuFilterBar("batch", state.batchSku)}${statusOverview(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
     $("batch-dialog").showModal();
     applyStoreFilter("batch", state.batchStore);
+    refreshDialogQuantityWarnings();
   }
 
   function rowsFromDialog(mode) {
@@ -1052,7 +1133,7 @@
     const localAction = event.target.closest("[data-local-action]");
     if (localAction?.dataset.localAction === "add-item") { await addManualItem(); return; }
     const unsavedRemove = event.target.closest("[data-remove-unsaved]");
-    if (unsavedRemove) { unsavedRemove.closest("tr").remove(); refreshSkuFilterSummary("batch"); return; }
+    if (unsavedRemove) { const row = unsavedRemove.closest("tr"), warning = row.nextElementSibling?.matches("[data-quantity-warning]") ? row.nextElementSibling : null; warning?.remove(); row.remove(); refreshSkuFilterSummary("batch"); refreshDialogQuantityWarnings(); return; }
     const removeItem = event.target.closest("[data-remove-item]");
     if (removeItem) { removeDialogItem(removeItem); return; }
     const button = event.target.closest("[data-action]"); if (!button) return;
@@ -1170,6 +1251,7 @@
     if (event.target.matches("[data-manual-sku]")) scheduleManualItemLookup();
     if (event.target.matches("[data-manual-quantity]")) updateManualFormProjection();
     if (event.target.matches("[data-approved], [data-confirmed]")) refreshSkuFilterSummary("batch");
+    if (event.target.matches("[data-reason], [data-hq-reason]")) refreshDialogQuantityWarnings();
   });
   $("batch-detail").addEventListener("change", (event) => {
     if (event.target.matches("[data-manual-store]")) scheduleManualItemLookup();

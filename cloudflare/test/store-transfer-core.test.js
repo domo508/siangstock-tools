@@ -119,7 +119,7 @@ describe("待發貨與A/B測試比對", () => {
     expect(fact.baseQuantity).toBeGreaterThan(0);
     expect(fact.dailyUsage).toBeCloseTo(6 / 42);
     expect(core.projectedSellThroughDate(fact.calculationDate, fact.baseQuantity, 2, fact.dailyUsage)).toMatch(/^2026-/);
-    expect(result.manualItemCatalog).toContainEqual({ sku: "B00001", productName: "無庫存無近期銷售測試品" });
+    expect(result.manualItemCatalog).toContainEqual(expect.objectContaining({ sku: "B00001", productName: "無庫存無近期銷售測試品", hqAvailable: 0, hqReleasable: 0 }));
   });
 
   it("A/B模式完整排除提交單對門市需求及總倉保留的影響", () => {

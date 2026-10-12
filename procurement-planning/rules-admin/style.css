@@ -48,9 +48,12 @@
 .transfer-exclusion-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .45rem .65rem; align-items: end; }
 .transfer-exclusion-entry label { grid-column: 1 / -1; color: var(--navy, #153f63); font-weight: 750; }
 .transfer-exclusion-entry input { width: 100%; min-height: 44px; box-sizing: border-box; padding: .55rem .7rem; border: 1px solid #aac5ce; border-radius: 11px; background: white; font: inherit; text-transform: uppercase; }
-.transfer-exclusion-status, .transfer-exclusion-list { grid-column: 1 / -1; }
+.transfer-exclusion-status, .transfer-exclusion-list, .transfer-exclusion-list-note { grid-column: 1 / -1; }
 .transfer-exclusion-status:empty { display: none; }
+.transfer-exclusion-list-note { margin: 0; color: var(--muted, #64778a); font-size: .88rem; }
+.transfer-exclusion-list.is-scrollable { max-height: var(--transfer-exclusion-visible-height, 24rem); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .transfer-exclusion-table { min-width: 720px; background: white; }
+.transfer-exclusion-list.is-scrollable .transfer-exclusion-table thead { position: sticky; top: 0; z-index: 1; background: white; box-shadow: 0 1px 0 var(--line, #ddd); }
 .transfer-exclusion-table td:nth-child(2) { font-weight: 800; color: var(--navy, #153f63); }
 
 @media (max-width: 760px) {
@@ -62,7 +65,7 @@
   .spring-festival-rule p { grid-column: auto; }
   .rule-condition-help { display: grid; }
   .transfer-exclusion-manager, .transfer-exclusion-entry { grid-template-columns: 1fr; }
-  .transfer-exclusion-entry label, .transfer-exclusion-status, .transfer-exclusion-list { grid-column: auto; }
+  .transfer-exclusion-entry label, .transfer-exclusion-status, .transfer-exclusion-list, .transfer-exclusion-list-note { grid-column: auto; }
   .transfer-exclusion-entry .secondary-button { width: 100%; }
 }
 .version-warning {

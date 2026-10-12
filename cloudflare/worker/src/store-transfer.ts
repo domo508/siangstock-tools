@@ -413,7 +413,15 @@ async function detail(request: Request, env: StoreTransferEnv, batchId: string):
     ? await env.DB.prepare("SELECT * FROM store_transfer_shortages WHERE batch_id = ? AND store_code = ? ORDER BY sku").bind(batchId, scope).all()
     : await env.DB.prepare("SELECT * FROM store_transfer_shortages WHERE batch_id = ? ORDER BY store_code, sku").bind(batchId).all();
   const events = await env.DB.prepare("SELECT store_code, event_type, summary, created_at, created_by FROM store_transfer_events WHERE batch_id = ? ORDER BY created_at DESC LIMIT 100").bind(batchId).all();
-  return json({ batch, items: items.results, shortages: shortages.results, storeStatuses: statuses.results, events: events.results, scope });
+  const supplyRows = await env.DB.prepare("SELECT store_code, sku, COALESCE(store_confirmed_quantity, suggested_quantity) quantity FROM store_transfer_items WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
+  const supplyUsage = new Map<string, { currentAllocated: number; otherAllocated: number }>();
+  supplyRows.results.forEach((row) => {
+    const sku = String(row.sku), current = supplyUsage.get(sku) || { currentAllocated: 0, otherAllocated: 0 }, value = Number(row.quantity || 0);
+    current.currentAllocated += value;
+    if (scope && String(row.store_code) !== scope) current.otherAllocated += value;
+    supplyUsage.set(sku, current);
+  });
+  return json({ batch, items: items.results, shortages: shortages.results, storeStatuses: statuses.results, events: events.results, scope, supplyUsage: Object.fromEntries(supplyUsage) });
 }
 
 async function manualItemFact(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
@@ -425,19 +433,22 @@ async function manualItemFact(request: Request, env: StoreTransferEnv, batchId: 
   if (!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) throw new RequestValidationError("ERP品號格式錯誤。");
   const batchStore = await env.DB.prepare("SELECT b.proposal_date, b.arrival_schedule FROM store_transfer_store_status s JOIN store_transfer_batches b ON b.id = s.batch_id WHERE s.batch_id = ? AND s.store_code = ? AND b.deleted_at IS NULL").bind(batchId, scope).first<Record<string, unknown>>();
   if (!batchStore) throw new RequestValidationError("此批次沒有這間門市。", 404);
-  const row = await env.DB.prepare("SELECT store_code, sku, product_name, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason FROM store_transfer_manual_item_facts WHERE batch_id = ? AND store_code = ? AND sku = ?").bind(batchId, scope, sku).first<Record<string, unknown>>();
+  const row = await env.DB.prepare("SELECT store_code, sku, product_name, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, hq_available, hq_reserve, hq_releasable FROM store_transfer_manual_item_facts WHERE batch_id = ? AND store_code = ? AND sku = ?").bind(batchId, scope, sku).first<Record<string, unknown>>();
+  const allocated = await env.DB.prepare("SELECT COALESCE(SUM(COALESCE(store_confirmed_quantity, suggested_quantity)), 0) quantity FROM store_transfer_items WHERE batch_id = ? AND sku = ? AND store_code <> ?").bind(batchId, sku, scope).first<Record<string, unknown>>();
+  const otherAllocated = Number(allocated?.quantity || 0);
   if (!row) {
-    const catalog = await env.DB.prepare("SELECT product_name FROM store_transfer_batch_product_catalog WHERE batch_id = ? AND sku = ?").bind(batchId, sku).first<Record<string, unknown>>();
+    const catalog = await env.DB.prepare("SELECT product_name, hq_available, hq_reserve, hq_releasable FROM store_transfer_batch_product_catalog WHERE batch_id = ? AND sku = ?").bind(batchId, sku).first<Record<string, unknown>>();
     if (!catalog) throw new RequestValidationError("此品號不在本批次建立時的商品主檔，請確認ERP品號。", 404);
     const schedule = parseJson(batchStore.arrival_schedule);
     const storeSchedule = schedule[scope] && typeof schedule[scope] === "object" && !Array.isArray(schedule[scope]) ? schedule[scope] as Record<string, unknown> : {};
-    return json({ storeCode: scope, sku, productName: String(catalog.product_name), calculationDate: String(storeSchedule.currentArrivalDate || batchStore.proposal_date), baseQuantity: 0, displayGap: 0, dailyUsage: 0, systemProjection: "近期無現場銷售", systemReason: "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求" });
+    return json({ storeCode: scope, sku, productName: String(catalog.product_name), calculationDate: String(storeSchedule.currentArrivalDate || batchStore.proposal_date), baseQuantity: 0, displayGap: 0, dailyUsage: 0, systemProjection: "近期無現場銷售", systemReason: "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", hqAvailable: Number(catalog.hq_available || 0), hqReserve: Number(catalog.hq_reserve || 0), hqReleasable: Number(catalog.hq_releasable || 0), supplyKnown: catalog.hq_releasable != null, otherAllocated });
   }
   return json({
     storeCode: String(row.store_code), sku: String(row.sku), productName: String(row.product_name),
     calculationDate: String(row.calculation_date), baseQuantity: Number(row.base_quantity || 0),
     displayGap: Number(row.display_gap || 0), dailyUsage: Number(row.daily_usage || 0), systemProjection: String(row.system_projection || ""),
-    systemReason: String(row.system_reason || "")
+    systemReason: String(row.system_reason || ""), hqAvailable: Number(row.hq_available || 0),
+    hqReserve: Number(row.hq_reserve || 0), hqReleasable: Number(row.hq_releasable || 0), supplyKnown: row.hq_releasable != null, otherAllocated
   });
 }
 
@@ -504,7 +515,11 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
       displayQuantity: nonnegativeNumber(rawSnapshot.displayQuantity || 0, "不可售展示量"),
       currentArrivalDate: rawSnapshot.currentArrivalDate ? dateText(rawSnapshot.currentArrivalDate, "本批到店日") : "",
       nextArrivalDate: rawSnapshot.nextArrivalDate ? dateText(rawSnapshot.nextArrivalDate, "下一輪到店日") : "",
-      preArrivalStockoutRisk: Boolean(rawSnapshot.preArrivalStockoutRisk)
+      preArrivalStockoutRisk: Boolean(rawSnapshot.preArrivalStockoutRisk),
+      hqAvailable: quantity(rawSnapshot.hqAvailable || 0, "總倉可用量"),
+      hqReserve: quantity(rawSnapshot.hqReserve || 0, "總部保留量"),
+      hqReleasable: quantity(rawSnapshot.hqReleasable || 0, "總倉可釋出量"),
+      hqSupplyCeiling: quantity(rawSnapshot.hqSupplyCeiling ?? rawSnapshot.hqReleasable ?? rawSnapshot.hqAvailable ?? 0, "本批供應上限")
     });
     return {
       storeCode, sku, productName: text(item.productName, "品名"), suggested,
@@ -556,7 +571,10 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
       displayGap: quantity(row.displayGap || 0, "不可售展示缺口"),
       dailyUsage: nonnegativeNumber(row.dailyUsage || 0, "日均現場銷售"),
       systemProjection: String(row.systemProjection || "").normalize("NFKC").trim().slice(0, 80),
-      systemReason: String(row.systemReason || "").normalize("NFKC").trim().slice(0, 500)
+      systemReason: String(row.systemReason || "").normalize("NFKC").trim().slice(0, 500),
+      hqAvailable: quantity(row.hqAvailable || 0, "總倉可用量"),
+      hqReserve: quantity(row.hqReserve || 0, "總部保留量"),
+      hqReleasable: quantity(row.hqReleasable || 0, "總倉可釋出量")
     };
   }).filter((row) => stores.includes(row.storeCode));
   const catalogSeen = new Set<string>();
@@ -566,7 +584,7 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
     const sku = text(row.sku, "ERP品號", 80).toLocaleUpperCase("en-US");
     if (catalogSeen.has(sku)) throw new RequestValidationError(`${sku}人工新增品項目錄重複。`);
     catalogSeen.add(sku);
-    return { sku, productName: text(row.productName, "品名") };
+    return { sku, productName: text(row.productName, "品名"), hqAvailable: quantity(row.hqAvailable || 0, "總倉可用量"), hqReserve: quantity(row.hqReserve || 0, "總部保留量"), hqReleasable: quantity(row.hqReleasable || 0, "總倉可釋出量") };
   });
   const arrivalSchedule = input.arrivalSchedule && typeof input.arrivalSchedule === "object" && !Array.isArray(input.arrivalSchedule) ? JSON.stringify(input.arrivalSchedule) : "{}";
   if (arrivalSchedule.length > 5000) throw new RequestValidationError("到店日快照內容過長。");
@@ -575,10 +593,10 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
     SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.suggested'), json_extract(value, '$.ruleSummary'), json_extract(value, '$.itemType'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.systemProjection'), json_extract(value, '$.systemReason'), json_extract(value, '$.decisionSnapshot'), ?3, ?4 FROM json_each(?2)`;
   const shortageInsertSql = `INSERT INTO store_transfer_shortages (batch_id, store_code, sku, product_name, item_type, demand_quantity, allocated_quantity, unfilled_quantity, reason, follow_up_status, current_arrival_date, next_arrival_date, created_at, updated_at)
     SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.type'), json_extract(value, '$.demand'), json_extract(value, '$.allocated'), json_extract(value, '$.unfilled'), json_extract(value, '$.reason'), json_extract(value, '$.followUpStatus'), json_extract(value, '$.currentArrivalDate'), json_extract(value, '$.nextArrivalDate'), ?3, ?3 FROM json_each(?2)`;
-  const manualItemFactInsertSql = `INSERT INTO store_transfer_manual_item_facts (batch_id, store_code, sku, product_name, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, created_at)
-    SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.systemProjection'), json_extract(value, '$.systemReason'), ?3 FROM json_each(?2)`;
-  const manualItemCatalogInsertSql = `INSERT INTO store_transfer_batch_product_catalog (batch_id, sku, product_name, created_at)
-    SELECT ?1, json_extract(value, '$.sku'), json_extract(value, '$.productName'), ?3 FROM json_each(?2)`;
+  const manualItemFactInsertSql = `INSERT INTO store_transfer_manual_item_facts (batch_id, store_code, sku, product_name, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, hq_available, hq_reserve, hq_releasable, created_at)
+    SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.systemProjection'), json_extract(value, '$.systemReason'), json_extract(value, '$.hqAvailable'), json_extract(value, '$.hqReserve'), json_extract(value, '$.hqReleasable'), ?3 FROM json_each(?2)`;
+  const manualItemCatalogInsertSql = `INSERT INTO store_transfer_batch_product_catalog (batch_id, sku, product_name, hq_available, hq_reserve, hq_releasable, created_at)
+    SELECT ?1, json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.hqAvailable'), json_extract(value, '$.hqReserve'), json_extract(value, '$.hqReleasable'), ?3 FROM json_each(?2)`;
   const statements = [
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) SELECT id, 'cancelled', ?, ?, ? FROM store_transfer_batches WHERE week_key = ? AND status IN ('open', 'review') AND deleted_at IS NULL AND id <> ?").bind(`已由新版批次${id}取代，僅供查閱`, now, who.email, weekKey, id),
     env.DB.prepare("UPDATE store_transfer_batches SET status = 'cancelled', updated_at = ?, updated_by = ?, revision = revision + 1 WHERE week_key = ? AND status IN ('open', 'review') AND deleted_at IS NULL AND id <> ?").bind(now, who.email, weekKey, id),
@@ -702,19 +720,29 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
   if (who.role === "store" && String(storeState.status) === "submitted") throw new RequestValidationError("已送出總部覆核；請先按撤回修改。", 409);
   const input = await readBody(request);
   if (!Array.isArray(input.items) || input.items.length > 2000) throw new RequestValidationError("確認明細格式錯誤。");
-  const existing = await env.DB.prepare("SELECT sku, item_type, suggested_quantity, store_confirmed_quantity, rule_summary FROM store_transfer_items WHERE batch_id = ? AND store_code = ?").bind(batchId, storeCode).all<Record<string, unknown>>();
+  const allExisting = await env.DB.prepare("SELECT store_code, sku, item_type, suggested_quantity, store_confirmed_quantity, rule_summary, decision_snapshot FROM store_transfer_items WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
+  const existing = { results: allExisting.results.filter((row) => String(row.store_code) === storeCode) };
   const manualFactsResult = await env.DB.prepare("SELECT * FROM store_transfer_manual_item_facts WHERE batch_id = ? AND store_code = ?").bind(batchId, storeCode).all<Record<string, unknown>>();
   const manualFacts = new Map(manualFactsResult.results.map((row) => [String(row.sku), row]));
-  const catalogResult = await env.DB.prepare("SELECT sku, product_name FROM store_transfer_batch_product_catalog WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
-  const manualCatalog = new Map(catalogResult.results.map((row) => [String(row.sku), String(row.product_name)]));
+  const catalogResult = await env.DB.prepare("SELECT sku, product_name, hq_available, hq_reserve, hq_releasable FROM store_transfer_batch_product_catalog WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
+  const manualCatalog = new Map(catalogResult.results.map((row) => [String(row.sku), row]));
   const schedule = parseJson(batch.arrival_schedule);
   const currentArrivalDate = String((schedule[storeCode] as Record<string, unknown> | undefined)?.currentArrivalDate || batch.proposal_date);
   const suggested = new Map(existing.results.map((row) => [`${row.sku}\u0000${row.item_type}`, {
-    suggested: Number(row.suggested_quantity), current: Number(row.store_confirmed_quantity ?? row.suggested_quantity), manual: /人工新增/.test(String(row.rule_summary || ""))
+    suggested: Number(row.suggested_quantity), current: Number(row.store_confirmed_quantity ?? row.suggested_quantity), manual: /人工新增/.test(String(row.rule_summary || "")), snapshot: parseJson(row.decision_snapshot)
   }]));
   if (input.items.length < existing.results.length) throw new RequestValidationError("確認明細不完整；移除品項請使用移除按鈕，系統會保留稽核紀錄。", 409);
   const now = new Date().toISOString();
   const seen = new Set<string>();
+  const requestedBySku = new Map<string, number>();
+  const supplyCeilingBySku = new Map<string, number>();
+  const otherStoreAllocationBySku = new Map<string, number>();
+  allExisting.results.filter((row) => String(row.store_code) !== storeCode).forEach((row) => {
+    const sku = String(row.sku);
+    otherStoreAllocationBySku.set(sku, (otherStoreAllocationBySku.get(sku) || 0) + Number(row.store_confirmed_quantity ?? row.suggested_quantity));
+    const snapshot = parseJson(row.decision_snapshot);
+    if (Object.prototype.hasOwnProperty.call(snapshot, "hqSupplyCeiling")) supplyCeilingBySku.set(sku, Math.max(supplyCeilingBySku.get(sku) || 0, Number(snapshot.hqSupplyCeiling || 0)));
+  });
   let addedCount = 0;
   let removedCount = 0;
   const updates = (input.items as unknown[]).map((raw) => {
@@ -726,22 +754,33 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
     if (seen.has(key)) throw new RequestValidationError(`${sku}確認明細重複。`);
     seen.add(key);
     const confirmed = quantity(item.confirmedQuantity, "門市確認量");
+    requestedBySku.set(sku, (requestedBySku.get(sku) || 0) + confirmed);
     validateConsumablePack(type, confirmed, "門市確認量");
     const reason = String(item.reason || "").normalize("NFKC").trim().slice(0, 300);
     const original = suggested.get(`${sku}\u0000${type}`);
     if (!original) {
-      const fact = manualFacts.get(sku) || (manualCatalog.has(sku) ? { product_name: manualCatalog.get(sku), calculation_date: currentArrivalDate, base_quantity: 0, display_gap: 0, daily_usage: 0, system_projection: "近期無現場銷售", system_reason: "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求" } : null);
+      const catalog = manualCatalog.get(sku);
+      const fact = manualFacts.get(sku) || (catalog ? { product_name: catalog.product_name, calculation_date: currentArrivalDate, base_quantity: 0, display_gap: 0, daily_usage: 0, system_projection: "近期無現場銷售", system_reason: "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", hq_available: catalog.hq_available, hq_reserve: catalog.hq_reserve, hq_releasable: catalog.hq_releasable } : null);
       if (!fact) throw new RequestValidationError(`${sku}缺少本批次的庫存與銷售推估基準，無法人工新增。`);
       const productName = text(fact.product_name, "人工新增品名");
       if (confirmed === 0) throw new RequestValidationError(`${sku}為人工新增品項，確認量須大於0。`);
       if (!reason) throw new RequestValidationError(`${sku}為人工新增品項，請填寫新增原因。`);
+      if (fact.hq_releasable != null) supplyCeilingBySku.set(sku, Number(fact.hq_releasable));
       addedCount += 1;
-      return env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, store_confirmed_quantity, store_reason, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, updated_at, updated_by) VALUES (?, ?, ?, ?, 0, ?, ?, '門市人工新增；沿用批次建立時的庫存與近42天銷售基準', ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(batchId, storeCode, sku, productName, confirmed, reason, type, fact.calculation_date, fact.base_quantity, fact.display_gap, fact.daily_usage, fact.system_projection, String(fact.system_reason || ""), now, who.email);
+      const snapshot = JSON.stringify({ hqAvailable: Number(fact.hq_available || 0), hqReserve: Number(fact.hq_reserve || 0), hqReleasable: Number(fact.hq_releasable || 0), hqSupplyCeiling: Number(fact.hq_releasable || 0) });
+      return env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, store_confirmed_quantity, store_reason, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, decision_snapshot, updated_at, updated_by) VALUES (?, ?, ?, ?, 0, ?, ?, '門市人工新增；沿用批次建立時的庫存與近42天銷售基準', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(batchId, storeCode, sku, productName, confirmed, reason, type, fact.calculation_date, fact.base_quantity, fact.display_gap, fact.daily_usage, fact.system_projection, String(fact.system_reason || ""), snapshot, now, who.email);
     }
+    if (Object.prototype.hasOwnProperty.call(original.snapshot, "hqSupplyCeiling")) supplyCeilingBySku.set(sku, Math.max(supplyCeilingBySku.get(sku) || 0, Number(original.snapshot.hqSupplyCeiling || 0)));
     if ((confirmed !== original.suggested || original.manual) && !reason) throw new RequestValidationError(`${sku}的門市確認量與系統建議不同，請填寫人工調整原因。`);
     if (original.current > 0 && confirmed === 0) removedCount += 1;
     return env.DB.prepare("UPDATE store_transfer_items SET store_confirmed_quantity = ?, store_reason = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ? AND item_type = ?").bind(confirmed, reason, now, who.email, batchId, storeCode, sku, type);
   });
+  for (const [sku, requested] of requestedBySku) {
+    if (!supplyCeilingBySku.has(sku)) continue;
+    const ceiling = Number(supplyCeilingBySku.get(sku) || 0);
+    const occupied = Number(otherStoreAllocationBySku.get(sku) || 0);
+    if (occupied + requested > ceiling) throw new RequestValidationError(`${sku}總倉本批可供應${ceiling}件，其他門市已占用${occupied}件，本店最多可申請${Math.max(0, ceiling - occupied)}件；請修改數量後再送出。`, 409);
+  }
   for (const key of suggested.keys()) if (!seen.has(key)) throw new RequestValidationError("確認明細不完整；移除品項請使用移除按鈕，系統會保留稽核紀錄。", 409);
   const status = submit ? "submitted" : "saved";
   const summary = `${submit ? "門市送出確認" : "門市暫存確認"}；人工新增${addedCount}項、移除${removedCount}項`;
@@ -763,7 +802,7 @@ async function withdrawStore(request: Request, env: StoreTransferEnv, batchId: s
   const batch = await env.DB.prepare("SELECT status, lock_at FROM store_transfer_batches WHERE id = ?").bind(batchId).first<Record<string, unknown>>();
   if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
   if (!["open", "review"].includes(String(batch.status))) throw new RequestValidationError("此批次已核准，不能撤回。", 409);
-  if (who.role === "store" && Date.now() >= Date.parse(String(batch.lock_at))) throw new RequestValidationError("星期一上午9點後只限總部更正。", 409);
+  if (who.role === "store" && Date.now() >= Date.parse(String(batch.lock_at))) throw new RequestValidationError("門市回覆鎖定時間後只限總部更正。", 409);
   const now = new Date().toISOString();
   const result = await env.DB.prepare("UPDATE store_transfer_store_status SET status = 'saved', submitted_at = NULL, submitted_by = NULL, withdrawn_at = ?, withdrawn_by = ?, updated_at = ? WHERE batch_id = ? AND store_code = ? AND status = 'submitted'").bind(now, who.email, now, batchId, storeCode).run();
   if (Number(result.meta.changes || 0) !== 1) throw new RequestValidationError("此門市目前不是已送出狀態，無需撤回。", 409);
@@ -784,14 +823,14 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   const input = await readBody(request);
   if (Number(pending?.count || 0) > 0 && input.confirmPendingStores !== true) throw new RequestValidationError("仍有門市尚未送出；確認要以目前資料核准後再操作。", 409);
   if (!Array.isArray(input.items) || input.items.length > 5000) throw new RequestValidationError("總部核准明細格式錯誤。");
-  const existing = await env.DB.prepare("SELECT store_code, sku, item_type, suggested_quantity, store_confirmed_quantity FROM store_transfer_items WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
+  const existing = await env.DB.prepare("SELECT store_code, sku, item_type, suggested_quantity, store_confirmed_quantity, decision_snapshot FROM store_transfer_items WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
   const allowedStores = await env.DB.prepare("SELECT store_code FROM store_transfer_store_status WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
   const allowedStoreCodes = new Set(allowedStores.results.map((row) => String(row.store_code)));
-  const baseline = new Map(existing.results.map((row) => [`${row.store_code}\u0000${row.sku}\u0000${row.item_type}`, Number(row.store_confirmed_quantity ?? row.suggested_quantity)]));
+  const baseline = new Map(existing.results.map((row) => [`${row.store_code}\u0000${row.sku}\u0000${row.item_type}`, { quantity: Number(row.store_confirmed_quantity ?? row.suggested_quantity), snapshot: parseJson(row.decision_snapshot) }]));
   const manualFactsResult = await env.DB.prepare("SELECT * FROM store_transfer_manual_item_facts WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
   const manualFacts = new Map(manualFactsResult.results.map((row) => [`${row.store_code}\u0000${row.sku}`, row]));
-  const catalogResult = await env.DB.prepare("SELECT sku, product_name FROM store_transfer_batch_product_catalog WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
-  const manualCatalog = new Map(catalogResult.results.map((row) => [String(row.sku), String(row.product_name)]));
+  const catalogResult = await env.DB.prepare("SELECT sku, product_name, hq_available, hq_reserve, hq_releasable FROM store_transfer_batch_product_catalog WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
+  const manualCatalog = new Map(catalogResult.results.map((row) => [String(row.sku), row]));
   const schedule = parseJson(batch.arrival_schedule);
   if (input.items.length < existing.results.length) throw new RequestValidationError("總部核准明細不完整；移除品項請使用移除按鈕，系統會保留稽核紀錄。", 409);
   const now = new Date().toISOString();
@@ -799,6 +838,8 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   let addedCount = 0;
   let removedCount = 0;
   const seen = new Set<string>();
+  const approvedBySku = new Map<string, number>();
+  const supplyCeilingBySku = new Map<string, number>();
   const updates = (input.items as unknown[]).map((raw) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("總部核准明細格式錯誤。");
     const item = raw as Record<string, unknown>;
@@ -810,23 +851,33 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
     if (seen.has(key)) throw new RequestValidationError(`${storeCode}／${sku}核准明細重複。`);
     seen.add(key);
     const approved = quantity(item.approvedQuantity, "總部核准量"); total += approved;
+    approvedBySku.set(sku, (approvedBySku.get(sku) || 0) + approved);
     validateConsumablePack(type, approved, "總部核准量");
     const reason = String(item.reason || "").normalize("NFKC").trim().slice(0, 300);
     const original = baseline.get(`${storeCode}\u0000${sku}\u0000${type}`);
     if (original == null) {
       const currentArrivalDate = String(((schedule[storeCode] as Record<string, unknown> | undefined)?.currentArrivalDate) || batch.proposal_date);
-      const fact = manualFacts.get(`${storeCode}\u0000${sku}`) || (manualCatalog.has(sku) ? { product_name: manualCatalog.get(sku), calculation_date: currentArrivalDate, base_quantity: 0, display_gap: 0, daily_usage: 0, system_projection: "近期無現場銷售", system_reason: "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求" } : null);
+      const catalog = manualCatalog.get(sku);
+      const fact = manualFacts.get(`${storeCode}\u0000${sku}`) || (catalog ? { product_name: catalog.product_name, calculation_date: currentArrivalDate, base_quantity: 0, display_gap: 0, daily_usage: 0, system_projection: "近期無現場銷售", system_reason: "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", hq_available: catalog.hq_available, hq_reserve: catalog.hq_reserve, hq_releasable: catalog.hq_releasable } : null);
       if (!fact) throw new RequestValidationError(`${storeCode}／${sku}缺少本批次的庫存與銷售推估基準，無法人工新增。`);
       const productName = text(fact.product_name, "人工新增品名");
       if (approved === 0) throw new RequestValidationError(`${storeCode}／${sku}為人工新增品項，核准量須大於0。`);
       if (!reason) throw new RequestValidationError(`${storeCode}／${sku}為人工新增品項，請填寫新增原因。`);
+      if (fact.hq_releasable != null) supplyCeilingBySku.set(sku, Number(fact.hq_releasable));
       addedCount += 1;
-      return env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, store_confirmed_quantity, store_reason, hq_approved_quantity, hq_reason, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, updated_at, updated_by) VALUES (?, ?, ?, ?, 0, 0, '', ?, ?, '總部人工新增；沿用批次建立時的庫存與近42天銷售基準', ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(batchId, storeCode, sku, productName, approved, reason, type, fact.calculation_date, fact.base_quantity, fact.display_gap, fact.daily_usage, fact.system_projection, String(fact.system_reason || ""), now, who.email);
+      const snapshot = JSON.stringify({ hqAvailable: Number(fact.hq_available || 0), hqReserve: Number(fact.hq_reserve || 0), hqReleasable: Number(fact.hq_releasable || 0), hqSupplyCeiling: Number(fact.hq_releasable || 0) });
+      return env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, store_confirmed_quantity, store_reason, hq_approved_quantity, hq_reason, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, decision_snapshot, updated_at, updated_by) VALUES (?, ?, ?, ?, 0, 0, '', ?, ?, '總部人工新增；沿用批次建立時的庫存與近42天銷售基準', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(batchId, storeCode, sku, productName, approved, reason, type, fact.calculation_date, fact.base_quantity, fact.display_gap, fact.daily_usage, fact.system_projection, String(fact.system_reason || ""), snapshot, now, who.email);
     }
-    if (approved !== original && !reason) throw new RequestValidationError(`${storeCode}／${sku}的核准量與門市確認量不同，請填寫總部調整原因。`);
-    if (original > 0 && approved === 0) removedCount += 1;
+    if (Object.prototype.hasOwnProperty.call(original.snapshot, "hqSupplyCeiling")) supplyCeilingBySku.set(sku, Math.max(supplyCeilingBySku.get(sku) || 0, Number(original.snapshot.hqSupplyCeiling || 0)));
+    if (approved !== original.quantity && !reason) throw new RequestValidationError(`${storeCode}／${sku}的核准量與門市確認量不同，請填寫總部調整原因。`);
+    if (original.quantity > 0 && approved === 0) removedCount += 1;
     return env.DB.prepare("UPDATE store_transfer_items SET hq_approved_quantity = ?, hq_reason = ?, updated_at = ?, updated_by = ? WHERE batch_id = ? AND store_code = ? AND sku = ? AND item_type = ?").bind(approved, reason, now, who.email, batchId, storeCode, sku, type);
   });
+  for (const [sku, approved] of approvedBySku) {
+    if (!supplyCeilingBySku.has(sku)) continue;
+    const ceiling = Number(supplyCeilingBySku.get(sku) || 0);
+    if (approved > ceiling) throw new RequestValidationError(`${sku}總倉本批可供應${ceiling}件，各門市合計核准${approved}件；請調整後再核准。`, 409);
+  }
   for (const key of baseline.keys()) if (!seen.has(key)) throw new RequestValidationError("總部核准明細不完整；移除品項請使用移除按鈕，系統會保留稽核紀錄。", 409);
   const results = await env.DB.batch([
     ...updates,

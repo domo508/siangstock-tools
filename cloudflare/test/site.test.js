@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20261012-store-transfer-r7");
+    const appIndex = html.indexOf("app.js?v=20261013-store-transfer-r8");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -158,14 +158,14 @@ describe("前台導覽", () => {
     const rulesVersion = JSON.parse(readFileSync("../procurement-planning/rules-admin/version.json", "utf8"));
     const headers = readFileSync("../_headers", "utf8");
     expect(transferHtml).toContain('id="version-warning"');
-    expect(transferHtml).toContain("deploy=20261012-transfer-rules-r2");
+    expect(transferHtml).toContain("deploy=20261013-transfer-rules-r3");
     expect(transferApp).toContain(`const APP_VERSION = "${transferVersion.version}"`);
     expect(transferApp).toContain("version.json?check=${Date.now()}");
     expect(transferApp).toContain('url.searchParams.set("deploy"');
     expect(rulesHtml).toContain('id="version-warning"');
     expect(rulesApp).toContain(`const APP_VERSION = "${rulesVersion.version}"`);
     expect(rulesApp).toContain("version.json?check=${Date.now()}");
-    expect(rulesApp).toContain("../../store-transfer/?deploy=20261012-store-transfer-r7");
+    expect(rulesApp).toContain("../../store-transfer/?deploy=20261013-store-transfer-r8");
     expect(transferApp).toContain('window.addEventListener("focus", checkRuntimeVersion)');
     expect(rulesApp).toContain('window.addEventListener("focus", checkRuntimeVersion)');
     expect(headers).toContain("/store-transfer/index.html\n  Cache-Control: no-store, max-age=0, must-revalidate");
@@ -252,9 +252,13 @@ describe("前台導覽", () => {
     const core = readFileSync("../store-transfer/core.js", "utf8");
     const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
     const migration = readFileSync("../cloudflare/worker/migrations/0033_store_transfer_manual_item_facts.sql", "utf8");
+    const supplyMigration = readFileSync("../cloudflare/worker/migrations/0035_store_transfer_supply_snapshots.sql", "utf8");
     expect(app).toContain("data-manual-projection");
     expect(app).toContain("manual-item-fact");
-    expect(app).toContain("加入後可售至");
+    expect(app).toContain("申請後預估可售至");
+    expect(app).toContain("refreshDialogQuantityWarnings");
+    expect(app).toContain("系統未建議追加量");
+    expect(app).toContain("hqSupplyCeiling");
     expect(app).toContain("系統未建議原因");
     expect(app).toContain("data-manual-system-reason");
     expect(app).toContain("舊批次未保存銷售基準，請重新建立批次");
@@ -263,11 +267,16 @@ describe("前台導覽", () => {
     expect(worker).toContain("store_transfer_manual_item_facts");
     expect(worker).toContain("store_transfer_batch_product_catalog");
     expect(worker).toContain("system_reason");
+    expect(worker).toContain("supplyUsage");
+    expect(worker).toContain("總倉本批可供應");
     expect(worker).toContain("沿用批次建立時的庫存與近42天銷售基準");
     expect(migration).toContain("PRIMARY KEY (batch_id, store_code, sku)");
     expect(migration).toContain("PRIMARY KEY (batch_id, sku)");
     expect(migration).toContain("ADD COLUMN system_reason");
     expect(migration).not.toMatch(/excel|file_name|raw_rows|transaction/i);
+    expect(supplyMigration).toContain("ADD COLUMN hq_available");
+    expect(supplyMigration).toContain("ADD COLUMN hq_reserve");
+    expect(supplyMigration).toContain("ADD COLUMN hq_releasable");
   });
 
   it("採購核准與週調撥總部協作使用獨立權限名單", () => {
@@ -359,8 +368,21 @@ describe("前台導覽", () => {
     expect(style).toContain(".decision-evidence-grid");
     expect(style).toContain(".workflow-table { min-width: 0; table-layout: fixed; }");
     expect(style).toContain(".workflow-table tr:not(.decision-detail-row)");
+    expect(style).toContain(".decision-warning-row");
+    expect(style).toContain("overflow-wrap: anywhere");
     expect(worker).toContain("decision_snapshot");
     expect(migration).toContain("ADD COLUMN decision_snapshot");
+  });
+
+  it("排除周調撥清單最新在上，超過五筆時改為卡片內捲動", () => {
+    const html = readFileSync("../procurement-planning/rules-admin/index.html", "utf8");
+    const admin = readFileSync("../procurement-planning/rules-admin/admin.js", "utf8");
+    const style = readFileSync("../procurement-planning/rules-admin/style.css", "utf8");
+    expect(html).toContain("最新加入的品項顯示在最上方");
+    expect(admin).toContain("ensureTransferExclusions().unshift");
+    expect(admin).toContain("classList.toggle(\"is-scrollable\"");
+    expect(style).toContain(".transfer-exclusion-list.is-scrollable");
+    expect(style).toContain("overflow-y: auto");
   });
 
   it("週調撥提供正式與A/B模式，且A/B模式不能發布批次", () => {
@@ -522,6 +544,9 @@ describe("前台導覽", () => {
     expect(admin).toContain("loadLatestProductMaster");
     expect(admin).toContain("parseProductMasterWorkbook");
     expect(admin).toContain("drive.readonly");
+    expect(html).toContain("超過5筆後可在清單內捲動查看");
+    expect(admin).toContain("ensureTransferExclusions().unshift");
+    expect(admin).toContain('classList.toggle("is-scrollable", shouldScroll)');
     expect(worker).toContain("storeInventory.transferExclusions");
     expect(core).toContain("isTransferExcluded");
   });
