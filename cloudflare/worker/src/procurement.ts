@@ -243,6 +243,20 @@ function validateProcurementRules(value: unknown): Record<string, unknown> {
   if (!rules.storeInventory || typeof rules.storeInventory !== "object" || Array.isArray(rules.storeInventory)) throw new RequestValidationError("門市庫存規則格式錯誤。");
   const storeInventory = rules.storeInventory as Record<string, unknown>;
   if (!Array.isArray(storeInventory.rules) || storeInventory.rules.length > 100) throw new RequestValidationError("門市庫存規則清單格式錯誤。");
+  const transferExclusions = storeInventory.transferExclusions == null ? [] : storeInventory.transferExclusions;
+  if (!Array.isArray(transferExclusions) || transferExclusions.length > 500) throw new RequestValidationError("排除周調撥品號清單格式錯誤或超過500筆。");
+  const seenTransferExclusions = new Set<string>();
+  storeInventory.transferExclusions = transferExclusions.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new RequestValidationError("排除周調撥品號格式錯誤。");
+    const item = entry as Record<string, unknown>;
+    const sku = String(item.sku || "").normalize("NFKC").trim().toUpperCase();
+    const productName = String(item.productName || "").trim();
+    if (!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) throw new RequestValidationError("排除周調撥品號格式錯誤。");
+    if (!productName || productName.length > 300) throw new RequestValidationError(`排除周調撥品號 ${sku} 的品名不可空白或超過300字。`);
+    if (seenTransferExclusions.has(sku)) throw new RequestValidationError(`排除周調撥品號 ${sku} 重複。`);
+    seenTransferExclusions.add(sku);
+    return { sku, productName, enabled: item.enabled !== false };
+  });
   const holidays = storeInventory.workdayHolidays == null ? [] : storeInventory.workdayHolidays;
   if (!Array.isArray(holidays) || holidays.length > 100 || holidays.some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(String(date)) || Number.isNaN(Date.parse(`${date}T00:00:00Z`)))) throw new RequestValidationError("公司不作業日須為有效 YYYY-MM-DD 日期。");
   storeInventory.workdayHolidays = [...new Set(holidays.map(String))].sort();

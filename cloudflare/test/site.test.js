@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20261012-formal-report-r1");
+    const appIndex = html.indexOf("app.js?v=20261012-collapsible-details-r5");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -224,6 +224,29 @@ describe("前台導覽", () => {
     expect(worker).toContain("移除品項請使用移除按鈕");
   });
 
+  it("人工新增品號會沿用批次快照顯示可售至並傳遞到總部覆核", () => {
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const core = readFileSync("../store-transfer/core.js", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    const migration = readFileSync("../cloudflare/worker/migrations/0033_store_transfer_manual_item_facts.sql", "utf8");
+    expect(app).toContain("data-manual-projection");
+    expect(app).toContain("manual-item-fact");
+    expect(app).toContain("加入後可售至");
+    expect(app).toContain("系統未建議原因");
+    expect(app).toContain("data-manual-system-reason");
+    expect(app).toContain("舊批次未保存銷售基準，請重新建立批次");
+    expect(core).toContain("manualItemFacts");
+    expect(core).toContain("總倉不足，部分供應");
+    expect(worker).toContain("store_transfer_manual_item_facts");
+    expect(worker).toContain("store_transfer_batch_product_catalog");
+    expect(worker).toContain("system_reason");
+    expect(worker).toContain("沿用批次建立時的庫存與近42天銷售基準");
+    expect(migration).toContain("PRIMARY KEY (batch_id, store_code, sku)");
+    expect(migration).toContain("PRIMARY KEY (batch_id, sku)");
+    expect(migration).toContain("ADD COLUMN system_reason");
+    expect(migration).not.toMatch(/excel|file_name|raw_rows|transaction/i);
+  });
+
   it("採購核准與週調撥總部協作使用獨立權限名單", () => {
     const html = readFileSync("../procurement-planning/rules-admin/index.html", "utf8");
     const admin = readFileSync("../procurement-planning/rules-admin/admin.js", "utf8");
@@ -282,6 +305,38 @@ describe("前台導覽", () => {
     expect(style).toContain('[data-store-row][hidden]');
   });
 
+  it("總部可用品號搜尋建議與批次分配並彙總門市及件數", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const style = readFileSync("../store-transfer/style.css", "utf8");
+    expect(html).toContain('id="calculation-sku-filter"');
+    expect(app).toContain('data-sku-filter-scope="${scope}"');
+    expect(app).toContain('data-allocation-row');
+    expect(app).toContain("分配${stores.size}間門市");
+    expect(app).toContain('skuFilterBar("batch"');
+    expect(app).toContain('if (state.config.role === "store") return ""');
+    expect(style).toContain(".sku-search-toolbar");
+  });
+
+  it("週調撥決策欄位精簡且判斷依據預設收合，窄螢幕改為單品卡片", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const style = readFileSync("../store-transfer/style.css", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    const migration = readFileSync("../cloudflare/worker/migrations/0034_store_transfer_decision_snapshots.sql", "utf8");
+    expect(html).toContain("摘要先顯示需要決策的欄位");
+    expect(html).toContain("decision-summary-table");
+    expect(app).toContain('aria-expanded="false">查看依據');
+    expect(app).toContain("data-decision-detail hidden");
+    expect(app).toContain("toggleDecisionDetail");
+    expect(app).toContain("decisionSnapshot");
+    expect(app).toContain("舊批次未保存完整判斷明細");
+    expect(style).toContain(".decision-evidence-grid");
+    expect(style).toContain(".workflow-table tr:not(.decision-detail-row)");
+    expect(worker).toContain("decision_snapshot");
+    expect(migration).toContain("ADD COLUMN decision_snapshot");
+  });
+
   it("週調撥提供正式與A/B模式，且A/B模式不能發布批次", () => {
     const html = readFileSync("../store-transfer/index.html", "utf8");
     const app = readFileSync("../store-transfer/app.js", "utf8");
@@ -321,9 +376,26 @@ describe("前台導覽", () => {
     const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
     expect(app).toContain('compactBatchItems(state.calculation.rows)');
     expect(app).toContain('compactBatchShortages(state.calculation.shortageRows)');
-    expect(worker).toContain('readBody(request, 6_000_000)');
+    expect(worker).toContain('readBody(request, 10_000_000)');
     expect(worker).toContain("FROM json_each(?2)");
     expect(worker).toContain('chunks(normalizedShortages)');
+  });
+
+  it("正式批次建立後逐店寄送可重試且防重複的門市通知", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    const migration = readFileSync("../cloudflare/worker/migrations/0032_store_transfer_notifications.sql", "utf8");
+    expect(html).toContain("建立批次後通知");
+    expect(app).toContain("data-send-batch-notifications");
+    expect(app).toContain("X-Google-Access-Token");
+    expect(app).toContain("await sendBatchNotifications(id, false)");
+    expect(worker).toContain("store_transfer_notifications");
+    expect(worker).toContain("status != 'sent'");
+    expect(worker).toContain("gmail.googleapis.com/gmail/v1/users/me/messages/send");
+    expect(worker).toContain("Google授權帳號必須與目前公司登入帳號相同");
+    expect(migration).toContain("UNIQUE (batch_id, store_code)");
+    expect(migration).not.toMatch(/excel|file_name|raw_rows/i);
   });
 
   it("A/B差異分析把三個比較區塊分成獨立頁籤", () => {
@@ -412,6 +484,20 @@ describe("前台導覽", () => {
     expect(admin).toContain('item.exactSkus');
     expect(admin).toContain('rules.sort');
     expect(worker).toContain('rule.exactSkus');
+  });
+
+  it("總部可用精準品號維護獨立的周調撥排除清單並由商品主檔帶入品名", () => {
+    const html = readFileSync("../procurement-planning/rules-admin/index.html", "utf8");
+    const admin = readFileSync("../procurement-planning/rules-admin/admin.js", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/procurement.ts", "utf8");
+    const core = readFileSync("../store-transfer/core.js", "utf8");
+    expect(html).toContain('id="transfer-exclusion-sku"');
+    expect(html).toContain("商品品名（主檔）");
+    expect(admin).toContain("loadLatestProductMaster");
+    expect(admin).toContain("parseProductMasterWorkbook");
+    expect(admin).toContain("drive.readonly");
+    expect(worker).toContain("storeInventory.transferExclusions");
+    expect(core).toContain("isTransferExcluded");
   });
 
   it("資料整理工具與規則頁都有清楚的名稱和上一層路徑", () => {

@@ -13,6 +13,13 @@
     P11043: { name: "紡布提袋 25' [30×30×10][小]", size: "小" }
   });
 
+  function transferExclusionSkus(storeInventory) {
+    return new Set((Array.isArray(storeInventory?.transferExclusions) ? storeInventory.transferExclusions : [])
+      .filter((item) => item && item.enabled !== false)
+      .map((item) => String(item.sku || "").normalize("NFKC").trim().toUpperCase())
+      .filter(Boolean));
+  }
+
   function localDate(value) {
     const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!match) throw new Error("日期格式必須是 YYYY-MM-DD。");
@@ -309,6 +316,21 @@
     };
   }
 
+  function supplyDecisionReason(rawNeed, suggested, protection, hqAvailable, isSellThroughStop) {
+    const demand = Math.max(0, Math.floor(Number(rawNeed || 0)));
+    const supplied = Math.max(0, Math.floor(Number(suggested || 0)));
+    if (!(demand > 0)) return "本次總需求0件，系統未提出調撥建議";
+    if (supplied >= demand) return `系統已足額建議：總需求${demand}件，供應${supplied}件`;
+    const unfilled = Math.max(0, demand - supplied);
+    const supplyState = supplied > 0 ? `總倉不足，部分供應${supplied}件／總需求${demand}件` : `總倉不足，未供應；總需求${demand}件`;
+    const protectionReason = isSellThroughStop
+      ? `S品${protection.reason}，總倉可釋出${protection.releasable}件`
+      : protection.reserve > 0
+        ? `總部安全庫存保留${protection.reserve}件，總倉可釋出${protection.releasable}件`
+        : `總倉可用${Math.max(0, Math.floor(Number(hqAvailable || 0)))}件`;
+    return `${supplyState}；未配${unfilled}件；${protectionReason}`;
+  }
+
   function dateKey(year, month, day) {
     const date = new Date(Date.UTC(year, month - 1, day));
     if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return "";
@@ -316,7 +338,7 @@
   }
 
   function activityScope(segment) {
-    const value = String(segment || "").normalize("NFKC").replace(/\s+/g, " ").trim();
+    const value = String(segment || "").normalize("NFKC").replace(/\s+/g, " ").trim().replace(/^[*＊•·-]+\s*/, "");
     const compact = normalizeName(value);
     if (/全館|全店|全品項/.test(compact) || /^(?:\d{1,2}[\/.]\d{1,2}(?:[-–—~～至]\d{1,2}[\/.]?\d{1,2})?)?(?:消費|單筆消費)?滿/.test(compact)) {
       return { scopeType: "all", scopeLabel: "全館", scopeTargets: [], thresholdBasis: "order_total", thresholdBasisLabel: "整張訂單" };
@@ -340,7 +362,54 @@
         thresholdBasisLabel: orderTotal ? "訂單含指定範圍後，以整張訂單計算" : "只計指定範圍小計"
       };
     }
+    const purchasedProduct = value.match(/(?:購買|任選)\s*([^，。；\n]{1,40}?)(?=(?:消費|滿|贈|送|$))/);
+    if (purchasedProduct) {
+      const target = purchasedProduct[1].trim();
+      if (target) return { scopeType: "product", scopeLabel: `指定品項：${target}`, scopeTargets: [target], thresholdBasis: "scoped_subtotal", thresholdBasisLabel: "只計指定品項小計" };
+    }
     return { scopeType: "unknown", scopeLabel: "適用範圍待確認", scopeTargets: [], thresholdBasis: "manual", thresholdBasisLabel: "人工確認" };
+  }
+
+  function marketingChannelSegments(value, fallbackSection) {
+    const source = String(value || "");
+    const lines = source.split("\n");
+    const leadingHeaders = [];
+    let bodyStart = 0;
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index].trim();
+      if (!line && (leadingHeaders.length || index === 0)) { bodyStart = index + 1; continue; }
+      const header = line.match(/^(門市|官網|平台|電商|蝦皮|MOMO)\s*[：:].*\d{1,2}\s*[\/.]\s*\d{1,2}/i);
+      if (!header) break;
+      leadingHeaders.push({ line, channel: header[1] });
+      bodyStart = index + 1;
+    }
+    if (leadingHeaders.length) {
+      const storeHeader = leadingHeaders.find((item) => item.channel === "門市");
+      const sharedBody = lines.slice(bodyStart).join("\n").trim();
+      if (storeHeader) return [{ text: [storeHeader.line, sharedBody].filter(Boolean).join("\n"), section: "store" }];
+      return [{ text: [leadingHeaders[0].line, sharedBody].filter(Boolean).join("\n"), section: "online" }];
+    }
+    const marked = source.replace(/(^|[\n；;])\s*(門市|官網|平台|電商|蝦皮|MOMO)\s*[：:]/gi, (_match, separator, label) => `${separator}\u001e${label}：`);
+    if (!marked.includes("\u001e")) return [{ text: marked, section: fallbackSection || "" }];
+    return marked.split("\u001e").map((part) => part.trim()).filter(Boolean).map((text) => {
+      const channel = text.match(/^(門市|官網|平台|電商|蝦皮|MOMO)\s*[：:]/i)?.[1] || "";
+      return { text, section: channel === "門市" ? "store" : (channel ? "online" : (fallbackSection || "")) };
+    });
+  }
+
+  function marketingDateSegments(value) {
+    const text = String(value || "").trim();
+    if (!text) return [];
+    const starts = [0];
+    for (const match of text.matchAll(/\n\s*(?=\d{1,2}\s*[\/.]\s*\d{1,2})/g)) starts.push((match.index || 0) + match[0].length);
+    return starts.map((start, index) => text.slice(start, starts[index + 1]).trim()).filter(Boolean);
+  }
+
+  function marketingGiftMatches(segment) {
+    const matches = [];
+    const pattern = /贈品(?:貨號|品號)\s*[：:]\s*([A-Z0-9]+(?:-[A-Z0-9]+)*)/gi;
+    for (const match of segment.matchAll(pattern)) matches.push({ sku: match[1].toUpperCase(), index: match.index || 0, end: (match.index || 0) + match[0].length });
+    return matches;
   }
 
   function parseMarketingWorkbook(workbook, XLSX, asOfDate) {
@@ -349,8 +418,9 @@
     const referenceMs = Date.parse(`${asOfDate}T12:00:00Z`);
     const futureLimit = referenceMs + 21 * 86400000;
     const activities = [];
-    const dateRange = /^(\d{1,2})\s*[\/.]\s*(\d{1,2})\s*(?:-|–|—|~|～|至)\s*(?:(\d{1,2})\s*[\/.]\s*)?(\d{1,2})(?=\s|$)/;
-    const singleDate = /^(\d{1,2})\s*[\/.]\s*(\d{1,2})(?=\s|[-–—:：]|$)/;
+    const time = "(?:\\s+\\d{1,2}\\s*:\\s*\\d{2})?";
+    const dateRange = new RegExp(`(\\d{1,2})\\s*[\\/.]\\s*(\\d{1,2})${time}\\s*(?:-|–|—|~|～|至)\\s*(?:(\\d{1,2})\\s*[\\/.]\\s*)?(\\d{1,2})${time}(?=\\s|$)`);
+    const singleDate = /(\d{1,2})\s*[\/.]\s*(\d{1,2})(?=\s|[-–—:：]|$)/;
     for (const sheetName of workbook.SheetNames || []) {
       const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: false, defval: "" });
       let section = "";
@@ -359,14 +429,15 @@
         if (/門市銷售波段/.test(rowText)) section = "store";
         else if (/(?:官網|平台|電商).*銷售波段/.test(rowText)) section = "online";
         for (const cell of row) {
-          const text = String(cell || "").normalize("NFKC").trim();
+          const text = String(cell || "").normalize("NFKC").replace(/\r\n?/g, "\n").trim();
           if (!text || !/(?:\d{1,2}\s*[\/.]\s*\d{1,2})/.test(text)) continue;
-          const segments = text.split(/\n(?=\s*\d{1,2}\s*[\/.]\s*\d{1,2})/).map((value) => value.trim()).filter(Boolean);
-          segments.forEach((rawSegment) => {
+          const channelSegments = marketingChannelSegments(text, section);
+          channelSegments.forEach((channelSegment) => marketingDateSegments(channelSegment.text).forEach((rawSegment) => {
+            if (channelSegment.section === "online") return;
             const range = rawSegment.match(dateRange);
             const single = range ? null : rawSegment.match(singleDate);
             if (!range && !single) return;
-            const segment = rawSegment.replace(/\s+/g, " ").trim();
+            const segment = rawSegment.replace(/[ \t]+/g, " ").trim();
             const startMonth = Number((range || single)[1]), startDay = Number((range || single)[2]);
             const endMonth = range ? Number(range[3] || range[1]) : startMonth;
             const endDay = range ? Number(range[4]) : new Date(Date.UTC(year, startMonth, 0)).getUTCDate();
@@ -378,23 +449,36 @@
             if (endMs < referenceMs || startMs > futureLimit) return;
             const explicitOnlineOnly = /門市不參與|官網專屬|電商專屬/.test(segment);
             if (explicitOnlineOnly) return;
-            const giftSkus = [...segment.matchAll(/贈品(?:貨號|品號)\s*[：:]\s*([A-Z0-9-]+)/gi)].map((item) => item[1].toUpperCase());
-            const isGift = /贈|滿額禮|滿件禮|加價購/.test(segment) || giftSkus.length > 0;
+            const giftMatches = marketingGiftMatches(segment);
+            const isGift = /贈|滿額禮|滿件禮|加價購/.test(segment) || giftMatches.length > 0;
             if (!isGift) return;
-            const amountMatch = segment.match(/(?:消費)?滿\s*(?:NT\$|\$)?\s*([\d,]+)\s*元?/i);
-            const pieceMatch = amountMatch ? null : segment.match(/(?:滿|任選|購買)[^\d]{0,16}(\d+)\s*(?:件|組)/);
-            const giftQuantityMatch = segment.match(/贈(?:送)?[^，。；]{0,24}?(\d+)\s*(?:件|個|組)/);
-            const thresholdType = amountMatch ? "amount" : (pieceMatch ? "quantity" : "manual");
-            const thresholdValue = Number(String(amountMatch?.[1] || pieceMatch?.[1] || "0").replace(/,/g, ""));
-            const cumulative = !/不累贈|每(?:筆|單)[^，。；]{0,16}(?:限|最多)[^，。；]{0,8}(?:1|一|乙)(?:件|個|組)/.test(segment);
-            const scope = activityScope(segment);
-            activities.push({
-              sheetName, section, startDate: start, endDate: end, description: segment.slice(0, 420), giftSkus: [...new Set(giftSkus)],
-              thresholdType, thresholdValue, giftQuantity: Math.max(1, Number(giftQuantityMatch?.[1] || 1)), cumulative,
-              thresholdText: amountMatch ? `滿${thresholdValue.toLocaleString("zh-TW")}元` : (pieceMatch ? `滿${thresholdValue}件` : "門檻需人工確認"),
-              ...scope
+            if (!giftMatches.length) {
+              activities.push({ sheetName, section: channelSegment.section || section, startDate: start, endDate: end, description: segment.slice(0, 420), giftSkus: [], thresholdType: "manual", thresholdValue: 0, giftQuantity: 1, cumulative: false, thresholdText: "門檻需人工確認", ...activityScope(segment) });
+              return;
+            }
+            const groupNoCumulativeAt = segment.search(/以上不累贈/);
+            giftMatches.forEach((giftMatch, index) => {
+              const previousEnd = index > 0 ? giftMatches[index - 1].end : (range || single).index + (range || single)[0].length;
+              const nextStart = giftMatches[index + 1]?.index ?? segment.length;
+              const clause = segment.slice(previousEnd, giftMatch.end).replace(/^\s*[，。、；;]+/, "").trim();
+              const afterClause = segment.slice(giftMatch.end, nextStart);
+              const amountMatch = clause.match(/(?:消費|全單|整單)?\s*滿\s*(?:NT\$|\$)?\s*([\d,]+)\s*元?/i);
+              const pieceMatch = amountMatch ? null : clause.match(/(?:滿|任選|購買)[^\d]{0,24}(\d+)\s*(?:件|組)/);
+              const giftQuantityMatch = clause.match(/贈(?:送)?[^，。；\n]{0,24}?(\d+)\s*(?:件|個|組)/);
+              const thresholdType = amountMatch ? "amount" : (pieceMatch ? "quantity" : "manual");
+              const thresholdValue = Number(String(amountMatch?.[1] || pieceMatch?.[1] || "0").replace(/,/g, ""));
+              const localCumulativeText = `${clause}\n${afterClause}`.replace(/以上不累贈/g, "");
+              const directlyNonCumulative = /不累贈|每(?:筆|單)[^，。；\n]{0,16}(?:限|最多)[^，。；\n]{0,8}(?:1|一|乙)(?:件|個|組)/.test(localCumulativeText);
+              const groupedNonCumulative = groupNoCumulativeAt >= 0 && giftMatch.index < groupNoCumulativeAt;
+              const scope = activityScope(clause);
+              activities.push({
+                sheetName, section: channelSegment.section || section, startDate: start, endDate: end, description: clause.slice(0, 420), giftSkus: [giftMatch.sku],
+                thresholdType, thresholdValue, giftQuantity: Math.max(1, Number(giftQuantityMatch?.[1] || 1)), cumulative: !(directlyNonCumulative || groupedNonCumulative),
+                thresholdText: amountMatch ? `滿${thresholdValue.toLocaleString("zh-TW")}元` : (pieceMatch ? `滿${thresholdValue}件` : "門檻需人工確認"),
+                ...scope
+              });
             });
-          });
+          }));
         }
       });
     }
@@ -505,6 +589,8 @@
     const proposalDate = input.proposalDate || input.sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "");
     const scheduleByStore = Object.fromEntries(stores.map((store) => [store, storeSchedule(proposalDate, store, input.storeInventory || {})]));
     const masterBySku = input.master.bySku;
+    const transferExclusions = transferExclusionSkus(input.storeInventory);
+    const isTransferExcluded = (sku) => transferExclusions.has(String(sku || "").normalize("NFKC").trim().toUpperCase());
     const inventory = new Map();
     for (const row of input.inventory.records) inventory.set(`${row.warehouseCode}|${row.sku}`, (inventory.get(`${row.warehouseCode}|${row.sku}`) || 0) + row.quantity);
     const regularSales = input.sales.flatMap((report) => report.records);
@@ -602,7 +688,7 @@
       if (!specialRule || !appliesToStore(specialRule, store, 1)) continue;
       const groups = new Map();
       for (const [sku, master] of masterBySku) {
-        if (master.sellThroughStop || excludedFromRegularTransfer(master) || !isSingleDuvet(master)) continue;
+        if (isTransferExcluded(sku) || master.sellThroughStop || excludedFromRegularTransfer(master) || !isSingleDuvet(master)) continue;
         const sold = Math.max(0, local.get(`${store}|${sku}`) || 0);
         if (!(sold > 0)) continue;
         const group = `${singleDuvetType(master)}|${materialName(master)}`;
@@ -618,7 +704,7 @@
     const needsBySku = new Map();
     for (const store of stores) {
       for (const [sku, master] of masterBySku) {
-        if (CONSUMABLES[sku] || excludedFromRegularTransfer(master)) continue;
+        if (isTransferExcluded(sku) || CONSUMABLES[sku] || excludedFromRegularTransfer(master)) continue;
         const key = `${store}|${sku}`, local42 = Math.max(0, local.get(key) || 0), b342 = Math.max(0, b3.get(key) || 0);
         const performance = local42 + b342, weeks = activeWeeks.get(key)?.size || 0;
         const tier = performance >= 12 && weeks >= 4 ? "熱銷" : performance >= 4 && weeks >= 2 ? "穩定" : "低銷";
@@ -677,13 +763,17 @@
     }
 
     const regularRows = [], specialStockRows = [], shortageRows = [];
+    const systemDecisionByKey = new Map();
     for (const [sku, allRows] of needsBySku) {
       const hqAvailable = Math.max(0, Math.floor((inventory.get(`T00|${sku}`) || 0) - (pendingOutbound.get(`T00|${sku}`) || 0)));
       const isS = allRows.some((row) => row.isSellThroughStop);
       const usage14 = Math.max(0, (isS ? hqUsage14 : hqDirect14).get(sku) || 0), usage42 = Math.max(0, (isS ? hqUsage42 : hqDirect42).get(sku) || 0), usage84 = Math.max(0, (isS ? hqUsage84 : hqDirect84).get(sku) || 0);
       const horizon = Math.max(...allRows.map((row) => row.coverageDays || 1));
       const protection = isS ? sStockProtection(hqAvailable, usage14, usage42, usage84) : generalHqStockProtection(hqAvailable, usage14, usage42, usage84, horizon);
-      if (isS && protection.releasable === 0) continue;
+      if (isS && protection.releasable === 0) {
+        for (const row of allRows) systemDecisionByKey.set(`${row.storeCode}|${sku}`, supplyDecisionReason(row.rawNeed, 0, protection, hqAvailable, true));
+        continue;
+      }
       let remaining = protection.releasable;
       for (const type of ["regular", "special_stock"]) {
         let rows = allRows.filter((row) => row.itemType === type);
@@ -693,12 +783,14 @@
         remaining = Math.max(0, remaining - used);
         for (const row of rows) {
           const suggested = allocated[row.storeCode] || 0;
+          const systemDecisionReason = supplyDecisionReason(row.rawNeed, suggested, protection, hqAvailable, isS);
+          systemDecisionByKey.set(`${row.storeCode}|${sku}`, systemDecisionReason);
           if (suggested > 0) {
-            const output = { ...row, suggestedQuantity: suggested, hqAvailable, hqReserve: protection.reserve, hqReleasable: protection.releasable, systemSellThroughDate: projectedSellThroughDate(row.calculationDate, row.baseSellableQuantity, Math.max(0, suggested - row.displayGap), row.dailySales), ruleSummary: `${row.ruleSummary}；${isS ? "S品" : "總部安全庫存"}${protection.reason}，可釋出${protection.releasable}件${suggested < row.rawNeed ? "；總倉不足依70/30分配" : ""}` };
+            const output = { ...row, suggestedQuantity: suggested, hqAvailable, hqReserve: protection.reserve, hqReleasable: protection.releasable, systemSellThroughDate: projectedSellThroughDate(row.calculationDate, row.baseSellableQuantity, Math.max(0, suggested - row.displayGap), row.dailySales), systemDecisionReason, ruleSummary: `${row.ruleSummary}；${isS ? "S品" : "總部安全庫存"}${protection.reason}，可釋出${protection.releasable}件${suggested < row.rawNeed ? "；總倉不足依70/30分配" : ""}` };
             (type === "special_stock" ? specialStockRows : regularRows).push(output);
           }
           const unfilled = Math.max(0, row.rawNeed - suggested);
-          if (type === "regular" && unfilled > 0) shortageRows.push({ storeCode: row.storeCode, sku, productName: row.productName, demandQuantity: row.rawNeed, allocatedQuantity: suggested, unfilledQuantity: unfilled, itemType: "regular", currentArrivalDate: row.currentArrivalDate, nextArrivalDate: row.nextArrivalDate, followUpStatus: "待回拋主採購", reason: isS ? `S品僅可釋出${protection.releasable}件；${protection.reason}` : protection.reserve > 0 ? `總部安全庫存保留${protection.reserve}件；總倉可釋出${protection.releasable}件` : `總倉可用${hqAvailable}件，不足全部門市需求` });
+          if (type === "regular" && unfilled > 0) shortageRows.push({ storeCode: row.storeCode, sku, productName: row.productName, demandQuantity: row.rawNeed, allocatedQuantity: suggested, unfilledQuantity: unfilled, itemType: "regular", currentArrivalDate: row.currentArrivalDate, nextArrivalDate: row.nextArrivalDate, followUpStatus: "待回拋主採購", systemDecisionReason, reason: isS ? `S品僅可釋出${protection.releasable}件；${protection.reason}` : protection.reserve > 0 ? `總部安全庫存保留${protection.reserve}件；總倉可釋出${protection.releasable}件` : `總倉可用${hqAvailable}件，不足全部門市需求` });
         }
       }
     }
@@ -716,6 +808,7 @@
       activityGroups.get(sku).push(activity);
     }
     for (const [sku, sourceActivities] of activityGroups) {
+      if (isTransferExcluded(sku)) continue;
       const signatures = new Set(sourceActivities.map((activity) => [activity.scopeType || "all", (activity.scopeTargets || []).join("|"), activity.thresholdBasis || "order_total", activity.thresholdType, activity.thresholdValue, activity.giftQuantity, activity.cumulative].join("|")));
       const chronological = sourceActivities.slice().sort((left, right) => left.startDate.localeCompare(right.startDate));
       const continuous = chronological.every((row, index) => index === 0 || row.startDate <= addDays(chronological[index - 1].endDate, 1));
@@ -832,6 +925,7 @@
         const inTransitQuantity = Math.max(0, inTransitInbound.get(transferKey) || 0);
         const projectedCurrent = currentQuantity + includedInbound(transferKey);
         consumableSnapshots.push({ storeCode, sku, snapshotDate: latest, currentQuantity, inboundQuantity: inbound, outboundQuantity: outbound, weeklyConsumption, trusted });
+        if (isTransferExcluded(sku)) continue;
         if (averageWeeklyUsage == null) continue;
         let triggerWeeks, targetWeeks, requiresManual = false;
         if (averageWeeklyUsage >= 50) { triggerWeeks = 2; targetWeeks = 4; }
@@ -880,7 +974,7 @@
     const inTransitRows = pendingTransferRows.filter((row) => row.status === "發貨審核");
     const comparisonKeys = new Set([
       ...rows.map((row) => `${row.storeCode}|${row.sku}`),
-      ...submittedRows.map((row) => `${row.storeCode}|${row.sku}`)
+      ...submittedRows.filter((row) => !isTransferExcluded(row.sku)).map((row) => `${row.storeCode}|${row.sku}`)
     ]);
     const comparisonFacts = [...comparisonKeys].map((compoundKey) => {
       const [storeCode, sku] = compoundKey.split("|");
@@ -919,8 +1013,54 @@
         ruleSummary: systemRow?.ruleSummary || [rule?.name, rule?.role, ruleApplies ? `適用${rule.quantity || 0}件` : "", displaySuppressedReason].filter(Boolean).join("；")
       };
     });
+    const manualItemKeys = new Set([
+      ...[...inventory.entries()].filter(([key, quantity]) => stores.includes(key.split("|")[0]) && Number(quantity) > 0).map(([key]) => key),
+      ...[...local.keys()], ...[...b3.keys()], ...[...submittedInbound.keys()], ...[...inTransitInbound.keys()],
+      ...rows.map((row) => `${row.storeCode}|${row.sku}`), ...shortageRows.map((row) => `${row.storeCode}|${row.sku}`)
+    ]);
+    const manualItemFacts = [...manualItemKeys].filter((compoundKey) => {
+      const [storeCode, sku] = compoundKey.split("|");
+      return stores.includes(storeCode) && !isTransferExcluded(sku) && masterBySku.has(sku);
+    }).map((compoundKey) => {
+      const [storeCode, sku] = compoundKey.split("|");
+      const master = masterBySku.get(sku) || {};
+      const schedule = scheduleByStore[storeCode];
+      const localSales42 = Math.max(0, local.get(compoundKey) || 0);
+      const rule = storeDisplayException(storeCode, sku, input.storeDisplayExceptions) || stockRule(master, input.storeInventory);
+      const ruleApplies = rule && appliesToStore(rule, storeCode, localSales42);
+      let displayQuantity = ruleApplies && rule.role === "不可售展示" ? Number(rule.quantity || 0) : 0;
+      if (master.sellThroughStop && displayQuantity > 0) {
+        const hqAvailableForDisplay = Math.max(0, Math.floor((inventory.get(`T00|${sku}`) || 0) - (pendingOutbound.get(`T00|${sku}`) || 0)));
+        const protection = sStockProtection(hqAvailableForDisplay, Math.max(0, hqUsage14.get(sku) || 0), Math.max(0, hqUsage42.get(sku) || 0), Math.max(0, hqUsage84.get(sku) || 0));
+        if (protection.releasable === 0) displayQuantity = 0;
+      }
+      const current = Math.max(0, (inventory.get(compoundKey) || 0) + includedInbound(compoundKey));
+      const dailyUsage = localSales42 / 42;
+      const displayGap = Math.max(0, displayQuantity - current);
+      const baseQuantity = Math.max(0, current - displayQuantity - dailyUsage * (schedule?.preArrivalDays || 0));
+      const minimum = ruleApplies && rule?.role === "可售最低庫存" ? Number(rule.quantity || 0) : 0;
+      const target = dailyUsage * Number(schedule?.coverageDays || 1);
+      const sellable = Math.max(0, current - displayQuantity);
+      const rawNeed = displayGap + Math.max(0, Math.ceil(Math.max(target, minimum) - sellable - 1e-9));
+      const pending = Math.max(0, submittedInbound.get(compoundKey) || 0);
+      const inTransit = Math.max(0, inTransitInbound.get(compoundKey) || 0);
+      let systemReason = systemDecisionByKey.get(compoundKey) || "";
+      if (!systemReason && rawNeed <= 0) {
+        if (rule?.role === "可售最低庫存" && !ruleApplies && localSales42 <= 0) systemReason = "近42天現場銷售0件，可售最低庫存規則不適用；本次總需求0件";
+        else if (pending + inTransit > 0) systemReason = `待發貨／在途${pending + inTransit}件已抵足需求；本次總需求0件`;
+        else if (current > 0) systemReason = `門市現有庫存${current}件已滿足需求；本次總需求0件`;
+        else systemReason = "依現行規則未形成補貨需求；本次總需求0件";
+      }
+      return {
+        storeCode, sku, productName: master.name || "", calculationDate: schedule?.currentArrivalDate || latest,
+        baseQuantity, displayGap, dailyUsage,
+        systemProjection: projectedSellThroughDate(schedule?.currentArrivalDate || latest, baseQuantity, 0, dailyUsage),
+        systemReason
+      };
+    }).sort((left, right) => STORE_ORDER.indexOf(left.storeCode) - STORE_ORDER.indexOf(right.storeCode) || left.sku.localeCompare(right.sku));
+    const manualItemCatalog = [...masterBySku.entries()].filter(([sku]) => !isTransferExcluded(sku)).map(([sku, record]) => ({ sku, productName: record.name || "" })).filter((row) => row.productName).sort((left, right) => left.sku.localeCompare(right.sku));
     return {
-      latestSalesDate: latest, proposalDate, scheduleByStore, calculationMode, rows, regularRows, specialStockRows, activityRows, consumableRows, shortageRows, consumableSnapshots, pendingTransferRows, comparisonFacts,
+      latestSalesDate: latest, proposalDate, scheduleByStore, calculationMode, rows, regularRows, specialStockRows, activityRows, consumableRows, shortageRows, consumableSnapshots, pendingTransferRows, comparisonFacts, manualItemFacts, manualItemCatalog,
       marketingWarnings,
       b3Audit: { matchedCount: matchedTakeSales.length, pendingCount: b3PendingRows.length, pendingRows: b3PendingRows },
       companyImpact: {

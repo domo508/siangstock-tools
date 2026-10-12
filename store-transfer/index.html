@@ -9,7 +9,7 @@
   <title>門市週補貨與調撥｜翔仔居家</title>
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="../cost-analysis/style.css">
-  <link rel="stylesheet" href="style.css?v=20261005-store-batch-history-r1">
+  <link rel="stylesheet" href="style.css?v=20261012-collapsible-details-r5">
 </head>
 <body>
   <main class="page-shell">
@@ -67,6 +67,7 @@
       <div id="calculation-results" class="calculation-results" hidden>
         <div class="section-heading compact"><div><h3>本週建議預覽</h3><p id="calculation-summary"></p></div><button id="publish-button" class="primary-button" type="button">建立門市確認批次</button></div>
         <div id="calculation-store-filter"></div>
+        <div id="calculation-sku-filter"></div>
         <p id="calculation-mode-alert" class="result-alert warn" hidden></p>
         <section id="comparison-downloads" class="comparison-downloads" hidden aria-labelledby="comparison-download-title">
           <div><strong id="comparison-download-title">分店下載 A/B 差異分析</strong><p>每份檔案只包含該門市，並將「A、B都有」、「僅A」、「僅B」分成三個頁籤；不會建立正式批次。</p></div>
@@ -78,10 +79,10 @@
         </section>
         <p id="company-impact" class="result-alert info"></p>
         <p id="b3-audit" class="result-alert warn" hidden></p>
-        <section class="result-section" data-store-section><h4>一般週補貨（必要調撥）</h4><p>依本次實際開單日至下一輪預計到店日、門市現場淨銷售、展示與最低庫存計算；待發貨與在途量只抵扣需求，不會併入本次系統建議。庫存檔的實際庫存已扣除顧客承諾，不會重複扣減。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>近42天現場銷售</th><th>B3銷售</th><th>現有實體庫存</th><th>待發貨量<br><small>提交</small></th><th>在途量<br><small>發貨審核</small></th><th>目標／展示</th><th>本次系統建議調撥量</th><th>本批預計到店</th><th>下一輪預計到店</th><th>建議後可售至</th><th>到貨前風險</th><th>說明</th></tr></thead><tbody id="calculation-rows"></tbody></table></div></section>
-        <section id="special-stock-results" class="result-section special-stock-section" data-store-section hidden><h4>建議調撥（非必要）</h4><p>單人薄被套／兩用被套依各材質近42天門市現場銷售，列出前2名花色作備貨參考；門市可填0。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>近42天現場銷售</th><th>現有實體庫存</th><th>待發貨量</th><th>在途量</th><th>本次系統建議調撥量</th><th>建議後可售至</th><th>說明</th></tr></thead><tbody id="special-stock-rows"></tbody></table></div></section>
-        <section id="activity-results" class="result-section activity-result-section" data-store-section hidden><h4>活動／贈品調撥</h4><p>依活動適用範圍、門檻與實際到店日估算；指定類別／系列／品項只使用命中範圍的訂單，到店日晚於活動結束日則本批不補。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>贈品貨號</th><th>品名</th><th>活動門檻／期間</th><th>活動適用範圍</th><th>門檻計算基礎</th><th>本批預計到店</th><th>有效估算天數</th><th>符合範圍訂單</th><th>範圍平均客單</th><th>範圍達標率</th><th>預估達標訂單</th><th>近21天耗用</th><th>現有實體庫存</th><th>待發貨量</th><th>在途量</th><th>本次系統建議調撥量</th><th>說明</th></tr></thead><tbody id="activity-rows"></tbody></table></div><p id="marketing-warnings" class="status-line"></p></section>
-        <section id="consumable-results" class="result-section consumable-section" data-store-section hidden><h4>門市耗材補貨</h4><p>僅顯示大、中、小提袋有需求的門市；至少累積4個可信週次才自動建議，確認量及核准量須為100的倍數。</p><div class="result-table-wrap"><table class="transfer-table"><thead><tr><th>門市</th><th>提袋品號</th><th>品名</th><th>現有實體庫存</th><th>待發貨量</th><th>在途量</th><th>週均耗用</th><th>本次系統建議調撥量</th><th>建議後可用週數</th><th>判斷說明</th></tr></thead><tbody id="consumable-rows"></tbody></table></div></section>
+        <section class="result-section" data-store-section><h4>一般週補貨（必要調撥）</h4><p>摘要先顯示需要決策的欄位；銷售、庫存、待發貨、在途、目標與到店依據預設收合，需要時逐筆展開。</p><div class="result-table-wrap"><table class="transfer-table decision-summary-table"><thead><tr><th>門市</th><th>ERP品號／品名</th><th>系統建議</th><th>建議後可售至</th><th>到貨前風險</th><th>判斷依據</th></tr></thead><tbody id="calculation-rows"></tbody></table></div></section>
+        <section id="special-stock-results" class="result-section special-stock-section" data-store-section hidden><h4>建議調撥（非必要）</h4><p>單人薄被套／兩用被套依各材質近42天門市現場銷售，列出前2名花色作備貨參考；詳細依據預設收合。</p><div class="result-table-wrap"><table class="transfer-table decision-summary-table"><thead><tr><th>門市</th><th>ERP品號／品名</th><th>系統建議</th><th>建議後可售至</th><th>判斷依據</th></tr></thead><tbody id="special-stock-rows"></tbody></table></div></section>
+        <section id="activity-results" class="result-section activity-result-section" data-store-section hidden><h4>活動／贈品調撥</h4><p>依活動適用範圍、門檻與實際到店日估算；門檻、訂單與庫存明細預設收合。</p><div class="result-table-wrap"><table class="transfer-table decision-summary-table"><thead><tr><th>門市</th><th>贈品貨號／品名</th><th>活動期間</th><th>系統建議</th><th>本批預計到店</th><th>判斷依據</th></tr></thead><tbody id="activity-rows"></tbody></table></div><p id="marketing-warnings" class="status-line"></p></section>
+        <section id="consumable-results" class="result-section consumable-section" data-store-section hidden><h4>門市耗材補貨</h4><p>僅顯示大、中、小提袋有需求的門市；週均耗用與庫存依據預設收合。</p><div class="result-table-wrap"><table class="transfer-table decision-summary-table"><thead><tr><th>門市</th><th>提袋品號／品名</th><th>系統建議</th><th>建議後可用週數</th><th>判斷依據</th></tr></thead><tbody id="consumable-rows"></tbody></table></div></section>
         <section id="pending-transfer-results" class="result-section pending-transfer-section" data-store-section hidden><h4>既有待發貨／在途明細（唯讀）</h4><p>本次建議量為0的品項不會出現在主要調撥建議，但仍保留在此供核對；這些數量不會寫入本次ERP調撥檔。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>調撥單號</th><th>狀態</th><th>數量</th><th>開單日</th><th>發貨日</th><th>本次計算</th></tr></thead><tbody id="pending-transfer-rows"></tbody></table></div></section>
         <section id="shortage-results" class="result-section shortage-section" data-store-section hidden><h4>缺貨未配清單</h4><p>此區顯示必要需求中總倉暫時無法配足的數量，會隨批次保存供總部與該門市追蹤；不會混入可確認量或ERP檔。S品總倉無可釋出量時仍只做背景監控。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>需求量</th><th>已配量</th><th>未配量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody id="shortage-rows"></tbody></table></div></section>
       </div>
@@ -128,7 +129,8 @@
 
     <section class="panel operation-guide" data-weekly-view aria-labelledby="guide-title">
       <div class="section-heading"><div><p class="eyebrow">操作說明</p><h2 id="guide-title">每週流程怎麼走</h2></div></div>
-      <div class="guide-grid"><article><strong>登入失敗怎麼辦</strong><p>按右上角「重新登入／切換帳號」，先清除公司工具登入狀態，再以本店被指派的公司 Google 帳號重新開啟週調撥。</p></article><article><strong>正式與A/B模式</strong><p>正式模式會以待發貨及在途量防止重複補貨；A/B模式忽略提交單，可依門市下載差異表或發布公司共用協作批次。</p></article><article><strong>下載正式補貨報表</strong><p>完成正式計算後，可勾選需要的門市分別下載；每份檔案包含本次建議、缺貨未配與待發貨／在途三個頁籤，不會改寫原始Excel。</p></article><article><strong>本店展示例外</strong><p>門市可用單一ERP貨號設定自己的不可售展示最低量；下次總部重算生效，不會改寫已建立批次。</p></article><article><strong>展示與42天銷售</strong><p>可售最低庫存仍要求近42天有現場銷售；不可售展示不受零銷售影響。S品總倉無可釋出量時取消展示需求。</p></article><article><strong>A/B協作怎麼走</strong><p>四位總部帳號皆可接續查看、調整決議量及備註；只有siang01與service1能轉正式批次。</p></article><article><strong>同週批次版本</strong><p>同一週重新建立時，新批次會成為目前作業版本；舊的未完成批次保留紀錄，但不能再修改或送出。</p></article><article><strong>門市批次怎麼顯示</strong><p>上方只列尚未處理、已暫存或已送出等待總部的批次；其它狀態放在預設收合的近一個月歷史區，完整稽核資料仍保留12個月。</p></article><article><strong>刪除舊批次</strong><p>總部可將已取代／已取消批次移出前台；目前作業與已完成批次不能直接刪除，稽核資料仍保留12個月。</p></article><article><strong>門市可撤回</strong><p>送出後、星期一上午9點鎖定前可不限次數撤回；鎖定後只能由總部更正。</p></article><article><strong>人工增減品項</strong><p>門市與總部皆可新增品項；移除時以本階段數量歸零處理，原因與原始建議仍會保留。</p></article><article><strong>人工調整原因</strong><p>新增、移除或數量不同於上一階段時，必須填原因才可送出。</p></article><article><strong>B3判斷</strong><p>只有來源單號＋ERP品號成功配對的總倉代出才認列；無法配對會列待人工確認。</p></article><article><strong>批次狀態</strong><p>等待門市→總部覆核→已核准→ERP皆完成→本週完成，每店進度會分開顯示。</p></article></div>
+      <p class="result-alert info"><strong>建立批次後通知：</strong>正式批次建立成功後，系統會以建立者完成授權的公司 Gmail，寄信通知本批實際包含的門市；寄送失敗可在批次清單重試，已寄成功的門市不會重複收到。</p>
+      <div class="guide-grid"><article><strong>登入失敗怎麼辦</strong><p>按右上角「重新登入／切換帳號」，先清除公司工具登入狀態，再以本店被指派的公司 Google 帳號重新開啟週調撥。</p></article><article><strong>正式與A/B模式</strong><p>正式模式會以待發貨及在途量防止重複補貨；A/B模式忽略提交單，可依門市下載差異表或發布公司共用協作批次。</p></article><article><strong>總部查某品號分到哪裡</strong><p>總部可在建議預覽或批次明細輸入完整或部分ERP品號，直接查看分配門市、筆數與合計件數。</p></article><article><strong>下載正式補貨報表</strong><p>完成正式計算後，可勾選需要的門市分別下載；每份檔案包含本次建議、缺貨未配與待發貨／在途三個頁籤，不會改寫原始Excel。</p></article><article><strong>本店展示例外</strong><p>門市可用單一ERP貨號設定自己的不可售展示最低量；下次總部重算生效，不會改寫已建立批次。</p></article><article><strong>展示與42天銷售</strong><p>可售最低庫存仍要求近42天有現場銷售；不可售展示不受零銷售影響。S品總倉無可釋出量時取消展示需求。</p></article><article><strong>A/B協作怎麼走</strong><p>四位總部帳號皆可接續查看、調整決議量及備註；只有siang01與service1能轉正式批次。</p></article><article><strong>同週批次版本</strong><p>同一週重新建立時，新批次會成為目前作業版本；舊的未完成批次保留紀錄，但不能再修改或送出。</p></article><article><strong>門市批次怎麼顯示</strong><p>上方只列尚未處理、已暫存或已送出等待總部的批次；其它狀態放在預設收合的近一個月歷史區，完整稽核資料仍保留12個月。</p></article><article><strong>刪除舊批次</strong><p>總部可將已取代／已取消批次移出前台；目前作業與已完成批次不能直接刪除，稽核資料仍保留12個月。</p></article><article><strong>門市可撤回</strong><p>送出後、星期一上午9點鎖定前可不限次數撤回；鎖定後只能由總部更正。</p></article><article><strong>人工增減品項</strong><p>門市與總部皆可新增品項；移除時以本階段數量歸零處理，原因與原始建議仍會保留。</p></article><article><strong>人工調整原因</strong><p>新增、移除或數量不同於上一階段時，必須填原因才可送出。</p></article><article><strong>B3判斷</strong><p>只有來源單號＋ERP品號成功配對的總倉代出才認列；無法配對會列待人工確認。</p></article><article><strong>批次狀態</strong><p>等待門市→總部覆核→已核准→ERP皆完成→本週完成，每店進度會分開顯示。</p></article></div>
     </section>
 
     <dialog id="batch-dialog" class="batch-dialog"><form method="dialog"><button class="dialog-close" aria-label="關閉">×</button></form><div id="batch-detail"></div></dialog>
@@ -159,8 +161,8 @@
   <script src="../procurement-planning/core.js?v=20260917-company-cost-r1"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="../procurement-planning/google-sources.js?v=20260915-google-sources-r1"></script>
-  <script src="core.js?v=20261012-formal-report-r1"></script>
+  <script src="core.js?v=20261012-marketing-parser-r3"></script>
   <script src="xlsx-preflight.js?v=20260916-xlsx-reader-r1"></script>
-  <script src="app.js?v=20261012-formal-report-r1"></script>
+  <script src="app.js?v=20261012-collapsible-details-r5"></script>
 </body>
 </html>

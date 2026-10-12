@@ -109,6 +109,19 @@ describe("待發貨與A/B測試比對", () => {
     expect(result.totals.pendingSubmittedQuantity).toBe(1);
   });
 
+  it("即使沒有系統建議仍保存人工新增品項的批次可售至基準", () => {
+    const input = transferModeInput("formal", 10);
+    input.master.bySku.set("B00001", { sku: "B00001", name: "無庫存無近期銷售測試品" });
+    const result = core.buildSuggestions(input);
+    expect(result.regularRows).toHaveLength(0);
+    const fact = result.manualItemFacts.find((row) => row.storeCode === "R00" && row.sku === "A102061");
+    expect(fact).toMatchObject({ productName: "5尺床包 [水洗棉-淺灰](S)", calculationDate: "2026-09-16", displayGap: 0 });
+    expect(fact.baseQuantity).toBeGreaterThan(0);
+    expect(fact.dailyUsage).toBeCloseTo(6 / 42);
+    expect(core.projectedSellThroughDate(fact.calculationDate, fact.baseQuantity, 2, fact.dailyUsage)).toMatch(/^2026-/);
+    expect(result.manualItemCatalog).toContainEqual({ sku: "B00001", productName: "無庫存無近期銷售測試品" });
+  });
+
   it("A/B模式完整排除提交單對門市需求及總倉保留的影響", () => {
     const formal = core.buildSuggestions(transferModeInput("formal"));
     const comparison = core.buildSuggestions(transferModeInput("comparison"));
@@ -128,6 +141,18 @@ describe("待發貨與A/B測試比對", () => {
     expect(result.regularRows[0]).toMatchObject({ physicalInventory: 0, pendingSubmittedQuantity: 0, inTransitQuantity: 1, currentInventory: 1, suggestedQuantity: 2 });
     expect(result.pendingTransferRows[0].includedInCalculation).toBe(true);
     expect(result.totals).toMatchObject({ inTransitQuantity: 1, excludedSubmittedQuantity: 0 });
+  });
+
+  it("總部排除周調撥品號會同時阻擋正式與A/B建議，但保留既有調撥明細", () => {
+    for (const mode of ["formal", "comparison"]) {
+      const input = transferModeInput(mode);
+      input.storeInventory = { transferExclusions: [{ sku: "A102061", productName: "5尺床包 [水洗棉-淺灰](S)", enabled: true }] };
+      const result = core.buildSuggestions(input);
+      expect(result.rows).toHaveLength(0);
+      expect(result.shortageRows).toHaveLength(0);
+      expect(result.comparisonFacts).toHaveLength(0);
+      expect(result.pendingTransferRows).toHaveLength(1);
+    }
   });
 
   it("A/B差異分析依單一門市彙總提交量，並保留僅B品項的實際庫存", () => {
@@ -162,6 +187,49 @@ describe("S品、建議備貨與可售至", () => {
 
   it("一般品會依總部14／42／84天最高日速保留安全庫存", () => {
     expect(core.generalHqStockProtection(4, 26, 26, 26, 10)).toMatchObject({ reserve: 4, releasable: 0 });
+  });
+
+  it("人工新增品項保留實際日均銷售並說明安全庫存造成未供應", () => {
+    const sku = "A101110";
+    const hqSales = Array.from({ length: 6 }, (_, index) => ({
+      warehouseCode: "T00", shipWarehouseCode: "T00", sku, date: `2026-10-${String(5 + index).padStart(2, "0")}`,
+      quantity: 1, deductQuantity: 1, saleType: "銷貨", sourceOrder: `HQ-${index + 1}`
+    }));
+    const result = core.buildSuggestions({
+      calculationMode: "formal", proposalDate: "2026-10-16", storeCodes: ["R01"],
+      master: { bySku: new Map([[sku, { sku, name: "3.5尺床包 [雙層紗-森語]" }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku, quantity: 6 }, { warehouseCode: "R01", sku, quantity: 0 }] },
+      transfer: { records: [] },
+      sales: [{ maxDate: "2026-10-12", records: [
+        { warehouseCode: "R01", shipWarehouseCode: "R01", sku, date: "2026-09-06", quantity: 1, deductQuantity: 1, saleType: "銷貨", sourceOrder: "R01-1" },
+        { warehouseCode: "R01", shipWarehouseCode: "R01", sku, date: "2026-10-07", quantity: 1, deductQuantity: 1, saleType: "銷貨", sourceOrder: "R01-2" },
+        ...hqSales
+      ], takeRecords: [] }]
+    });
+    expect(result.regularRows).toHaveLength(0);
+    expect(result.shortageRows[0]).toMatchObject({ storeCode: "R01", sku, demandQuantity: 1, allocatedQuantity: 0, unfilledQuantity: 1 });
+    expect(result.shortageRows[0].systemDecisionReason).toContain("總倉不足，未供應；總需求1件");
+    expect(result.shortageRows[0].systemDecisionReason).toContain("總部安全庫存保留6件");
+    const fact = result.manualItemFacts.find((row) => row.storeCode === "R01" && row.sku === sku);
+    expect(fact.dailyUsage).toBeCloseTo(2 / 42);
+    expect(fact.systemProjection).not.toBe("近期無現場銷售");
+    expect(fact.systemReason).toContain("總倉可釋出0件");
+  });
+
+  it("總倉只能配出部分需求時明列總需求與部分供應", () => {
+    const sku = "A-PARTIAL";
+    const records = [
+      ...Array.from({ length: 6 }, (_, index) => ({ warehouseCode: "R01", shipWarehouseCode: "R01", sku, date: `2026-10-${String(5 + index).padStart(2, "0")}`, quantity: 1, deductQuantity: 1, saleType: "銷貨", sourceOrder: `R-${index}` })),
+      ...Array.from({ length: 6 }, (_, index) => ({ warehouseCode: "T00", shipWarehouseCode: "T00", sku, date: `2026-10-${String(5 + index).padStart(2, "0")}`, quantity: 1, deductQuantity: 1, saleType: "銷貨", sourceOrder: `H-${index}` }))
+    ];
+    const result = core.buildSuggestions({
+      calculationMode: "formal", proposalDate: "2026-10-16", storeCodes: ["R01"],
+      master: { bySku: new Map([[sku, { sku, name: "一般補貨測試品" }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku, quantity: 7 }] }, transfer: { records: [] },
+      sales: [{ maxDate: "2026-10-12", records, takeRecords: [] }]
+    });
+    expect(result.regularRows[0]).toMatchObject({ rawNeed: 2, suggestedQuantity: 1 });
+    expect(result.regularRows[0].systemDecisionReason).toContain("總倉不足，部分供應1件／總需求2件");
   });
 
   it("單人被套各材質前2名可進入非必要建議區", () => {
@@ -439,6 +507,18 @@ describe("提袋耗材模型", () => {
     expect(result.consumableRows[0].suggestedQuantity % 100).toBe(0);
   });
 
+  it("排除周調撥品號不建立耗材建議但仍保留週快照", () => {
+    const history = ["2026-09-07", "2026-08-31", "2026-08-24", "2026-08-17"].map((snapshotDate) => ({ snapshot_date: snapshotDate, store_code: "R00", sku: "P11041", current_quantity: 10, weekly_consumption: 60, trusted: 1 }));
+    const result = core.buildSuggestions({
+      storeCodes: ["R00"], master: { bySku: new Map() },
+      inventory: { records: [{ warehouseCode: "T00", sku: "P11041", quantity: 1000 }, { warehouseCode: "R00", sku: "P11041", quantity: 40 }] },
+      transfer: { records: [] }, sales: [{ maxDate: "2026-09-14", records: [], takeRecords: [] }], consumableHistory: history,
+      storeInventory: { transferExclusions: [{ sku: "P11041", productName: "大提袋", enabled: true }] }
+    });
+    expect(result.consumableRows).toHaveLength(0);
+    expect(result.consumableSnapshots).toHaveLength(3);
+  });
+
   it("歷史不足4週時只保存快照、不自動建議", () => {
     const result = core.buildSuggestions({
       storeCodes: ["R00"], master: { bySku: new Map() },
@@ -485,6 +565,30 @@ describe("整體行銷策略與活動贈品", () => {
     expect(activities[1]).toMatchObject({ scopeType: "category", scopeTargets: ["長絨棉"], thresholdBasis: "order_total" });
   });
 
+  it("會解析含門市前綴、時間與多層贈品條件，且不混入同格官網活動", () => {
+    const workbook = {
+      SheetNames: ['26"整體行銷策略_官網+平台'],
+      Sheets: { '26"整體行銷策略_官網+平台': { rows: [[
+        "門市：10/02 10:00 - 11/2 23:59\n官網：10/02 10:00 - 11/3 09:59\n\n*全館消費滿$3,000贈Second Morning髮帶1入(不挑款)｜贈品貨號：N00139\n*滿$4,500贈Second Morning萬年曆1入｜贈品貨號：N00157\n以上不累贈\n\n*Apple聯名天絲上市9折 / 購買Apple四件組贈聯名隨身鏡乙組(不累贈)｜贈品貨號：N00144"
+      ]] } }
+    };
+    const activities = core.parseMarketingWorkbook(workbook, fakeXlsx, "2026-10-12").giftActivities;
+    expect(activities.map((activity) => activity.giftSkus[0])).toEqual(["N00139", "N00157", "N00144"]);
+    expect(activities[0]).toMatchObject({ startDate: "2026-10-02", endDate: "2026-11-02", thresholdType: "amount", thresholdValue: 3000, cumulative: false, scopeType: "all" });
+    expect(activities[1]).toMatchObject({ thresholdType: "amount", thresholdValue: 4500, cumulative: false, scopeType: "all" });
+    expect(activities[2]).toMatchObject({ cumulative: false, scopeType: "product", scopeTargets: ["Apple四件組"] });
+  });
+
+  it("同一儲存格的每個贈品會綁定各自最近的門檻", () => {
+    const workbook = {
+      SheetNames: ["門市銷售波段"],
+      Sheets: { "門市銷售波段": { rows: [["10/01-10/31 滿3,000元贈品 贈品貨號：N00139\n滿4,500元贈品 贈品貨號：N00157"]] } }
+    };
+    const activities = core.parseMarketingWorkbook(workbook, fakeXlsx, "2026-10-12").giftActivities;
+    expect(activities).toHaveLength(2);
+    expect(activities.map((activity) => activity.thresholdValue)).toEqual([3000, 4500]);
+  });
+
   it("活動贈品獨立估算，不會併入一般補貨", () => {
     const gift = { sku: "N00144", name: "聯名隨身鏡", size: "", style1: "贈品" };
     const result = core.buildSuggestions({
@@ -504,6 +608,18 @@ describe("整體行銷策略與活動贈品", () => {
     expect(result.activityRows).toHaveLength(1);
     expect(result.activityRows[0].itemType).toBe("activity_gift");
     expect(result.activityRows[0].suggestedQuantity).toBe(2);
+  });
+
+  it("排除周調撥品號不建立活動贈品建議", () => {
+    const result = core.buildSuggestions({
+      storeCodes: ["R00"], master: { bySku: new Map([["N00144", { sku: "N00144", name: "聯名隨身鏡", style1: "贈品" }]]) },
+      inventory: { records: [{ warehouseCode: "T00", sku: "N00144", quantity: 10 }] }, transfer: { records: [] },
+      sales: [{ maxDate: "2026-09-14", records: [], takeRecords: [] }],
+      marketing: { giftActivities: [{ startDate: "2026-09-06", endDate: "2026-09-30", giftSkus: ["N00144"] }], warnings: [] },
+      storeInventory: { transferExclusions: [{ sku: "N00144", productName: "聯名隨身鏡", enabled: true }] }
+    });
+    expect(result.activityRows).toHaveLength(0);
+    expect(result.rows).toHaveLength(0);
   });
 
   it("以門市POS平均客單與實際達標率預估贈品", () => {
