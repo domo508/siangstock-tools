@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20261005-store-batch-history-r1");
+    const appIndex = html.indexOf("app.js?v=20261012-formal-report-r1");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -306,6 +306,26 @@ describe("前台導覽", () => {
     expect(core).toContain('buildComparisonReport');
   });
 
+  it("正式補貨可勾選門市並各自下載三頁籤報表", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    expect(html).toContain('id="formal-downloads"');
+    expect(html).toContain('id="formal-download-options"');
+    expect(html).toContain('id="download-formal-reports"');
+    expect(app).toContain('buildFormalWorkbook');
+    expect(app).toContain('正式補貨建議.xlsx');
+  });
+
+  it("正式批次以精簡欄位送出，後端用JSON批次展開大量品項", () => {
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    expect(app).toContain('compactBatchItems(state.calculation.rows)');
+    expect(app).toContain('compactBatchShortages(state.calculation.shortageRows)');
+    expect(worker).toContain('readBody(request, 6_000_000)');
+    expect(worker).toContain("FROM json_each(?2)");
+    expect(worker).toContain('chunks(normalizedShortages)');
+  });
+
   it("A/B差異分析把三個比較區塊分成獨立頁籤", () => {
     const transferContext = loadBrowserScript("../store-transfer/core.js", { XLSX });
     const transferCore = transferContext.StoreTransferCore;
@@ -329,6 +349,20 @@ describe("前台導覽", () => {
       expect(rows[10]).toEqual(expect.arrayContaining(["ERP品號", "系統建議量(A)", "人工調撥量(B)"]));
     }
     expect(workbook.Sheets["A、B都有"].K12.f).toBe("J12-I12");
+  });
+
+  it("正式補貨報表分列建議、缺貨未配及待發貨與在途", () => {
+    const transferContext = loadBrowserScript("../store-transfer/core.js", { XLSX });
+    const workbook = transferContext.StoreTransferCore.buildFormalWorkbook({
+      calculationMode: "formal", proposalDate: "2026-10-12", latestSalesDate: "2026-10-12",
+      rows: [{ storeCode: "R00", itemType: "regular", sku: "A001", productName: "測試品", physicalInventory: 0, pendingSubmittedQuantity: 1, inTransitQuantity: 2, localSales42: 4, targetQuantity: 5, displayQuantity: 1, suggestedQuantity: 2, currentArrivalDate: "2026-10-14", nextArrivalDate: "2026-10-21", systemSellThroughDate: "2026-10-20", ruleSummary: "測試判斷" }],
+      shortageRows: [{ storeCode: "R00", itemType: "regular", sku: "B001", productName: "缺貨品", demandQuantity: 3, allocatedQuantity: 1, unfilledQuantity: 2, currentArrivalDate: "2026-10-14", nextArrivalDate: "2026-10-21", reason: "總倉不足", followUpStatus: "待回拋主採購" }],
+      pendingTransferRows: [{ storeCode: "R00", sku: "A001", productName: "測試品", documentCode: "AT001", status: "提交", quantity: 1, openedDate: "2026-10-12", shippedDate: "", includedInCalculation: true }]
+    }, XLSX, "R00", "台北中山門市");
+    expect(workbook.SheetNames).toEqual(["本次調撥建議", "缺貨未配", "待發貨與在途"]);
+    expect(XLSX.utils.sheet_to_json(workbook.Sheets["本次調撥建議"], { header: 1, raw: true })[5]).toEqual(expect.arrayContaining(["A001", 1, 2, "測試判斷"]));
+    expect(XLSX.utils.sheet_to_json(workbook.Sheets["缺貨未配"], { header: 1, raw: true })[5]).toEqual(expect.arrayContaining(["B001", 2, "總倉不足"]));
+    expect(XLSX.utils.sheet_to_json(workbook.Sheets["待發貨與在途"], { header: 1, raw: true })[5]).toEqual(expect.arrayContaining(["AT001", "提交", "已納入抵扣"]));
   });
 
   it("A/B差異可發布共用協作批次，且僅兩個指定帳號可轉正式", () => {

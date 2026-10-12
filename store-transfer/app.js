@@ -182,6 +182,43 @@
     $("hq-status").textContent = `${storeName}的A/B調撥建議差異分析表已下載；未建立正式批次。`;
   }
 
+  function renderFormalDownloads(stores, mode) {
+    const panel = $("formal-downloads");
+    panel.hidden = mode !== "formal";
+    $("formal-download-options").innerHTML = mode === "formal" ? stores.map((code) => `<label><input type="checkbox" value="${escapeHtml(code)}" checked><span>${escapeHtml(state.config.stores[code]?.name || code)}</span></label>`).join("") : "";
+  }
+
+  function downloadFormalReports() {
+    if (!state.calculation || state.calculation.calculationMode !== "formal") throw new Error("請先以正式補貨模式產生建議。");
+    const stores = [...document.querySelectorAll('#formal-download-options input:checked')].map((input) => input.value);
+    if (!stores.length) throw new Error("請至少勾選一間要下載的門市。");
+    for (const storeCode of stores) {
+      const storeName = state.config.stores[storeCode]?.name || storeCode;
+      const workbook = transferCore.buildFormalWorkbook(state.calculation, outputXlsx, storeCode, storeName);
+      const safeName = String(storeName).replace(/[\\/:*?"<>|]/g, "-");
+      outputXlsx.writeFile(workbook, `${state.calculation.proposalDate}_${safeName}_正式補貨建議.xlsx`, { compression: true });
+    }
+    $("hq-status").textContent = `已下載 ${stores.length} 間門市的正式補貨報表；每間門市各一份。`;
+  }
+
+  function compactBatchItems(rows) {
+    return rows.map((row) => ({
+      storeCode: row.storeCode, sku: row.sku, productName: row.productName,
+      suggestedQuantity: row.suggestedQuantity, ruleSummary: row.ruleSummary, itemType: row.itemType,
+      calculationDate: row.calculationDate, baseSellableQuantity: row.baseSellableQuantity,
+      displayGap: row.displayGap, dailySales: row.dailySales, systemSellThroughDate: row.systemSellThroughDate
+    }));
+  }
+
+  function compactBatchShortages(rows) {
+    return rows.map((row) => ({
+      storeCode: row.storeCode, sku: row.sku, productName: row.productName, itemType: row.itemType,
+      demandQuantity: row.demandQuantity, allocatedQuantity: row.allocatedQuantity, unfilledQuantity: row.unfilledQuantity,
+      reason: row.reason, followUpStatus: row.followUpStatus,
+      currentArrivalDate: row.currentArrivalDate, nextArrivalDate: row.nextArrivalDate
+    }));
+  }
+
   async function sha256(value) {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -487,6 +524,7 @@
       $("calculation-mode-alert").hidden = mode !== "comparison";
       $("calculation-mode-alert").innerHTML = mode === "comparison" ? `<strong>A/B測試比對：</strong>已排除${state.calculation.totals.excludedSubmittedDocumentCount}張提交單、共${state.calculation.totals.excludedSubmittedQuantity}件；本結果只能預覽，不能建立正式批次。發貨審核仍按在途量計算。` : "";
       renderComparisonDownloads(stores, mode);
+      renderFormalDownloads(stores, mode);
       $("publish-collaboration-button").disabled = mode !== "comparison";
       const impact = state.calculation.companyImpact;
       $("company-impact").innerHTML = `<strong>寬承／寬沐成本流向：</strong>寬沐調撥收貨${impact.kuanmuTransferCount}筆、B3代出${impact.kuanmuB3Count}筆；原始供貨成本${formatCurrency(impact.kuanmuBaseCost)}，寬承對寬沐計價參考${formatCurrency(impact.kuanmuIntercompanyRevenue)}（成本×1.11）。合併檢視時抵銷公司間計價，只保留原始成本。`;
@@ -521,7 +559,8 @@
     $("publish-button").disabled = true;
     try {
       const id = `TR-${weekKey}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
-      await api("/batches", { method: "POST", body: { id, weekKey, proposalDate, responseDueAt: new Date(localLock).toISOString(), lockAt: new Date(localLock).toISOString(), items: state.calculation.rows, shortages: state.calculation.shortageRows, arrivalSchedule: state.calculation.scheduleByStore } });
+      $("hq-status").textContent = "正在建立正式批次；大型缺貨清單會以精簡格式安全寫入…";
+      await api("/batches", { method: "POST", body: { id, weekKey, proposalDate, responseDueAt: new Date(localLock).toISOString(), lockAt: new Date(localLock).toISOString(), items: compactBatchItems(state.calculation.rows), shortages: compactBatchShortages(state.calculation.shortageRows), arrivalSchedule: state.calculation.scheduleByStore } });
       $("hq-status").textContent = `已建立批次${id}；同週舊的未完成批次已改為僅供查閱，門市重新登入即可看到新版確認清單。`;
       $("calculation-results").hidden = true; state.calculation = null; await loadBatches();
     } finally { $("publish-button").disabled = false; }
@@ -614,7 +653,7 @@
     const id = `TR-${payload.weekKey}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
     await api("/batches", { method: "POST", body: {
       id, weekKey: payload.weekKey, proposalDate: payload.proposalDate, responseDueAt: payload.responseDueAt, lockAt: payload.lockAt,
-      items: finalizedItems(payload), shortages: finalizedShortages(payload), arrivalSchedule: payload.formal.scheduleByStore,
+      items: compactBatchItems(finalizedItems(payload)), shortages: compactBatchShortages(finalizedShortages(payload)), arrivalSchedule: payload.formal.scheduleByStore,
       collaborationId: draft.id, collaborationRevision: draft.revision
     } });
     $("collaboration-dialog").close(); state.activeCollaboration = null;
@@ -825,6 +864,7 @@
     state.calculation = null; state.formalCalculation = null;
     $("calculation-results").hidden = true;
     $("comparison-downloads").hidden = true;
+    $("formal-downloads").hidden = true;
     $("publish-button").textContent = "建立門市確認批次";
     $("hq-status").textContent = "計算模式已變更，請重新產生建議。";
   }));
@@ -844,6 +884,14 @@
   $("collaboration-detail").addEventListener("click", handleCollaborationDialog);
   $("collaboration-detail").addEventListener("change", handleCollaborationDialog);
   $("calculation-results").addEventListener("click", (event) => {
+    const formalDownloadButton = event.target.closest("#download-formal-reports");
+    if (formalDownloadButton) {
+      formalDownloadButton.disabled = true;
+      try { downloadFormalReports(); }
+      catch (error) { $("hq-status").textContent = error.message; }
+      finally { formalDownloadButton.disabled = false; }
+      return;
+    }
     const downloadButton = event.target.closest("[data-download-comparison]");
     if (downloadButton) {
       downloadButton.disabled = true;

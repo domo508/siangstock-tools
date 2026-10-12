@@ -100,6 +100,12 @@ function validateConsumablePack(type: ItemType, value: number, label: string): v
   if (type === "consumable" && value % 100 !== 0) throw new RequestValidationError(`${label}須為0或100的倍數。`);
 }
 
+function chunks<T>(rows: T[], size = 750): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < rows.length; index += size) result.push(rows.slice(index, index + size));
+  return result;
+}
+
 function assertHq(role: Role): void {
   if (role === "store") throw new RequestValidationError("此動作只限總部操作。", 403);
 }
@@ -383,7 +389,7 @@ async function detail(request: Request, env: StoreTransferEnv, batchId: string):
 async function createBatch(request: Request, env: StoreTransferEnv): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  const input = await readBody(request);
+  const input = await readBody(request, 6_000_000);
   const collaborationId = String(input.collaborationId || "").normalize("NFKC").trim();
   const collaborationRevision = Number(input.collaborationRevision || 0);
   let collaboration: Record<string, unknown> | null = null;
@@ -461,13 +467,17 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   const arrivalSchedule = input.arrivalSchedule && typeof input.arrivalSchedule === "object" && !Array.isArray(input.arrivalSchedule) ? JSON.stringify(input.arrivalSchedule) : "{}";
   if (arrivalSchedule.length > 5000) throw new RequestValidationError("到店日快照內容過長。");
   const now = new Date().toISOString();
+  const itemInsertSql = `INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, updated_at, updated_by)
+    SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.suggested'), json_extract(value, '$.ruleSummary'), json_extract(value, '$.itemType'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.systemProjection'), ?3, ?4 FROM json_each(?2)`;
+  const shortageInsertSql = `INSERT INTO store_transfer_shortages (batch_id, store_code, sku, product_name, item_type, demand_quantity, allocated_quantity, unfilled_quantity, reason, follow_up_status, current_arrival_date, next_arrival_date, created_at, updated_at)
+    SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.type'), json_extract(value, '$.demand'), json_extract(value, '$.allocated'), json_extract(value, '$.unfilled'), json_extract(value, '$.reason'), json_extract(value, '$.followUpStatus'), json_extract(value, '$.currentArrivalDate'), json_extract(value, '$.nextArrivalDate'), ?3, ?3 FROM json_each(?2)`;
   const statements = [
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) SELECT id, 'cancelled', ?, ?, ? FROM store_transfer_batches WHERE week_key = ? AND status IN ('open', 'review') AND deleted_at IS NULL AND id <> ?").bind(`已由新版批次${id}取代，僅供查閱`, now, who.email, weekKey, id),
     env.DB.prepare("UPDATE store_transfer_batches SET status = 'cancelled', updated_at = ?, updated_by = ?, revision = revision + 1 WHERE week_key = ? AND status IN ('open', 'review') AND deleted_at IS NULL AND id <> ?").bind(now, who.email, weekKey, id),
     env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, arrival_schedule, source_collaboration_id, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)").bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), arrivalSchedule, collaborationId || null, now, who.email, now, who.email),
     ...(collaborationId ? [env.DB.prepare("UPDATE store_transfer_collaboration_drafts SET status = 'finalized', finalized_batch_id = ?, revision = revision + 1, updated_at = ?, updated_by = ? WHERE id = ? AND status = 'draft' AND revision = ?").bind(id, now, who.email, collaborationId, collaborationRevision)] : []),
-    ...normalized.map((item) => env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, item.storeCode, item.sku, item.productName, item.suggested, item.ruleSummary, item.itemType, item.calculationDate, item.baseQuantity, item.displayGap, item.dailyUsage, item.systemProjection, now, who.email)),
-    ...normalizedShortages.map((row) => env.DB.prepare("INSERT INTO store_transfer_shortages (batch_id, store_code, sku, product_name, item_type, demand_quantity, allocated_quantity, unfilled_quantity, reason, follow_up_status, current_arrival_date, next_arrival_date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, row.storeCode, row.sku, row.productName, row.type, row.demand, row.allocated, row.unfilled, row.reason, row.followUpStatus, row.currentArrivalDate, row.nextArrivalDate, now, now)),
+    ...chunks(normalized).map((rows) => env.DB.prepare(itemInsertSql).bind(id, JSON.stringify(rows), now, who.email)),
+    ...chunks(normalizedShortages).map((rows) => env.DB.prepare(shortageInsertSql).bind(id, JSON.stringify(rows), now)),
     ...stores.map((storeCode) => env.DB.prepare("INSERT INTO store_transfer_store_status (batch_id, store_code, status, updated_at) VALUES (?, ?, 'pending', ?)").bind(id, storeCode, now)),
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'created', ?, ?, ?)").bind(id, `建立${stores.length}間門市、${normalized.length}筆建議、${normalizedShortages.length}筆缺貨未配`, now, who.email)
   ];

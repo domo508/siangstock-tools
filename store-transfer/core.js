@@ -1047,5 +1047,55 @@
     return workbook;
   }
 
-  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, storeDisplayException, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook };
+  function buildFormalWorkbook(calculation, XLSX, storeCode, storeName) {
+    if (calculation?.calculationMode !== "formal") throw new Error("只有正式補貨結果可以下載正式報表。");
+    const workbook = XLSX.utils.book_new();
+    const titleStyle = { fill: { fgColor: { rgb: "15344A" } }, font: { name: "Arial", bold: true, color: { rgb: "FFFFFF" }, sz: 17 }, alignment: { vertical: "center" } };
+    const infoStyle = { fill: { fgColor: { rgb: "EEF3F6" } }, font: { name: "Arial", color: { rgb: "36566C" }, sz: 10 }, alignment: { wrapText: true, vertical: "center" } };
+    const headerStyle = { fill: { fgColor: { rgb: "DDEBF1" } }, font: { name: "Arial", bold: true, color: { rgb: "15344A" }, sz: 10 }, alignment: { wrapText: true, horizontal: "center", vertical: "center" } };
+    const rowStyle = { fill: { fgColor: { rgb: "FFFFFF" } }, font: { name: "Arial", color: { rgb: "243746" }, sz: 10 }, alignment: { wrapText: true, vertical: "top" } };
+    const addSheet = (sheetName, description, headers, rows, widths) => {
+      const worksheet = XLSX.utils.aoa_to_sheet([
+        [`${storeName || storeCode}｜正式補貨報表｜${sheetName}`],
+        [],
+        [`建議日 ${calculation.proposalDate}　｜　銷售截止 ${calculation.latestSalesDate}　｜　${description}`],
+        [],
+        headers,
+        ...(rows.length ? rows : [["本頁無資料"]])
+      ]);
+      worksheet["!merges"] = [XLSX.utils.decode_range(`A1:${XLSX.utils.encode_col(headers.length - 1)}1`), XLSX.utils.decode_range(`A3:${XLSX.utils.encode_col(headers.length - 1)}3`)];
+      worksheet["!cols"] = widths.map((wch) => ({ wch }));
+      worksheet["!rows"] = [{ hpt: 30 }, { hpt: 8 }, { hpt: 38 }, { hpt: 8 }, { hpt: 34 }];
+      worksheet["!freeze"] = { xSplit: 0, ySplit: 5, topLeftCell: "A6", activePane: "bottomLeft", state: "frozen" };
+      worksheet.A1.s = titleStyle;
+      worksheet.A3.s = infoStyle;
+      headers.forEach((_header, index) => { worksheet[XLSX.utils.encode_cell({ r: 4, c: index })].s = headerStyle; });
+      for (let rowIndex = 5; rowIndex < 5 + Math.max(1, rows.length); rowIndex += 1) {
+        for (let columnIndex = 0; columnIndex < headers.length; columnIndex += 1) {
+          const cell = worksheet[XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex })];
+          if (cell) cell.s = rowStyle;
+        }
+      }
+      XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+    };
+    const suggestionRows = (calculation.rows || []).filter((row) => row.storeCode === storeCode).map((row) => [
+      comparisonTypeLabel(row.itemType), row.sku, row.productName, row.physicalInventory, row.pendingSubmittedQuantity,
+      row.inTransitQuantity, row.localSales42, row.targetQuantity, row.displayQuantity, row.suggestedQuantity,
+      row.currentArrivalDate, row.nextArrivalDate, row.systemSellThroughDate, row.ruleSummary
+    ]);
+    const shortageRows = (calculation.shortageRows || []).filter((row) => row.storeCode === storeCode).map((row) => [
+      comparisonTypeLabel(row.itemType), row.sku, row.productName, row.demandQuantity, row.allocatedQuantity,
+      row.unfilledQuantity, row.currentArrivalDate, row.nextArrivalDate, row.reason, row.followUpStatus || "待回拋主採購"
+    ]);
+    const pendingRows = (calculation.pendingTransferRows || []).filter((row) => row.storeCode === storeCode).map((row) => [
+      row.sku, row.productName, row.documentCode, row.status, row.quantity, row.openedDate || "", row.shippedDate || "",
+      row.includedInCalculation ? "已納入抵扣" : "未納入抵扣"
+    ]);
+    addSheet("本次調撥建議", "提交待發貨與發貨審核在途只抵扣需求，不併入本次新增調撥量。", ["品項分類", "ERP品號", "品名", "現有實體庫存", "待發貨量", "在途量", "近42天現場銷售", "目標庫存", "展示最低量", "本次系統建議調撥量", "本批預計到店", "下一輪預計到店", "建議後可售至", "判斷分析"], suggestionRows, [16, 15, 38, 13, 12, 12, 15, 12, 13, 18, 16, 16, 20, 55]);
+    addSheet("缺貨未配", "總倉暫時無法配足的必要需求，不會混入門市確認量或ERP調撥檔。", ["品項分類", "ERP品號", "品名", "需求量", "已配量", "未配量", "本批預計到店", "下一輪預計到店", "未配原因", "後續狀態"], shortageRows, [16, 15, 38, 12, 12, 12, 16, 16, 48, 18]);
+    addSheet("待發貨與在途", "提交列為待發貨、發貨審核列為在途；兩者已抵扣正式補貨需求。", ["ERP品號", "品名", "調撥單號", "狀態", "數量", "開單日", "發貨日", "本次計算"], pendingRows, [15, 38, 20, 14, 10, 14, 14, 18]);
+    return workbook;
+  }
+
+  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, storeDisplayException, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook, buildFormalWorkbook };
 });
