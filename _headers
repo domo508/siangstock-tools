@@ -38,7 +38,31 @@
   Cross-Origin-Opener-Policy: same-origin-allow-popups
 
 /procurement-planning/version.json
-  Cache-Control: no-store, max-age=0
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/procurement-planning/rules-admin
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/procurement-planning/rules-admin/
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/procurement-planning/rules-admin/index.html
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/procurement-planning/rules-admin/version.json
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/store-transfer
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/store-transfer/
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/store-transfer/index.html
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/store-transfer/version.json
+  Cache-Control: no-store, max-age=0, must-revalidate
 
 /procurement-planning/manual.html
   Cache-Control: no-cache

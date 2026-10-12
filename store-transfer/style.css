@@ -1,4 +1,6 @@
 :root { --transfer-blue: #174b72; --transfer-gold: #a47b16; --transfer-soft: #f5f8fa; }
+html, body { max-width: 100%; overflow-x: clip; }
+.page-shell, .panel, .result-section { min-width: 0; }
 .compact-hero { padding-bottom: 2.5rem; }
 .compact-hero h1 { max-width: 13em; font-size: clamp(2.15rem, 4vw, 3.7rem); }
 .panel { margin-top: 1.5rem; }
@@ -114,14 +116,19 @@
 .transfer-table input { width: 90px; padding: .45rem; border: 1px solid #bfcfd9; border-radius: 8px; font: inherit; }
 .transfer-table input.reason-input { width: 220px; }
 .decision-summary-table { min-width: 720px; }
-.workflow-table { min-width: 900px; }
+.workflow-table { min-width: 0; table-layout: fixed; }
+.workflow-table th, .workflow-table td { overflow-wrap: anywhere; }
+.workflow-table input { max-width: 100%; box-sizing: border-box; }
+.workflow-table input.reason-input { width: 100%; min-width: 0; }
 .decision-table-note { color: #60788b; font-size: .88rem; }
 .decision-sku { display: block; color: #17324d; }
-.decision-product-name { display: block; min-width: 170px; margin-top: .2rem; color: #536b7c; line-height: 1.4; }
+.decision-product-name { display: block; min-width: 0; margin-top: .2rem; color: #536b7c; line-height: 1.4; }
 .decision-quantity { color: #153f63; font-size: 1rem; font-weight: 800; font-variant-numeric: tabular-nums; }
-.decision-stage-cell { min-width: 125px; }
+.decision-stage-cell { min-width: 0; }
 .decision-stage-cell small { display: block; max-width: 150px; margin-top: .35rem; color: #60788b; line-height: 1.35; }
-.decision-detail-toggle { white-space: nowrap; }
+.decision-toggle-cell { width: 44px; padding-left: .35rem !important; padding-right: .35rem !important; text-align: center !important; }
+.decision-detail-toggle { display: inline-flex; width: 32px; min-width: 32px; height: 32px; padding: 0 !important; align-items: center; justify-content: center; border-radius: 50%; color: #174b72; font-size: 1.25rem; font-weight: 800; line-height: 1; }
+.decision-detail-toggle[aria-expanded="true"] { color: #fff; border-color: #176b87; background: #176b87; }
 .decision-detail-row[hidden] { display: none !important; }
 .decision-detail-row > td { padding: 0 .8rem .9rem; background: #f6fafb; }
 .decision-evidence-grid { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: .55rem; padding: .75rem; border: 1px solid #d8e5e9; border-radius: 11px; background: #fff; }
@@ -192,7 +199,7 @@
 .collaboration-table input[data-collaboration-note] { width: 230px; }
 .collaboration-table :disabled { color: #667b89; background: #edf2f4; }
 [data-store-row][hidden], [data-store-section][hidden] { display: none !important; }
-.batch-dialog { width: min(1180px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); padding: 1.4rem; border: 0; border-radius: 18px; box-shadow: 0 22px 70px rgba(15, 42, 61, .28); }
+.batch-dialog { width: min(1500px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); padding: 1.4rem; border: 0; border-radius: 18px; box-shadow: 0 22px 70px rgba(15, 42, 61, .28); }
 .batch-dialog::backdrop { background: rgba(13, 35, 50, .5); }
 .dialog-close { float: right; border: 0; background: transparent; font-size: 2rem; cursor: pointer; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1rem; }
@@ -245,5 +252,30 @@
   .decision-evidence-grid { grid-template-columns: 1fr; }
   .decision-product-name { min-width: 0; }
   .decision-stage-cell input, .workflow-table input.reason-input { width: 100%; }
-  .decision-detail-toggle, .remove-item-button { width: 100%; }
+  .decision-toggle-cell { width: 100%; text-align: left !important; }
+  .decision-detail-toggle { width: 32px; }
+  .remove-item-button { width: 100%; }
+}
+.version-warning {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px max(24px, calc((100vw - 1280px) / 2));
+  border-bottom: 1px solid #c88b1d;
+  background: #fff4d6;
+  color: var(--navy);
+  box-shadow: 0 8px 24px rgba(30, 54, 74, .14);
+}
+.version-warning[hidden] { display: none; }
+.version-warning strong { display: block; margin-bottom: 4px; font-size: 1.08rem; }
+.version-warning p { margin: 0; line-height: 1.55; }
+.version-warning .primary-button { flex: 0 0 auto; }
+.runtime-outdated .page-shell { pointer-events: none; filter: grayscale(.18); opacity: .72; user-select: none; }
+@media (max-width: 700px) {
+  .version-warning { align-items: stretch; flex-direction: column; padding: 14px 18px; }
+  .version-warning .primary-button { width: 100%; }
 }

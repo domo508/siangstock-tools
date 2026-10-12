@@ -1,7 +1,8 @@
 (function () {
   "use strict";
 
-  const state = { config: null, version: 0, rules: null, dirty: false, googleTokenClient: null, googleAccessToken: "", masterBySku: null };
+  const APP_VERSION = "20261012-transfer-rules-r2";
+  const state = { config: null, version: 0, rules: null, dirty: false, googleTokenClient: null, googleAccessToken: "", masterBySku: null, runtimeOutdated: false, latestRuntimeVersion: "" };
   const GOOGLE_READ_SCOPE = "openid email https://www.googleapis.com/auth/drive.readonly";
   const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   const UNIT_CATEGORIES = ["床包", "薄被套", "兩用被套", "枕套", "抱枕套", "枕頭／枕芯", "其它配件", "其它品項"];
@@ -17,6 +18,7 @@
   };
   const get = (selector) => document.querySelector(selector);
   const elements = {
+    versionWarning: get("#version-warning"), reloadLatest: get("#reload-latest-button"),
     account: get("#account-badge"), pageStatus: get("#page-status"), suppliers: get("#supplier-rows"), units: get("#unit-rows"), stores: get("#store-rows"),
     addSupplier: get("#add-supplier"), featuredSupplierSelect: get("#featured-supplier-select"), addFeaturedSupplier: get("#add-featured-supplier"), featuredSupplierList: get("#featured-supplier-list"),
     addUnit: get("#add-unit"), addStore: get("#add-store-rule"), blacklist: get("#blacklist-input"), holidays: get("#workday-holidays"),
@@ -29,9 +31,29 @@
     arrivals: Object.fromEntries(["R00", "R01", "R03", "R10", "R07", "R06"].map((code) => [code, get(`#arrival-${code}`)]))
   };
 
+  async function checkRuntimeVersion() {
+    if (state.runtimeOutdated) return false;
+    try {
+      const response = await fetch(`version.json?check=${Date.now()}`, { cache: "no-store", credentials: "same-origin" });
+      if (!response.ok) return true;
+      const manifest = await response.json();
+      const latestVersion = String(manifest?.version || "").trim();
+      if (!latestVersion || latestVersion === APP_VERSION) return true;
+      state.runtimeOutdated = true;
+      state.latestRuntimeVersion = latestVersion;
+      elements.versionWarning.hidden = false;
+      document.body.classList.add("runtime-outdated");
+      elements.pageStatus.textContent = "已有新版規則管理頁，本分頁已停止操作；請按上方「重新載入最新版」。";
+      elements.pageStatus.classList.add("error");
+      return false;
+    } catch (_) {
+      return true;
+    }
+  }
+
   function configureReturnPath() {
     if (new URLSearchParams(location.search).get("from") !== "store-transfer") return;
-    const target = "../../store-transfer/";
+    const target = "../../store-transfer/?deploy=20261012-store-transfer-r7";
     const source = get("#source-tool-link"); const back = get("#source-back-link"); const brand = get("#tool-brand-link");
     source.href = target; source.textContent = "門市週補貨與調撥";
     back.href = target; back.textContent = "← 返回週調撥工具";
@@ -328,6 +350,7 @@
     elements.approvers.value = settings.approverEmails.join("\n"); elements.storeTransferHq.value = settings.storeTransferHqEmails.join("\n"); elements.recipient.value = settings.notificationRecipient; elements.retention.value = String(settings.retentionMonths);
   }
   async function saveAccessSettings() {
+    if (!(await checkRuntimeVersion())) return;
     elements.saveAccess.disabled = true; elements.accessStatus.textContent = "正在儲存…";
     try {
       await request("/api/procurement/access-settings", { method: "PUT", body: JSON.stringify({ approverEmails: elements.approvers.value.split(/\n/).map((item) => item.trim()).filter(Boolean), storeTransferHqEmails: elements.storeTransferHq.value.split(/\n/).map((item) => item.trim()).filter(Boolean), notificationRecipient: elements.recipient.value.trim(), retentionMonths: Number(elements.retention.value), notificationEvents: ["approved", "revoked", "corrected"] }) });
@@ -335,6 +358,7 @@
     } catch (error) { elements.accessStatus.textContent = `儲存失敗：${error.message}`; } finally { elements.saveAccess.disabled = false; }
   }
   async function saveRules() {
+    if (!(await checkRuntimeVersion())) return;
     const reason = elements.reason.value.trim(); if (!reason) { elements.saveStatus.textContent = "請填寫本次修改原因。"; elements.reason.focus(); return; }
     state.rules.blacklist = elements.blacklist.value.split(/\n/).map((item) => item.trim()).filter(Boolean);
     state.rules.storeInventory.workdayHolidays = elements.holidays.value.split(/\n/).map((item) => item.trim()).filter(Boolean);
@@ -349,6 +373,7 @@
   }
   async function init() {
     try {
+      if (!(await checkRuntimeVersion())) return;
       const [config, payload] = await Promise.all([request("/api/procurement/config"), request("/api/procurement/rules")]); state.config = config; state.version = payload.version; state.rules = payload.rules;
       const roleLabel = { admin: "最高權限", approver: "採購核准者", operator: "採購操作" }[config.role]; elements.account.textContent = `${config.email}・${roleLabel}`;
       if (!config.permissions?.canManageRules) throw new Error("此帳號只有採購操作權，不能管理規則。");
@@ -368,6 +393,14 @@
   elements.addTransferExclusion.addEventListener("click", addTransferExclusion);
   elements.transferExclusionSku.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); addTransferExclusion(); } });
   configureReturnPath();
+  elements.reloadLatest.addEventListener("click", () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("deploy", state.latestRuntimeVersion || String(Date.now()));
+    window.location.replace(url.toString());
+  });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) checkRuntimeVersion(); });
+  window.addEventListener("focus", checkRuntimeVersion);
+  window.setInterval(checkRuntimeVersion, 5 * 60 * 1000);
   elements.blacklist.addEventListener("input", markDirty); elements.holidays.addEventListener("input", markDirty); elements.save.addEventListener("click", saveRules); elements.saveAccess.addEventListener("click", saveAccessSettings); init();
   Object.values(elements.arrivals).forEach((control) => control.addEventListener("change", markDirty));
 })();

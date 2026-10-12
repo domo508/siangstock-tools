@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20261012-collapsible-details-r5");
+    const appIndex = html.indexOf("app.js?v=20261012-store-transfer-r7");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -147,6 +147,29 @@ describe("前台導覽", () => {
     expect(app).toContain("登入已失效，請重新登入或切換至本店被指派的公司帳號。");
     expect(app).toContain("accountRecovery(error)");
     expect(style).toContain(".auth-recovery");
+  });
+
+  it("週調撥與規則管理會阻擋舊版操作，且巢狀入口不快取HTML", () => {
+    const transferHtml = readFileSync("../store-transfer/index.html", "utf8");
+    const transferApp = readFileSync("../store-transfer/app.js", "utf8");
+    const transferVersion = JSON.parse(readFileSync("../store-transfer/version.json", "utf8"));
+    const rulesHtml = readFileSync("../procurement-planning/rules-admin/index.html", "utf8");
+    const rulesApp = readFileSync("../procurement-planning/rules-admin/admin.js", "utf8");
+    const rulesVersion = JSON.parse(readFileSync("../procurement-planning/rules-admin/version.json", "utf8"));
+    const headers = readFileSync("../_headers", "utf8");
+    expect(transferHtml).toContain('id="version-warning"');
+    expect(transferHtml).toContain("deploy=20261012-transfer-rules-r2");
+    expect(transferApp).toContain(`const APP_VERSION = "${transferVersion.version}"`);
+    expect(transferApp).toContain("version.json?check=${Date.now()}");
+    expect(transferApp).toContain('url.searchParams.set("deploy"');
+    expect(rulesHtml).toContain('id="version-warning"');
+    expect(rulesApp).toContain(`const APP_VERSION = "${rulesVersion.version}"`);
+    expect(rulesApp).toContain("version.json?check=${Date.now()}");
+    expect(rulesApp).toContain("../../store-transfer/?deploy=20261012-store-transfer-r7");
+    expect(transferApp).toContain('window.addEventListener("focus", checkRuntimeVersion)');
+    expect(rulesApp).toContain('window.addEventListener("focus", checkRuntimeVersion)');
+    expect(headers).toContain("/store-transfer/index.html\n  Cache-Control: no-store, max-age=0, must-revalidate");
+    expect(headers).toContain("/procurement-planning/rules-admin/index.html\n  Cache-Control: no-store, max-age=0, must-revalidate");
   });
 
   it("門市上方只列待處理批次，近一個月歷史預設收合", () => {
@@ -326,12 +349,15 @@ describe("前台導覽", () => {
     const migration = readFileSync("../cloudflare/worker/migrations/0034_store_transfer_decision_snapshots.sql", "utf8");
     expect(html).toContain("摘要先顯示需要決策的欄位");
     expect(html).toContain("decision-summary-table");
-    expect(app).toContain('aria-expanded="false">查看依據');
+    expect(app).toContain('aria-expanded="false" aria-label="展開判斷依據"');
+    expect(app).toContain('button.textContent = open ? "−" : "+"');
+    expect(app).toContain('class="decision-toggle-cell" data-label="判斷依據"');
     expect(app).toContain("data-decision-detail hidden");
     expect(app).toContain("toggleDecisionDetail");
     expect(app).toContain("decisionSnapshot");
     expect(app).toContain("舊批次未保存完整判斷明細");
     expect(style).toContain(".decision-evidence-grid");
+    expect(style).toContain(".workflow-table { min-width: 0; table-layout: fixed; }");
     expect(style).toContain(".workflow-table tr:not(.decision-detail-row)");
     expect(worker).toContain("decision_snapshot");
     expect(migration).toContain("ADD COLUMN decision_snapshot");

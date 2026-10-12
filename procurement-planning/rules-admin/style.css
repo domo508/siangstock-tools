@@ -65,3 +65,26 @@
   .transfer-exclusion-entry label, .transfer-exclusion-status, .transfer-exclusion-list { grid-column: auto; }
   .transfer-exclusion-entry .secondary-button { width: 100%; }
 }
+.version-warning {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px max(24px, calc((100vw - 1280px) / 2));
+  border-bottom: 1px solid #c88b1d;
+  background: #fff4d6;
+  color: var(--navy, #153f63);
+  box-shadow: 0 8px 24px rgba(30, 54, 74, .14);
+}
+.version-warning[hidden] { display: none; }
+.version-warning strong { display: block; margin-bottom: 4px; font-size: 1.08rem; }
+.version-warning p { margin: 0; line-height: 1.55; }
+.version-warning .primary-button { flex: 0 0 auto; }
+.runtime-outdated .page-shell { pointer-events: none; filter: grayscale(.18); opacity: .72; user-select: none; }
+@media (max-width: 700px) {
+  .version-warning { align-items: stretch; flex-direction: column; padding: 14px 18px; }
+  .version-warning .primary-button { width: 100%; }
+}

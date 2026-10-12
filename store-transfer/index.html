@@ -9,9 +9,16 @@
   <title>門市週補貨與調撥｜翔仔居家</title>
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="../cost-analysis/style.css">
-  <link rel="stylesheet" href="style.css?v=20261012-collapsible-details-r5">
+  <link rel="stylesheet" href="style.css?v=20261012-store-transfer-r7">
 </head>
 <body>
+  <section id="version-warning" class="version-warning" role="alert" hidden>
+    <div>
+      <strong>這個分頁已有新版</strong>
+      <p>為避免使用舊規則或舊畫面送出資料，本分頁已停止操作。請重新載入最新版；已建立的批次與門市確認資料不受影響。</p>
+    </div>
+    <button id="reload-latest-button" class="primary-button" type="button">重新載入最新版</button>
+  </section>
   <main class="page-shell">
     <header class="topbar">
       <a class="brand" href="/" aria-label="回到公司工具首頁"><span class="brand-mark" aria-hidden="true">調</span><span>翔仔居家・門市週補貨與調撥</span></a>
@@ -35,7 +42,7 @@
     </section>
 
     <section id="hq-panel" class="panel" data-weekly-view hidden aria-labelledby="hq-title">
-      <div class="section-heading"><div><p class="eyebrow">總部工作台</p><h2 id="hq-title">建立本週調撥建議</h2></div><div class="heading-actions"><p>星期五遇假日會提前；星期一遇假日，回覆期限順延至下一個工作日。</p><a id="rules-link" class="secondary-button compact" href="../procurement-planning/rules-admin/?from=store-transfer#store-inventory" hidden>展示／最低庫存規則</a></div></div>
+      <div class="section-heading"><div><p class="eyebrow">總部工作台</p><h2 id="hq-title">建立本週調撥建議</h2></div><div class="heading-actions"><p>星期五遇假日會提前；星期一遇假日，回覆期限順延至下一個工作日。</p><a id="rules-link" class="secondary-button compact" href="../procurement-planning/rules-admin/?from=store-transfer&amp;deploy=20261012-transfer-rules-r2#store-inventory" hidden>展示／最低庫存規則</a></div></div>
       <div class="period-grid">
         <label><span>本週週次</span><input id="week-key" type="week" required></label>
         <label><span>建議產生日</span><input id="proposal-date" type="date" required></label>
@@ -79,10 +86,10 @@
         </section>
         <p id="company-impact" class="result-alert info"></p>
         <p id="b3-audit" class="result-alert warn" hidden></p>
-        <section class="result-section" data-store-section><h4>一般週補貨（必要調撥）</h4><p>摘要先顯示需要決策的欄位；銷售、庫存、待發貨、在途、目標與到店依據預設收合，需要時逐筆展開。</p><div class="result-table-wrap"><table class="transfer-table decision-summary-table"><thead><tr><th>門市</th><th>ERP品號／品名</th><th>系統建議</th><th>建議後可售至</th><th>到貨前風險</th><th>判斷依據</th></tr></thead><tbody id="calculation-rows"></tbody></table></div></section>
-        <section id="special-stock-results" class="result-section special-stock-section" data-store-section hidden><h4>建議調撥（非必要）</h4><p>單人薄被套／兩用被套依各材質近42天門市現場銷售，列出前2名花色作備貨參考；詳細依據預設收合。</p><div class="result-table-wrap"><table class="transfer-table decision-summary-table"><thead><tr><th>門市</th><th>ERP品號／品名</th><th>系統建議</th><th>建議後可售至</th><th>判斷依據</th></tr></thead><tbody id="special-stock-rows"></tbody></table></div></section>
-        <section id="activity-results" class="result-section activity-result-section" data-store-section hidden><h4>活動／贈品調撥</h4><p>依活動適用範圍、門檻與實際到店日估算；門檻、訂單與庫存明細預設收合。</p><div class="result-table-wrap"><table class="transfer-table decision-summary-table"><thead><tr><th>門市</th><th>贈品貨號／品名</th><th>活動期間</th><th>系統建議</th><th>本批預計到店</th><th>判斷依據</th></tr></thead><tbody id="activity-rows"></tbody></table></div><p id="marketing-warnings" class="status-line"></p></section>
-        <section id="consumable-results" class="result-section consumable-section" data-store-section hidden><h4>門市耗材補貨</h4><p>僅顯示大、中、小提袋有需求的門市；週均耗用與庫存依據預設收合。</p><div class="result-table-wrap"><table class="transfer-table decision-summary-table"><thead><tr><th>門市</th><th>提袋品號／品名</th><th>系統建議</th><th>建議後可用週數</th><th>判斷依據</th></tr></thead><tbody id="consumable-rows"></tbody></table></div></section>
+        <section class="result-section" data-store-section><h4>一般週補貨（必要調撥）</h4><p>摘要先顯示需要決策的欄位；銷售、庫存、待發貨、在途、目標與到店依據預設收合，需要時點選每列最左側的＋展開。</p><div class="result-table-wrap"><table class="transfer-table decision-summary-table"><thead><tr><th class="decision-toggle-cell" aria-label="判斷依據"></th><th>門市</th><th>ERP品號／品名</th><th>系統建議</th><th>建議後可售至</th><th>到貨前風險</th></tr></thead><tbody id="calculation-rows"></tbody></table></div></section>
+        <section id="special-stock-results" class="result-section special-stock-section" data-store-section hidden><h4>建議調撥（非必要）</h4><p>單人薄被套／兩用被套依各材質近42天門市現場銷售，列出前2名花色作備貨參考；詳細依據預設收合。</p><div class="result-table-wrap"><table class="transfer-table decision-summary-table"><thead><tr><th class="decision-toggle-cell" aria-label="判斷依據"></th><th>門市</th><th>ERP品號／品名</th><th>系統建議</th><th>建議後可售至</th></tr></thead><tbody id="special-stock-rows"></tbody></table></div></section>
+        <section id="activity-results" class="result-section activity-result-section" data-store-section hidden><h4>活動／贈品調撥</h4><p>依活動適用範圍、門檻與實際到店日估算；門檻、訂單與庫存明細預設收合。</p><div class="result-table-wrap"><table class="transfer-table decision-summary-table"><thead><tr><th class="decision-toggle-cell" aria-label="判斷依據"></th><th>門市</th><th>贈品貨號／品名</th><th>活動期間</th><th>系統建議</th><th>本批預計到店</th></tr></thead><tbody id="activity-rows"></tbody></table></div><p id="marketing-warnings" class="status-line"></p></section>
+        <section id="consumable-results" class="result-section consumable-section" data-store-section hidden><h4>門市耗材補貨</h4><p>僅顯示大、中、小提袋有需求的門市；週均耗用與庫存依據預設收合。</p><div class="result-table-wrap"><table class="transfer-table decision-summary-table"><thead><tr><th class="decision-toggle-cell" aria-label="判斷依據"></th><th>門市</th><th>提袋品號／品名</th><th>系統建議</th><th>建議後可用週數</th></tr></thead><tbody id="consumable-rows"></tbody></table></div></section>
         <section id="pending-transfer-results" class="result-section pending-transfer-section" data-store-section hidden><h4>既有待發貨／在途明細（唯讀）</h4><p>本次建議量為0的品項不會出現在主要調撥建議，但仍保留在此供核對；這些數量不會寫入本次ERP調撥檔。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>調撥單號</th><th>狀態</th><th>數量</th><th>開單日</th><th>發貨日</th><th>本次計算</th></tr></thead><tbody id="pending-transfer-rows"></tbody></table></div></section>
         <section id="shortage-results" class="result-section shortage-section" data-store-section hidden><h4>缺貨未配清單</h4><p>此區顯示必要需求中總倉暫時無法配足的數量，會隨批次保存供總部與該門市追蹤；不會混入可確認量或ERP檔。S品總倉無可釋出量時仍只做背景監控。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>需求量</th><th>已配量</th><th>未配量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody id="shortage-rows"></tbody></table></div></section>
       </div>
@@ -163,6 +170,6 @@
   <script src="../procurement-planning/google-sources.js?v=20260915-google-sources-r1"></script>
   <script src="core.js?v=20261012-marketing-parser-r3"></script>
   <script src="xlsx-preflight.js?v=20260916-xlsx-reader-r1"></script>
-  <script src="app.js?v=20261012-collapsible-details-r5"></script>
+  <script src="app.js?v=20261012-store-transfer-r7"></script>
 </body>
 </html>
