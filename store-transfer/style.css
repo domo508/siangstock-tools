@@ -212,6 +212,13 @@ html, body { max-width: 100%; overflow-x: clip; }
 .batch-dialog::backdrop { background: rgba(13, 35, 50, .5); }
 .dialog-close { float: right; border: 0; background: transparent; font-size: 2rem; cursor: pointer; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1rem; }
+.approved-correction-panel { flex: 1 0 100%; padding: 1rem; border: 1px solid #dfc67f; border-radius: 14px; background: #fff8e4; }
+.approved-correction-panel h3 { margin: 0 0 .35rem; color: #17324d; }
+.approved-correction-panel p { margin: 0 0 .8rem; color: #66552a; line-height: 1.55; }
+.approved-correction-controls { display: grid; grid-template-columns: minmax(190px, .7fr) minmax(280px, 1.4fr) auto auto; gap: .65rem; align-items: end; }
+.approved-correction-controls label { display: grid; gap: .35rem; color: #233d52; font-weight: 800; }
+.approved-correction-controls input,
+.approved-correction-controls select { width: 100%; min-height: 42px; padding: .55rem .65rem; border: 1px solid #bfcfd9; border-radius: 9px; background: #fff; font: inherit; }
 .secondary-button.compact { padding: .55rem .8rem; }
 .button-link { border: 0; background: transparent; font: inherit; cursor: pointer; }
 .sub-breadcrumb { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.4rem; color: #647b8d; }
@@ -246,7 +253,7 @@ html, body { max-width: 100%; overflow-x: clip; }
 .auth-recovery strong { display: block; margin-bottom: .4rem; color: #17324d; font-size: 1.05rem; }
 .auth-recovery p { margin: .35rem 0 .8rem; line-height: 1.65; }
 .auth-recovery .primary-button { display: inline-flex; text-decoration: none; }
-@media (max-width: 960px) { .guide-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .manual-item-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 960px) { .guide-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .manual-item-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } .approved-correction-controls { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 760px) { .period-grid, .transfer-sources, .fixed-source-panel, .calculation-mode-panel, .guide-grid, .status-grid, .manual-item-form, .display-exception-form-grid, .display-exception-toolbar, .sku-search-toolbar { grid-template-columns: 1fr; } .calculation-mode-panel > p { grid-column: auto; } .manual-item-form .manual-reason-field, .manual-item-form .manual-system-reason-field, .display-exception-form-grid .wide-field, .display-exception-priority, .display-exception-check { grid-column: auto; } .fixed-source-panel > .status-line { grid-column: auto; } .fixed-source-actions { justify-content: stretch; } .fixed-source-actions button, .sku-search-toolbar button { width: 100%; } .sku-search-toolbar .status-line { margin-bottom: 0; } .batch-card { grid-template-columns: 1fr; } .batch-card-actions { justify-content: stretch; } .batch-card-actions button { flex: 1 1 10rem; } .batch-history-details summary { align-items: flex-start; flex-direction: column; gap: .3rem; } .action-row, .comparison-downloads, .sub-breadcrumb { align-items: stretch; flex-direction: column; } .comparison-download-actions { justify-items: stretch; } .comparison-download-buttons, .formal-download-options { justify-content: stretch; } .comparison-download-buttons button, .comparison-download-actions > button, .formal-download-options label { width: 100%; } .heading-actions { justify-items: start; } .store-filter-bar > div { flex-wrap: nowrap; overflow-x: auto; padding-bottom: .2rem; } .store-filter-button { flex: 0 0 auto; } .topbar { align-items: stretch; flex-direction: column; } .account-controls { width: 100%; align-items: stretch; flex-direction: column; } .account-relogin { width: 100%; text-align: center; }
   .decision-summary-table, .workflow-table { display: block; min-width: 0; }
   .decision-summary-table thead, .workflow-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
@@ -268,6 +275,8 @@ html, body { max-width: 100%; overflow-x: clip; }
   .decision-toggle-cell { width: 100%; text-align: left !important; }
   .decision-detail-toggle { width: 32px; }
   .remove-item-button { width: 100%; }
+  .approved-correction-controls { grid-template-columns: 1fr; }
+  .approved-correction-controls button { width: 100%; }
 }
 .version-warning {
   position: sticky;

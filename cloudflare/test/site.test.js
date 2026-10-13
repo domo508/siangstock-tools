@@ -126,7 +126,7 @@ describe("前台導覽", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20261013-store-transfer-r10");
+    const appIndex = html.indexOf("app.js?v=20261013-store-transfer-r11");
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -165,7 +165,7 @@ describe("前台導覽", () => {
     expect(rulesHtml).toContain('id="version-warning"');
     expect(rulesApp).toContain(`const APP_VERSION = "${rulesVersion.version}"`);
     expect(rulesApp).toContain("version.json?check=${Date.now()}");
-    expect(rulesApp).toContain("../../store-transfer/?deploy=20261013-store-transfer-r10");
+    expect(rulesApp).toContain("../../store-transfer/?deploy=20261013-store-transfer-r11");
     expect(transferApp).toContain('window.addEventListener("focus", checkRuntimeVersion)');
     expect(rulesApp).toContain('window.addEventListener("focus", checkRuntimeVersion)');
     expect(headers).toContain("/store-transfer/index.html\n  Cache-Control: no-store, max-age=0, must-revalidate");
@@ -184,6 +184,26 @@ describe("前台導覽", () => {
     expect(app).toContain('renderBatchCards(pending, "目前沒有待處理批次。")');
     expect(style).toContain(".batch-list[hidden]");
     expect(style).toContain(".batch-history-details summary:focus-visible");
+  });
+
+  it("已核准週調撥只能由總部開啟更正或退回門市，並保留版本紀錄", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const style = readFileSync("../store-transfer/style.css", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    const migration = readFileSync("../cloudflare/worker/migrations/0037_store_transfer_approved_corrections.sql", "utf8");
+    expect(html).toContain("核准後需要修改");
+    expect(app).toContain("開啟總部更正");
+    expect(app).toContain("退回門市修改");
+    expect(app).toContain("data-correction-reason");
+    expect(app).toContain("corrections/open");
+    expect(style).toContain(".approved-correction-panel");
+    expect(worker).toContain("assertHq(who.role)");
+    expect(worker).toContain("此門市已產生ERP檔，不能直接退回");
+    expect(worker).toContain("退回門市修改的內容尚未重新送出");
+    expect(migration).toContain("CREATE TABLE store_transfer_corrections");
+    expect(migration).toContain("item_snapshot");
+    expect(migration).toContain("correction_revision");
   });
 
   it("主採購完整呈現門市未配判斷並串接到貨與補配結案", () => {

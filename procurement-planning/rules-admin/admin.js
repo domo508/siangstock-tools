@@ -53,7 +53,7 @@
 
   function configureReturnPath() {
     if (new URLSearchParams(location.search).get("from") !== "store-transfer") return;
-    const target = "../../store-transfer/?deploy=20261013-store-transfer-r10";
+    const target = "../../store-transfer/?deploy=20261013-store-transfer-r11";
     const source = get("#source-tool-link"); const back = get("#source-back-link"); const brand = get("#tool-brand-link");
     source.href = target; source.textContent = "門市週補貨與調撥";
     back.href = target; back.textContent = "← 返回週調撥工具";
