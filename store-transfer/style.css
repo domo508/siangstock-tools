@@ -301,3 +301,4 @@ html, body { max-width: 100%; overflow-x: clip; }
   .version-warning { align-items: stretch; flex-direction: column; padding: 14px 18px; }
   .version-warning .primary-button { width: 100%; }
 }
+.heading-rule-links { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .55rem; }

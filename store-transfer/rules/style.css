@@ -1,0 +1,47 @@
+.compact-hero { min-height: auto; padding-bottom: 1rem; }
+.compact-hero h1 { font-size: clamp(2.2rem, 5vw, 4.5rem); }
+.priority-guide { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(270px, .6fr); gap: 1.5rem; align-items: center; border-color: #b9ddd1; background: #edf8f2; }
+.priority-guide h2 { margin: 0 0 .45rem; color: var(--navy, #153f63); }
+.priority-guide p { margin: 0; color: #4e6d61; line-height: 1.65; }
+.priority-guide ol { margin: 0; padding: 1rem 1rem 1rem 2.4rem; border-radius: 16px; background: white; }
+.priority-guide li + li { margin-top: .45rem; }
+.scope-rule-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.scope-rule-grid > label, .field-group label { display: grid; gap: .4rem; color: var(--navy, #153f63); font-weight: 750; }
+.scope-rule-grid input, .scope-rule-grid select { width: 100%; min-height: 44px; box-sizing: border-box; padding: .55rem .7rem; border: 1px solid #aac5ce; border-radius: 11px; background: white; font: inherit; color: var(--ink, #172f43); }
+.scope-rule-grid input[readonly] { color: var(--muted, #64778a); background: #f2f6f7; }
+.scope-rule-grid small { color: var(--muted, #64778a); font-weight: 500; line-height: 1.45; }
+.full-row { grid-column: 1 / -1; }
+.field-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.inline-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .55rem; }
+.store-checkboxes { display: flex; flex-wrap: wrap; gap: .65rem 1rem; padding: .85rem 1rem; border: 1px solid #c9dde3; border-radius: 14px; background: #f3f9f9; }
+.store-checkboxes legend { padding: 0 .35rem; color: var(--navy, #153f63); font-weight: 800; }
+.store-checkboxes label { display: inline-flex; align-items: center; gap: .45rem; min-height: 38px; color: var(--ink, #172f43); }
+.store-checkboxes input { width: auto; min-height: auto; }
+.annual-fields { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.match-preview { display: flex; flex-wrap: wrap; gap: .35rem .75rem; margin-top: 1rem; padding: .9rem 1rem; border: 1px solid #c9dde3; border-radius: 14px; background: #f3f9f9; }
+.match-preview strong { color: var(--navy, #153f63); }
+.match-preview span { color: var(--muted, #64778a); }
+.match-preview.is-ready { border-color: #b9ddd1; background: #edf8f2; }
+.match-preview.is-error { border-color: #e1aaa4; background: #fff1ee; }
+.preview-table-wrap { max-height: 18rem; margin-top: .75rem; overflow-y: auto; }
+.preview-table-wrap table { min-width: 620px; }
+.rule-list-table { min-width: 1120px; }
+.rule-list-table td { vertical-align: top; }
+.rule-kind { display: block; margin-top: .2rem; color: var(--muted, #64778a); font-size: .82rem; }
+.hard-priority { color: #9e342b; font-weight: 800; }
+.table-actions { display: flex; gap: .65rem; }
+.table-action { border: 0; padding: 0; color: var(--blue, #176b87); background: transparent; cursor: pointer; text-decoration: underline; font: inherit; }
+.table-action.danger { color: #9e342b; }
+.save-panel { position: sticky; bottom: 1rem; z-index: 3; box-shadow: 0 10px 30px rgb(0 0 0 / 12%); }
+.version-warning { position: sticky; top: 0; z-index: 1000; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px max(24px, calc((100vw - 1280px) / 2)); border-bottom: 1px solid #c88b1d; background: #fff4d6; color: var(--navy, #153f63); box-shadow: 0 8px 24px rgba(30,54,74,.14); }
+.version-warning[hidden] { display: none; }
+.version-warning strong { display: block; margin-bottom: 4px; }
+.version-warning p { margin: 0; }
+.runtime-outdated .page-shell { pointer-events: none; filter: grayscale(.18); opacity: .72; user-select: none; }
+@media (max-width: 760px) {
+  .priority-guide, .scope-rule-grid, .field-group, .annual-fields { grid-template-columns: 1fr; }
+  .full-row { grid-column: auto; }
+  .inline-control { grid-template-columns: 1fr; }
+  .inline-control .secondary-button, .section-heading .secondary-button { width: 100%; }
+  .version-warning { align-items: stretch; flex-direction: column; padding: 14px 18px; }
+}

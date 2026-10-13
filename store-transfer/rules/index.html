@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>周調撥適用／排除規則｜翔仔居家</title>
+  <link rel="stylesheet" href="../../site.css">
+  <link rel="stylesheet" href="../../cost-analysis/style.css">
+  <link rel="stylesheet" href="../style.css?v=20261013-store-transfer-r11">
+  <link rel="stylesheet" href="style.css?v=20261014-transfer-applicability-r1">
+</head>
+<body>
+  <section id="version-warning" class="version-warning" role="alert" hidden><div><strong>這個分頁已有新版</strong><p>為避免用舊規則覆蓋同事的修改，本頁已停止操作。</p></div><button id="reload-latest-button" class="primary-button" type="button">重新載入最新版</button></section>
+  <main class="page-shell">
+    <header class="topbar"><a class="brand" href="../"><span class="brand-mark" aria-hidden="true">規</span><span>翔仔居家・周調撥規則</span></a><span id="account-badge" class="privacy-badge">正在確認總部權限…</span></header>
+    <nav class="breadcrumb" aria-label="頁面導覽"><ol><li><a href="/">公司工具首頁</a></li><li><a href="../">門市週補貨與調撥</a></li><li aria-current="page">周調撥適用／排除規則</li></ol><a class="back-link" href="../">← 返回周調撥工具</a></nav>
+
+    <section class="hero compact-hero" aria-labelledby="page-title"><div><p class="eyebrow">STORE TRANSFER SCOPE</p><h1 id="page-title">周調撥適用／排除規則</h1><p class="hero-description">管理「哪些商品可在什麼時間、哪些門市進入周調撥」。展示品與最低庫存通用規則仍在原本的獨立頁面維護。</p></div></section>
+    <div id="page-status" class="result-alert" role="status">正在載入公司共用規則…</div>
+
+    <section class="panel priority-guide" aria-labelledby="priority-title">
+      <div><p class="eyebrow">固定防呆</p><h2 id="priority-title">ERP品號硬性排除永遠最優先</h2><p>完整品號＋完全排除＋全部門市＋長期生效，會自動列為最高優先，不能被品名關鍵字或季節規則覆蓋。</p></div>
+      <ol><li><strong>最高</strong> ERP品號硬性排除</li><li><strong>其次</strong> ERP品號條件規則</li><li><strong>最後</strong> 品名關鍵字規則</li></ol>
+    </section>
+
+    <section class="panel" aria-labelledby="new-rule-title">
+      <div class="section-heading compact"><div><p class="eyebrow">新增規則</p><h2 id="new-rule-title">先查商品，再確認套用範圍</h2><p>所有選項都以選單或核取方塊控制；品名關鍵字需先預覽命中商品。</p></div><button id="reset-form" class="secondary-button" type="button">清除重填</button></div>
+      <div class="rule-form-grid scope-rule-grid">
+        <label>規則名稱＊<input id="rule-name" type="text" maxlength="100" placeholder="例如：法蘭絨冬季適用"></label>
+        <label>命中方式＊<select id="match-type"><option value="sku">ERP品號（精準）</option><option value="keyword">品名關鍵字</option></select></label>
+
+        <div id="sku-fields" class="field-group full-row"><label>ERP品號＊<span class="inline-control"><input id="rule-sku" type="text" maxlength="80" autocomplete="off" placeholder="例如 XB41002-1"><button id="lookup-sku" class="secondary-button" type="button">查找並帶入品名</button></span></label><label>商品品名（自動帶入）<input id="rule-product-name" type="text" readonly></label></div>
+        <div id="keyword-fields" class="field-group full-row" hidden><label>品名關鍵字＊<span class="inline-control"><input id="rule-keywords" type="text" maxlength="300" placeholder="例如 法蘭絨，或 出清,特賣"><button id="preview-keywords" class="secondary-button" type="button">查找並預覽</button></span><small>多個關鍵字可用逗號分隔。</small></label><label>關鍵字比對方式<select id="keyword-mode"><option value="any">任一關鍵字符合</option><option value="all">全部關鍵字皆符合</option></select></label></div>
+
+        <label>規則動作＊<select id="rule-action"><option value="exclude">完全排除周調撥</option><option value="include_period">只在生效期間納入</option><option value="allow">允許周調撥</option></select></label>
+        <label>適用門市＊<select id="store-scope"><option value="all">全部門市</option><option value="selected">指定門市</option></select></label>
+        <fieldset id="selected-stores" class="store-checkboxes full-row" hidden><legend>選擇門市（可複選）</legend></fieldset>
+
+        <label>生效方式＊<select id="schedule-mode"><option value="always">長期生效</option><option value="date_range">指定期間</option><option value="annual">每年固定期間</option><option value="campaign">活動期間</option></select></label>
+        <label id="campaign-link-field" hidden>關聯活動<select id="campaign-link"><option value="manual">不關聯活動・自行指定期間</option><option value="structured" disabled>已發布行銷活動（結構化資料上線後開放）</option></select></label>
+        <div id="date-range-fields" class="field-group full-row" hidden><label>開始日期<input id="start-date" type="date"></label><label>結束日期<input id="end-date" type="date"></label></div>
+        <div id="annual-fields" class="field-group annual-fields full-row" hidden><label>開始月<select id="start-month"></select></label><label>開始日<select id="start-day"></select></label><label>結束月<select id="end-month"></select></label><label>結束日<select id="end-day"></select></label></div>
+
+        <label id="priority-field">規則優先層級＊<select id="priority-level"><option value="30">一般</option><option value="60" selected>優先</option><option value="90">高度優先</option></select><small id="priority-help">同為品號或同為關鍵字時，層級較高者先套用。</small></label>
+        <label>設定原因＊<select id="reason-type"><option value="季節商品">季節商品</option><option value="活動或贈品">活動或贈品</option><option value="年度特賣或出清">年度特賣或出清</option><option value="限定門市販售">限定門市販售</option><option value="停售前庫存管理">停售前庫存管理</option><option value="總部指定">總部指定</option><option value="其他">其他</option></select></label>
+        <label class="full-row">補充說明<input id="reason-note" type="text" maxlength="300" placeholder="選其他時必填；其餘情況建議簡短說明"></label>
+        <label>啟用狀態<select id="rule-enabled"><option value="enabled">啟用</option><option value="disabled">暫停</option></select></label>
+      </div>
+
+      <div id="match-preview" class="match-preview" role="status" aria-live="polite"><strong>尚未查找商品</strong><span>輸入ERP品號或品名關鍵字後，先確認命中內容。</span></div>
+      <div id="preview-table-wrap" class="result-table-wrap preview-table-wrap" hidden><table class="transfer-table compact-table"><thead><tr><th>ERP品號</th><th>商品品名（主檔）</th></tr></thead><tbody id="preview-rows"></tbody></table></div>
+      <div class="action-row"><button id="add-rule" class="primary-button" type="button">加入待儲存規則</button><p id="form-status" class="status-line" role="status"></p></div>
+    </section>
+
+    <section class="panel" aria-labelledby="rule-list-title">
+      <div class="section-heading compact"><div><p class="eyebrow">公司共用</p><h2 id="rule-list-title">目前周調撥規則</h2><p>最新加入顯示在最上方；ERP品號硬性排除固定最高優先。</p></div><span id="rule-count" class="status-line"></span></div>
+      <div class="result-table-wrap"><table class="transfer-table rule-list-table"><thead><tr><th>狀態</th><th>命中條件</th><th>規則動作</th><th>適用門市</th><th>生效期間</th><th>優先權</th><th>原因</th><th>操作</th></tr></thead><tbody id="rule-rows"></tbody></table></div>
+      <p id="rule-empty" class="empty-state" hidden>目前尚未建立周調撥適用或排除規則。</p>
+    </section>
+
+    <section class="panel save-panel"><label class="wide-field">本次修改原因＊<input id="change-reason" type="text" maxlength="500" placeholder="例如：新增法蘭絨冬季適用規則"></label><button id="save-rules" class="primary-button" type="button" disabled>儲存周調撥規則</button><p id="save-status" class="main-status">尚未修改。</p></section>
+    <footer><p>儲存後從下一次重新產生周調撥開始生效；既有批次保留原規則快照。</p><p><a href="../">返回周調撥工具</a>　·　<a href="../../procurement-planning/rules-admin/?from=store-transfer#store-inventory">展示／最低庫存通用規則</a></p></footer>
+  </main>
+  <script src="../../inventory/assets/xlsx.full.min.js"></script>
+  <script src="../../procurement-planning/core.js?v=20261013-transfer-rules-r3"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="app.js?v=20261014-transfer-applicability-r1"></script>
+</body>
+</html>

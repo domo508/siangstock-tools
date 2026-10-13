@@ -64,6 +64,34 @@
 /store-transfer/version.json
   Cache-Control: no-store, max-age=0, must-revalidate
 
+/store-transfer/rules
+  Cache-Control: no-store, max-age=0, must-revalidate
+  Content-Security-Policy: default-src 'self' data:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+
+/store-transfer/rules/
+  Cache-Control: no-store, max-age=0, must-revalidate
+  Content-Security-Policy: default-src 'self' data:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+
+/store-transfer/rules/index.html
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/store-transfer/rules/version.json
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/store-transfer/rules/*.js
+  Cache-Control: public, max-age=3600
+
+/store-transfer/rules/*.css
+  Cache-Control: public, max-age=3600
+
+/store-transfer/*.js
+  Cache-Control: public, max-age=3600
+
+/store-transfer/*.css
+  Cache-Control: public, max-age=3600
+
 /procurement-planning/manual.html
   Cache-Control: no-cache
 

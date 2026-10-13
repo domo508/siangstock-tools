@@ -124,9 +124,10 @@ describe("前台導覽", () => {
   it("週調撥以新版元件讀取輸入，並保留獨立的ERP樣式輸出元件", () => {
     const html = readFileSync("../store-transfer/index.html", "utf8");
     const app = readFileSync("../store-transfer/app.js", "utf8");
+    const version = JSON.parse(readFileSync("../store-transfer/version.json", "utf8"));
     const writerIndex = html.indexOf("xlsx-style-runtime.js");
     const readerIndex = html.indexOf("inventory/assets/xlsx.full.min.js");
-    const appIndex = html.indexOf("app.js?v=20261013-store-transfer-r11");
+    const appIndex = html.indexOf(`app.js?v=${version.version}`);
     expect(writerIndex).toBeGreaterThan(-1);
     expect(readerIndex).toBeGreaterThan(writerIndex);
     expect(appIndex).toBeGreaterThan(readerIndex);
@@ -156,20 +157,27 @@ describe("前台導覽", () => {
     const rulesHtml = readFileSync("../procurement-planning/rules-admin/index.html", "utf8");
     const rulesApp = readFileSync("../procurement-planning/rules-admin/admin.js", "utf8");
     const rulesVersion = JSON.parse(readFileSync("../procurement-planning/rules-admin/version.json", "utf8"));
+    const transferRulesHtml = readFileSync("../store-transfer/rules/index.html", "utf8");
+    const transferRulesApp = readFileSync("../store-transfer/rules/app.js", "utf8");
+    const transferRulesVersion = JSON.parse(readFileSync("../store-transfer/rules/version.json", "utf8"));
     const headers = readFileSync("../_headers", "utf8");
     expect(transferHtml).toContain('id="version-warning"');
-    expect(transferHtml).toContain("deploy=20261013-transfer-rules-r4");
+    expect(transferHtml).toContain(`deploy=${rulesVersion.version}`);
     expect(transferApp).toContain(`const APP_VERSION = "${transferVersion.version}"`);
     expect(transferApp).toContain("version.json?check=${Date.now()}");
     expect(transferApp).toContain('url.searchParams.set("deploy"');
     expect(rulesHtml).toContain('id="version-warning"');
     expect(rulesApp).toContain(`const APP_VERSION = "${rulesVersion.version}"`);
     expect(rulesApp).toContain("version.json?check=${Date.now()}");
-    expect(rulesApp).toContain("../../store-transfer/?deploy=20261013-store-transfer-r11");
+    expect(rulesApp).toContain(`../../store-transfer/?deploy=${transferVersion.version}`);
+    expect(transferRulesHtml).toContain('id="version-warning"');
+    expect(transferRulesApp).toContain(`const APP_VERSION = "${transferRulesVersion.version}"`);
+    expect(transferRulesApp).toContain("version.json?check=${Date.now()}");
     expect(transferApp).toContain('window.addEventListener("focus", checkRuntimeVersion)');
     expect(rulesApp).toContain('window.addEventListener("focus", checkRuntimeVersion)');
     expect(headers).toContain("/store-transfer/index.html\n  Cache-Control: no-store, max-age=0, must-revalidate");
     expect(headers).toContain("/procurement-planning/rules-admin/index.html\n  Cache-Control: no-store, max-age=0, must-revalidate");
+    expect(headers).toContain("/store-transfer/rules/index.html\n  Cache-Control: no-store, max-age=0, must-revalidate");
   });
 
   it("門市上方只列待處理批次，近一個月歷史預設收合", () => {
@@ -404,15 +412,19 @@ describe("前台導覽", () => {
     expect(migration).toContain("ADD COLUMN decision_snapshot");
   });
 
-  it("排除周調撥清單最新在上，超過五筆時改為卡片內捲動", () => {
-    const html = readFileSync("../procurement-planning/rules-admin/index.html", "utf8");
-    const admin = readFileSync("../procurement-planning/rules-admin/admin.js", "utf8");
-    const style = readFileSync("../procurement-planning/rules-admin/style.css", "utf8");
-    expect(html).toContain("最新加入的品項顯示在最上方");
-    expect(admin).toContain("ensureTransferExclusions().unshift");
-    expect(admin).toContain("classList.toggle(\"is-scrollable\"");
-    expect(style).toContain(".transfer-exclusion-list.is-scrollable");
-    expect(style).toContain("overflow-y: auto");
+  it("周調撥適用與排除規則有獨立入口，並與展示最低庫存通用規則分開", () => {
+    const transferHtml = readFileSync("../store-transfer/index.html", "utf8");
+    const rulesHtml = readFileSync("../store-transfer/rules/index.html", "utf8");
+    const rulesApp = readFileSync("../store-transfer/rules/app.js", "utf8");
+    const generalHtml = readFileSync("../procurement-planning/rules-admin/index.html", "utf8");
+    expect(transferHtml).toContain('id="transfer-rules-link"');
+    expect(rulesHtml).toContain("周調撥適用／排除規則");
+    expect(rulesHtml).toContain("ERP品號硬性排除永遠最優先");
+    expect(rulesHtml).toContain('id="match-type"');
+    expect(rulesHtml).toContain('id="schedule-mode"');
+    expect(rulesApp).toContain('api("/applicability-rules"');
+    expect(generalHtml).toContain("本頁只管理展示與最低庫存通用規則");
+    expect(generalHtml).not.toContain('id="transfer-exclusion-sku"');
   });
 
   it("週調撥提供正式與A/B模式，且A/B模式不能發布批次", () => {
@@ -578,21 +590,24 @@ describe("前台導覽", () => {
     expect(worker).toContain('rule.exactSkus');
   });
 
-  it("總部可用精準品號維護獨立的周調撥排除清單並由商品主檔帶入品名", () => {
-    const html = readFileSync("../procurement-planning/rules-admin/index.html", "utf8");
-    const admin = readFileSync("../procurement-planning/rules-admin/admin.js", "utf8");
+  it("總部可在獨立頁以精準品號或品名關鍵字維護周調撥規則", () => {
+    const html = readFileSync("../store-transfer/rules/index.html", "utf8");
+    const admin = readFileSync("../store-transfer/rules/app.js", "utf8");
     const worker = readFileSync("../cloudflare/worker/src/procurement.ts", "utf8");
+    const transferWorker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
     const core = readFileSync("../store-transfer/core.js", "utf8");
-    expect(html).toContain('id="transfer-exclusion-sku"');
-    expect(html).toContain("商品品名（主檔）");
+    expect(html).toContain('id="rule-sku"');
+    expect(html).toContain('id="rule-keywords"');
+    expect(html).toContain("商品品名（自動帶入）");
     expect(admin).toContain("loadLatestProductMaster");
     expect(admin).toContain("parseProductMasterWorkbook");
     expect(admin).toContain("drive.readonly");
-    expect(html).toContain("超過5筆後可在清單內捲動查看");
-    expect(admin).toContain("ensureTransferExclusions().unshift");
-    expect(admin).toContain('classList.toggle("is-scrollable", shouldScroll)');
+    expect(admin).toContain("state.exclusions.unshift");
     expect(worker).toContain("storeInventory.transferExclusions");
+    expect(worker).toContain("storeInventory.applicabilityRules");
+    expect(transferWorker).toContain("saveTransferApplicabilityRules");
     expect(core).toContain("isTransferExcluded");
+    expect(core).toContain("transferApplicabilityDecision");
   });
 
   it("資料整理工具與規則頁都有清楚的名稱和上一層路徑", () => {

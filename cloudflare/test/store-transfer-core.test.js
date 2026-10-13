@@ -155,6 +155,28 @@ describe("待發貨與A/B測試比對", () => {
     }
   });
 
+  it("周調撥適用規則以精準品號優先於品名關鍵字，硬性排除仍為最高", () => {
+    const input = transferModeInput("formal");
+    input.storeInventory = {
+      applicabilityRules: [
+        { id: "rule-keyword-1", name: "床包關鍵字排除", enabled: true, matchType: "keyword", keywords: ["床包"], keywordMode: "any", action: "exclude", storeScope: "all", stores: [], scheduleMode: "always", priority: 90 },
+        { id: "rule-exact-allow-1", name: "A102061精準允許", enabled: true, matchType: "sku", sku: "A102061", productName: "5尺床包", keywords: [], keywordMode: "any", action: "allow", storeScope: "all", stores: [], scheduleMode: "always", priority: 30 }
+      ]
+    };
+    expect(core.buildSuggestions(input).regularRows).toHaveLength(1);
+    input.storeInventory.transferExclusions = [{ sku: "A102061", productName: "5尺床包", enabled: true }];
+    expect(core.buildSuggestions(input).rows).toHaveLength(0);
+  });
+
+  it("每年固定期間規則只在期間內納入周調撥", () => {
+    const input = transferModeInput("formal");
+    input.storeInventory = { applicabilityRules: [{ id: "rule-season-1", name: "床包季節限定", enabled: true, matchType: "keyword", keywords: ["床包"], keywordMode: "any", action: "include_period", storeScope: "all", stores: [], scheduleMode: "annual", startMonthDay: "10-01", endMonthDay: "03-31", priority: 60 }] };
+    input.proposalDate = "2026-10-12";
+    expect(core.buildSuggestions(input).regularRows).toHaveLength(1);
+    input.proposalDate = "2026-07-12";
+    expect(core.buildSuggestions(input).rows).toHaveLength(0);
+  });
+
   it("A/B差異分析依單一門市彙總提交量，並保留僅B品項的實際庫存", () => {
     const input = transferModeInput("comparison");
     input.master.bySku.set("B001", { sku: "B001", name: "人工測試品" });

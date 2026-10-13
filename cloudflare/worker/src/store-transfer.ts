@@ -154,6 +154,102 @@ async function storeInventoryConfig(env: StoreTransferEnv): Promise<{ version: n
   return { version: Number(row?.version || 0), updatedAt: String(row?.updated_at || ""), updatedBy: String(row?.updated_by || ""), config };
 }
 
+function validateTransferRulePayload(input: Record<string, unknown>): { transferExclusions: Record<string, unknown>[]; applicabilityRules: Record<string, unknown>[] } {
+  const exclusions = Array.isArray(input.transferExclusions) ? input.transferExclusions : [];
+  if (exclusions.length > 500) throw new RequestValidationError("排除周調撥品號不可超過500筆。");
+  const seenSkus = new Set<string>();
+  const transferExclusions = exclusions.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new RequestValidationError("排除周調撥品號格式錯誤。");
+    const item = entry as Record<string, unknown>;
+    const sku = String(item.sku || "").normalize("NFKC").trim().toUpperCase();
+    const productName = String(item.productName || "").trim();
+    if (!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku) || !productName || productName.length > 300) throw new RequestValidationError("排除周調撥品號或品名格式錯誤。");
+    if (seenSkus.has(sku)) throw new RequestValidationError(`排除周調撥品號 ${sku} 重複。`);
+    seenSkus.add(sku);
+    return { sku, productName, enabled: item.enabled !== false };
+  });
+
+  const rules = Array.isArray(input.applicabilityRules) ? input.applicabilityRules : [];
+  if (rules.length > 300) throw new RequestValidationError("周調撥適用規則不可超過300筆。");
+  const storeCodes = new Set(Object.keys(STORES));
+  const seenIds = new Set<string>();
+  const applicabilityRules = rules.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new RequestValidationError("周調撥適用規則格式錯誤。");
+    const item = entry as Record<string, unknown>;
+    const id = String(item.id || "").trim();
+    const name = String(item.name || "").trim();
+    const matchType = String(item.matchType || "");
+    const sku = String(item.sku || "").normalize("NFKC").trim().toUpperCase();
+    const productName = String(item.productName || "").trim();
+    const keywords = (Array.isArray(item.keywords) ? item.keywords : []).map((keyword) => String(keyword || "").normalize("NFKC").trim()).filter(Boolean);
+    const keywordMode = String(item.keywordMode || "any");
+    const action = String(item.action || "");
+    const storeScope = String(item.storeScope || "all");
+    const stores = (Array.isArray(item.stores) ? item.stores : []).map(String);
+    const scheduleMode = String(item.scheduleMode || "always");
+    const startDate = String(item.startDate || "");
+    const endDate = String(item.endDate || "");
+    const startMonthDay = String(item.startMonthDay || "");
+    const endMonthDay = String(item.endMonthDay || "");
+    const campaignId = String(item.campaignId || "").trim();
+    const campaignName = String(item.campaignName || "").trim();
+    const priority = Number(item.priority || 0);
+    const reasonType = String(item.reasonType || "").trim();
+    const reasonNote = String(item.reasonNote || "").trim();
+    if (!/^[A-Za-z0-9_-]{8,80}$/.test(id) || seenIds.has(id)) throw new RequestValidationError("周調撥適用規則編號格式錯誤或重複。");
+    seenIds.add(id);
+    if (!name || name.length > 100) throw new RequestValidationError("規則名稱不可空白或超過100字。");
+    if (!["sku", "keyword"].includes(matchType)) throw new RequestValidationError(`規則「${name}」的命中方式錯誤。`);
+    if (matchType === "sku" && (!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku) || !productName || productName.length > 300)) throw new RequestValidationError(`規則「${name}」須包含有效ERP品號與商品品名。`);
+    if (matchType === "keyword" && (!keywords.length || keywords.length > 10 || keywords.some((keyword) => keyword.length > 50))) throw new RequestValidationError(`規則「${name}」須包含1至10個品名關鍵字。`);
+    if (!["any", "all"].includes(keywordMode) || !["exclude", "allow", "include_period"].includes(action)) throw new RequestValidationError(`規則「${name}」的比對或動作格式錯誤。`);
+    if (!["all", "selected"].includes(storeScope) || stores.some((store) => !storeCodes.has(store)) || (storeScope === "selected" && !stores.length)) throw new RequestValidationError(`規則「${name}」的適用門市錯誤。`);
+    if (!["always", "date_range", "annual", "campaign"].includes(scheduleMode)) throw new RequestValidationError(`規則「${name}」的生效方式錯誤。`);
+    if (["date_range", "campaign"].includes(scheduleMode) && (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || startDate > endDate)) throw new RequestValidationError(`規則「${name}」的生效日期錯誤。`);
+    if (scheduleMode === "annual" && (!/^\d{2}-\d{2}$/.test(startMonthDay) || !/^\d{2}-\d{2}$/.test(endMonthDay))) throw new RequestValidationError(`規則「${name}」的每年固定期間錯誤。`);
+    if (!Number.isInteger(priority) || priority < 0 || priority > 1000) throw new RequestValidationError(`規則「${name}」的優先序須為0至1000的整數。`);
+    if (!reasonType || reasonType.length > 50 || reasonNote.length > 300 || campaignId.length > 100 || campaignName.length > 200) throw new RequestValidationError(`規則「${name}」的原因或活動資料格式錯誤。`);
+    return { id, name, enabled: item.enabled !== false, matchType, sku: matchType === "sku" ? sku : "", productName: matchType === "sku" ? productName : "", keywords: matchType === "keyword" ? [...new Set(keywords)] : [], keywordMode, action, storeScope, stores: storeScope === "selected" ? [...new Set(stores)] : [], scheduleMode, startDate, endDate, startMonthDay, endMonthDay, campaignId, campaignName, priority, reasonType, reasonNote };
+  });
+  return { transferExclusions, applicabilityRules };
+}
+
+async function transferApplicabilityRules(request: Request, env: StoreTransferEnv): Promise<Response> {
+  const who = await actor(request, env);
+  assertHq(who.role);
+  const inventory = await storeInventoryConfig(env);
+  return json({ version: inventory.version, updatedAt: inventory.updatedAt, updatedBy: inventory.updatedBy,
+    transferExclusions: Array.isArray(inventory.config.transferExclusions) ? inventory.config.transferExclusions : [],
+    applicabilityRules: Array.isArray(inventory.config.applicabilityRules) ? inventory.config.applicabilityRules : [] });
+}
+
+async function saveTransferApplicabilityRules(request: Request, env: StoreTransferEnv): Promise<Response> {
+  requireSameOrigin(request, env);
+  const who = await actor(request, env);
+  assertHq(who.role);
+  const input = await readBody(request, 250_000);
+  const expectedVersion = Number(input.expectedVersion);
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new RequestValidationError("規則版本格式錯誤。");
+  const changeReason = text(input.changeReason, "修改原因", 500);
+  const validated = validateTransferRulePayload(input);
+  const row = await env.DB.prepare("SELECT version, payload FROM procurement_rules_current WHERE id = 1").first<Record<string, unknown>>();
+  if (!row || Number(row.version) !== expectedVersion) throw new RequestValidationError("規則已被其他同事更新，請重新載入最新版。", 409);
+  const rules = parseJson(row.payload);
+  const storeInventory = rules.storeInventory && typeof rules.storeInventory === "object" && !Array.isArray(rules.storeInventory) ? rules.storeInventory as Record<string, unknown> : {};
+  storeInventory.transferExclusions = validated.transferExclusions;
+  storeInventory.applicabilityRules = validated.applicabilityRules;
+  rules.storeInventory = storeInventory;
+  const payload = JSON.stringify(rules);
+  if (new TextEncoder().encode(payload).byteLength > 60000) throw new RequestValidationError("公司共用規則超過60 KB上限。", 413);
+  const now = new Date().toISOString();
+  const updated = await env.DB.prepare("UPDATE procurement_rules_current SET version = version + 1, payload = ?, updated_at = ?, updated_by = ? WHERE id = 1 AND version = ? RETURNING version")
+    .bind(payload, now, who.email, expectedVersion).first<{ version: number }>();
+  if (!updated) throw new RequestValidationError("規則已被其他同事更新，請重新載入最新版。", 409);
+  await env.DB.prepare("INSERT INTO procurement_rules_history (version, payload, change_reason, changed_at, changed_by) VALUES (?, ?, ?, ?, ?)")
+    .bind(updated.version, payload, changeReason, now, who.email).run();
+  return json({ version: updated.version, updatedAt: now, updatedBy: who.email, ...validated });
+}
+
 function displayExceptionSummary(row: Record<string, unknown>): Record<string, unknown> {
   return {
     storeCode: String(row.store_code), sku: String(row.sku), displayQuantity: Number(row.display_quantity || 0),
@@ -1083,6 +1179,8 @@ export async function storeTransferRoute(request: Request, env: StoreTransferEnv
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/store-transfer")) return null;
   if (url.pathname === "/api/store-transfer/config" && request.method === "GET") return config(request, env);
+  if (url.pathname === "/api/store-transfer/applicability-rules" && request.method === "GET") return transferApplicabilityRules(request, env);
+  if (url.pathname === "/api/store-transfer/applicability-rules" && request.method === "PUT") return saveTransferApplicabilityRules(request, env);
   if (url.pathname === "/api/store-transfer/display-exceptions" && request.method === "GET") return listDisplayExceptions(request, env);
   const displayExceptionMatch = url.pathname.match(/^\/api\/store-transfer\/display-exceptions\/([^/]+)\/([^/]+)$/);
   if (displayExceptionMatch && request.method === "PUT") return saveDisplayException(request, env, decodeURIComponent(displayExceptionMatch[1]), decodeURIComponent(displayExceptionMatch[2]));

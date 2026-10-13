@@ -20,6 +20,57 @@
       .filter(Boolean));
   }
 
+  function normalizedApplicabilityRules(storeInventory) {
+    return (Array.isArray(storeInventory?.applicabilityRules) ? storeInventory.applicabilityRules : [])
+      .filter((item) => item && item.enabled !== false)
+      .slice()
+      .sort((left, right) => {
+        const leftExact = left.matchType === "sku" ? 1 : 0;
+        const rightExact = right.matchType === "sku" ? 1 : 0;
+        return rightExact - leftExact || Number(right.priority || 0) - Number(left.priority || 0) || String(left.name || "").localeCompare(String(right.name || ""), "zh-Hant");
+      });
+  }
+
+  function applicabilityRuleMatches(rule, product, storeCode) {
+    if (rule.storeScope === "selected" && !(rule.stores || []).includes(storeCode)) return false;
+    const sku = String(product?.sku || "").normalize("NFKC").trim().toUpperCase();
+    if (rule.matchType === "sku") return sku === String(rule.sku || "").normalize("NFKC").trim().toUpperCase();
+    const productName = normalizeName(product?.name || "").toLocaleLowerCase("zh-Hant");
+    const keywords = (Array.isArray(rule.keywords) ? rule.keywords : String(rule.keywords || "").split(/[、,，|｜]/))
+      .map((keyword) => normalizeName(keyword).toLocaleLowerCase("zh-Hant"))
+      .filter(Boolean);
+    if (!keywords.length) return false;
+    return rule.keywordMode === "all" ? keywords.every((keyword) => productName.includes(keyword)) : keywords.some((keyword) => productName.includes(keyword));
+  }
+
+  function applicabilityRuleActive(rule, proposalDate) {
+    const scheduleMode = String(rule.scheduleMode || "always");
+    if (scheduleMode === "always") return true;
+    if (scheduleMode === "date_range" || scheduleMode === "campaign") return Boolean(rule.startDate && rule.endDate && proposalDate >= rule.startDate && proposalDate <= rule.endDate);
+    if (scheduleMode === "annual") {
+      const monthDay = String(proposalDate || "").slice(5);
+      const start = String(rule.startMonthDay || "");
+      const end = String(rule.endMonthDay || "");
+      if (!/^\d{2}-\d{2}$/.test(start) || !/^\d{2}-\d{2}$/.test(end)) return false;
+      return start <= end ? monthDay >= start && monthDay <= end : monthDay >= start || monthDay <= end;
+    }
+    return false;
+  }
+
+  function transferApplicabilityDecision(storeInventory, product, storeCode, proposalDate) {
+    const sku = String(product?.sku || "").normalize("NFKC").trim().toUpperCase();
+    if (transferExclusionSkus(storeInventory).has(sku)) return { excluded: true, source: "exact_exclusion" };
+    for (const rule of normalizedApplicabilityRules(storeInventory)) {
+      if (!applicabilityRuleMatches(rule, product, storeCode)) continue;
+      const active = applicabilityRuleActive(rule, proposalDate);
+      if (rule.action === "include_period") return { excluded: !active, source: "applicability_rule", rule };
+      if (!active) continue;
+      if (rule.action === "exclude") return { excluded: true, source: "applicability_rule", rule };
+      if (rule.action === "allow") return { excluded: false, source: "applicability_rule", rule };
+    }
+    return { excluded: false, source: "default" };
+  }
+
   function localDate(value) {
     const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!match) throw new Error("日期格式必須是 YYYY-MM-DD。");
@@ -590,7 +641,13 @@
     const scheduleByStore = Object.fromEntries(stores.map((store) => [store, storeSchedule(proposalDate, store, input.storeInventory || {})]));
     const masterBySku = input.master.bySku;
     const transferExclusions = transferExclusionSkus(input.storeInventory);
-    const isTransferExcluded = (sku) => transferExclusions.has(String(sku || "").normalize("NFKC").trim().toUpperCase());
+    const applicabilityRules = normalizedApplicabilityRules(input.storeInventory);
+    const isTransferExcluded = (sku, storeCode = "") => {
+      const normalized = String(sku || "").normalize("NFKC").trim().toUpperCase();
+      if (transferExclusions.has(normalized)) return true;
+      if (!storeCode || !applicabilityRules.length) return false;
+      return transferApplicabilityDecision({ transferExclusions: [], applicabilityRules }, masterBySku.get(normalized) || { sku: normalized, name: "" }, storeCode, proposalDate).excluded;
+    };
     const inventory = new Map();
     for (const row of input.inventory.records) inventory.set(`${row.warehouseCode}|${row.sku}`, (inventory.get(`${row.warehouseCode}|${row.sku}`) || 0) + row.quantity);
     const regularSales = input.sales.flatMap((report) => report.records);
@@ -688,7 +745,7 @@
       if (!specialRule || !appliesToStore(specialRule, store, 1)) continue;
       const groups = new Map();
       for (const [sku, master] of masterBySku) {
-        if (isTransferExcluded(sku) || master.sellThroughStop || excludedFromRegularTransfer(master) || !isSingleDuvet(master)) continue;
+        if (isTransferExcluded(sku, store) || master.sellThroughStop || excludedFromRegularTransfer(master) || !isSingleDuvet(master)) continue;
         const sold = Math.max(0, local.get(`${store}|${sku}`) || 0);
         if (!(sold > 0)) continue;
         const group = `${singleDuvetType(master)}|${materialName(master)}`;
@@ -704,7 +761,7 @@
     const needsBySku = new Map();
     for (const store of stores) {
       for (const [sku, master] of masterBySku) {
-        if (isTransferExcluded(sku) || CONSUMABLES[sku] || excludedFromRegularTransfer(master)) continue;
+        if (isTransferExcluded(sku, store) || CONSUMABLES[sku] || excludedFromRegularTransfer(master)) continue;
         const key = `${store}|${sku}`, local42 = Math.max(0, local.get(key) || 0), b342 = Math.max(0, b3.get(key) || 0);
         const performance = local42 + b342, weeks = activeWeeks.get(key)?.size || 0;
         const tier = performance >= 12 && weeks >= 4 ? "熱銷" : performance >= 4 && weeks >= 2 ? "穩定" : "低銷";
@@ -808,7 +865,6 @@
       activityGroups.get(sku).push(activity);
     }
     for (const [sku, sourceActivities] of activityGroups) {
-      if (isTransferExcluded(sku)) continue;
       const signatures = new Set(sourceActivities.map((activity) => [activity.scopeType || "all", (activity.scopeTargets || []).join("|"), activity.thresholdBasis || "order_total", activity.thresholdType, activity.thresholdValue, activity.giftQuantity, activity.cumulative].join("|")));
       const chronological = sourceActivities.slice().sort((left, right) => left.startDate.localeCompare(right.startDate));
       const continuous = chronological.every((row, index) => index === 0 || row.startDate <= addDays(chronological[index - 1].endDate, 1));
@@ -825,7 +881,7 @@
       {
         const master = masterBySku.get(sku);
         const hqAvailable = Math.max(0, Math.floor((inventory.get(`T00|${sku}`) || 0) - (pendingOutbound.get(`T00|${sku}`) || 0) - (regularBySku.get(sku) || 0)));
-        const candidates = stores.map((storeCode) => {
+        const candidates = stores.filter((storeCode) => !isTransferExcluded(sku, storeCode)).map((storeCode) => {
           const key = `${storeCode}|${sku}`;
           const schedule = scheduleByStore[storeCode];
           const serviceStart = schedule.currentArrivalDate > activity.startDate ? schedule.currentArrivalDate : activity.startDate;
@@ -925,7 +981,7 @@
         const inTransitQuantity = Math.max(0, inTransitInbound.get(transferKey) || 0);
         const projectedCurrent = currentQuantity + includedInbound(transferKey);
         consumableSnapshots.push({ storeCode, sku, snapshotDate: latest, currentQuantity, inboundQuantity: inbound, outboundQuantity: outbound, weeklyConsumption, trusted });
-        if (isTransferExcluded(sku)) continue;
+        if (isTransferExcluded(sku, storeCode)) continue;
         if (averageWeeklyUsage == null) continue;
         let triggerWeeks, targetWeeks, requiresManual = false;
         if (averageWeeklyUsage >= 50) { triggerWeeks = 2; targetWeeks = 4; }
@@ -974,7 +1030,7 @@
     const inTransitRows = pendingTransferRows.filter((row) => row.status === "發貨審核");
     const comparisonKeys = new Set([
       ...rows.map((row) => `${row.storeCode}|${row.sku}`),
-      ...submittedRows.filter((row) => !isTransferExcluded(row.sku)).map((row) => `${row.storeCode}|${row.sku}`)
+      ...submittedRows.filter((row) => !isTransferExcluded(row.sku, row.storeCode)).map((row) => `${row.storeCode}|${row.sku}`)
     ]);
     const comparisonFacts = [...comparisonKeys].map((compoundKey) => {
       const [storeCode, sku] = compoundKey.split("|");
@@ -1020,7 +1076,7 @@
     ]);
     const manualItemFacts = [...manualItemKeys].filter((compoundKey) => {
       const [storeCode, sku] = compoundKey.split("|");
-      return stores.includes(storeCode) && !isTransferExcluded(sku) && masterBySku.has(sku);
+      return stores.includes(storeCode) && !isTransferExcluded(sku, storeCode) && masterBySku.has(sku);
     }).map((compoundKey) => {
       const [storeCode, sku] = compoundKey.split("|");
       const master = masterBySku.get(sku) || {};

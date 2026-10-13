@@ -8,7 +8,7 @@
   <title>採購規則管理｜翔仔居家</title>
   <link rel="stylesheet" href="../../cost-analysis/style.css">
   <link rel="stylesheet" href="../style.css?v=20260914-rules-r2">
-  <link rel="stylesheet" href="style.css?v=20261013-transfer-rules-r4">
+  <link rel="stylesheet" href="style.css?v=20261014-transfer-rules-r5">
 </head>
 <body>
   <section id="version-warning" class="version-warning" role="alert" hidden>
@@ -67,20 +67,7 @@
     <section id="store-inventory" class="panel" aria-labelledby="store-title">
       <div class="section-heading compact"><div><p class="eyebrow">門市調撥階段套用</p><h2 id="store-title">門市庫存管理</h2><p>門市週調撥會直接讀取此處最新版；新增規則請依商品主檔設定商品大類、尺寸屬性及品項關鍵字。專屬規則以較高優先序先套用。</p></div><button id="add-store-rule" class="secondary-button" type="button">新增門市規則</button></div>
       <div class="result-alert"><strong>目前確認：</strong>獨立5尺商品與6×7尺雙人兩用被套皆為「不可售展示1」；展示試行門市為R00、R06。獨立3.5／6／7尺與天絲／華爾紗雙人薄被套則為可售最低庫存1。</div>
-      <div class="transfer-exclusion-manager" aria-labelledby="transfer-exclusion-title">
-        <div>
-          <h3 id="transfer-exclusion-title">排除周調撥品號</h3>
-          <p>輸入完整ERP品號後，系統會從最新商品主檔精準查找並帶入品名。啟用後，正式補貨與A/B測試的所有週調撥建議都會優先排除；既有待發貨與在途明細仍保留供核對。</p>
-        </div>
-        <div class="transfer-exclusion-entry">
-          <label for="transfer-exclusion-sku">ERP品號（一次一個）</label>
-          <input id="transfer-exclusion-sku" type="text" maxlength="80" autocomplete="off" placeholder="例如 XB41002-1">
-          <button id="add-transfer-exclusion" class="secondary-button" type="button">確認加入</button>
-        </div>
-        <p id="transfer-exclusion-status" class="transfer-exclusion-status" role="status"></p>
-        <p class="transfer-exclusion-list-note">最新加入的品項顯示在最上方；超過5筆後可在清單內捲動查看。</p>
-        <div class="result-table-wrap transfer-exclusion-list"><table class="rules-table transfer-exclusion-table"><thead><tr><th>啟用</th><th>ERP品號</th><th>商品品名（主檔）</th><th></th></tr></thead><tbody id="transfer-exclusion-rows"></tbody></table></div>
-      </div>
+      <div class="rule-condition-help"><strong>周調撥適用／排除已獨立管理</strong><span>ERP品號硬性排除、季節品與品名關鍵字規則，請從門市週調撥工具的「周調撥適用／排除規則」入口維護；本頁只管理展示與最低庫存通用規則。</span></div>
       <div class="rule-condition-help"><strong>準確命中順序</strong><span>ERP品號（精準）→ 商品大類 → 尺寸屬性 → 品項關鍵字；多個ERP品號可用逗號或「｜」分隔，例如N00126,N00127。儲存後會依優先序由高至低重新排列。</span></div>
       <div class="result-table-wrap"><table class="rules-table store-rules-table"><thead><tr><th>啟用</th><th>規則名稱</th><th>適用門市</th><th>ERP品號（精準）</th><th>商品大類</th><th>尺寸屬性</th><th>品項關鍵字</th><th>庫存角色</th><th>數量</th><th>優先序</th><th></th></tr></thead><tbody id="store-rows"></tbody></table></div>
       <fieldset class="spring-festival-rule"><legend>各門市一般到店日</legend><p>用來推算「本次開單日至下一輪預計到店日」的保護天數；遇公司不作業日會自動順延。</p><div class="rule-form-grid"><label>R00 台北中山<select id="arrival-R00"><option value="3">星期三</option><option value="4">星期四</option></select></label><label>R01 台中北屯<select id="arrival-R01"><option value="3">星期三</option><option value="4">星期四</option></select></label><label>R03 新竹東區<select id="arrival-R03"><option value="3">星期三</option><option value="4">星期四</option></select></label><label>R10 新莊<select id="arrival-R10"><option value="3">星期三</option><option value="4">星期四</option></select></label><label>R07 誠品480<select id="arrival-R07"><option value="3">星期三</option><option value="4">星期四</option></select></label><label>R06 文心秀泰<select id="arrival-R06"><option value="3">星期三</option><option value="4">星期四</option></select></label></div></fieldset>
@@ -108,6 +95,6 @@
   <script src="../../inventory/assets/xlsx.full.min.js"></script>
   <script src="../core.js?v=20261013-transfer-rules-r3"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="admin.js?v=20261013-transfer-rules-r4"></script>
+  <script src="admin.js?v=20261014-transfer-rules-r5"></script>
 </body>
 </html>

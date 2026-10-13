@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const APP_VERSION = "20261013-transfer-rules-r4";
+  const APP_VERSION = "20261014-transfer-rules-r5";
   const state = { config: null, version: 0, rules: null, dirty: false, googleTokenClient: null, googleAccessToken: "", masterBySku: null, runtimeOutdated: false, latestRuntimeVersion: "" };
   const GOOGLE_READ_SCOPE = "openid email https://www.googleapis.com/auth/drive.readonly";
   const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -22,7 +22,6 @@
     account: get("#account-badge"), pageStatus: get("#page-status"), suppliers: get("#supplier-rows"), units: get("#unit-rows"), stores: get("#store-rows"),
     addSupplier: get("#add-supplier"), featuredSupplierSelect: get("#featured-supplier-select"), addFeaturedSupplier: get("#add-featured-supplier"), featuredSupplierList: get("#featured-supplier-list"),
     addUnit: get("#add-unit"), addStore: get("#add-store-rule"), blacklist: get("#blacklist-input"), holidays: get("#workday-holidays"),
-    transferExclusionSku: get("#transfer-exclusion-sku"), addTransferExclusion: get("#add-transfer-exclusion"), transferExclusionStatus: get("#transfer-exclusion-status"), transferExclusionList: get(".transfer-exclusion-list"), transferExclusionRows: get("#transfer-exclusion-rows"),
     accessPanel: get("#access-panel"), approvers: get("#approver-emails"), storeTransferHq: get("#store-transfer-hq-emails"), recipient: get("#notification-recipient"), retention: get("#retention-months"),
     saveAccess: get("#save-access"), accessStatus: get("#access-status"), reason: get("#change-reason"), save: get("#save-rules"), saveStatus: get("#save-status"),
     springFestivalEnabled: get("#spring-festival-enabled"), springFestivalStart: get("#spring-festival-start"), springFestivalRecovery: get("#spring-festival-recovery"), springFestivalExtraDays: get("#spring-festival-extra-days"),
@@ -53,7 +52,7 @@
 
   function configureReturnPath() {
     if (new URLSearchParams(location.search).get("from") !== "store-transfer") return;
-    const target = "../../store-transfer/?deploy=20261013-store-transfer-r11";
+    const target = "../../store-transfer/?deploy=20261014-store-transfer-r12";
     const source = get("#source-tool-link"); const back = get("#source-back-link"); const brand = get("#tool-brand-link");
     source.href = target; source.textContent = "門市週補貨與調撥";
     back.href = target; back.textContent = "← 返回週調撥工具";
@@ -67,10 +66,6 @@
     return result;
   }
   function normalizedSku(value) { return String(value || "").normalize("NFKC").trim().toUpperCase(); }
-  function ensureTransferExclusions() {
-    if (!Array.isArray(state.rules.storeInventory.transferExclusions)) state.rules.storeInventory.transferExclusions = [];
-    return state.rules.storeInventory.transferExclusions;
-  }
   function waitForGoogleIdentity() {
     if (globalThis.google?.accounts?.oauth2) return Promise.resolve();
     return new Promise((resolve, reject) => {
@@ -290,49 +285,6 @@
         cell(removeButton(() => rules.splice(index, 1)))); fragment.appendChild(row);
     }); elements.stores.replaceChildren(fragment);
   }
-  function renderTransferExclusions() {
-    const fragment = document.createDocumentFragment();
-    ensureTransferExclusions().forEach((item, index) => {
-      const row = document.createElement("tr");
-      const sku = document.createElement("span"); sku.textContent = item.sku;
-      const productName = document.createElement("span"); productName.textContent = item.productName;
-      row.append(
-        cell(input("checkbox", item.enabled !== false, (value) => item.enabled = value)),
-        cell(sku), cell(productName),
-        cell(removeButton(() => ensureTransferExclusions().splice(index, 1)))
-      );
-      fragment.appendChild(row);
-    });
-    if (!fragment.childNodes.length) {
-      const row = document.createElement("tr"); const empty = document.createElement("td"); empty.colSpan = 4; empty.textContent = "目前沒有排除品號。"; row.appendChild(empty); fragment.appendChild(row);
-    }
-    elements.transferExclusionRows.replaceChildren(fragment);
-    requestAnimationFrame(() => {
-      const rows = [...elements.transferExclusionRows.querySelectorAll("tr")];
-      const shouldScroll = ensureTransferExclusions().length > 5;
-      elements.transferExclusionList.classList.toggle("is-scrollable", shouldScroll);
-      elements.transferExclusionList.style.removeProperty("--transfer-exclusion-visible-height");
-      if (!shouldScroll) return;
-      const headerHeight = elements.transferExclusionList.querySelector("thead")?.getBoundingClientRect().height || 0;
-      const visibleRowsHeight = rows.slice(0, 5).reduce((total, row) => total + row.getBoundingClientRect().height, 0);
-      elements.transferExclusionList.style.setProperty("--transfer-exclusion-visible-height", `${Math.ceil(headerHeight + visibleRowsHeight + 2)}px`);
-    });
-  }
-  async function addTransferExclusion() {
-    const sku = normalizedSku(elements.transferExclusionSku.value);
-    if (!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) { elements.transferExclusionStatus.textContent = "請輸入一個完整且有效的ERP品號。"; elements.transferExclusionSku.focus(); return; }
-    if (ensureTransferExclusions().some((item) => normalizedSku(item.sku) === sku)) { elements.transferExclusionStatus.textContent = `${sku} 已在排除清單中。`; return; }
-    elements.addTransferExclusion.disabled = true; elements.transferExclusionStatus.textContent = "正在讀取最新商品主檔並核對品號…";
-    try {
-      const master = await loadLatestProductMaster();
-      const product = master.get(sku);
-      if (!product) throw new Error(`最新商品主檔找不到品號 ${sku}，未加入清單。`);
-      ensureTransferExclusions().unshift({ sku: product.sku, productName: product.name, enabled: true });
-      elements.transferExclusionSku.value = ""; markDirty(); renderTransferExclusions();
-      elements.transferExclusionStatus.textContent = `已帶入 ${product.sku}・${product.name}；請填寫頁面下方的修改原因並儲存全部規則後才會生效。`;
-    } catch (error) { elements.transferExclusionStatus.textContent = `無法加入：${error.message}`; }
-    finally { elements.addTransferExclusion.disabled = false; }
-  }
   function setConsignmentFields() {
     const p = state.rules.consignment.puyouma; const l = state.rules.consignment.lirong;
     const values = [[elements.puyoumaPull, p, "pullLeadDays"], [elements.puyoumaProduction, p, "productionDays"], [elements.puyoumaHot, p.targetDays, "熱銷"], [elements.puyoumaStable, p.targetDays, "穩定"], [elements.puyoumaLow, p.targetDays, "低銷"],
@@ -347,7 +299,7 @@
     elements.springFestivalExtraDays.value = String(rule.extraDays ?? 53);
   }
   function render() {
-    renderSuppliers(); renderFeaturedSuppliers(); renderUnits(); renderStores(); renderTransferExclusions(); setConsignmentFields(); setSpringFestivalFields();
+    renderSuppliers(); renderFeaturedSuppliers(); renderUnits(); renderStores(); setConsignmentFields(); setSpringFestivalFields();
     elements.blacklist.value = (state.rules.blacklist || []).join("\n"); elements.holidays.value = (state.rules.storeInventory.workdayHolidays || []).join("\n");
     const defaults = { R00: 3, R01: 4, R03: 4, R10: 3, R07: 3, R06: 4 };
     state.rules.storeInventory.arrivalWeekdayByStore ||= {};
@@ -399,8 +351,6 @@
   elements.springFestivalStart.addEventListener("input", () => { ensureSpringFestivalRule().closureStart = elements.springFestivalStart.value; markDirty(); });
   elements.springFestivalRecovery.addEventListener("input", () => { ensureSpringFestivalRule().recoveryDate = elements.springFestivalRecovery.value; markDirty(); });
   elements.springFestivalExtraDays.addEventListener("input", () => { ensureSpringFestivalRule().extraDays = Number(elements.springFestivalExtraDays.value || 0); markDirty(); });
-  elements.addTransferExclusion.addEventListener("click", addTransferExclusion);
-  elements.transferExclusionSku.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); addTransferExclusion(); } });
   configureReturnPath();
   elements.reloadLatest.addEventListener("click", () => {
     const url = new URL(window.location.href);
