@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20261013-special-procurement-r1">
+  <link rel="stylesheet" href="style.css?v=20261013-special-workflow-cis-r2">
 </head>
 <body>
   <section id="version-warning" class="version-warning" role="alert" hidden>
@@ -308,33 +308,54 @@
       </div>
 
       <section class="special-workflows" aria-labelledby="special-workflows-title">
-        <div class="section-heading compact">
+        <div class="section-heading compact special-workflow-heading">
           <div><p class="eyebrow"><span class="stage-number" aria-hidden="true">3</span> 採購方式與例外需求</p><h3 id="special-workflows-title">新品、臨時追加、已開ERP補登與門市不足</h3></div>
-          <p>一般採購由上方產生；例外流程集中在此。前兩項共用兩次回匯與核准，補登依ERP單號去重後直接納入台帳。</p>
+          <p>依目前工作情況選一種方式；一般採購仍由上方「產生採購建議」開始。</p>
         </div>
         <div class="special-workflow-grid">
-          <article>
-            <h4>新品首批採購</h4>
-            <p>先下載空白範本並填寫新品資料，再完成上方最新資料計算後匯入。必要欄位：ERP品號、上市日、通路／門市、首月預估量。</p>
-            <a id="new-product-template-download" class="secondary-button button-link" href="assets/new-product-initial-purchase-template.xlsx?v=20261013-special-procurement-r1" download="新品首批採購_匯入空白範本.xlsx">下載空白範本</a>
-            <label class="file-button">選擇新品首批名單<input id="new-product-file" type="file" accept=".xlsx"></label>
-            <button id="new-product-button" class="secondary-button" type="button" disabled>建立新品首批建議</button>
+          <article class="workflow-choice-card">
+            <div class="workflow-choice-content">
+              <div class="workflow-choice-kicker"><strong>需先完成最新資料計算</strong></div>
+              <h4>新品首批採購</h4>
+              <p>用類別參考值輔助新品首月需求，完成回匯與正式核准後才會占用額度。</p>
+              <ul class="workflow-choice-fields" aria-label="新品首批採購必要欄位">
+                <li>ERP品號</li><li>上市日</li><li>通路／門市</li><li>首月預估量</li>
+              </ul>
+            </div>
+            <div class="workflow-choice-actions">
+              <a id="new-product-template-download" class="workflow-template-link" href="assets/new-product-initial-purchase-template.xlsx?v=20261013-special-workflow-cis-r2" download="新品首批採購_匯入空白範本.xlsx"><span aria-hidden="true">↓</span>下載 Excel 空白範本</a>
+              <label class="file-button workflow-file-button">選擇新品首批名單<input id="new-product-file" type="file" accept=".xlsx"></label>
+              <button id="new-product-button" class="secondary-button workflow-create-button" type="button" disabled>建立新品首批建議</button>
+            </div>
           </article>
-          <article>
-            <h4>臨時追加採購</h4>
-            <p>匯入尚未在ERP正式建立的追加名單；接受.xlsx或.xls，至少須有ERP品號與採購數量。追加量會與最新淨需求並列，仍須回匯與正式核准。</p>
-            <a id="temporary-addition-template-download" class="secondary-button button-link" href="assets/temporary-additional-purchase-template.xlsx?v=20261013-special-procurement-r1" download="臨時追加採購_匯入空白範本.xlsx">下載空白範本</a>
-            <label class="file-button">選擇臨時追加名單<input id="manual-draft-files" type="file" accept=".xlsx,.xls" multiple></label>
-            <button id="manual-draft-button" class="secondary-button" type="button" disabled>建立臨時追加採購</button>
+          <article class="workflow-choice-card">
+            <div class="workflow-choice-content">
+              <div class="workflow-choice-kicker"><strong>需先完成最新資料計算</strong></div>
+              <h4>臨時追加採購</h4>
+              <p>將尚未在ERP正式建立的追加量，和最新淨需求並列檢查，再走回匯與核准。</p>
+              <ul class="workflow-choice-fields" aria-label="臨時追加採購必要欄位">
+                <li>ERP品號</li><li>採購數量</li><li>.xlsx／.xls</li>
+              </ul>
+            </div>
+            <div class="workflow-choice-actions">
+              <a id="temporary-addition-template-download" class="workflow-template-link" href="assets/temporary-additional-purchase-template.xlsx?v=20261013-special-workflow-cis-r2" download="臨時追加採購_匯入空白範本.xlsx"><span aria-hidden="true">↓</span>下載 Excel 空白範本</a>
+              <label class="file-button workflow-file-button">選擇臨時追加名單<input id="manual-draft-files" type="file" accept=".xlsx,.xls" multiple></label>
+              <button id="manual-draft-button" class="secondary-button workflow-create-button" type="button" disabled>建立臨時追加採購</button>
+            </div>
           </article>
-          <article>
-            <h4>補登已採購單</h4>
-            <p>只用於已在ERP建立、但未經本工具核准的採購單。不必先產生採購建議；需有ERP單據編碼，重複單號不會再占額。</p>
-            <label class="file-button">選擇已建立ERP採購單<input id="posted-order-files" type="file" accept=".xlsx,.xls" multiple></label>
-            <button id="posted-order-button" class="secondary-button" type="button" disabled>檢查並補登台帳</button>
+          <article class="workflow-choice-card workflow-choice-card-direct">
+            <div class="workflow-choice-content">
+              <div class="workflow-choice-kicker direct"><strong>可直接執行，不需重跑建議</strong></div>
+              <h4>補登已採購單</h4>
+              <p>適用於已在ERP建立、但未經本工具核准的採購單。系統會依ERP單號去重，避免重複占用額度。</p>
+            </div>
+            <div class="workflow-choice-actions direct-actions">
+              <label class="file-button workflow-file-button">選擇已建立ERP採購單<input id="posted-order-files" type="file" accept=".xlsx,.xls" multiple></label>
+              <button id="posted-order-button" class="secondary-button workflow-create-button" type="button" disabled>檢查並補登台帳</button>
+            </div>
           </article>
         </div>
-        <p id="special-workflow-status" class="main-status" role="status">新品與臨時追加須先完成最新資料計算；補登已建立ERP採購單可直接執行。</p>
+        <p id="special-workflow-status" class="main-status special-workflow-status" role="status"><span aria-hidden="true">i</span>新品與臨時追加須先完成最新資料計算；補登已建立ERP採購單可直接執行。</p>
 
         <details id="store-shortage-card" class="store-shortage-card" aria-labelledby="store-shortage-title">
           <summary class="store-shortage-heading">
@@ -544,9 +565,9 @@
   <script src="xlsx-style-runtime.js?v=20260930-month-end-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20261013-special-procurement-r1"></script>
+  <script src="core.js?v=20261013-special-workflow-cis-r2"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
   <script src="google-sources.js?v=20261006-notification-audit-r2"></script>
-  <script src="app.js?v=20261013-special-procurement-r1"></script>
+  <script src="app.js?v=20261013-special-workflow-cis-r2"></script>
 </body>
 </html>

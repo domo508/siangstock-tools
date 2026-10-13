@@ -363,29 +363,167 @@
 
 .special-workflows {
   margin-top: 24px;
-  padding: 20px;
+  padding: 26px;
   border: 1px solid #b9d2da;
-  border-radius: 18px;
-  background: linear-gradient(145deg, #f8fbfc, #eef7f8);
+  border-radius: 24px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, .96), rgba(239, 248, 249, .94));
+  box-shadow: 0 18px 44px rgba(30, 66, 91, .08);
+}
+.special-workflow-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 9px;
+  margin-bottom: 22px;
+}
+.special-workflow-heading h3 {
+  margin: 0;
+  color: var(--navy);
+  font-size: clamp(1.35rem, 2.4vw, 1.75rem);
+  line-height: 1.25;
+}
+.special-workflow-heading > p {
+  max-width: 720px;
+  text-align: left;
 }
 .special-workflow-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
 }
-.special-workflow-grid article {
+.workflow-choice-card {
   display: grid;
-  align-content: start;
-  gap: 10px;
-  padding: 16px;
+  grid-template-rows: 1fr auto;
+  gap: 20px;
+  min-width: 0;
+  padding: 21px;
   border: 1px solid var(--line);
-  border-radius: 15px;
-  background: #fff;
+  border-radius: 19px;
+  background: rgba(255, 255, 255, .96);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
-.special-workflow-grid h4 { margin: 0; color: var(--navy); }
-.special-workflow-grid p { margin: 0; min-height: 5em; color: var(--muted); line-height: 1.55; }
-.special-workflow-grid .secondary-button { width: 100%; }
-.special-workflows > .main-status { margin-top: 14px; }
+.workflow-choice-card:hover {
+  transform: translateY(-1px);
+  border-color: #9fc7d0;
+  box-shadow: 0 12px 28px rgba(30, 66, 91, .08);
+}
+.workflow-choice-content { min-width: 0; }
+.workflow-choice-kicker {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 14px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: var(--blue);
+  background: var(--soft-blue);
+  font-size: .78rem;
+}
+.workflow-choice-kicker strong { letter-spacing: .04em; }
+.workflow-choice-kicker.direct { color: var(--green); background: var(--soft-green); }
+.workflow-choice-card h4 {
+  margin: 0;
+  color: var(--navy);
+  font-size: 1.18rem;
+}
+.workflow-choice-card p {
+  margin: 9px 0 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+.workflow-choice-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 15px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.workflow-choice-fields li {
+  padding: 6px 9px;
+  border-radius: 999px;
+  color: #4e6879;
+  background: #edf5f7;
+  font-size: .77rem;
+  font-weight: 800;
+}
+.workflow-choice-actions {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+  gap: 9px;
+}
+.workflow-template-link {
+  display: inline-flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 13px;
+  border: 1px solid #9eb8c3;
+  border-radius: 12px;
+  color: var(--navy);
+  background: #fff;
+  font-weight: 800;
+  text-align: center;
+  text-decoration: none;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+.workflow-template-link span { color: var(--blue); font-size: 1.05rem; }
+.workflow-template-link:hover,
+.workflow-template-link:focus-visible {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: var(--soft-blue);
+  outline: none;
+}
+.workflow-template-link:focus-visible,
+.workflow-file-button:focus-within,
+.workflow-create-button:focus-visible { box-shadow: 0 0 0 3px rgba(23, 107, 135, .18); }
+.workflow-file-button {
+  display: inline-flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--navy);
+  text-align: center;
+}
+.workflow-create-button {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 46px;
+  background: #f7fafb;
+}
+.workflow-choice-card-direct {
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) minmax(310px, .72fr);
+  grid-template-rows: auto;
+  align-items: center;
+  border-color: #b9ddd1;
+  background: linear-gradient(135deg, #fff, #f4faf7);
+}
+.workflow-choice-card-direct .workflow-choice-content { max-width: 700px; }
+.direct-actions { grid-template-columns: 1fr; }
+.direct-actions .workflow-create-button { grid-column: auto; }
+.special-workflow-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 16px !important;
+  padding: 11px 13px;
+  border-radius: 12px;
+  color: #526d7d;
+  background: rgba(234, 245, 247, .8);
+  font-size: .86rem;
+}
+.special-workflow-status > span {
+  display: inline-grid;
+  flex: 0 0 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--blue);
+  font-size: .72rem;
+  font-weight: 900;
+}
 .active-ledger { margin-top: 24px; }
 .active-ledger .procurement-table { min-width: 1180px; }
 .notification-state { display: grid; gap: 4px; margin-bottom: 7px; color: var(--muted); font-size: .78rem; line-height: 1.35; }
@@ -783,8 +921,7 @@
   .supplier-filter-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .source-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .budget-grid .budget-source-field { grid-column: span 2; }
-  .special-workflow-grid { grid-template-columns: 1fr; }
-  .special-workflow-grid p { min-height: 0; }
+  .workflow-choice-card-direct { grid-template-columns: 1fr; }
   .reason-batch-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -803,9 +940,15 @@
   .activity-grid-two,
   .activity-method-panel { grid-template-columns: 1fr; }
   .activity-methods { display: grid; }
+  .special-workflow-grid { grid-template-columns: 1fr; }
+  .workflow-choice-card-direct { grid-column: auto; }
 }
 
 @media (max-width: 620px) {
+  .special-workflows { padding: 18px; border-radius: 20px; }
+  .workflow-choice-card { padding: 18px; }
+  .workflow-choice-actions { grid-template-columns: 1fr; }
+  .workflow-create-button { grid-column: auto; }
   .google-auth-priority { display: grid; }
   .google-auth-priority .primary-button { width: 100%; }
   .planning-context,

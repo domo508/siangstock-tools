@@ -2052,14 +2052,15 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20261013-special-procurement-r1');
+    expect(toolHtml).toContain('style.css?v=20261013-special-workflow-cis-r2');
+    expect(toolHtml).toContain('core.js?v=20261013-special-workflow-cis-r2');
     expect(toolHtml).toContain('google-sources.js?v=20261006-notification-audit-r2');
-    expect(toolHtml).toContain('app.js?v=20261013-special-procurement-r1');
+    expect(toolHtml).toContain('app.js?v=20261013-special-workflow-cis-r2');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261013-special-procurement-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261013-special-workflow-cis-r2");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2079,7 +2080,9 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('download="新品首批採購_匯入空白範本.xlsx"');
     expect(existsSync("../procurement-planning/assets/new-product-initial-purchase-template.xlsx")).toBe(true);
     expect(toolHtml).toContain("臨時追加採購");
-    expect(toolHtml).toContain("至少須有ERP品號與採購數量");
+    expect(toolHtml).toContain('class="workflow-choice-card"');
+    expect(toolHtml).toContain('class="workflow-choice-card workflow-choice-card-direct"');
+    expect(toolHtml).toContain("可直接執行，不需重跑建議");
     expect(toolHtml).toContain('id="temporary-addition-template-download"');
     expect(toolHtml).toContain('download="臨時追加採購_匯入空白範本.xlsx"');
     expect(existsSync("../procurement-planning/assets/temporary-additional-purchase-template.xlsx")).toBe(true);
@@ -2141,7 +2144,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261013-special-procurement-r1");
+    expect(toolHtml).toContain("app.js?v=20261013-special-workflow-cis-r2");
     expect(toolHtml).toContain('id="activity-demand-card"');
     expect(toolHtml).toContain("活動期間預計營業額");
     expect(toolHtml).toContain("需求加乘倍數");
