@@ -205,6 +205,7 @@ describe("前台導覽", () => {
     expect(app).toContain("退回門市修改");
     expect(app).toContain("data-correction-reason");
     expect(app).toContain("corrections/open");
+    expect(app).toContain("${statusOverview(p)}${approvedCorrectionPanel(p)}${itemTable(p)}");
     expect(style).toContain(".approved-correction-panel");
     expect(worker).toContain("assertHq(who.role)");
     expect(worker).toContain("此門市已產生ERP檔，不能直接退回");

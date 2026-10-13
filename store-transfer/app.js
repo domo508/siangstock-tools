@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261014-store-transfer-r12";
+  const APP_VERSION = "20261014-store-transfer-r13";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -1145,6 +1145,14 @@
     refreshDialogQuantityWarnings();
   }
 
+  function approvedCorrectionPanel(payload) {
+    if (state.config.role === "store" || payload.batch.status !== "approved") return "";
+    const eligible = payload.storeStatuses.filter((row) => row.status === "approved" && !row.erp_created_at);
+    if (!eligible.length) return "";
+    const options = eligible.map((row) => `<option value="${row.store_code}">${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</option>`).join("");
+    return `<section class="approved-correction-panel"><h3>已核准內容需要修改</h3><p>選擇門市並填寫原因。尚未產生ERP才能開啟；原核准內容會保留為更正版本。</p><div class="approved-correction-controls"><label><span>門市</span><select data-correction-store>${options}</select></label><label><span>更正原因</span><input data-correction-reason maxlength="300" placeholder="必填，例如：門市補充實際需求"></label><button class="secondary-button" type="button" data-action="open-hq-correction">開啟總部更正</button><button class="secondary-button" type="button" data-action="return-store">退回門市修改</button></div></section>`;
+  }
+
   function detailActions(payload) {
     const ownState = payload.storeStatuses.find((row) => row.store_code === state.config.storeCode);
     const ownStatus = ownState?.status;
@@ -1154,10 +1162,7 @@
     if (state.config.role !== "store" && ["approved", "erp_created"].includes(payload.batch.status)) {
       const erpButtons = [...new Set(payload.items.map((item) => item.store_code))].map((store) => { const done = payload.storeStatuses.find((row) => row.store_code === store)?.erp_created_at; return `<button class="secondary-button" type="button" data-action="erp" data-store="${store}">${done ? "重新下載" : "下載"}${store} ERP檔</button>`; }).join("");
       if (payload.batch.status === "erp_created") return `${erpButtons}<button class="primary-button" type="button" data-action="close">標記本週批次完成</button>`;
-      const eligible = payload.storeStatuses.filter((row) => row.status === "approved" && !row.erp_created_at);
-      const options = eligible.map((row) => `<option value="${row.store_code}">${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</option>`).join("");
-      const correction = eligible.length ? `<section class="approved-correction-panel"><h3>已核准內容需要修改</h3><p>選擇門市並填寫原因。尚未產生ERP才能開啟；原核准內容會保留為更正版本。</p><div class="approved-correction-controls"><label><span>門市</span><select data-correction-store>${options}</select></label><label><span>更正原因</span><input data-correction-reason maxlength="300" placeholder="必填，例如：門市補充實際需求"></label><button class="secondary-button" type="button" data-action="open-hq-correction">開啟總部更正</button><button class="secondary-button" type="button" data-action="return-store">退回門市修改</button></div></section>` : "";
-      return `${correction}${erpButtons}`;
+      return erpButtons;
     }
     return "";
   }
@@ -1180,7 +1185,7 @@
     const scheduleText = Object.values(schedule).map((row) => `${row.storeCode} 本批${row.currentArrivalDate}／下一輪${row.nextArrivalDate}`).join("；");
     const activeCorrection = p.storeStatuses.find((row) => row.correction_mode);
     const correctionNotice = activeCorrection ? `<p class="result-alert warn"><strong>${activeCorrection.correction_mode === "store" ? "已退回門市修改" : "總部更正中"}：</strong>${escapeHtml(activeCorrection.store_code)}・第${escapeHtml(activeCorrection.correction_revision)}版・${escapeHtml(activeCorrection.correction_reason || "未填原因")}。原核准內容已保留，重新核准後才可產生ERP。</p>` : "";
-    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${correctionNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${skuFilterBar("batch", state.batchSku)}${statusOverview(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
+    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${correctionNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${skuFilterBar("batch", state.batchSku)}${statusOverview(p)}${approvedCorrectionPanel(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
     $("batch-dialog").showModal();
     applyStoreFilter("batch", state.batchStore);
     refreshDialogQuantityWarnings();
