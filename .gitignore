@@ -9,6 +9,8 @@
 !procurement-planning/version.json
 !procurement-planning/rules-admin/version.json
 !store-transfer/version.json
+!procurement-planning/assets/new-product-initial-purchase-template.xlsx
+!procurement-planning/assets/temporary-additional-purchase-template.xlsx
 
 # 敏感設定
 .env

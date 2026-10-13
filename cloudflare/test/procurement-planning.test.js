@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 
@@ -402,15 +402,37 @@ describe("採購規劃核心鎖定公式", () => {
     expect(summary).toMatchObject({ actualReceiptCost: 3200, receiptDocumentCount: 2, pendingQuantity: 6, draftDocumentCount: 1, closedPartialDocumentCount: 1 });
   });
 
+  it("臨時追加採購以原訂購量為準，不因新單狀態變成0", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["狀態", "ERP品號", "採購數量"],
+      ["新單", "A1", 12]
+    ]), "追加名單");
+    const report = core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: "臨時追加.xlsx" });
+    expect(report.records[0]).toMatchObject({ sku: "A1", quantity: 0, orderedQuantity: 12 });
+    expect(core.buildTemporaryAdditionalPurchaseRows([report])[0]).toMatchObject({ sku: "A1", quantity: 12 });
+  });
+
   it("新品首批名單需含上市日、通路與首月預估量", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
-      ["ERP品號", "預計／實際上市日", "預計販售通路或門市", "首月預估量", "相似品號", "是否已納入行銷預估"],
-      ["A1", "2026-09-20", "官網、台北門市", 30, "A42359-A", "是"]
+      ["ERP品號", "預計／實際上市日", "預計販售通路或門市", "首月預估量", "相似類別", "備註"],
+      ["A1", "2026-09-20", "官網、台北門市", 30, "天絲", "首月量已含活動需求"]
     ]), "新品名單");
     const parsed = core.parseNewProductWorkbook(workbook, XLSX, { fileName: "新品.xlsx" });
     expect(parsed.errors).toHaveLength(0);
-    expect(parsed.records[0]).toMatchObject({ sku: "A1", listedDate: "2026-09-20", channels: "官網、台北門市", firstMonthQty: 30, similarSku: "A42359-A" });
+    expect(parsed.records[0]).toMatchObject({ sku: "A1", listedDate: "2026-09-20", channels: "官網、台北門市", firstMonthQty: 30, similarCategory: "天絲", remark: "首月量已含活動需求" });
+  });
+
+  it("新品首批名單仍相容舊版相似品號欄位", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "預計／實際上市日", "預計販售通路或門市", "首月預估量", "相似品號", "是否已納入行銷預估"],
+      ["A2", "2026-09-21", "全部通路", 20, "A42359-A", "是"]
+    ]), "舊版新品名單");
+    const parsed = core.parseNewProductWorkbook(workbook, XLSX, { fileName: "舊版新品.xlsx" });
+    expect(parsed.errors).toHaveLength(0);
+    expect(parsed.records[0]).toMatchObject({ sku: "A2", similarSku: "A42359-A", marketingIncluded: "是" });
   });
 
   it("枕頭本體固定歸四季枕芯，枕套不誤判", () => {
@@ -750,22 +772,22 @@ describe("採購建議第二階段", () => {
     expect(recommendations.totals).toMatchObject({ activeTransferDocumentCount: 2, transferSubmittedQty: 2, transferInTransitQty: 3 });
   });
 
-  it("人工匯入採購單保留草稿量並共用兩次回匯欄位", () => {
+  it("臨時追加採購保留追加量並共用回匯欄位", () => {
     const base = core.buildProcurementRecommendations({
       master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
       salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28"
     });
     const special = core.buildSpecialProcurementAnalysis({
-      baseAnalysis: base, workflowType: "manual_draft", rows: [{ sku: "A1", quantity: 27 }], fileName: "人工草稿.xlsx",
+      baseAnalysis: base, workflowType: "manual_draft", rows: [{ sku: "A1", quantity: 27 }], fileName: "臨時追加.xlsx",
       master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], supplierRules: core.SUPPLIER_RULES
     });
-    expect(special.meta).toMatchObject({ workflowType: "manual_draft", workflowLabel: "人工匯入採購單" });
-    expect(special.rows[0]).toMatchObject({ initialManualQty: 27, initialManualReason: "人工匯入採購草稿" });
+    expect(special.meta).toMatchObject({ workflowType: "manual_draft", workflowLabel: "臨時追加採購" });
+    expect(special.rows[0]).toMatchObject({ initialManualQty: 27, initialManualReason: "臨時追加採購匯入" });
     const output = core.buildRecommendationWorkbook(special, XLSX);
     const row = XLSX.utils.sheet_to_json(output.Sheets["03B1_普優瑪_天絲"], { defval: "" })[0];
     expect(row["人工確認採購量"]).toBe(27);
     expect(row["人工調整原因類別"]).toBe("其他");
-    expect(row["人工調整補充說明"]).toBe("人工匯入採購草稿");
+    expect(row["人工調整補充說明"]).toBe("臨時追加採購匯入");
   });
 
   it("品名結尾(S)保留需求資料，但不進對外採購或寄庫建議", () => {
@@ -1081,10 +1103,10 @@ describe("採購建議第二階段", () => {
     expect(confirmedReview.rows[0]).toMatchObject({ productStatusPendingReview: true, finalQty: row.suggestedPurchaseQty });
 
     const special = core.buildSpecialProcurementAnalysis({
-      baseAnalysis: recommendations, workflowType: "new_product", rows: [{ sku: "A1", firstMonthQty: 30, channels: "官網" }],
+      baseAnalysis: recommendations, workflowType: "new_product", rows: [{ sku: "A1", firstMonthQty: 30, channels: "官網", similarCategory: "精梳純棉" }],
       fileName: "新品.xlsx", master, inventory: makeInventory(), pendingReports: [makePending()], supplierRules: core.SUPPLIER_RULES
     });
-    expect(special.rows[0]).toMatchObject({ productStatusPendingReview: true });
+    expect(special.rows[0]).toMatchObject({ productStatusPendingReview: true, similarCategory: "精梳純棉", categoryModel: "相似類別精梳純棉" });
     expect(special.rows[0].suggestedPurchaseQty).toBeGreaterThan(0);
   });
 
@@ -2030,14 +2052,14 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('core.js?v=20261012-activity-demand-r1');
+    expect(toolHtml).toContain('core.js?v=20261013-special-procurement-r1');
     expect(toolHtml).toContain('google-sources.js?v=20261006-notification-audit-r2');
-    expect(toolHtml).toContain('app.js?v=20261012-activity-demand-r1');
+    expect(toolHtml).toContain('app.js?v=20261013-special-procurement-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261012-activity-demand-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261013-special-procurement-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2053,7 +2075,17 @@ describe("採購規劃前台與入口", () => {
     expect(readFileSync("../procurement-planning/inventory-reader-worker.js", "utf8")).toContain("STREAM_THRESHOLD_BYTES");
     expect(readFileSync("../procurement-planning/inventory-stream-reader.js", "utf8")).toContain('DecompressionStream("deflate-raw")');
     expect(toolHtml).toContain("新品首批採購");
-    expect(toolHtml).toContain("人工匯入採購單");
+    expect(toolHtml).toContain('id="new-product-template-download"');
+    expect(toolHtml).toContain('download="新品首批採購_匯入空白範本.xlsx"');
+    expect(existsSync("../procurement-planning/assets/new-product-initial-purchase-template.xlsx")).toBe(true);
+    expect(toolHtml).toContain("臨時追加採購");
+    expect(toolHtml).toContain("至少須有ERP品號與採購數量");
+    expect(toolHtml).toContain('id="temporary-addition-template-download"');
+    expect(toolHtml).toContain('download="臨時追加採購_匯入空白範本.xlsx"');
+    expect(existsSync("../procurement-planning/assets/temporary-additional-purchase-template.xlsx")).toBe(true);
+    const temporaryTemplate = XLSX.read(readFileSync("../procurement-planning/assets/temporary-additional-purchase-template.xlsx"), { type: "buffer" });
+    const temporaryTemplateRows = XLSX.utils.sheet_to_json(temporaryTemplate.Sheets["臨時追加名單"], { header: 1, defval: "" });
+    expect(temporaryTemplateRows[3]).toEqual(["ERP品號", "採購數量"]);
     expect(toolHtml).toContain("補登已採購單");
     expect(toolHtml).toContain("補登已建立ERP採購單可直接執行");
     expect(toolHtml).toContain('id="active-ledger-rows"');
@@ -2109,7 +2141,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261012-activity-demand-r1");
+    expect(toolHtml).toContain("app.js?v=20261013-special-procurement-r1");
     expect(toolHtml).toContain('id="activity-demand-card"');
     expect(toolHtml).toContain("活動期間預計營業額");
     expect(toolHtml).toContain("需求加乘倍數");

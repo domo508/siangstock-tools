@@ -904,6 +904,14 @@
     };
   }
 
+  function buildTemporaryAdditionalPurchaseRows(reports = []) {
+    return reports.flatMap((report) => (report.records || []).map((row) => ({
+      ...row,
+      quantity: Math.max(0, Number(row.orderedQuantity ?? row.quantity ?? 0)),
+      supplier: report.metadata?.supplier || row.supplier || ""
+    })));
+  }
+
   const ERP_TRANSFER_WAREHOUSES = Object.freeze([
     ["T00", ["寬承總倉", "總倉"]],
     ["R00", ["翔仔居家-台北中山門市", "台北中山門市"]],
@@ -1008,6 +1016,7 @@
       listedDate: ["預計／實際上市日", "預計上市日", "實際上市日", "上市日期", "上架日"],
       channels: ["預計販售通路或門市", "預計通路或門市", "販售通路", "通路", "門市"],
       firstMonthQty: ["首月預估量", "首批預估量", "首月數量", "預估數量", "數量"],
+      similarCategory: ["相似類別", "參考類別", "商品類別"],
       similarSku: ["相似品號", "相似ERP品號"],
       marketingIncluded: ["是否已納入行銷預估", "納入行銷預估"],
       remark: ["備註", "人工備註"]
@@ -1044,7 +1053,7 @@
       if (!listedDate) errors.push({ sourceRow: index + 1, sku, message: "上市日格式錯誤。" });
       if (!channels) errors.push({ sourceRow: index + 1, sku, message: "預計販售通路或門市不可空白。" });
       if (firstMonthQty == null || firstMonthQty < 0 || !Number.isInteger(firstMonthQty)) errors.push({ sourceRow: index + 1, sku, message: "首月預估量須為0或正整數。" });
-      records.push({ sourceRow: index + 1, sku, listedDate, channels, firstMonthQty: Math.max(0, Number(firstMonthQty || 0)), similarSku: normalizeSku(read("similarSku")), marketingIncluded: String(read("marketingIncluded") || "").trim(), remark: String(read("remark") || "").trim() });
+      records.push({ sourceRow: index + 1, sku, listedDate, channels, firstMonthQty: Math.max(0, Number(firstMonthQty || 0)), similarCategory: String(read("similarCategory") || "").trim(), similarSku: normalizeSku(read("similarSku")), marketingIncluded: String(read("marketingIncluded") || "").trim(), remark: String(read("remark") || "").trim() });
     }
     if (!records.length) throw new Error("新品首批名單沒有可辨識的ERP品號。");
     return { fileName: options.fileName || "", sheetName: selected.name, records, errors };
@@ -3703,7 +3712,7 @@
     if (!base?.rows || !input.master?.bySku) throw new Error("請先完成一次最新資料計算，再建立特殊採購流程。");
     const workflowType = input.workflowType === "new_product" ? "new_product" : "manual_draft";
     const sourceRows = Array.isArray(input.rows) ? input.rows : [];
-    if (!sourceRows.length) throw new Error(workflowType === "new_product" ? "新品首批名單沒有可處理品項。" : "人工採購草稿沒有可處理品項。");
+    if (!sourceRows.length) throw new Error(workflowType === "new_product" ? "新品首批名單沒有可處理品項。" : "臨時追加名單沒有可處理品項。");
     const pending = aggregatePendingReports(input.pendingReports || []);
     const rows = sourceRows.map((source) => {
       const sku = normalizeSku(source.sku);
@@ -3734,6 +3743,8 @@
         : Math.max(0, Number(existing?.suggestedPurchaseQty || 0));
       const unitCost = Number(masterRecord.unitCost || 0);
       const baseRow = existing || {};
+      const requestedSimilarCategory = String(source.similarCategory || "").trim();
+      const selectedSimilarCategory = requestedSimilarCategory && requestedSimilarCategory !== "由系統判斷" ? requestedSimilarCategory : "";
       return {
         ...baseRow,
         sku,
@@ -3762,8 +3773,8 @@
         activeWeeks12: Number(existing?.activeWeeks12 || 0),
         variabilityCv: Number(existing?.variabilityCv || 0),
         trendRatio: Number(existing?.trendRatio || 0),
-        skuModel: workflowType === "new_product" ? "新品首月人工預估" : (existing?.skuModel || "人工草稿比對"),
-        categoryModel: existing?.categoryModel || (source.similarSku ? `相似品號${source.similarSku}` : "新品人工預估"),
+        skuModel: workflowType === "new_product" ? "新品首月人工預估" : (existing?.skuModel || "臨時追加比對"),
+        categoryModel: selectedSimilarCategory ? `相似類別${selectedSimilarCategory}` : (existing?.categoryModel || (source.similarSku ? `相似品號${source.similarSku}` : "新品人工預估")),
         categorySeasonFactor: Number(existing?.categorySeasonFactor || 1),
         categoryReliability: existing?.categoryReliability || "需人工確認",
         categoryWape: existing?.categoryWape ?? null,
@@ -3794,7 +3805,7 @@
         suggestedConsignmentQty: workflowType === "new_product" ? Number(existing?.suggestedConsignmentQty || 0) : 0,
         supplyStatus: productStatusPendingReview
           ? "待人工確認：貨品狀態空白；已保留試算建議量，第一次回匯須明確填量與原因"
-          : (workflowType === "new_product" ? `新品首批：${source.channels || "通路待確認"}` : "人工採購草稿：與系統淨需求比較後走兩次回匯"),
+          : (workflowType === "new_product" ? `新品首批：${source.channels || "通路待確認"}` : "臨時追加採購：與系統淨需求比較後走回匯與核准"),
         sellThroughStop: Boolean(masterRecord.sellThroughStop),
         externalPurchaseBlocked: Boolean(masterRecord.discontinued || masterRecord.sellThroughStop),
         automaticExclusionReason: "",
@@ -3803,12 +3814,13 @@
         discontinued: Boolean(masterRecord.discontinued),
         isNewProduct: workflowType === "new_product",
         initialManualQty: workflowType === "manual_draft" ? requestedQty : null,
-        initialManualReason: workflowType === "manual_draft" ? "人工匯入採購草稿" : "",
+        initialManualReason: workflowType === "manual_draft" ? "臨時追加採購匯入" : "",
         listedDate: source.listedDate || masterRecord.listedDate || "",
         plannedChannels: source.channels || "",
+        similarCategory: requestedSimilarCategory,
         similarSku: source.similarSku || "",
         marketingIncluded: source.marketingIncluded || "",
-        sourceFiles: [input.fileName || (workflowType === "new_product" ? "新品首批名單" : "人工採購草稿")],
+        sourceFiles: [input.fileName || (workflowType === "new_product" ? "新品首批名單" : "臨時追加名單")],
         scheduleNotes: []
       };
     });
@@ -3819,7 +3831,7 @@
       suggestedRows,
       consignmentRows: workflowType === "new_product" ? rows.filter((row) => /普優[瑪碼]/.test(row.supplier)) : [],
       lirongConsignmentRows: [],
-      meta: { ...(base.meta || {}), workflowType, workflowLabel: workflowType === "new_product" ? "新品首批採購" : "人工匯入採購單" },
+      meta: { ...(base.meta || {}), workflowType, workflowLabel: workflowType === "new_product" ? "新品首批採購" : "臨時追加採購" },
       totals: {
         analyzedSkuCount: rows.length,
         suggestedSkuCount: rows.filter((row) => row.suggestedPurchaseQty > 0 || Number(row.initialManualQty || 0) > 0).length,
@@ -4378,8 +4390,7 @@
       "AI判斷": "待回匯後重算",
       "新品上市日": row.listedDate || "",
       "新品預計通路／門市": row.plannedChannels || "",
-      "相似品號": row.similarSku || "",
-      "已納入行銷預估": row.marketingIncluded || "",
+      "相似類別": row.similarCategory || row.materialCategory || "",
       "進貨價": row.unitCost,
       "建議採購金額": row.suggestedPurchaseAmount,
       "已下架": row.discontinued ? "是" : "否",
@@ -5205,6 +5216,7 @@
     parseProductMasterWorkbook,
     parseInventoryWorkbook,
     parsePendingPurchaseWorkbook,
+    buildTemporaryAdditionalPurchaseRows,
     parseTransferWorkbook,
     parseNewProductWorkbook,
     parseSalesWorkbook,

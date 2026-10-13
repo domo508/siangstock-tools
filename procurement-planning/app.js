@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261012-activity-demand-r1";
+  const APP_VERSION = "20261013-special-procurement-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -276,7 +276,7 @@
       ? "本分頁先前成功取得的四項資料仍保留，這次重新整理未覆蓋舊資料"
       : "本次自動來源尚未完成，尚未採用不完整資料";
     const nextStep = hasPreviousSources
-      ? "稍後可再按「重新取得最新資料」；不必重做門市不足量或重新選擇本次人工匯入檔"
+      ? "稍後可再按「重新取得最新資料」；不必重做門市不足量或重新選擇本次臨時追加檔"
       : `先重試「自動取得最新資料」；若只有${sourceLabel}持續失敗，再使用該來源卡片的「手動備援」`;
     return `操作環節：自動取得最新資料｜失敗區塊：${sourceLabel}｜失敗階段：${stage}｜原因：${reason}｜處理結果：${result}｜建議處理：${nextStep}。`;
   }
@@ -1275,7 +1275,7 @@
     return ({ pending_approval: "待核准", approved: "已核准", erp_created: "ERP已建立／未到貨", received: "已到貨", revoked: "已撤銷" })[status] || status;
   }
   function workflowLabel(type) {
-    return ({ system_recommendation: "一般採購", new_product: "新品首批", manual_draft: "人工匯入", manual_posted: "補登已採購", customer_custom: "客製採購" })[type] || "一般採購";
+    return ({ system_recommendation: "一般採購", new_product: "新品首批", manual_draft: "臨時追加", manual_posted: "補登已採購", customer_custom: "客製採購" })[type] || "一般採購";
   }
   function appendLedgerClosureSummary(cell, item) {
     const summary = item.closure_summary || {};
@@ -2698,21 +2698,21 @@
   async function buildManualDraftFlow() {
     if (!state.baseAnalysis || !state.manualDraftFiles.length) return;
     elements.manualDraftButton.disabled = true;
-    elements.specialWorkflowStatus.textContent = "正在把人工採購草稿與最新淨需求比對…";
+    elements.specialWorkflowStatus.textContent = "正在把臨時追加名單與最新淨需求比對…";
     try {
       const workbooks = await Promise.all(state.manualDraftFiles.map(readWorkbook));
       const reports = workbooks.map((workbook, index) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: state.manualDraftFiles[index].name }));
-      const rows = reports.flatMap((report) => report.records.map((row) => ({ ...row, supplier: report.metadata.supplier })));
+      const rows = core.buildTemporaryAdditionalPurchaseRows(reports);
       const duplicate = rows.find((row, index) => rows.findIndex((item) => item.sku === row.sku) !== index);
-      if (duplicate) throw new Error(`${duplicate.sku}在人工採購草稿中重複，請先合併為單一數量。`);
+      if (duplicate) throw new Error(`${duplicate.sku}在臨時追加名單中重複，請先合併為單一數量。`);
       const analysis = core.buildSpecialProcurementAnalysis({
         baseAnalysis: state.baseAnalysis, workflowType: "manual_draft", rows, fileName: state.manualDraftFiles.map((file) => file.name).join("、"),
         master: state.parsedSources.master, inventory: state.parsedSources.inventory, pendingReports: state.parsedSources.pendingReports,
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, purchaseUnitRules: state.procurementRules?.purchaseUnits
       });
-      activateSpecialAnalysis(analysis, "人工匯入採購單");
+      activateSpecialAnalysis(analysis, "臨時追加採購");
     } catch (error) {
-      elements.specialWorkflowStatus.textContent = `人工採購草稿停止：${error.message}`;
+      elements.specialWorkflowStatus.textContent = `臨時追加採購停止：${error.message}`;
       elements.specialWorkflowStatus.className = "main-status error";
     } finally { updateSpecialWorkflowReady(); }
   }
