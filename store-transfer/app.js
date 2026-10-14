@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261014-store-transfer-r13";
+  const APP_VERSION = "20261014-store-transfer-r14";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;

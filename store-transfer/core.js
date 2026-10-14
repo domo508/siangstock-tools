@@ -12,6 +12,12 @@
     P11042: { name: "紡布提袋 25' [48×31×12][中]", size: "中" },
     P11043: { name: "紡布提袋 25' [30×30×10][小]", size: "小" }
   });
+  const CUSTOM_TRANSFER_SKU_MARKERS = Object.freeze(["SA", "SB", "OA", "OB"]);
+
+  function isCustomTransferSku(sku) {
+    const normalized = String(sku || "").normalize("NFKC").trim().toUpperCase();
+    return Boolean(normalized) && CUSTOM_TRANSFER_SKU_MARKERS.some((marker) => normalized.includes(marker));
+  }
 
   function transferExclusionSkus(storeInventory) {
     return new Set((Array.isArray(storeInventory?.transferExclusions) ? storeInventory.transferExclusions : [])
@@ -59,6 +65,7 @@
 
   function transferApplicabilityDecision(storeInventory, product, storeCode, proposalDate) {
     const sku = String(product?.sku || "").normalize("NFKC").trim().toUpperCase();
+    if (isCustomTransferSku(sku)) return { excluded: true, source: "custom_sku" };
     if (transferExclusionSkus(storeInventory).has(sku)) return { excluded: true, source: "exact_exclusion" };
     for (const rule of normalizedApplicabilityRules(storeInventory)) {
       if (!applicabilityRuleMatches(rule, product, storeCode)) continue;
@@ -644,6 +651,7 @@
     const applicabilityRules = normalizedApplicabilityRules(input.storeInventory);
     const isTransferExcluded = (sku, storeCode = "") => {
       const normalized = String(sku || "").normalize("NFKC").trim().toUpperCase();
+      if (isCustomTransferSku(normalized)) return true;
       if (transferExclusions.has(normalized)) return true;
       if (!storeCode || !applicabilityRules.length) return false;
       return transferApplicabilityDecision({ transferExclusions: [], applicabilityRules }, masterBySku.get(normalized) || { sku: normalized, name: "" }, storeCode, proposalDate).excluded;
@@ -1304,5 +1312,5 @@
     return workbook;
   }
 
-  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, storeDisplayException, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook, buildFormalWorkbook };
+  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, isCustomTransferSku, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, storeDisplayException, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook, buildFormalWorkbook };
 });

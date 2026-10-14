@@ -155,6 +155,38 @@ describe("待發貨與A/B測試比對", () => {
     }
   });
 
+  it("客製品號內含SA、SB、OA或OB時固定排除周調撥與人工新增", () => {
+    for (const sku of ["SA42002", "XSA42002", "XSB53001", "XOA41361", "XOB00001"]) {
+      const input = transferModeInput("formal");
+      const original = input.master.bySku.get("A102061");
+      input.master.bySku = new Map([[sku, { ...original, sku, name: `客製測試 ${sku}` }]]);
+      input.inventory.records = input.inventory.records.map((row) => ({ ...row, sku }));
+      input.transfer.records = input.transfer.records.map((row) => ({ ...row, sku }));
+      input.sales[0].records = input.sales[0].records.map((row) => ({ ...row, sku }));
+      const result = core.buildSuggestions(input);
+      expect(core.isCustomTransferSku(sku)).toBe(true);
+      expect(result.rows).toHaveLength(0);
+      expect(result.shortageRows).toHaveLength(0);
+      expect(result.comparisonFacts).toHaveLength(0);
+      expect(result.manualItemFacts).toHaveLength(0);
+      expect(result.manualItemCatalog).toHaveLength(0);
+      expect(result.pendingTransferRows).toHaveLength(1);
+    }
+    expect(core.isCustomTransferSku("A102061")).toBe(false);
+  });
+
+  it("周調撥適用規則不能重新納入客製品號", () => {
+    const input = transferModeInput("formal");
+    const sku = "XSA42002";
+    const original = input.master.bySku.get("A102061");
+    input.master.bySku = new Map([[sku, { ...original, sku, name: "客製床包" }]]);
+    input.inventory.records = input.inventory.records.map((row) => ({ ...row, sku }));
+    input.transfer.records = input.transfer.records.map((row) => ({ ...row, sku }));
+    input.sales[0].records = input.sales[0].records.map((row) => ({ ...row, sku }));
+    input.storeInventory = { applicabilityRules: [{ id: "allow-custom", name: "客製品允許", enabled: true, matchType: "sku", sku, action: "allow", storeScope: "all", stores: [], scheduleMode: "always", priority: 9999 }] };
+    expect(core.buildSuggestions(input).rows).toHaveLength(0);
+  });
+
   it("周調撥適用規則以精準品號優先於品名關鍵字，硬性排除仍為最高", () => {
     const input = transferModeInput("formal");
     input.storeInventory = {
