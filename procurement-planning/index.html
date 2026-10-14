@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20261013-special-workflow-cis-r2">
+  <link rel="stylesheet" href="style.css?v=20261014-ledger-history-r1">
 </head>
 <body>
   <section id="version-warning" class="version-warning" role="alert" hidden>
@@ -76,6 +76,9 @@
         <label><span>使用時點＊</span><select id="checkpoint"><option value="month-start">月初採購</option><option value="mid-month">月中採購</option><option value="month-end">月底驗證</option></select></label>
         <label><span>預計下單日＊</span><input id="order-date" type="date" required></label>
       </div>
+      <div id="history-mode-banner" class="history-mode-banner" hidden>
+        <strong>歷史查詢模式</strong><span>以下顯示當時保存的快照；未結案ERP採購單則顯示目前最新到貨進度。本模式僅供查看，不能改寫舊資料。</span>
+      </div>
       <div id="budget-summary" class="summary-grid budget-summary budget-summary-featured" aria-live="polite"></div>
       <p id="cost-snapshot-status" class="budget-note">正在同步本月公司共用成本快照…</p>
       <details id="budget-details" class="budget-details" open>
@@ -132,7 +135,17 @@
           <p class="activity-demand-note">同一活動只能正式套用一種估算方式。活動設定只影響這次重新產生的母批次；既有母批次、已下載報表與正式台帳不會被改寫。</p>
         </div>
       </section>
-      <p id="ledger-status" class="budget-note">正式核准、核准更正與撤銷會即時更新集中台帳；採購單匯入只判讀未交量與實際收貨成本，不反推台帳已承諾金額。</p>
+      <p id="ledger-status" class="budget-note">正式核准會建立採購承諾；完整ERP採購檔依每次新增到貨量與實際收貨日，分次更新付款及國外餘款認列。</p>
+      <details id="history-panel" class="history-panel" open>
+        <summary><span>月份回溯與採購閉環</span><small id="history-status">正在讀取本月份快照與最新到貨進度…</small></summary>
+        <div class="history-body">
+          <div id="history-summary" class="history-summary" aria-live="polite"></div>
+          <div class="history-columns">
+            <section><h3>當時保存的批次</h3><div id="history-batches" class="history-list"></div></section>
+            <section><h3>持續更新的未結案ERP單</h3><div id="history-open-orders" class="history-list"></div></section>
+          </div>
+        </div>
+      </details>
     </section>
 
     <section class="panel stage-panel stage-two" aria-labelledby="source-title">
@@ -551,7 +564,7 @@
         <article><strong>普優瑪採購與寄庫分開</strong><p>現貨拉貨5天、製作45天；寄庫目標熱銷120、穩定105、低銷90天。</p></article>
         <article><strong>力榮採購與寄庫分開</strong><p>現貨5天、製作14天、製作後最早19天；每個品號只能0或10的倍數。</p></article>
         <article><strong>上林獨立檢視</strong><p>固定28天檢視期；總部、門市與加總需求使用公式。</p></article>
-        <article><strong>付款月份分流</strong><p>國內到貨100%；國外下單30%、預計出貨70%。</p></article>
+        <article><strong>承諾與付款分流</strong><p>國內核准時承諾100%、實際到貨付款；國外核准時認列訂金30%，其餘70%於實際到貨時認列與付款。</p></article>
         <article><strong>國外春節停工備貨</strong><p>補貨範圍跨入年度停工期才加量；預設53天，可於45～60天內調整並分開顯示額度影響。</p></article>
       </div>
       <p class="result-note">一般備貨公式屬程式內建，不列入管理頁。供應商、國外春節停工備貨、寄庫、採購單位、門市庫存與黑名單由採購核准者管理；權限與通知只有最高權限可查看及變更。</p>
@@ -565,9 +578,9 @@
   <script src="xlsx-style-runtime.js?v=20260930-month-end-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20261013-special-workflow-cis-r2"></script>
+  <script src="core.js?v=20261014-ledger-history-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
   <script src="google-sources.js?v=20261006-notification-audit-r2"></script>
-  <script src="app.js?v=20261013-special-workflow-cis-r2"></script>
+  <script src="app.js?v=20261014-ledger-history-r1"></script>
 </body>
 </html>

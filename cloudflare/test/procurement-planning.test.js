@@ -557,13 +557,14 @@ describe("採購規劃核心鎖定公式", () => {
     })).toEqual({ availableBudget: 4550000, purchasedAmountToDate: 1200000, remainingBudget: 3350000 });
   });
 
-  it("上林固定28天檢視，付款依國內到貨或國外出貨月份分配且守恆", () => {
+  it("上林固定28天檢視，國外餘款改以實際到貨月份認列且金額守恆", () => {
     expect(core.resolveSupplyProfile("上林實業", [], "穩定")).toMatchObject({ reviewDays: 28, leadDays: 5 });
     const domestic = core.calculatePaymentSchedule({ supplier: "力榮", orderDate: "2026-09-20", amount: 123380, confirmedQty: 290, consignmentAvailableQty: 300, supplyMode: "consignment" });
     expect(domestic).toMatchObject({ status: "PASS", supplierCountry: "國內", expectedArrivalDate: "2026-09-25" });
     expect(domestic.entries).toEqual([{ trigger: "預計到貨100%", date: "2026-09-25", month: "2026-09", amount: 123380 }]);
     const foreign = core.calculatePaymentSchedule({ supplier: "凱信達", orderDate: "2026-09-20", amount: 100000 });
-    expect(foreign).toMatchObject({ supplierCountry: "國外", expectedShipmentDate: "2026-11-29" });
+    expect(foreign).toMatchObject({ supplierCountry: "國外", expectedShipmentDate: "", expectedArrivalDate: "2026-11-29" });
+    expect(foreign.entries[1].trigger).toBe("預計到貨70%（實際到貨後認列）");
     expect(foreign.entries.map((row) => row.amount)).toEqual([30000, 70000]);
     expect(foreign.entries.reduce((sum, row) => sum + row.amount, 0)).toBe(100000);
   });
@@ -2052,15 +2053,15 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('style.css?v=20261013-special-workflow-cis-r2');
-    expect(toolHtml).toContain('core.js?v=20261013-special-workflow-cis-r2');
+    expect(toolHtml).toContain('style.css?v=20261014-ledger-history-r1');
+    expect(toolHtml).toContain('core.js?v=20261014-ledger-history-r1');
     expect(toolHtml).toContain('google-sources.js?v=20261006-notification-audit-r2');
-    expect(toolHtml).toContain('app.js?v=20261013-special-workflow-cis-r2');
+    expect(toolHtml).toContain('app.js?v=20261014-ledger-history-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261013-special-workflow-cis-r2");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261014-ledger-history-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2144,7 +2145,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261013-special-workflow-cis-r2");
+    expect(toolHtml).toContain("app.js?v=20261014-ledger-history-r1");
     expect(toolHtml).toContain('id="activity-demand-card"');
     expect(toolHtml).toContain("活動期間預計營業額");
     expect(toolHtml).toContain("需求加乘倍數");
@@ -2172,6 +2173,15 @@ describe("採購規劃前台與入口", () => {
     expect(costSnapshotMigration).toContain("CREATE TABLE procurement_cost_snapshots");
     expect(costSnapshotMigration).toContain("source_hashes");
     expect(costSnapshotMigration).not.toMatch(/file_name|excel|raw_rows/i);
+    const historyMigration = readFileSync("worker/migrations/0038_procurement_history_receipts.sql", "utf8");
+    expect(historyMigration).toContain("CREATE TABLE procurement_receipt_events");
+    expect(historyMigration).toContain("CREATE TABLE procurement_commitment_events");
+    expect(historyMigration).toContain("CREATE TABLE procurement_payment_events");
+    expect(historyMigration).toContain("CREATE TABLE procurement_month_plan_history");
+    expect(procurementWorker).toContain('/api/procurement/history');
+    expect(procurementWorker).toContain('fingerprintReceipt');
+    expect(toolHtml).toContain('id="history-mode-banner"');
+    expect(toolApp).toContain('function applyHistoryMode()');
     expect(procurementWorker).toContain("VALUES (?, 'neutral', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month)");
     expect(procurementWorker).not.toContain("VALUES (?, 'neutral', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month)");
     expect(toolApp).toContain('setAutomaticSourceBusy(true, "正在取得 4 項最新資料…")');
