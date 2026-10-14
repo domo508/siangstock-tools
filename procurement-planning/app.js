@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261013-special-workflow-cis-r2";
+  const APP_VERSION = "20261014-ledger-history-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -25,7 +25,7 @@
     newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], storeShortagePermissions: { canDecide: false }, storeShortageRendered: false, shortageRunMode: "merge_next",
     monthEndWorkbook: null, monthEndReportBytes: null, monthEndSummary: null,
     purchaseStatusSummary: null, costSummary: null, sharedCostSnapshot: null, draftId: "", draftStage: "", latestDraft: null, workflowDrafts: [], sharedDrafts: [], sharedDraftId: "", sharedDraftRevision: 0, parentBatchId: "", activeWorkUnit: null, selectedWorkUnitIds: new Set(), forecastCostRate: DEFAULT_COST_RATE,
-    runtimeOutdated: false, latestRuntimeVersion: ""
+    runtimeOutdated: false, latestRuntimeVersion: "", history: null, historyMode: false
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -68,7 +68,8 @@
     ,newProductFile: get("#new-product-file"), newProductButton: get("#new-product-button"), manualDraftFiles: get("#manual-draft-files"), manualDraftButton: get("#manual-draft-button"),
     postedOrderFiles: get("#posted-order-files"), postedOrderButton: get("#posted-order-button"), specialWorkflowStatus: get("#special-workflow-status"), activeLedgerRows: get("#active-ledger-rows"), erpReconciliationPanel: get("#erp-reconciliation-panel"), erpReconciliationList: get("#erp-reconciliation-list"),
     storeShortageCard: get("#store-shortage-card"), storeShortageTopCount: get("#store-shortage-top-count"), storeShortageCount: get("#store-shortage-count"), storeShortageEmpty: get("#store-shortage-empty"), storeShortageBatchBar: get("#store-shortage-batch-bar"), storeShortageSelectAll: get("#store-shortage-select-all"), storeShortageSelectedCount: get("#store-shortage-selected-count"), storeShortageTableWrap: get("#store-shortage-table-wrap"), storeShortageRows: get("#store-shortage-rows"), storeShortageStatus: get("#store-shortage-status"), runShortageOrder: get("#run-shortage-order-button"),
-    workflowPanel: get("#workflow-panel"), monthEndPanel: get("#month-end-panel"), monthEndSummary: get("#month-end-summary"), monthEndAlert: get("#month-end-alert"), monthEndStatus: get("#month-end-status"), monthEndDownload: get("#month-end-download-button"), monthEndConfirm: get("#month-end-confirm-button"), monthEndRetryEmail: get("#month-end-retry-email-button")
+    workflowPanel: get("#workflow-panel"), monthEndPanel: get("#month-end-panel"), monthEndSummary: get("#month-end-summary"), monthEndAlert: get("#month-end-alert"), monthEndStatus: get("#month-end-status"), monthEndDownload: get("#month-end-download-button"), monthEndConfirm: get("#month-end-confirm-button"), monthEndRetryEmail: get("#month-end-retry-email-button"),
+    historyModeBanner: get("#history-mode-banner"), historyPanel: get("#history-panel"), historyStatus: get("#history-status"), historySummary: get("#history-summary"), historyBatches: get("#history-batches"), historyOpenOrders: get("#history-open-orders")
   };
 
   function today() { return new Date().toISOString().slice(0, 10); }
@@ -1238,7 +1239,7 @@
       const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
       if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
       state.ledger = result; elements.purchasedToDate.value = String(Number(result.totals.committedAmount || 0));
-      elements.ledgerStatus.textContent = `台帳已同步：正式承諾${formatCurrency(result.totals.committedAmount)}；待核准${formatCurrency(result.totals.pendingAmount)}；已核准未建ERP${formatCurrency(result.totals.approvedNotErpAmount)}；已建ERP未到貨${formatCurrency(result.totals.erpNotReceivedAmount)}；已到貨${formatCurrency(result.totals.receivedAmount)}；本月付款${formatCurrency(result.totals.currentMonthPayment)}；未來付款${formatCurrency(result.totals.futureMonthPayments)}。`;
+      elements.ledgerStatus.textContent = `台帳已同步：本月承諾認列${formatCurrency(result.totals.committedAmount)}；尚待到貨認列${formatCurrency(result.totals.pendingCommitmentAmount)}；待核准${formatCurrency(result.totals.pendingAmount)}；已核准未建ERP${formatCurrency(result.totals.approvedNotErpAmount)}；已建ERP未到貨${formatCurrency(result.totals.erpNotReceivedAmount)}；本月實際付款${formatCurrency(result.totals.currentMonthPayment)}（其中前月採購${formatCurrency(result.totals.priorMonthPurchasesPaidThisMonth)}）；尚未到貨付款${formatCurrency(result.totals.futureMonthPayments)}。`;
       elements.ledgerStatus.classList.remove("error");
       renderApprovalQueue();
       renderActiveLedger();
@@ -1250,6 +1251,55 @@
       state.ledger = null; elements.ledgerStatus.textContent = `台帳同步失敗：${error.message}；為避免錯算，正式核准前請重新整理。`;
       elements.ledgerStatus.classList.add("error");
       renderGoogleAuthorizationStatus();
+    }
+  }
+  function applyHistoryMode() {
+    const historical = Boolean(elements.month.value && elements.month.value < today().slice(0, 7));
+    state.historyMode = historical;
+    document.body.classList.toggle("history-readonly", historical);
+    elements.historyModeBanner.hidden = !historical;
+    [get(".stage-two"), get(".stage-three"), elements.resultPanel, elements.activityCard, get("#budget-details")].filter(Boolean).forEach((section) => { section.inert = historical; });
+    elements.orderDate.disabled = historical;
+  }
+  function historyItem(title, detail) {
+    const item = document.createElement("article"); item.className = "history-item";
+    const heading = document.createElement("strong"); heading.textContent = title;
+    const meta = document.createElement("small"); meta.textContent = detail;
+    item.append(heading, meta); return item;
+  }
+  function renderHistory() {
+    const history = state.history;
+    if (!history) return;
+    const commitments = history.recognized?.commitments || [];
+    const payments = history.recognized?.payments || [];
+    const receipts = history.recognized?.receipts || [];
+    const batches = history.snapshot?.batches || [];
+    const openOrders = history.live?.openOrders || [];
+    const sum = (rows, field = "amount") => rows.reduce((total, row) => total + Number(row[field] || 0), 0);
+    const plan = history.snapshot?.monthPlan;
+    elements.historySummary.innerHTML = `
+      <div><span>當月營業額快照</span><strong>${plan ? formatCurrency(plan.forecastRevenue || 0) : "尚無快照"}</strong><small>${plan ? "保存於本次使用時點" : "此時點尚未儲存"}</small></div>
+      <div><span>當月承諾認列</span><strong>${formatCurrency(sum(commitments))}</strong><small>國內100%；國外訂金30%＋實際到貨70%</small></div>
+      <div><span>當月實際付款</span><strong>${formatCurrency(sum(payments))}</strong><small>${receipts.length}筆到貨異動</small></div>
+      <div><span>已核准採購批次</span><strong>${formatNumber(batches.length)}筆</strong><small>${formatCurrency(sum(batches, "approved_amount"))}</small></div>`;
+    const batchNodes = batches.map((row) => historyItem(`${row.id}・${statusLabel(row.status)}`, `${(row.supplier_summary || []).join("、") || "未提供供應商"}・核准${formatCurrency(row.approved_amount)}・${(row.items || []).length}項`));
+    elements.historyBatches.replaceChildren(...(batchNodes.length ? batchNodes : [Object.assign(document.createElement("p"), { className: "history-empty", textContent: "此月份與時點尚無已保存批次。" })]));
+    const openNodes = openOrders.map((row) => historyItem(`${row.erp_reference || row.id}・${statusLabel(row.status)}`, `${(row.supplier_summary || []).join("、") || "未提供供應商"}・未認列承諾${formatCurrency(row.pending_commitment_amount)}・更新${String(row.updated_at || "").replace("T", " ").slice(0, 19)}`));
+    elements.historyOpenOrders.replaceChildren(...(openNodes.length ? openNodes : [Object.assign(document.createElement("p"), { className: "history-empty", textContent: "截至此月份沒有仍待到貨的ERP採購單。" })]));
+    elements.historyStatus.textContent = `${history.month}・${({ "month-start": "月初", "mid-month": "月中", "month-end": "月底" })[history.checkpoint] || history.checkpoint}；快照固定、未結案採購單持續更新。`;
+  }
+  async function loadHistory() {
+    if (!state.config || !elements.month.value) return;
+    applyHistoryMode();
+    try {
+      const response = await fetch(`/api/procurement/history?month=${encodeURIComponent(elements.month.value)}&checkpoint=${encodeURIComponent(elements.checkpoint.value)}`, { headers: { Accept: "application/json" }, cache: "no-store" });
+      const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      state.history = result; renderHistory();
+    } catch (error) {
+      state.history = null;
+      elements.historyStatus.textContent = `歷史資料讀取失敗：${error.message}`;
+      elements.historySummary.replaceChildren(); elements.historyBatches.replaceChildren(); elements.historyOpenOrders.replaceChildren();
     }
   }
   function renderApprovalQueue() {
@@ -1853,7 +1903,7 @@
       elements.saveBudget.disabled = !canManageBudget;
       elements.addChannel.disabled = !canManageBudget;
       [elements.forecastRevenue, elements.releasedBudget, elements.budgetSourceNote].forEach((element) => { element.disabled = !canManageBudget; });
-      await Promise.all([loadProcurementRules(), loadLedger(), loadMonthPlan(), loadStoreShortageNeeds(), loadSharedWorkflowDrafts()]);
+      await Promise.all([loadProcurementRules(), loadLedger(), loadMonthPlan(), loadStoreShortageNeeds(), loadSharedWorkflowDrafts(), loadHistory()]);
       await loadCostSnapshot();
     } catch (error) {
       state.config = null; elements.accountBadge.textContent = "公司登入驗證失敗";
@@ -2003,12 +2053,13 @@
       group.fullyReceived ||= Boolean(row.fullyReceived);
       const existing = group.items.get(row.sku);
       if (existing && Math.abs(Number(existing.unitCost || 0) - Number(row.unitCost || 0)) >= 0.01) throw new Error(`${erpReference}的${row.sku}在完整採購檔出現不同未稅採購價。`);
-      const item = existing || { sku: row.sku, name: row.name || "", orderedQuantity: 0, unitCost: Number(row.unitCost || 0), orderedAmount: 0, deliveredQuantity: 0, remainingQuantity: 0, lifecycleStatus: "" };
+      const item = existing || { sku: row.sku, name: row.name || "", orderedQuantity: 0, unitCost: Number(row.unitCost || 0), orderedAmount: 0, deliveredQuantity: 0, remainingQuantity: 0, lifecycleStatus: "", receiptDate: "" };
       item.orderedQuantity += Number(row.orderedQuantity || 0);
       item.orderedAmount += Number(row.orderedAmount || 0) || Number(row.orderedQuantity || 0) * Number(row.unitCost || 0);
       item.deliveredQuantity += Number(row.deliveredQuantity || 0);
       item.remainingQuantity += Number(row.remainingQuantity || 0);
       item.lifecycleStatus = row.status || item.lifecycleStatus;
+      if (String(row.receiptDate || "") > item.receiptDate) item.receiptDate = String(row.receiptDate || "");
       group.items.set(row.sku, item); grouped.set(erpReference, group);
     });
     if (!grouped.size) return { pendingCount: 0, missing: [] };
@@ -2475,7 +2526,7 @@
       createSummaryCard("整月預估成本耗用", formatCurrencyPrecise(summary.forecastCost), `資料截至${summary.dataAsOfDate}`, "currency"),
       createSummaryCard("本月實際收貨成本", formatCurrencyPrecise(summary.actualReceiptCost), "依採購單實際交貨日", "currency"),
       createSummaryCard("截至目前正式承諾", formatCurrencyPrecise(summary.committedAmount), "公司共用採購台帳", "currency"),
-      createSummaryCard("本月預計付款", formatCurrencyPrecise(summary.currentMonthPayment), "依已核准批次付款月份", "currency"),
+      createSummaryCard("本月實際付款", formatCurrencyPrecise(summary.currentMonthPayment), "依ERP實際到貨日跨月份彙總", "currency"),
       createSummaryCard("待處理事項", formatNumber(summary.warningCount), summary.warningCount ? "請先查看報表第6頁" : "本次未發現阻擋性異常")
     );
     elements.monthEndAlert.textContent = `${validation.dateCheck?.message || "來源日期已檢查"} 本流程未產生任何採購建議、採購草稿或額度承諾。`;
@@ -2875,6 +2926,7 @@
     renderBudget();
   }
   async function saveMonthPlan() {
+    if (state.historyMode) { elements.budgetPlanStatus.textContent = "歷史查詢模式只能查看，不能改寫舊月份額度。"; return; }
     if (!state.config?.permissions?.canManageBudget) return;
     if (!state.revenueChannels.length) {
       elements.budgetPlanStatus.textContent = "請先新增至少一個營收預估通路。";
@@ -2901,6 +2953,7 @@
     try {
       const result = await postJson("/api/procurement/month-plan", {
         analysisMonth: elements.month.value,
+        checkpoint: elements.checkpoint.value,
         forecastRevenue: Number(elements.forecastRevenue.value || 0),
         revenueChannels: state.revenueChannels,
         forecastCostOutflow: Number(elements.forecastCost.value || 0),
@@ -3233,13 +3286,14 @@
   });
   [elements.checkpoint, elements.orderDate, elements.inventoryDate, elements.pendingDate, elements.transferDate, elements.consignmentDate, elements.salesDate].forEach((element) => element.addEventListener("change", () => {
     if (state.analysis || state.monthEndWorkbook) invalidateAnalysis();
-    if (element === elements.checkpoint) renderBudget();
+    if (element === elements.checkpoint) { renderBudget(); loadHistory(); }
     updateReadyState();
   }));
   elements.month.addEventListener("change", () => {
     if (state.analysis || state.monthEndWorkbook) invalidateAnalysis();
     state.sharedCostSnapshot = null; renderCostSnapshotStatus(); renderModelStatus(); updateReadyState();
-    Promise.all([loadLedger(), loadMonthPlan(), loadSharedWorkflowDrafts()]).then(loadCostSnapshot);
+    applyHistoryMode();
+    Promise.all([loadLedger(), loadMonthPlan(), loadSharedWorkflowDrafts(), loadHistory()]).then(loadCostSnapshot);
   });
   const activityControls = [elements.activityEnabled, elements.activityName, elements.activityStartDate, elements.activityEndDate, elements.activityScope, elements.activityMultiplier, ...document.querySelectorAll('input[name="activity-method"]')];
   activityControls.forEach((element) => element.addEventListener(element === elements.activityName || element === elements.activityMultiplier ? "input" : "change", () => {

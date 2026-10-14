@@ -2174,18 +2174,18 @@
     }
     const leadDays = Math.max(0, Number(supplierRule.leadDays));
     const isLirongConsignment = /力榮/.test(normalizeText(input.supplier)) && input.supplyMode === "consignment";
-    const expectedShipmentDate = supplierRule.country === "國外" ? addDays(orderDate, leadDays) : "";
+    const expectedShipmentDate = "";
     const arrivalLeadDays = isLirongConsignment ? (Number(input.consignmentAvailableQty || 0) >= Number(input.confirmedQty || 0) ? 5 : 19) : leadDays;
-    const expectedArrivalDate = supplierRule.country === "國內" ? addDays(orderDate, arrivalLeadDays) : "";
+    const expectedArrivalDate = addDays(orderDate, supplierRule.country === "國內" ? arrivalLeadDays : leadDays);
     const entries = supplierRule.country === "國外"
       ? [
         { trigger: "下單訂金30%", date: orderDate, month: orderDate.slice(0, 7), amount: Math.round(amount * 30) / 100 },
-        { trigger: "預計出貨70%", date: expectedShipmentDate, month: expectedShipmentDate.slice(0, 7), amount: Math.round(amount * 70) / 100 }
+        { trigger: "預計到貨70%（實際到貨後認列）", date: expectedArrivalDate, month: expectedArrivalDate.slice(0, 7), amount: Math.round(amount * 70) / 100 }
       ]
       : [{ trigger: "預計到貨100%", date: expectedArrivalDate, month: expectedArrivalDate.slice(0, 7), amount }];
     return {
       status: "PASS", supplierCountry: supplierRule.country, leadDays, expectedShipmentDate, expectedArrivalDate, entries,
-      message: supplierRule.country === "國外" ? "國外：下單30%、預計出貨70%。" : "國內：預計到貨100%。"
+      message: supplierRule.country === "國外" ? "國外：下單訂金30%；剩餘70%以實際到貨月份認列，未到貨前只列預估。" : "國內：採購承諾100%；付款依實際到貨認列。"
     };
   }
 
@@ -4195,9 +4195,12 @@
       ["本月至今成本耗用", currency(summary.managementCostToDate), "寬承直接成本＋寬沐供貨原始成本"],
       ["整月預估成本耗用", currency(summary.forecastCost), "依本月實際成本日均推估"],
       ["本月實際收貨成本", currency(summary.actualReceiptCost), "依採購單實際交貨日"],
-      ["截至目前正式承諾", currency(ledger.totals?.committedAmount), "公司共用採購台帳"],
-      ["本月預計付款", currency(ledger.totals?.currentMonthPayment), "依已核准批次付款月份"],
-      ["未來月份已承諾付款", currency(ledger.totals?.futureMonthPayments), "依已核准批次付款月份"],
+      ["本月承諾認列", currency(ledger.totals?.committedAmount), "國內核准100%；國外訂金30%與到貨70%"],
+      ["本月實際付款", currency(ledger.totals?.currentMonthPayment), "依ERP實際到貨日跨採購月份彙總"],
+      ["以前月份採購本月付款", currency(ledger.totals?.priorMonthPurchasesPaidThisMonth), "原採購月份早於本月"],
+      ["本月採購本月付款", currency(ledger.totals?.currentMonthPurchasesPaidThisMonth), "原採購月份等於本月"],
+      ["尚未到貨付款", currency(ledger.totals?.futureMonthPayments), "未到貨前不當作實際付款"],
+      ["未到貨待認列承諾", currency(ledger.totals?.pendingCommitmentAmount), "國外採購尚未到貨的70%"],
       ["來源日期檢核", validation.dateCheck?.status || "", validation.dateCheck?.message || ""]
     ], [26, 22, 70], true);
 
@@ -4215,10 +4218,10 @@
     ], [28, 20, 64]);
 
     addSheet("03_採購額度與承諾", [
-      ["批次", "流程", "供應商", "狀態", "承諾金額", "本月付款", "未來付款", "ERP單號"],
-      ...(ledger.batches || []).map((row) => [row.id, row.workflow_type, (row.supplier_summary || []).join("、"), row.status, currency(row.approved_amount), currency(row.payment_current_month), currency(row.payment_future_months), row.erp_reference || ""]),
+      ["批次", "流程", "供應商", "狀態", "採購單總額", "已認列承諾", "待到貨認列", "ERP單號"],
+      ...(ledger.batches || []).map((row) => [row.id, row.workflow_type, (row.supplier_summary || []).join("、"), row.status, currency(row.approved_amount), currency(row.recognized_commitment_amount), currency(row.pending_commitment_amount), row.erp_reference || ""]),
       [],
-      ["台帳合計", "", "", "", currency(ledger.totals?.committedAmount), currency(ledger.totals?.currentMonthPayment), currency(ledger.totals?.futureMonthPayments), ""]
+      ["台帳合計", "", "", "", currency(ledger.totals?.totalApprovedOrderAmount), currency(ledger.totals?.committedAmount), currency(ledger.totals?.pendingCommitmentAmount), ""]
     ], [30, 18, 34, 18, 18, 18, 18, 24]);
 
     addSheet("04_庫存橋接驗證", [
@@ -4844,7 +4847,7 @@
       ["力榮採購與寄庫", `製作${recommendations.appliedRules?.lirong?.productionDays ?? 14}天；寄庫熱銷${recommendations.appliedRules?.lirong?.targetDays?.["熱銷"] ?? 90}／穩定${recommendations.appliedRules?.lirong?.targetDays?.["穩定"] ?? 60}／低銷${recommendations.appliedRules?.lirong?.targetDays?.["低銷"] ?? 60}天；逐品號依規則管理的品類與尺寸套用採購單位`, "集中規則"],
       ["上林檢視期", "固定28天；另加到貨交期與分級安全緩衝；總部／門市／加總需求保留公式", "已確認"],
       ["Excel編輯", "匯出檔不啟用工作表密碼保護；流程上只填人工欄位，系統欄位如被改動會在回匯時拒絕", "已確認"],
-      ["付款認列", "國內預計到貨100%；國外下單30%、預計出貨70%；付款分配合計必須等於核准總額", "已確認"],
+      ["承諾與付款認列", "國內核准時承諾100%、實際到貨付款；國外下單訂金30%，其餘70%依每次ERP實際到貨日分次認列與付款", "已確認"],
       ["一般自動採購排除", "凱信達一次性、歐必斯客訂型、所有總部贈品、SA／OA／SB／OB開頭及8×7尺的一次性客製／組合品均不產生一般自動採購或寄庫", "已確認"],
       ["寄倉處理", LOCKED_RULES.consignmentRule, "核心鎖定"],
       ["期間調撥單", LOCKED_RULES.transferRule, "核心鎖定"],

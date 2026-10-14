@@ -118,6 +118,53 @@ function parseJsonText(value: string): unknown {
   try { return JSON.parse(value); } catch { return null; }
 }
 
+function canonicalSupplier(value: unknown): string {
+  return String(value || "").normalize("NFKC").replace(/\s+/g, "").replace(/普悠碼/g, "普優瑪").toLocaleLowerCase("zh-Hant");
+}
+
+function supplierCountry(value: unknown): "domestic" | "foreign" {
+  const target = canonicalSupplier(value);
+  const matched = SUPPLIERS.find((supplier) => {
+    const name = canonicalSupplier(supplier.name);
+    return target === name || target.includes(name) || name.includes(target);
+  });
+  return matched?.country === "foreign" ? "foreign" : "domestic";
+}
+
+function paymentScheduleCountry(value: unknown, supplier: string): "domestic" | "foreign" {
+  const parsed = typeof value === "string" ? parseJsonText(value) : value;
+  const entries = Array.isArray(parsed) ? parsed : [];
+  const match = entries.find((entry) => entry && typeof entry === "object" && canonicalSupplier((entry as Record<string, unknown>).supplier) === canonicalSupplier(supplier)) as Record<string, unknown> | undefined;
+  if (match?.country === "國外") return "foreign";
+  if (match?.country === "國內") return "domestic";
+  return supplierCountry(supplier);
+}
+
+type PaymentScheduleEntry = { supplier: string; country: string; trigger: string; date: string; month: string; amount: number };
+
+function normalizedPaymentSchedule(value: unknown): PaymentScheduleEntry[] {
+  if (!Array.isArray(value)) throw new RequestValidationError("付款月份格式錯誤。");
+  return value.map((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("付款月份格式錯誤。");
+    const entry = raw as Record<string, unknown>;
+    const supplier = string(entry.supplier, "付款供應商", 120);
+    const country = String(entry.country || "").trim();
+    if (!['國內', '國外'].includes(country)) throw new RequestValidationError(`${supplier}供應商分類格式錯誤。`);
+    const date = isoDate(entry.date, `${supplier}付款日期`);
+    const scheduledMonth = month(entry.month);
+    if (date.slice(0, 7) !== scheduledMonth) throw new RequestValidationError(`${supplier}付款月份與日期不一致。`);
+    return { supplier, country, trigger: string(entry.trigger, "付款觸發", 80), date, month: scheduledMonth, amount: money(entry.amount, "付款金額") };
+  });
+}
+
+function initialCommitmentAmounts(entries: PaymentScheduleEntry[], approvedAmount: number): { recognized: number; pending: number } {
+  const recognized = Math.round(entries
+    .filter((entry) => entry.country === "國內" || /訂金30%/.test(entry.trigger))
+    .reduce((sum, entry) => sum + entry.amount, 0) * 100) / 100;
+  if (recognized > approvedAmount + 0.05) throw new RequestValidationError("初始採購承諾認列超過核准總額。");
+  return { recognized, pending: Math.max(0, Math.round((approvedAmount - recognized) * 100) / 100) };
+}
+
 function normalizedCompanyEmails(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 50) throw new RequestValidationError("帳號清單格式錯誤。");
   const emails = value.map((item) => String(item || "").trim().toLocaleLowerCase("en-US"));
@@ -453,7 +500,7 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
   await verifyCompanyUser(request, procurementAccess(env));
   const requestedMonth = month(new URL(request.url).searchParams.get("month"));
   const rows = await env.DB.prepare(
-    "SELECT b.id, b.analysis_month, b.checkpoint, b.parent_batch_id, b.work_unit_ids, b.workflow_type, b.erp_reference, b.supplier_summary, b.status, b.suggested_amount, b.manual_amount, b.blocked_amount, b.approved_amount, b.adjustment_amount, b.budget_amount, b.payment_current_month, b.payment_future_months, b.payment_schedule, b.warning_summary, b.created_at, b.created_by, b.approved_at, b.approved_by, b.erp_created_at, b.erp_created_by, b.updated_at, b.revision, (SELECT n.status FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_status, (SELECT n.recipient FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_recipient, (SELECT n.retry_count FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_retry_count, (SELECT n.last_attempt_at FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_last_attempt_at, (SELECT n.sent_at FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_sent_at, (SELECT n.error_summary FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_error_summary FROM procurement_batches b WHERE b.analysis_month = ? ORDER BY b.updated_at DESC LIMIT 200"
+    "SELECT b.id, b.analysis_month, b.checkpoint, b.parent_batch_id, b.work_unit_ids, b.workflow_type, b.erp_reference, b.supplier_summary, b.status, b.suggested_amount, b.manual_amount, b.blocked_amount, b.approved_amount, b.adjustment_amount, b.budget_amount, b.payment_current_month, b.payment_future_months, b.payment_schedule, b.recognized_commitment_amount, b.pending_commitment_amount, b.warning_summary, b.created_at, b.created_by, b.approved_at, b.approved_by, b.erp_created_at, b.erp_created_by, b.updated_at, b.revision, (SELECT n.status FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_status, (SELECT n.recipient FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_recipient, (SELECT n.retry_count FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_retry_count, (SELECT n.last_attempt_at FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_last_attempt_at, (SELECT n.sent_at FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_sent_at, (SELECT n.error_summary FROM procurement_notifications n WHERE n.batch_id = b.id ORDER BY n.id DESC LIMIT 1) notification_error_summary FROM procurement_batches b WHERE b.analysis_month = ? ORDER BY b.updated_at DESC LIMIT 200"
   ).bind(requestedMonth).all<Record<string, unknown>>();
   const batchIds = rows.results.map((row) => String(row.id));
   const itemSummaryRows = batchIds.length
@@ -521,12 +568,23 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
     items.push(row);
     itemsByReconciliation.set(id, items);
   }
+  const commitmentMonth = await env.DB.prepare("SELECT COALESCE(SUM(amount), 0) amount FROM procurement_commitment_events WHERE recognition_month = ?").bind(requestedMonth).first<{ amount: number }>();
+  const commitmentCumulative = await env.DB.prepare("SELECT COALESCE(SUM(amount), 0) amount FROM procurement_commitment_events WHERE recognition_month <= ?").bind(requestedMonth).first<{ amount: number }>();
+  const paymentMonth = await env.DB.prepare("SELECT COALESCE(SUM(amount), 0) amount, COALESCE(SUM(CASE WHEN b.analysis_month < ? THEN amount ELSE 0 END), 0) prior_amount, COALESCE(SUM(CASE WHEN b.analysis_month = ? THEN amount ELSE 0 END), 0) current_origin_amount FROM procurement_payment_events p JOIN procurement_batches b ON b.id = p.batch_id WHERE p.payment_month = ? AND b.status IN ('approved', 'erp_created', 'received')").bind(requestedMonth, requestedMonth, requestedMonth).first<Record<string, unknown>>();
+  const outstandingPayment = await env.DB.prepare("SELECT COALESCE(SUM(MAX(0, b.approved_amount - COALESCE((SELECT SUM(p.amount) FROM procurement_payment_events p WHERE p.batch_id = b.id AND p.payment_month <= ?), 0))), 0) amount FROM procurement_batches b WHERE b.status IN ('approved', 'erp_created', 'received') AND COALESCE(substr(b.approved_at, 1, 7), b.analysis_month) <= ?").bind(requestedMonth, requestedMonth).first<{ amount: number }>();
+  const pendingCommitment = await env.DB.prepare("SELECT COALESCE(SUM(pending_commitment_amount), 0) amount FROM procurement_batches WHERE status IN ('approved', 'erp_created', 'received') AND COALESCE(substr(approved_at, 1, 7), analysis_month) <= ?").bind(requestedMonth).first<{ amount: number }>();
+  const receiptRows = await env.DB.prepare("SELECT r.id, r.batch_id, r.erp_reference, r.sku, r.supplier, r.receipt_date, r.quantity_delta, r.unit_cost, r.receipt_amount, r.commitment_amount, r.payment_amount, r.cumulative_quantity, b.analysis_month FROM procurement_receipt_events r JOIN procurement_batches b ON b.id = r.batch_id WHERE r.receipt_month = ? ORDER BY r.receipt_date DESC, r.erp_reference, r.sku LIMIT 1000").bind(requestedMonth).all<Record<string, unknown>>();
   return json({
     month: requestedMonth,
     totals: {
-      committedAmount: approved.reduce((sum, row) => sum + Number(row.approved_amount || 0), 0),
-      currentMonthPayment: approved.reduce((sum, row) => sum + Number(row.payment_current_month || 0), 0),
-      futureMonthPayments: approved.reduce((sum, row) => sum + Number(row.payment_future_months || 0), 0),
+      committedAmount: Number(commitmentMonth?.amount || 0),
+      recognizedCommitmentCumulative: Number(commitmentCumulative?.amount || 0),
+      totalApprovedOrderAmount: approved.reduce((sum, row) => sum + Number(row.approved_amount || 0), 0),
+      pendingCommitmentAmount: Number(pendingCommitment?.amount || 0),
+      currentMonthPayment: Number(paymentMonth?.amount || 0),
+      priorMonthPurchasesPaidThisMonth: Number(paymentMonth?.prior_amount || 0),
+      currentMonthPurchasesPaidThisMonth: Number(paymentMonth?.current_origin_amount || 0),
+      futureMonthPayments: Number(outstandingPayment?.amount || 0),
       pendingAmount: statusAmount("pending_approval"),
       approvedNotErpAmount: statusAmount("approved"),
       erpNotReceivedAmount: statusAmount("erp_created"),
@@ -535,6 +593,7 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
       activeAdjustmentAmount: approved.reduce((sum, row) => sum + Number(row.adjustment_amount || 0), 0)
     },
     batches,
+    receiptEvents: receiptRows.results,
     reconciliations: reconciliationRows.results.map((row) => ({
       ...row,
       supplier_summary: parseJsonText(String(row.supplier_summary || "[]")),
@@ -552,6 +611,7 @@ type ErpReconciliationItem = {
   deliveredQuantity: number;
   remainingQuantity: number;
   lifecycleStatus: string;
+  receiptDate: string;
 };
 
 function optionalText(value: unknown, max: number): string {
@@ -575,7 +635,8 @@ function normalizedErpOrders(input: Record<string, unknown>) {
       const remainingQuantity = money(item.remainingQuantity == null ? Math.max(0, orderedQuantity - deliveredQuantity) : item.remainingQuantity, `${sku}未到貨量`);
       const orderedAmount = money(item.orderedAmount, `${sku}ERP未稅金額`);
       const unitCost = money(item.unitCost == null ? (orderedQuantity > 0 ? orderedAmount / orderedQuantity : 0) : item.unitCost, `${sku}ERP未稅採購價`);
-      const normalized = { sku, name: optionalText(item.name, 300), orderedQuantity, unitCost, orderedAmount, deliveredQuantity, remainingQuantity, lifecycleStatus: optionalText(item.lifecycleStatus, 120) };
+      const receiptDate = item.receiptDate ? isoDate(item.receiptDate, `${sku}收貨日期`) : "";
+      const normalized = { sku, name: optionalText(item.name, 300), orderedQuantity, unitCost, orderedAmount, deliveredQuantity, remainingQuantity, lifecycleStatus: optionalText(item.lifecycleStatus, 120), receiptDate };
       const existing = itemMap.get(sku);
       if (existing && Math.abs(existing.unitCost - normalized.unitCost) >= 0.01) throw new RequestValidationError(`${erpReference}的${sku}出現不同未稅採購價。`);
       if (existing) {
@@ -583,6 +644,7 @@ function normalizedErpOrders(input: Record<string, unknown>) {
         existing.orderedAmount = Math.round((existing.orderedAmount + normalized.orderedAmount) * 100) / 100;
         existing.deliveredQuantity = Math.round((existing.deliveredQuantity + normalized.deliveredQuantity) * 10000) / 10000;
         existing.remainingQuantity = Math.round((existing.remainingQuantity + normalized.remainingQuantity) * 10000) / 10000;
+        if (normalized.receiptDate > existing.receiptDate) existing.receiptDate = normalized.receiptDate;
       } else itemMap.set(sku, normalized);
     }
     return {
@@ -601,15 +663,21 @@ async function fingerprintErpOrder(order: ReturnType<typeof normalizedErpOrders>
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function fingerprintReceipt(erpReference: string, sku: string, receiptDate: string, cumulativeQuantity: number): Promise<string> {
+  const canonical = `${erpReference}||${sku}||${receiptDate}||${cumulativeQuantity.toFixed(4)}`;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 async function reconcileErpOrders(request: Request, env: ProcurementEnv): Promise<Response> {
   requireSameOrigin(request, env);
   const actor = await verifyCompanyUser(request, procurementAccess(env));
   const orders = normalizedErpOrders(await body(request));
   const results: Record<string, unknown>[] = [];
   for (const order of orders) {
-    const batch = await env.DB.prepare("SELECT b.id, b.status, b.approved_amount FROM procurement_batches b LEFT JOIN procurement_batch_erp_documents d ON d.batch_id = b.id WHERE (d.erp_reference = ? OR b.erp_reference = ?) AND b.status IN ('erp_created', 'received') LIMIT 1").bind(order.erpReference, order.erpReference).first<Record<string, unknown>>();
+    const batch = await env.DB.prepare("SELECT b.id, b.status, b.approved_amount, b.payment_schedule FROM procurement_batches b LEFT JOIN procurement_batch_erp_documents d ON d.batch_id = b.id WHERE (d.erp_reference = ? OR b.erp_reference = ?) AND b.status IN ('erp_created', 'received') LIMIT 1").bind(order.erpReference, order.erpReference).first<Record<string, unknown>>();
     if (!batch) { results.push({ erpReference: order.erpReference, status: "unmatched" }); continue; }
-    const baselineRows = await env.DB.prepare("SELECT sku, name, supplier, approved_quantity, unit_cost, approved_amount FROM procurement_batch_items WHERE batch_id = ? ORDER BY sku").bind(batch.id).all<Record<string, unknown>>();
+    const baselineRows = await env.DB.prepare("SELECT sku, name, supplier, approved_quantity, unit_cost, approved_amount, received_quantity FROM procurement_batch_items WHERE batch_id = ? ORDER BY sku").bind(batch.id).all<Record<string, unknown>>();
     if (!baselineRows.results.length) { results.push({ erpReference: order.erpReference, batchId: batch.id, status: "missing_baseline" }); continue; }
     const baseline = new Map(baselineRows.results.map((row) => [String(row.sku), row]));
     const erp = new Map(order.items.map((row) => [row.sku, row]));
@@ -636,6 +704,7 @@ async function reconcileErpOrders(request: Request, env: ProcurementEnv): Promis
         unitCostAfter,
         receivedQuantity: Number(after?.deliveredQuantity || 0),
         remainingQuantity: Number(after?.remainingQuantity || 0),
+        receiptDate: String(after?.receiptDate || ""),
         lifecycleStatus: String(after?.lifecycleStatus || order.sourceStatus || "").slice(0, 120),
         amountDelta: Math.round(((after?.orderedAmount || 0) - Number(before?.approved_amount || 0)) * 100) / 100
       };
@@ -651,17 +720,50 @@ async function reconcileErpOrders(request: Request, env: ProcurementEnv): Promis
       await env.DB.prepare("UPDATE procurement_erp_reconciliations SET status = 'superseded', reason = '較新的完整採購檔已取代此待確認差異' WHERE batch_id = ? AND status = 'pending'").bind(batch.id).run();
       const reconciliation = await env.DB.prepare("INSERT INTO procurement_erp_reconciliations (batch_id, erp_reference, fingerprint, status, source_status, amount_before, amount_after, amount_delta, difference_count, created_at, created_by) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?) RETURNING id").bind(batch.id, order.erpReference, fingerprint, order.sourceStatus, amountBefore, amountAfter, amountAfter - amountBefore, differences.length, now, actor).first<{ id: number }>();
       if (!reconciliation) throw new RequestValidationError(`${order.erpReference}差異摘要建立失敗。`, 503);
-      await env.DB.batch(snapshots.map((row) => env.DB.prepare("INSERT INTO procurement_erp_reconciliation_items (reconciliation_id, sku, name, difference_type, approved_quantity, erp_quantity, unit_cost_before, unit_cost_after, received_quantity, remaining_quantity, lifecycle_status, amount_delta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(reconciliation.id, row.sku, row.name, row.differenceType, row.approvedQuantity, row.erpQuantity, row.unitCostBefore, row.unitCostAfter, row.receivedQuantity, row.remainingQuantity, row.lifecycleStatus, row.amountDelta)));
+      await env.DB.batch(snapshots.map((row) => env.DB.prepare("INSERT INTO procurement_erp_reconciliation_items (reconciliation_id, sku, name, difference_type, approved_quantity, erp_quantity, unit_cost_before, unit_cost_after, received_quantity, remaining_quantity, receipt_date, lifecycle_status, amount_delta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(reconciliation.id, row.sku, row.name, row.differenceType, row.approvedQuantity, row.erpQuantity, row.unitCostBefore, row.unitCostAfter, row.receivedQuantity, row.remainingQuantity, row.receiptDate, row.lifecycleStatus, row.amountDelta)));
       results.push({ erpReference: order.erpReference, batchId: batch.id, status: "pending", reconciliationId: reconciliation.id, differenceCount: differences.length });
       continue;
     }
     const received = order.documentClosed || order.fullyReceived || order.items.every((row) => row.remainingQuantity <= 0);
+    const receiptStatements: D1PreparedStatement[] = [];
+    let commitmentIncrease = 0;
+    let receiptEventCount = 0;
+    const missingReceiptDates: string[] = [];
+    for (const item of order.items) {
+      const before = baseline.get(item.sku);
+      const previousReceived = Number(before?.received_quantity || 0);
+      const quantityDelta = Math.round((item.deliveredQuantity - previousReceived) * 10000) / 10000;
+      if (!(quantityDelta > 0)) continue;
+      if (!item.receiptDate) { missingReceiptDates.push(item.sku); continue; }
+      const supplier = String(before?.supplier || "");
+      const foreign = paymentScheduleCountry(batch.payment_schedule, supplier) === "foreign";
+      const receiptAmount = Math.round(quantityDelta * item.unitCost * 100) / 100;
+      const commitmentAmount = foreign ? Math.round(receiptAmount * 70) / 100 : 0;
+      const paymentAmount = foreign ? commitmentAmount : receiptAmount;
+      const receiptFingerprint = await fingerprintReceipt(order.erpReference, item.sku, item.receiptDate, item.deliveredQuantity);
+      const existingReceipt = await env.DB.prepare("SELECT id FROM procurement_receipt_events WHERE batch_id = ? AND sku = ? AND source_fingerprint = ?").bind(batch.id, item.sku, receiptFingerprint).first();
+      if (existingReceipt) continue;
+      const sourceBase = `${batch.id}:${item.sku}:${receiptFingerprint}`;
+      receiptStatements.push(
+        env.DB.prepare("INSERT INTO procurement_receipt_events (batch_id, erp_reference, sku, supplier, receipt_date, receipt_month, quantity_delta, unit_cost, receipt_amount, commitment_amount, payment_amount, cumulative_quantity, source_fingerprint, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .bind(batch.id, order.erpReference, item.sku, supplier, item.receiptDate, item.receiptDate.slice(0, 7), quantityDelta, item.unitCost, receiptAmount, commitmentAmount, paymentAmount, item.deliveredQuantity, receiptFingerprint, now, actor),
+        env.DB.prepare("INSERT OR IGNORE INTO procurement_payment_events (batch_id, supplier, erp_reference, event_type, event_date, payment_month, amount, source_key, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .bind(batch.id, supplier, order.erpReference, foreign ? "foreign_receipt" : "domestic_receipt", item.receiptDate, item.receiptDate.slice(0, 7), paymentAmount, `${sourceBase}:payment`, now, actor)
+      );
+      if (commitmentAmount > 0) {
+        receiptStatements.push(env.DB.prepare("INSERT OR IGNORE INTO procurement_commitment_events (batch_id, supplier, erp_reference, event_type, event_date, recognition_month, amount, source_key, created_at, created_by) VALUES (?, ?, ?, 'foreign_receipt', ?, ?, ?, ?, ?, ?)")
+          .bind(batch.id, supplier, order.erpReference, item.receiptDate, item.receiptDate.slice(0, 7), commitmentAmount, `${sourceBase}:commitment`, now, actor));
+      }
+      commitmentIncrease += commitmentAmount;
+      receiptEventCount += 1;
+    }
     await env.DB.batch([
       ...order.items.map((row) => env.DB.prepare("UPDATE procurement_batch_items SET erp_quantity = ?, received_quantity = ?, remaining_quantity = ?, lifecycle_status = ?, updated_at = ? WHERE batch_id = ? AND sku = ?").bind(row.orderedQuantity, row.deliveredQuantity, row.remainingQuantity, row.lifecycleStatus || order.sourceStatus, now, batch.id, row.sku)),
-      env.DB.prepare("UPDATE procurement_batches SET status = CASE WHEN ? = 1 THEN 'received' ELSE status END, updated_at = ? WHERE id = ? AND status IN ('erp_created', 'received')").bind(received ? 1 : 0, now, batch.id),
+      ...receiptStatements,
+      env.DB.prepare("UPDATE procurement_batches SET status = CASE WHEN ? = 1 THEN 'received' ELSE status END, recognized_commitment_amount = MIN(approved_amount, recognized_commitment_amount + ?), pending_commitment_amount = MAX(0, pending_commitment_amount - ?), updated_at = ? WHERE id = ? AND status IN ('erp_created', 'received')").bind(received ? 1 : 0, commitmentIncrease, commitmentIncrease, now, batch.id),
       env.DB.prepare("INSERT OR IGNORE INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) SELECT id, 'received', approved_amount, 0, approved_amount, '完整採購檔確認全部到貨或已結案', ?, ?, ? FROM procurement_batches WHERE id = ? AND status = 'received'").bind(now, actor, `${batch.id}:received:${fingerprint}`, batch.id)
     ]);
-    results.push({ erpReference: order.erpReference, batchId: batch.id, status: received ? "received" : "updated", differenceCount: 0 });
+    results.push({ erpReference: order.erpReference, batchId: batch.id, status: received ? "received" : "updated", differenceCount: 0, receiptEventCount, missingReceiptDates });
   }
   return json({ results });
 }
@@ -688,24 +790,60 @@ async function confirmErpReconciliation(request: Request, env: ProcurementEnv, r
   const reason = string(input.reason, "差異原因", 500);
   const id = Number(reconciliationId);
   if (!Number.isSafeInteger(id) || id < 1) throw new RequestValidationError("ERP差異編號格式錯誤。");
-  const row = await env.DB.prepare("SELECT r.*, b.analysis_month, b.status batch_status, b.approved_amount, b.suggested_amount, b.blocked_amount, b.payment_current_month, b.payment_future_months, b.payment_schedule, b.revision FROM procurement_erp_reconciliations r JOIN procurement_batches b ON b.id = r.batch_id WHERE r.id = ?").bind(id).first<Record<string, unknown>>();
+  const row = await env.DB.prepare("SELECT r.*, b.analysis_month, b.status batch_status, b.approved_amount, b.suggested_amount, b.blocked_amount, b.payment_current_month, b.payment_future_months, b.payment_schedule, b.recognized_commitment_amount, b.pending_commitment_amount, b.supplier_summary, b.revision FROM procurement_erp_reconciliations r JOIN procurement_batches b ON b.id = r.batch_id WHERE r.id = ?").bind(id).first<Record<string, unknown>>();
   if (!row) throw new RequestValidationError("找不到ERP差異摘要。", 404);
   if (row.status === "confirmed") return json({ reconciliationId: id, batchId: row.batch_id, status: "confirmed", duplicate: true });
   if (row.status !== "pending" || !["erp_created", "received"].includes(String(row.batch_status))) throw new RequestValidationError("此差異已被取代或批次狀態已改變，請重新載入。", 409);
   const snapshots = await env.DB.prepare("SELECT * FROM procurement_erp_reconciliation_items WHERE reconciliation_id = ? ORDER BY sku").bind(id).all<Record<string, unknown>>();
+  const previousItems = await env.DB.prepare("SELECT sku, supplier, received_quantity FROM procurement_batch_items WHERE batch_id = ?").bind(row.batch_id).all<Record<string, unknown>>();
+  const previousBySku = new Map(previousItems.results.map((item) => [String(item.sku), item]));
   const amountAfter = Number(row.amount_after || 0);
   const amountBefore = Number(row.approved_amount || 0);
   const payment = scaledPaymentSchedule(row, amountAfter);
   const now = new Date().toISOString();
   const key = `erp-reconciliation:${id}`;
   const received = snapshots.results.length > 0 && snapshots.results.every((item) => Number(item.remaining_quantity || 0) <= 0);
+  const defaultSupplier = ((parseJsonText(String(row.supplier_summary || "[]")) as string[] | null) || [])[0] || "";
+  const foreign = paymentScheduleCountry(row.payment_schedule, defaultSupplier) === "foreign";
+  const amountDelta = Math.round((amountAfter - amountBefore) * 100) / 100;
+  const adjustmentRecognition = foreign ? Math.round(amountDelta * 30) / 100 : amountDelta;
+  const adjustmentPending = foreign ? Math.round(amountDelta * 70) / 100 : 0;
+  const receiptStatements: D1PreparedStatement[] = [];
+  let receiptCommitmentIncrease = 0;
+  for (const item of snapshots.results) {
+    const before = previousBySku.get(String(item.sku));
+    const quantityDelta = Math.round((Number(item.received_quantity || 0) - Number(before?.received_quantity || 0)) * 10000) / 10000;
+    if (!(quantityDelta > 0)) continue;
+    const receiptDate = String(item.receipt_date || "");
+    if (!receiptDate) throw new RequestValidationError(`${item.sku}已有新增到貨量，但完整採購檔缺少實際收貨日期；請補齊後重新匯入。`, 409);
+    const supplier = String(before?.supplier || defaultSupplier);
+    const itemForeign = paymentScheduleCountry(row.payment_schedule, supplier) === "foreign";
+    const receiptAmount = Math.round(quantityDelta * Number(item.unit_cost_after || 0) * 100) / 100;
+    const commitmentAmount = itemForeign ? Math.round(receiptAmount * 70) / 100 : 0;
+    const paymentAmount = itemForeign ? commitmentAmount : receiptAmount;
+    const receiptFingerprint = await fingerprintReceipt(String(row.erp_reference), String(item.sku), receiptDate, Number(item.received_quantity || 0));
+    const existingReceipt = await env.DB.prepare("SELECT id FROM procurement_receipt_events WHERE batch_id = ? AND sku = ? AND source_fingerprint = ?").bind(row.batch_id, item.sku, receiptFingerprint).first();
+    if (existingReceipt) continue;
+    const sourceBase = `${row.batch_id}:${item.sku}:${receiptFingerprint}`;
+    receiptStatements.push(
+      env.DB.prepare("INSERT INTO procurement_receipt_events (batch_id, erp_reference, sku, supplier, receipt_date, receipt_month, quantity_delta, unit_cost, receipt_amount, commitment_amount, payment_amount, cumulative_quantity, source_fingerprint, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(row.batch_id, row.erp_reference, item.sku, supplier, receiptDate, receiptDate.slice(0, 7), quantityDelta, item.unit_cost_after, receiptAmount, commitmentAmount, paymentAmount, item.received_quantity, receiptFingerprint, now, access.email),
+      env.DB.prepare("INSERT OR IGNORE INTO procurement_payment_events (batch_id, supplier, erp_reference, event_type, event_date, payment_month, amount, source_key, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(row.batch_id, supplier, row.erp_reference, itemForeign ? "foreign_receipt" : "domestic_receipt", receiptDate, receiptDate.slice(0, 7), paymentAmount, `${sourceBase}:payment`, now, access.email)
+    );
+    if (commitmentAmount > 0) receiptStatements.push(env.DB.prepare("INSERT OR IGNORE INTO procurement_commitment_events (batch_id, supplier, erp_reference, event_type, event_date, recognition_month, amount, source_key, created_at, created_by) VALUES (?, ?, ?, 'foreign_receipt', ?, ?, ?, ?, ?, ?)").bind(row.batch_id, supplier, row.erp_reference, receiptDate, receiptDate.slice(0, 7), commitmentAmount, `${sourceBase}:commitment`, now, access.email));
+    receiptCommitmentIncrease += commitmentAmount;
+  }
+  if (Math.abs(adjustmentRecognition) >= 0.01) {
+    receiptStatements.push(env.DB.prepare("INSERT OR IGNORE INTO procurement_commitment_events (batch_id, supplier, erp_reference, event_type, event_date, recognition_month, amount, source_key, created_at, created_by) VALUES (?, ?, ?, 'adjustment', ?, ?, ?, ?, ?, ?)").bind(row.batch_id, defaultSupplier, row.erp_reference, now.slice(0, 10), now.slice(0, 7), adjustmentRecognition, `${key}:commitment-adjustment`, now, access.email));
+    if (foreign) receiptStatements.push(env.DB.prepare("INSERT OR IGNORE INTO procurement_payment_events (batch_id, supplier, erp_reference, event_type, event_date, payment_month, amount, source_key, created_at, created_by) VALUES (?, ?, ?, 'adjustment', ?, ?, ?, ?, ?, ?)").bind(row.batch_id, defaultSupplier, row.erp_reference, now.slice(0, 10), now.slice(0, 7), adjustmentRecognition, `${key}:payment-adjustment`, now, access.email));
+  }
   const result = await env.DB.batch([
-    env.DB.prepare("UPDATE procurement_batches SET status = CASE WHEN ? = 1 THEN 'received' ELSE 'erp_created' END, manual_amount = ? + blocked_amount, approved_amount = ?, adjustment_amount = ? - suggested_amount, payment_current_month = ?, payment_future_months = ?, payment_schedule = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND revision = ? AND status IN ('erp_created', 'received')").bind(received ? 1 : 0, amountAfter, amountAfter, amountAfter, payment.current, payment.future, JSON.stringify(payment.schedule), now, row.batch_id, row.revision),
+    env.DB.prepare("UPDATE procurement_batches SET status = CASE WHEN ? = 1 THEN 'received' ELSE 'erp_created' END, manual_amount = ? + blocked_amount, approved_amount = ?, adjustment_amount = ? - suggested_amount, payment_current_month = ?, payment_future_months = ?, payment_schedule = ?, recognized_commitment_amount = MAX(0, MIN(?, recognized_commitment_amount + ? + ?)), pending_commitment_amount = MAX(0, pending_commitment_amount + ? - ?), updated_at = ?, revision = revision + 1 WHERE id = ? AND revision = ? AND status IN ('erp_created', 'received')").bind(received ? 1 : 0, amountAfter, amountAfter, amountAfter, payment.current, payment.future, JSON.stringify(payment.schedule), amountAfter, adjustmentRecognition, receiptCommitmentIncrease, adjustmentPending, receiptCommitmentIncrease, now, row.batch_id, row.revision),
     env.DB.prepare("UPDATE procurement_erp_reconciliations SET status = 'confirmed', confirmed_at = ?, confirmed_by = ?, reason = ? WHERE id = ? AND status = 'pending'").bind(now, access.email, reason, id),
     env.DB.prepare("INSERT OR IGNORE INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) VALUES (?, 'corrected', ?, ?, ?, ?, ?, ?, ?)").bind(row.batch_id, amountBefore, amountAfter - amountBefore, amountAfter, `ERP差異確認：${reason}`, now, access.email, key),
     env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'corrected', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(row.batch_id, access.settings.notificationRecipient, now, key),
     env.DB.prepare("DELETE FROM procurement_batch_items WHERE batch_id = ?").bind(row.batch_id),
-    ...snapshots.results.filter((item) => Number(item.erp_quantity || 0) > 0).map((item) => env.DB.prepare("INSERT INTO procurement_batch_items (batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, erp_quantity, received_quantity, remaining_quantity, lifecycle_status, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)").bind(row.batch_id, item.sku, item.name, item.erp_quantity, item.unit_cost_after, Number(item.erp_quantity || 0) * Number(item.unit_cost_after || 0), item.erp_quantity, item.received_quantity, item.remaining_quantity, item.lifecycle_status, now))
+    ...receiptStatements,
+    ...snapshots.results.filter((item) => Number(item.erp_quantity || 0) > 0).map((item) => env.DB.prepare("INSERT INTO procurement_batch_items (batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, erp_quantity, received_quantity, remaining_quantity, lifecycle_status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(row.batch_id, item.sku, item.name, String(previousBySku.get(String(item.sku))?.supplier || defaultSupplier), item.erp_quantity, item.unit_cost_after, Number(item.erp_quantity || 0) * Number(item.unit_cost_after || 0), item.erp_quantity, item.received_quantity, item.remaining_quantity, item.lifecycle_status, now))
   ]);
   if (Number(result[0].meta.changes || 0) === 0) throw new RequestValidationError("批次已被其他操作更新，請重新載入。", 409);
   return json({ reconciliationId: id, batchId: row.batch_id, status: "confirmed", amountBefore, amountAfter, amountDelta: amountAfter - amountBefore, notification: "pending", duplicate: false });
@@ -980,6 +1118,8 @@ async function saveMonthPlan(request: Request, env: ProcurementEnv): Promise<Res
   const { email: actor } = await verifyApprover(request, env);
   const input = await body(request);
   const analysisMonth = month(input.analysisMonth);
+  const checkpoint = string(input.checkpoint || "month-start", "使用時點", 20);
+  if (!["month-start", "mid-month", "month-end"].includes(checkpoint)) throw new RequestValidationError("使用時點格式錯誤。");
   const revenueChannels = Array.isArray(input.revenueChannels) ? input.revenueChannels : [];
   if (revenueChannels.length > 100) throw new RequestValidationError("通路營收明細最多100列。");
   const normalizedChannels = revenueChannels.map((row) => {
@@ -1001,14 +1141,65 @@ async function saveMonthPlan(request: Request, env: ProcurementEnv): Promise<Res
     : Math.round(fullBudgetAmount * 0.5 * 100) / 100);
   const sourceNote = string(input.sourceNote, "額度來源註記", 500);
   const now = new Date().toISOString();
-  await env.DB.prepare(
-    "INSERT INTO procurement_month_plans (analysis_month, scenario, forecast_revenue, forecast_cost_outflow, target_ending_inventory_cost, opening_inventory_cost, expected_supplier_returns, budget_amount, full_budget_amount, revenue_channels, source_note, created_at, created_by, updated_at, updated_by) VALUES (?, 'neutral', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month) DO UPDATE SET forecast_revenue = excluded.forecast_revenue, forecast_cost_outflow = excluded.forecast_cost_outflow, target_ending_inventory_cost = excluded.target_ending_inventory_cost, opening_inventory_cost = excluded.opening_inventory_cost, expected_supplier_returns = excluded.expected_supplier_returns, budget_amount = excluded.budget_amount, full_budget_amount = excluded.full_budget_amount, revenue_channels = excluded.revenue_channels, source_note = excluded.source_note, updated_at = excluded.updated_at, updated_by = excluded.updated_by"
-  ).bind(analysisMonth, forecastRevenue, forecastCostOutflow, targetEndingInventoryCost, openingInventoryCost, expectedSupplierReturns, releasedBudgetAmount, fullBudgetAmount, JSON.stringify(normalizedChannels), sourceNote, now, actor, now, actor).run();
+  const snapshot = JSON.stringify({
+    analysisMonth, checkpoint, scenario: "neutral", forecastRevenue, forecastCostOutflow,
+    targetEndingInventoryCost, openingInventoryCost, expectedSupplierReturns,
+    budgetAmount: releasedBudgetAmount, releasedBudgetAmount, fullBudgetAmount,
+    revenueChannels: normalizedChannels, sourceNote, updatedAt: now, updatedBy: actor
+  });
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO procurement_month_plan_history (analysis_month, checkpoint, snapshot, created_at, created_by) VALUES (?, ?, ?, ?, ?)").bind(analysisMonth, checkpoint, snapshot, now, actor),
+    env.DB.prepare(
+      "INSERT INTO procurement_month_plans (analysis_month, scenario, forecast_revenue, forecast_cost_outflow, target_ending_inventory_cost, opening_inventory_cost, expected_supplier_returns, budget_amount, full_budget_amount, revenue_channels, source_note, created_at, created_by, updated_at, updated_by) VALUES (?, 'neutral', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(analysis_month) DO UPDATE SET forecast_revenue = excluded.forecast_revenue, forecast_cost_outflow = excluded.forecast_cost_outflow, target_ending_inventory_cost = excluded.target_ending_inventory_cost, opening_inventory_cost = excluded.opening_inventory_cost, expected_supplier_returns = excluded.expected_supplier_returns, budget_amount = excluded.budget_amount, full_budget_amount = excluded.full_budget_amount, revenue_channels = excluded.revenue_channels, source_note = excluded.source_note, updated_at = excluded.updated_at, updated_by = excluded.updated_by"
+    ).bind(analysisMonth, forecastRevenue, forecastCostOutflow, targetEndingInventoryCost, openingInventoryCost, expectedSupplierReturns, releasedBudgetAmount, fullBudgetAmount, JSON.stringify(normalizedChannels), sourceNote, now, actor, now, actor)
+  ]);
   const row = await env.DB.prepare(
     "SELECT analysis_month, scenario, forecast_revenue, forecast_cost_outflow, target_ending_inventory_cost, opening_inventory_cost, expected_supplier_returns, budget_amount, full_budget_amount, revenue_channels, source_note, updated_at, updated_by FROM procurement_month_plans WHERE analysis_month = ?"
   ).bind(analysisMonth).first<Record<string, unknown>>();
   if (!row) throw new RequestValidationError("本月額度資料儲存失敗。", 503);
   return json({ month: analysisMonth, plan: serializeMonthPlan(row) });
+}
+
+async function procurementHistory(request: Request, env: ProcurementEnv): Promise<Response> {
+  await verifyCompanyUser(request, procurementAccess(env));
+  const url = new URL(request.url);
+  const requestedMonth = month(url.searchParams.get("month"));
+  const checkpoint = string(url.searchParams.get("checkpoint") || "month-start", "使用時點", 20);
+  if (!["month-start", "mid-month", "month-end"].includes(checkpoint)) throw new RequestValidationError("使用時點格式錯誤。");
+  const now = new Date();
+  const earliest = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5, 1)).toISOString().slice(0, 7);
+  if (requestedMonth < earliest) throw new RequestValidationError(`歷史查詢目前保留${earliest}起六個月；未結案採購單仍會持續追蹤。`, 400);
+
+  const planRow = await env.DB.prepare("SELECT snapshot, created_at, created_by FROM procurement_month_plan_history WHERE analysis_month = ? AND checkpoint = ? ORDER BY created_at DESC, id DESC LIMIT 1").bind(requestedMonth, checkpoint).first<Record<string, unknown>>();
+  const costRow = await env.DB.prepare("SELECT snapshot, created_at, created_by FROM procurement_cost_snapshot_history WHERE analysis_month = ? AND checkpoint = ? ORDER BY created_at DESC, id DESC LIMIT 1").bind(requestedMonth, checkpoint).first<Record<string, unknown>>();
+  const batchRows = await env.DB.prepare("SELECT id, analysis_month, checkpoint, workflow_type, erp_reference, supplier_summary, status, approved_amount, recognized_commitment_amount, pending_commitment_amount, created_at, created_by, approved_at, approved_by, updated_at, revision FROM procurement_batches WHERE analysis_month = ? AND checkpoint = ? ORDER BY approved_at DESC, updated_at DESC LIMIT 200").bind(requestedMonth, checkpoint).all<Record<string, unknown>>();
+  const batchIds = batchRows.results.map((row) => String(row.id));
+  const itemRows = batchIds.length
+    ? await env.DB.prepare(`SELECT batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, erp_quantity, received_quantity, remaining_quantity, lifecycle_status, updated_at FROM procurement_batch_items WHERE batch_id IN (${batchIds.map(() => "?").join(",")}) ORDER BY batch_id, sku`).bind(...batchIds).all<Record<string, unknown>>()
+    : { results: [] as Record<string, unknown>[] };
+  const itemsByBatch = new Map<string, Record<string, unknown>[]>();
+  for (const item of itemRows.results) {
+    const items = itemsByBatch.get(String(item.batch_id)) || [];
+    items.push(item); itemsByBatch.set(String(item.batch_id), items);
+  }
+  const commitmentRows = await env.DB.prepare("SELECT batch_id, supplier, erp_reference, event_type, event_date, amount, created_at FROM procurement_commitment_events WHERE recognition_month = ? ORDER BY event_date, id").bind(requestedMonth).all<Record<string, unknown>>();
+  const paymentRows = await env.DB.prepare("SELECT batch_id, supplier, erp_reference, event_type, event_date, amount, created_at FROM procurement_payment_events WHERE payment_month = ? ORDER BY event_date, id").bind(requestedMonth).all<Record<string, unknown>>();
+  const receiptRows = await env.DB.prepare("SELECT batch_id, erp_reference, sku, supplier, receipt_date, quantity_delta, unit_cost, receipt_amount, commitment_amount, payment_amount, cumulative_quantity FROM procurement_receipt_events WHERE receipt_month = ? ORDER BY receipt_date, id").bind(requestedMonth).all<Record<string, unknown>>();
+  const liveOpenRows = await env.DB.prepare("SELECT id, analysis_month, checkpoint, erp_reference, supplier_summary, status, approved_amount, recognized_commitment_amount, pending_commitment_amount, updated_at FROM procurement_batches WHERE status IN ('approved', 'erp_created') AND analysis_month <= ? ORDER BY analysis_month, updated_at DESC LIMIT 200").bind(requestedMonth).all<Record<string, unknown>>();
+  const parseSnapshot = (row: Record<string, unknown> | null) => row ? parseJsonText(String(row.snapshot || "{}")) : null;
+  const batches = batchRows.results.map((row) => ({ ...row, supplier_summary: parseJsonText(String(row.supplier_summary || "[]")) || [], items: itemsByBatch.get(String(row.id)) || [] }));
+  return json({
+    month: requestedMonth, checkpoint, retentionStartMonth: earliest,
+    snapshot: {
+      monthPlan: parseSnapshot(planRow), monthPlanCreatedAt: planRow?.created_at || null, monthPlanCreatedBy: planRow?.created_by || null,
+      cost: parseSnapshot(costRow), costCreatedAt: costRow?.created_at || null, costCreatedBy: costRow?.created_by || null,
+      batches
+    },
+    recognized: { commitments: commitmentRows.results, payments: paymentRows.results, receipts: receiptRows.results },
+    live: {
+      openOrders: liveOpenRows.results.map((row) => ({ ...row, supplier_summary: parseJsonText(String(row.supplier_summary || "[]")) || [] }))
+    }
+  });
 }
 
 function validatedApprovedItems(value: unknown, approvedAmount?: number) {
@@ -1051,7 +1242,8 @@ function validatedBatch(input: Record<string, unknown>, actor: string) {
   if (Math.abs((suggested + adjustment) - approved) >= 0.01) throw new RequestValidationError("系統建議＋人工調整不等於最終核准金額。");
   if (Math.abs((currentPayment + futurePayments) - approved) >= 0.01) throw new RequestValidationError("付款月份合計不等於最終核准金額。");
   const supplierSummary = JSON.stringify(input.supplierSummary || []);
-  const paymentSchedule = JSON.stringify(input.paymentSchedule || []);
+  const paymentEntries = normalizedPaymentSchedule(input.paymentSchedule || []);
+  const paymentSchedule = JSON.stringify(paymentEntries);
   if (supplierSummary.length > 4096 || paymentSchedule.length > 8192) throw new RequestValidationError("供應商或付款摘要過長。");
   const now = new Date().toISOString();
   const workflowType = typeof input.workflowType === "string" ? input.workflowType.trim() : "system_recommendation";
@@ -1070,12 +1262,39 @@ function validatedBatch(input: Record<string, unknown>, actor: string) {
   const workUnitIdsInput = input.workUnitIds == null ? [] : input.workUnitIds;
   if (!Array.isArray(workUnitIdsInput) || workUnitIdsInput.length > 100 || workUnitIdsInput.some((value) => typeof value !== "string" || !value.trim() || value.length > 300)) throw new RequestValidationError("實際核准審核單位格式錯誤。");
   const workUnitIds = JSON.stringify([...new Set(workUnitIdsInput.map((value) => value.trim()))]);
+  const initialCommitment = initialCommitmentAmounts(paymentEntries, approved);
   return {
     id: string(input.batchId, "批次編號", 80), analysisMonth: month(input.analysisMonth), checkpoint, parentBatchId, workUnitIds, supplierSummary,
     suggested, manual, blocked, approved, adjustment, budget: money(input.budgetAmount, "整月預估額度"),
-    currentPayment, futurePayments, paymentSchedule, warning: typeof input.warningSummary === "string" ? input.warningSummary.trim().slice(0, 1024) : "",
+    currentPayment, futurePayments, paymentSchedule, paymentEntries, initialCommitment, warning: typeof input.warningSummary === "string" ? input.warningSummary.trim().slice(0, 1024) : "",
     idempotencyKey: string(input.idempotencyKey, "冪等鍵", 120), workflowType, storeNeeds: normalizedStoreNeeds, approvedItems: normalizedItems, now, actor
   };
+}
+
+function initialRecognitionStatements(
+  env: ProcurementEnv,
+  batchId: string,
+  entries: PaymentScheduleEntry[],
+  actor: string,
+  now: string,
+  erpReference = ""
+): D1PreparedStatement[] {
+  const statements: D1PreparedStatement[] = [];
+  for (const entry of entries) {
+    if (entry.country === "國內") {
+      statements.push(env.DB.prepare("INSERT OR IGNORE INTO procurement_commitment_events (batch_id, supplier, erp_reference, event_type, event_date, recognition_month, amount, source_key, created_at, created_by) VALUES (?, ?, ?, 'domestic_approval', ?, ?, ?, ?, ?, ?)")
+        .bind(batchId, entry.supplier, erpReference, now.slice(0, 10), now.slice(0, 7), entry.amount, `${batchId}:commitment:domestic:${entry.supplier}`, now, actor));
+    } else if (/訂金30%/.test(entry.trigger)) {
+      const eventDate = entry.date || now.slice(0, 10);
+      statements.push(
+        env.DB.prepare("INSERT OR IGNORE INTO procurement_commitment_events (batch_id, supplier, erp_reference, event_type, event_date, recognition_month, amount, source_key, created_at, created_by) VALUES (?, ?, ?, 'foreign_deposit', ?, ?, ?, ?, ?, ?)")
+          .bind(batchId, entry.supplier, erpReference, eventDate, eventDate.slice(0, 7), entry.amount, `${batchId}:commitment:deposit:${entry.supplier}`, now, actor),
+        env.DB.prepare("INSERT OR IGNORE INTO procurement_payment_events (batch_id, supplier, erp_reference, event_type, event_date, payment_month, amount, source_key, created_at, created_by) VALUES (?, ?, ?, 'foreign_deposit', ?, ?, ?, ?, ?, ?)")
+          .bind(batchId, entry.supplier, erpReference, eventDate, eventDate.slice(0, 7), entry.amount, `${batchId}:payment:deposit:${entry.supplier}`, now, actor)
+      );
+    }
+  }
+  return statements;
 }
 
 async function submit(request: Request, env: ProcurementEnv): Promise<Response> {
@@ -1127,15 +1346,16 @@ async function importManualOrder(request: Request, env: ProcurementEnv): Promise
   }
   try {
     await env.DB.batch([
-      env.DB.prepare("INSERT INTO procurement_batches (id, analysis_month, workflow_type, erp_reference, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, approved_at, approved_by, erp_created_at, erp_created_by, updated_at, revision, idempotency_key) VALUES (?, ?, ?, ?, ?, 'erp_created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, ?)")
-        .bind(item.id, item.analysisMonth, item.workflowType, erpReference, item.supplierSummary, item.suggested, item.manual, item.blocked, item.approved, item.adjustment, item.budget, item.currentPayment, item.futurePayments, item.paymentSchedule, item.warning, item.now, access.email, item.now, access.email, item.now, access.email, item.now, item.idempotencyKey),
+      env.DB.prepare("INSERT INTO procurement_batches (id, analysis_month, workflow_type, erp_reference, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, recognized_commitment_amount, pending_commitment_amount, warning_summary, created_at, created_by, approved_at, approved_by, erp_created_at, erp_created_by, updated_at, revision, idempotency_key) VALUES (?, ?, ?, ?, ?, 'erp_created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, ?)")
+        .bind(item.id, item.analysisMonth, item.workflowType, erpReference, item.supplierSummary, item.suggested, item.manual, item.blocked, item.approved, item.adjustment, item.budget, item.currentPayment, item.futurePayments, item.paymentSchedule, item.initialCommitment.recognized, item.initialCommitment.pending, item.warning, item.now, access.email, item.now, access.email, item.now, access.email, item.now, item.idempotencyKey),
       env.DB.prepare("INSERT INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) VALUES (?, 'approved', 0, ?, ?, ?, ?, ?, ?)")
         .bind(item.id, item.approved, item.approved, item.workflowType === "customer_custom" ? "未到貨清單自動辨識客製採購並補登" : "補登已建立ERP採購單", item.now, access.email, `${item.idempotencyKey}:approved`),
       env.DB.prepare("INSERT INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) VALUES (?, 'erp_created', ?, 0, ?, ?, ?, ?, ?)")
         .bind(item.id, item.approved, item.approved, `ERP確認：${erpReference}`, item.now, access.email, `${item.idempotencyKey}:erp`),
       env.DB.prepare("INSERT INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'approved', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?")
         .bind(item.id, access.settings.notificationRecipient, item.now, `${item.idempotencyKey}:approved`),
-      ...item.approvedItems.map((row) => env.DB.prepare("INSERT INTO procurement_batch_items (batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, erp_quantity, remaining_quantity, lifecycle_status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ERP已開立・等待到貨', ?)").bind(item.id, row.sku, row.name, row.supplier, row.quantity, row.unitCost, row.amount, row.quantity, row.quantity, item.now))
+      ...item.approvedItems.map((row) => env.DB.prepare("INSERT INTO procurement_batch_items (batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, erp_quantity, remaining_quantity, lifecycle_status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ERP已開立・等待到貨', ?)").bind(item.id, row.sku, row.name, row.supplier, row.quantity, row.unitCost, row.amount, row.quantity, row.quantity, item.now)),
+      ...initialRecognitionStatements(env, item.id, item.paymentEntries, access.email, item.now, erpReference)
     ]);
   } catch (error) {
     const duplicate = await env.DB.prepare("SELECT id, status, workflow_type, erp_reference FROM procurement_batches WHERE erp_reference = ? OR idempotency_key = ?").bind(erpReference, item.idempotencyKey).first<Record<string, unknown>>();
@@ -1152,12 +1372,17 @@ async function approve(request: Request, env: ProcurementEnv, batchId: string): 
   const input = await body(request);
   const key = string(input.idempotencyKey, "冪等鍵", 120);
   const now = new Date().toISOString();
+  const before = await env.DB.prepare("SELECT id, status, approved_amount, payment_schedule FROM procurement_batches WHERE id = ?").bind(batchId).first<Record<string, unknown>>();
+  if (!before) throw new RequestValidationError("找不到採購批次。", 404);
+  const paymentEntries = normalizedPaymentSchedule(parseJsonText(String(before.payment_schedule || "[]")) || []);
+  const commitment = initialCommitmentAmounts(paymentEntries, Number(before.approved_amount || 0));
   const result = await env.DB.batch([
-    env.DB.prepare("UPDATE procurement_batches SET status = 'approved', approved_at = ?, approved_by = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND status = 'pending_approval'").bind(now, actor, now, batchId),
+    env.DB.prepare("UPDATE procurement_batches SET status = 'approved', recognized_commitment_amount = ?, pending_commitment_amount = ?, approved_at = ?, approved_by = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND status = 'pending_approval'").bind(commitment.recognized, commitment.pending, now, actor, now, batchId),
     env.DB.prepare("INSERT OR IGNORE INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) SELECT id, 'approved', 0, approved_amount, approved_amount, '正式核准', ?, ?, ? FROM procurement_batches WHERE id = ? AND status = 'approved' AND approved_at = ? AND approved_by = ?").bind(now, actor, key, batchId, now, actor),
     env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'approved', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(batchId, access.settings.notificationRecipient, now, key),
     env.DB.prepare("UPDATE store_transfer_procurement_needs SET status = CASE WHEN covered_quantity + (SELECT x.covered_quantity FROM procurement_batch_store_needs x WHERE x.batch_id = ? AND x.store_code = store_transfer_procurement_needs.store_code AND x.sku = store_transfer_procurement_needs.sku) >= unfilled_quantity THEN 'covered_waiting' WHEN handling_mode = 'new_order' THEN 'new_order' ELSE 'waiting_merge' END, covered_quantity = MIN(unfilled_quantity, covered_quantity + (SELECT x.covered_quantity FROM procurement_batch_store_needs x WHERE x.batch_id = ? AND x.store_code = store_transfer_procurement_needs.store_code AND x.sku = store_transfer_procurement_needs.sku)), updated_at = ?, updated_by = ? WHERE EXISTS (SELECT 1 FROM procurement_batch_store_needs x WHERE x.batch_id = ? AND x.store_code = store_transfer_procurement_needs.store_code AND x.sku = store_transfer_procurement_needs.sku)").bind(batchId, batchId, now, actor, batchId),
-    env.DB.prepare("UPDATE store_transfer_shortages SET follow_up_status = '已由採購覆蓋待到貨', updated_at = ? WHERE EXISTS (SELECT 1 FROM procurement_batch_store_needs x WHERE x.batch_id = ? AND x.store_code = store_transfer_shortages.store_code AND x.sku = store_transfer_shortages.sku) AND batch_id = (SELECT source_batch_id FROM store_transfer_procurement_needs n WHERE n.store_code = store_transfer_shortages.store_code AND n.sku = store_transfer_shortages.sku)").bind(now, batchId)
+    env.DB.prepare("UPDATE store_transfer_shortages SET follow_up_status = '已由採購覆蓋待到貨', updated_at = ? WHERE EXISTS (SELECT 1 FROM procurement_batch_store_needs x WHERE x.batch_id = ? AND x.store_code = store_transfer_shortages.store_code AND x.sku = store_transfer_shortages.sku) AND batch_id = (SELECT source_batch_id FROM store_transfer_procurement_needs n WHERE n.store_code = store_transfer_shortages.store_code AND n.sku = store_transfer_shortages.sku)").bind(now, batchId),
+    ...initialRecognitionStatements(env, batchId, paymentEntries, actor, now)
   ]);
   if (Number(result[0].meta.changes || 0) === 0) {
     const existing = await env.DB.prepare("SELECT id, status, approved_at, approved_by FROM procurement_batches WHERE id = ?").bind(batchId).first();
@@ -1323,7 +1548,7 @@ async function notify(request: Request, env: ProcurementEnv, batchId: string): P
   const eventLabel = eventLabels[String(row.event_type)] || "額度異動";
   const amountBefore = Number(row.event_amount_before || 0);
   const amountAfter = Number(row.event_amount_after || 0);
-  const monthTotals = await env.DB.prepare("SELECT COALESCE(SUM(approved_amount), 0) committed_amount, COALESCE(SUM(payment_current_month), 0) current_payment, COALESCE(SUM(payment_future_months), 0) future_payments FROM procurement_batches WHERE analysis_month = ? AND status IN ('approved', 'erp_created', 'received')").bind(row.analysis_month).first<Record<string, unknown>>();
+  const monthTotals = await env.DB.prepare("SELECT (SELECT COALESCE(SUM(amount), 0) FROM procurement_commitment_events WHERE recognition_month = ?) committed_amount, (SELECT COALESCE(SUM(amount), 0) FROM procurement_payment_events WHERE payment_month = ?) current_payment, (SELECT COALESCE(SUM(pending_commitment_amount), 0) FROM procurement_batches WHERE status IN ('approved', 'erp_created', 'received')) future_payments").bind(row.analysis_month, row.analysis_month).first<Record<string, unknown>>();
   const eventDelta = Number(row.event_amount_delta || 0);
   const committedAfter = Number(monthTotals?.committed_amount || 0);
   const committedBefore = committedAfter - eventDelta;
@@ -1345,7 +1570,7 @@ async function notify(request: Request, env: ProcurementEnv, batchId: string): P
     `異動前尚可承諾：${remainingBefore.toFixed(2)}`, `異動後尚可承諾：${remainingAfter.toFixed(2)}`,
     `目前已釋放可採購額度：${Number(row.budget_amount).toFixed(2)}`,
     `本月累計已承諾採購金額：${committedAfter.toFixed(2)}`, `目前額度使用率：${usageRate.toFixed(2)}%`,
-    `本月預計付款：${currentPayment.toFixed(2)}`, `下月以後已承諾付款：${futurePayments.toFixed(2)}`,
+    `本月實際付款：${currentPayment.toFixed(2)}`, `尚待到貨認列／付款：${futurePayments.toFixed(2)}`,
     `警示：${String(row.warning_summary || "無")}`
   ].join("\r\n");
   let send: Response;
@@ -1393,6 +1618,7 @@ export async function procurementRoute(request: Request, env: ProcurementEnv): P
   if (shortageCloseMatch && request.method === "POST") return closeStoreShortageNeed(request, env, decodeURIComponent(shortageCloseMatch[1]), decodeURIComponent(shortageCloseMatch[2]));
   if (url.pathname === "/api/procurement/month-plan" && request.method === "GET") return monthPlan(request, env);
   if (url.pathname === "/api/procurement/month-plan" && request.method === "PUT") return saveMonthPlan(request, env);
+  if (url.pathname === "/api/procurement/history" && request.method === "GET") return procurementHistory(request, env);
   if (url.pathname === "/api/procurement/cost-snapshot" && request.method === "GET") return costSnapshot(request, env);
   if (url.pathname === "/api/procurement/cost-snapshot" && request.method === "PUT") return saveCostSnapshot(request, env);
   if (url.pathname === "/api/procurement/batches" && request.method === "POST") return submit(request, env);
