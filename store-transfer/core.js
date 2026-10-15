@@ -19,6 +19,11 @@
     return Boolean(normalized) && CUSTOM_TRANSFER_SKU_MARKERS.some((marker) => normalized.includes(marker));
   }
 
+  function isCombinationTransferSku(sku) {
+    const normalized = String(sku || "").normalize("NFKC").trim().toUpperCase();
+    return /^O[A-Z0-9._/-]*$/.test(normalized);
+  }
+
   function transferExclusionSkus(storeInventory) {
     return new Set((Array.isArray(storeInventory?.transferExclusions) ? storeInventory.transferExclusions : [])
       .filter((item) => item && item.enabled !== false)
@@ -66,6 +71,7 @@
   function transferApplicabilityDecision(storeInventory, product, storeCode, proposalDate) {
     const sku = String(product?.sku || "").normalize("NFKC").trim().toUpperCase();
     if (isCustomTransferSku(sku)) return { excluded: true, source: "custom_sku" };
+    if (isCombinationTransferSku(sku)) return { excluded: true, source: "combination_sku" };
     if (transferExclusionSkus(storeInventory).has(sku)) return { excluded: true, source: "exact_exclusion" };
     for (const rule of normalizedApplicabilityRules(storeInventory)) {
       if (!applicabilityRuleMatches(rule, product, storeCode)) continue;
@@ -76,6 +82,18 @@
       if (rule.action === "allow") return { excluded: false, source: "applicability_rule", rule };
     }
     return { excluded: false, source: "default" };
+  }
+
+  function transferExclusionReason(decision) {
+    if (!decision?.excluded) return "";
+    if (decision.source === "custom_sku") return "客製品號（SA／SB／OA／OB）不自動產生周調撥建議";
+    if (decision.source === "combination_sku") return "O開頭組合號不自動產生周調撥建議";
+    if (decision.source === "exact_exclusion") return "已列入排除周調撥品號";
+    if (decision.source === "applicability_rule") {
+      const name = decision.rule?.name ? `「${decision.rule.name}」` : "周調撥適用規則";
+      return decision.rule?.action === "include_period" ? `${name}目前不在納入期間` : `${name}設定為排除周調撥`;
+    }
+    return "依周調撥適用規則不自動產生建議";
   }
 
   function localDate(value) {
@@ -651,7 +669,7 @@
     const applicabilityRules = normalizedApplicabilityRules(input.storeInventory);
     const isTransferExcluded = (sku, storeCode = "") => {
       const normalized = String(sku || "").normalize("NFKC").trim().toUpperCase();
-      if (isCustomTransferSku(normalized)) return true;
+      if (isCustomTransferSku(normalized) || isCombinationTransferSku(normalized)) return true;
       if (transferExclusions.has(normalized)) return true;
       if (!storeCode || !applicabilityRules.length) return false;
       return transferApplicabilityDecision({ transferExclusions: [], applicabilityRules }, masterBySku.get(normalized) || { sku: normalized, name: "" }, storeCode, proposalDate).excluded;
@@ -1084,7 +1102,7 @@
     ]);
     const manualItemFacts = [...manualItemKeys].filter((compoundKey) => {
       const [storeCode, sku] = compoundKey.split("|");
-      return stores.includes(storeCode) && !isTransferExcluded(sku, storeCode) && masterBySku.has(sku);
+      return stores.includes(storeCode) && masterBySku.has(sku);
     }).map((compoundKey) => {
       const [storeCode, sku] = compoundKey.split("|");
       const master = masterBySku.get(sku) || {};
@@ -1119,20 +1137,28 @@
       const hqProtection = master.sellThroughStop
         ? sStockProtection(hqAvailable, Math.max(0, hqUsage14.get(sku) || 0), Math.max(0, hqUsage42.get(sku) || 0), Math.max(0, hqUsage84.get(sku) || 0))
         : generalHqStockProtection(hqAvailable, Math.max(0, hqDirect14.get(sku) || 0), Math.max(0, hqDirect42.get(sku) || 0), Math.max(0, hqDirect84.get(sku) || 0), Number(schedule?.coverageDays || 1));
+      const exclusionDecision = transferApplicabilityDecision(input.storeInventory || {}, { ...master, sku }, storeCode, proposalDate);
+      const exclusionReason = transferExclusionReason(exclusionDecision);
+      if (exclusionReason) systemReason = exclusionReason;
       return {
         storeCode, sku, productName: master.name || "", calculationDate: schedule?.currentArrivalDate || latest,
         baseQuantity, displayGap, dailyUsage,
         systemProjection: projectedSellThroughDate(schedule?.currentArrivalDate || latest, baseQuantity, 0, dailyUsage),
-        systemReason, hqAvailable, hqReserve: hqProtection.reserve, hqReleasable: hqProtection.releasable
+        systemReason, hqAvailable, hqReserve: hqProtection.reserve, hqReleasable: hqProtection.releasable,
+        autoExcluded: exclusionDecision.excluded, exclusionReason
       };
     }).sort((left, right) => STORE_ORDER.indexOf(left.storeCode) - STORE_ORDER.indexOf(right.storeCode) || left.sku.localeCompare(right.sku));
     const maximumCoverageDays = Math.max(1, ...Object.values(scheduleByStore).map((schedule) => Number(schedule.coverageDays || 1)));
-    const manualItemCatalog = [...masterBySku.entries()].filter(([sku]) => !isTransferExcluded(sku)).map(([sku, record]) => {
+    const manualItemCatalog = [...masterBySku.entries()].map(([sku, record]) => {
       const hqAvailable = Math.max(0, Math.floor((inventory.get(`T00|${sku}`) || 0) - (pendingOutbound.get(`T00|${sku}`) || 0)));
       const protection = record.sellThroughStop
         ? sStockProtection(hqAvailable, Math.max(0, hqUsage14.get(sku) || 0), Math.max(0, hqUsage42.get(sku) || 0), Math.max(0, hqUsage84.get(sku) || 0))
         : generalHqStockProtection(hqAvailable, Math.max(0, hqDirect14.get(sku) || 0), Math.max(0, hqDirect42.get(sku) || 0), Math.max(0, hqDirect84.get(sku) || 0), maximumCoverageDays);
-      return { sku, productName: record.name || "", hqAvailable, hqReserve: protection.reserve, hqReleasable: protection.releasable };
+      const autoExclusions = Object.fromEntries(stores.map((storeCode) => {
+        const decision = transferApplicabilityDecision(input.storeInventory || {}, { ...record, sku }, storeCode, proposalDate);
+        return [storeCode, decision.excluded ? transferExclusionReason(decision) : ""];
+      }).filter(([, reason]) => reason));
+      return { sku, productName: record.name || "", hqAvailable, hqReserve: protection.reserve, hqReleasable: protection.releasable, autoExclusions };
     }).filter((row) => row.productName).sort((left, right) => left.sku.localeCompare(right.sku));
     return {
       latestSalesDate: latest, proposalDate, scheduleByStore, calculationMode, rows, regularRows, specialStockRows, activityRows, consumableRows, shortageRows, consumableSnapshots, pendingTransferRows, comparisonFacts, manualItemFacts, manualItemCatalog,
@@ -1312,5 +1338,5 @@
     return workbook;
   }
 
-  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, isCustomTransferSku, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, storeDisplayException, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook, buildFormalWorkbook };
+  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, isCustomTransferSku, isCombinationTransferSku, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, storeDisplayException, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook, buildFormalWorkbook };
 });

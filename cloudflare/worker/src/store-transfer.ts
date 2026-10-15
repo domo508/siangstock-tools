@@ -558,22 +558,24 @@ async function manualItemFact(request: Request, env: StoreTransferEnv, batchId: 
   if (!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) throw new RequestValidationError("ERP品號格式錯誤。");
   const batchStore = await env.DB.prepare("SELECT b.proposal_date, b.arrival_schedule FROM store_transfer_store_status s JOIN store_transfer_batches b ON b.id = s.batch_id WHERE s.batch_id = ? AND s.store_code = ? AND b.deleted_at IS NULL").bind(batchId, scope).first<Record<string, unknown>>();
   if (!batchStore) throw new RequestValidationError("此批次沒有這間門市。", 404);
-  const row = await env.DB.prepare("SELECT store_code, sku, product_name, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, hq_available, hq_reserve, hq_releasable FROM store_transfer_manual_item_facts WHERE batch_id = ? AND store_code = ? AND sku = ?").bind(batchId, scope, sku).first<Record<string, unknown>>();
+  const row = await env.DB.prepare("SELECT store_code, sku, product_name, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, hq_available, hq_reserve, hq_releasable, auto_excluded, exclusion_reason FROM store_transfer_manual_item_facts WHERE batch_id = ? AND store_code = ? AND sku = ?").bind(batchId, scope, sku).first<Record<string, unknown>>();
   const allocated = await env.DB.prepare("SELECT COALESCE(SUM(COALESCE(store_confirmed_quantity, suggested_quantity)), 0) quantity FROM store_transfer_items WHERE batch_id = ? AND sku = ? AND store_code <> ?").bind(batchId, sku, scope).first<Record<string, unknown>>();
   const otherAllocated = Number(allocated?.quantity || 0);
   if (!row) {
-    const catalog = await env.DB.prepare("SELECT product_name, hq_available, hq_reserve, hq_releasable FROM store_transfer_batch_product_catalog WHERE batch_id = ? AND sku = ?").bind(batchId, sku).first<Record<string, unknown>>();
+    const catalog = await env.DB.prepare("SELECT product_name, hq_available, hq_reserve, hq_releasable, auto_exclusions FROM store_transfer_batch_product_catalog WHERE batch_id = ? AND sku = ?").bind(batchId, sku).first<Record<string, unknown>>();
     if (!catalog) throw new RequestValidationError("此品號不在本批次建立時的商品主檔，請確認ERP品號。", 404);
     const schedule = parseJson(batchStore.arrival_schedule);
     const storeSchedule = schedule[scope] && typeof schedule[scope] === "object" && !Array.isArray(schedule[scope]) ? schedule[scope] as Record<string, unknown> : {};
-    return json({ storeCode: scope, sku, productName: String(catalog.product_name), calculationDate: String(storeSchedule.currentArrivalDate || batchStore.proposal_date), baseQuantity: 0, displayGap: 0, dailyUsage: 0, systemProjection: "近期無現場銷售", systemReason: "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", hqAvailable: Number(catalog.hq_available || 0), hqReserve: Number(catalog.hq_reserve || 0), hqReleasable: Number(catalog.hq_releasable || 0), supplyKnown: catalog.hq_releasable != null, otherAllocated });
+    const exclusionReason = String(parseJson(catalog.auto_exclusions)[scope] || "");
+    return json({ storeCode: scope, sku, productName: String(catalog.product_name), calculationDate: String(storeSchedule.currentArrivalDate || batchStore.proposal_date), baseQuantity: 0, displayGap: 0, dailyUsage: 0, systemProjection: "近期無現場銷售", systemReason: exclusionReason || "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", autoExcluded: Boolean(exclusionReason), exclusionReason, hqAvailable: Number(catalog.hq_available || 0), hqReserve: Number(catalog.hq_reserve || 0), hqReleasable: Number(catalog.hq_releasable || 0), supplyKnown: catalog.hq_releasable != null, otherAllocated });
   }
   return json({
     storeCode: String(row.store_code), sku: String(row.sku), productName: String(row.product_name),
     calculationDate: String(row.calculation_date), baseQuantity: Number(row.base_quantity || 0),
     displayGap: Number(row.display_gap || 0), dailyUsage: Number(row.daily_usage || 0), systemProjection: String(row.system_projection || ""),
     systemReason: who.role === "store" ? storeFacingReason(row.system_reason, 0) : String(row.system_reason || ""), hqAvailable: Number(row.hq_available || 0),
-    hqReserve: Number(row.hq_reserve || 0), hqReleasable: Number(row.hq_releasable || 0), supplyKnown: row.hq_releasable != null, otherAllocated
+    hqReserve: Number(row.hq_reserve || 0), hqReleasable: Number(row.hq_releasable || 0), autoExcluded: Number(row.auto_excluded || 0) === 1,
+    exclusionReason: String(row.exclusion_reason || ""), supplyKnown: row.hq_releasable != null, otherAllocated
   });
 }
 
@@ -699,7 +701,8 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
       systemReason: String(row.systemReason || "").normalize("NFKC").trim().slice(0, 500),
       hqAvailable: quantity(row.hqAvailable || 0, "總倉可用量"),
       hqReserve: quantity(row.hqReserve || 0, "總部保留量"),
-      hqReleasable: quantity(row.hqReleasable || 0, "總倉可釋出量")
+      hqReleasable: quantity(row.hqReleasable || 0, "總倉可釋出量"),
+      autoExcluded: Boolean(row.autoExcluded), exclusionReason: String(row.exclusionReason || "").normalize("NFKC").trim().slice(0, 500)
     };
   }).filter((row) => stores.includes(row.storeCode));
   const catalogSeen = new Set<string>();
@@ -709,7 +712,9 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
     const sku = text(row.sku, "ERP品號", 80).toLocaleUpperCase("en-US");
     if (catalogSeen.has(sku)) throw new RequestValidationError(`${sku}人工新增品項目錄重複。`);
     catalogSeen.add(sku);
-    return { sku, productName: text(row.productName, "品名"), hqAvailable: quantity(row.hqAvailable || 0, "總倉可用量"), hqReserve: quantity(row.hqReserve || 0, "總部保留量"), hqReleasable: quantity(row.hqReleasable || 0, "總倉可釋出量") };
+    const autoExclusions = row.autoExclusions && typeof row.autoExclusions === "object" && !Array.isArray(row.autoExclusions) ? row.autoExclusions as Record<string, unknown> : {};
+    const normalizedAutoExclusions = Object.fromEntries(Object.entries(autoExclusions).filter(([storeCode, reason]) => storeCode in STORES && String(reason || "").trim()).map(([storeCode, reason]) => [storeCode, String(reason).normalize("NFKC").trim().slice(0, 500)]));
+    return { sku, productName: text(row.productName, "品名"), hqAvailable: quantity(row.hqAvailable || 0, "總倉可用量"), hqReserve: quantity(row.hqReserve || 0, "總部保留量"), hqReleasable: quantity(row.hqReleasable || 0, "總倉可釋出量"), autoExclusions: JSON.stringify(normalizedAutoExclusions) };
   });
   const arrivalSchedule = input.arrivalSchedule && typeof input.arrivalSchedule === "object" && !Array.isArray(input.arrivalSchedule) ? JSON.stringify(input.arrivalSchedule) : "{}";
   if (arrivalSchedule.length > 5000) throw new RequestValidationError("到店日快照內容過長。");
@@ -718,10 +723,10 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
     SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.suggested'), json_extract(value, '$.ruleSummary'), json_extract(value, '$.itemType'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.systemProjection'), json_extract(value, '$.systemReason'), json_extract(value, '$.decisionSnapshot'), ?3, ?4 FROM json_each(?2)`;
   const shortageInsertSql = `INSERT INTO store_transfer_shortages (batch_id, store_code, sku, product_name, item_type, demand_quantity, allocated_quantity, unfilled_quantity, reason, follow_up_status, current_arrival_date, next_arrival_date, created_at, updated_at)
     SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.type'), json_extract(value, '$.demand'), json_extract(value, '$.allocated'), json_extract(value, '$.unfilled'), json_extract(value, '$.reason'), json_extract(value, '$.followUpStatus'), json_extract(value, '$.currentArrivalDate'), json_extract(value, '$.nextArrivalDate'), ?3, ?3 FROM json_each(?2)`;
-  const manualItemFactInsertSql = `INSERT INTO store_transfer_manual_item_facts (batch_id, store_code, sku, product_name, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, hq_available, hq_reserve, hq_releasable, created_at)
-    SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.systemProjection'), json_extract(value, '$.systemReason'), json_extract(value, '$.hqAvailable'), json_extract(value, '$.hqReserve'), json_extract(value, '$.hqReleasable'), ?3 FROM json_each(?2)`;
-  const manualItemCatalogInsertSql = `INSERT INTO store_transfer_batch_product_catalog (batch_id, sku, product_name, hq_available, hq_reserve, hq_releasable, created_at)
-    SELECT ?1, json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.hqAvailable'), json_extract(value, '$.hqReserve'), json_extract(value, '$.hqReleasable'), ?3 FROM json_each(?2)`;
+  const manualItemFactInsertSql = `INSERT INTO store_transfer_manual_item_facts (batch_id, store_code, sku, product_name, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, hq_available, hq_reserve, hq_releasable, auto_excluded, exclusion_reason, created_at)
+    SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.systemProjection'), json_extract(value, '$.systemReason'), json_extract(value, '$.hqAvailable'), json_extract(value, '$.hqReserve'), json_extract(value, '$.hqReleasable'), CASE WHEN json_extract(value, '$.autoExcluded') THEN 1 ELSE 0 END, json_extract(value, '$.exclusionReason'), ?3 FROM json_each(?2)`;
+  const manualItemCatalogInsertSql = `INSERT INTO store_transfer_batch_product_catalog (batch_id, sku, product_name, hq_available, hq_reserve, hq_releasable, auto_exclusions, created_at)
+    SELECT ?1, json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.hqAvailable'), json_extract(value, '$.hqReserve'), json_extract(value, '$.hqReleasable'), json_extract(value, '$.autoExclusions'), ?3 FROM json_each(?2)`;
   const batchInsert = collaborationId
     ? env.DB.prepare("INSERT INTO store_transfer_batches (id, week_key, proposal_date, response_due_at, lock_at, status, store_codes, item_count, suggested_quantity, approved_quantity, arrival_schedule, source_collaboration_id, created_at, created_by, updated_at, updated_by) SELECT ?, ?, ?, ?, ?, 'open', ?, ?, ?, 0, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM store_transfer_collaboration_drafts WHERE id = ? AND status = 'draft' AND revision = ? AND removed_at IS NULL)")
       .bind(id, weekKey, proposalDate, responseDueAt, lockAt, JSON.stringify(stores), normalized.length, normalized.reduce((sum, item) => sum + item.suggested, 0), arrivalSchedule, collaborationId, now, who.email, now, who.email, collaborationId, collaborationRevision)
@@ -859,7 +864,7 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
   const existing = { results: allExisting.results.filter((row) => String(row.store_code) === storeCode) };
   const manualFactsResult = await env.DB.prepare("SELECT * FROM store_transfer_manual_item_facts WHERE batch_id = ? AND store_code = ?").bind(batchId, storeCode).all<Record<string, unknown>>();
   const manualFacts = new Map(manualFactsResult.results.map((row) => [String(row.sku), row]));
-  const catalogResult = await env.DB.prepare("SELECT sku, product_name, hq_available, hq_reserve, hq_releasable FROM store_transfer_batch_product_catalog WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
+  const catalogResult = await env.DB.prepare("SELECT sku, product_name, hq_available, hq_reserve, hq_releasable, auto_exclusions FROM store_transfer_batch_product_catalog WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
   const manualCatalog = new Map(catalogResult.results.map((row) => [String(row.sku), row]));
   const schedule = parseJson(batch.arrival_schedule);
   const currentArrivalDate = String((schedule[storeCode] as Record<string, unknown> | undefined)?.currentArrivalDate || batch.proposal_date);
@@ -895,15 +900,18 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
     const original = suggested.get(`${sku}\u0000${type}`);
     if (!original) {
       const catalog = manualCatalog.get(sku);
-      const fact = manualFacts.get(sku) || (catalog ? { product_name: catalog.product_name, calculation_date: currentArrivalDate, base_quantity: 0, display_gap: 0, daily_usage: 0, system_projection: "近期無現場銷售", system_reason: "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", hq_available: catalog.hq_available, hq_reserve: catalog.hq_reserve, hq_releasable: catalog.hq_releasable } : null);
+      const catalogExclusionReason = catalog ? String(parseJson(catalog.auto_exclusions)[storeCode] || "") : "";
+      const fact = manualFacts.get(sku) || (catalog ? { product_name: catalog.product_name, calculation_date: currentArrivalDate, base_quantity: 0, display_gap: 0, daily_usage: 0, system_projection: "近期無現場銷售", system_reason: catalogExclusionReason || "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", hq_available: catalog.hq_available, hq_reserve: catalog.hq_reserve, hq_releasable: catalog.hq_releasable, auto_excluded: catalogExclusionReason ? 1 : 0, exclusion_reason: catalogExclusionReason } : null);
       if (!fact) throw new RequestValidationError(`${sku}缺少本批次的庫存與銷售推估基準，無法人工新增。`);
       const productName = text(fact.product_name, "人工新增品名");
       if (confirmed === 0) throw new RequestValidationError(`${sku}為人工新增品項，確認量須大於0。`);
       if (!reason) throw new RequestValidationError(`${sku}為人工新增品項，請填寫新增原因。`);
       if (fact.hq_releasable != null) supplyCeilingBySku.set(sku, Number(fact.hq_releasable));
       addedCount += 1;
-      const snapshot = JSON.stringify({ hqAvailable: Number(fact.hq_available || 0), hqReserve: Number(fact.hq_reserve || 0), hqReleasable: Number(fact.hq_releasable || 0), hqSupplyCeiling: Number(fact.hq_releasable || 0) });
-      return env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, store_confirmed_quantity, store_reason, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, decision_snapshot, updated_at, updated_by) VALUES (?, ?, ?, ?, 0, ?, ?, '門市人工新增；沿用批次建立時的庫存與近42天銷售基準', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(batchId, storeCode, sku, productName, confirmed, reason, type, fact.calculation_date, fact.base_quantity, fact.display_gap, fact.daily_usage, fact.system_projection, String(fact.system_reason || ""), snapshot, now, who.email);
+      const exclusionReason = String(fact.exclusion_reason || "");
+      const snapshot = JSON.stringify({ hqAvailable: Number(fact.hq_available || 0), hqReserve: Number(fact.hq_reserve || 0), hqReleasable: Number(fact.hq_releasable || 0), hqSupplyCeiling: Number(fact.hq_releasable || 0), autoExcluded: Number(fact.auto_excluded || 0) === 1, exclusionReason });
+      const ruleSummary = exclusionReason ? `門市人工新增（原自動排除：${exclusionReason}）` : "門市人工新增；沿用批次建立時的庫存與近42天銷售基準";
+      return env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, store_confirmed_quantity, store_reason, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, decision_snapshot, updated_at, updated_by) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(batchId, storeCode, sku, productName, confirmed, reason, ruleSummary, type, fact.calculation_date, fact.base_quantity, fact.display_gap, fact.daily_usage, fact.system_projection, String(fact.system_reason || ""), snapshot, now, who.email);
     }
     if (Object.prototype.hasOwnProperty.call(original.snapshot, "hqSupplyCeiling")) supplyCeilingBySku.set(sku, Math.max(supplyCeilingBySku.get(sku) || 0, Number(original.snapshot.hqSupplyCeiling || 0)));
     if ((confirmed !== original.suggested || original.manual) && !reason) throw new RequestValidationError(`${sku}的門市確認量與系統建議不同，請填寫人工調整原因。`);
@@ -1010,7 +1018,7 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   const correctionStoreCodes = new Set(correctionRows.results.map((row) => String(row.store_code)));
   const manualFactsResult = await env.DB.prepare("SELECT * FROM store_transfer_manual_item_facts WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
   const manualFacts = new Map(manualFactsResult.results.map((row) => [`${row.store_code}\u0000${row.sku}`, row]));
-  const catalogResult = await env.DB.prepare("SELECT sku, product_name, hq_available, hq_reserve, hq_releasable FROM store_transfer_batch_product_catalog WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
+  const catalogResult = await env.DB.prepare("SELECT sku, product_name, hq_available, hq_reserve, hq_releasable, auto_exclusions FROM store_transfer_batch_product_catalog WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
   const manualCatalog = new Map(catalogResult.results.map((row) => [String(row.sku), row]));
   const schedule = parseJson(batch.arrival_schedule);
   if (input.items.length < existing.results.length) throw new RequestValidationError("總部核准明細不完整；移除品項請使用移除按鈕，系統會保留稽核紀錄。", 409);
@@ -1040,15 +1048,18 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
       if (correctionRows.results.length && !correctionStoreCodes.has(storeCode)) throw new RequestValidationError(`更正期間只能修改指定門市；${storeCode}不可新增品項。`, 409);
       const currentArrivalDate = String(((schedule[storeCode] as Record<string, unknown> | undefined)?.currentArrivalDate) || batch.proposal_date);
       const catalog = manualCatalog.get(sku);
-      const fact = manualFacts.get(`${storeCode}\u0000${sku}`) || (catalog ? { product_name: catalog.product_name, calculation_date: currentArrivalDate, base_quantity: 0, display_gap: 0, daily_usage: 0, system_projection: "近期無現場銷售", system_reason: "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", hq_available: catalog.hq_available, hq_reserve: catalog.hq_reserve, hq_releasable: catalog.hq_releasable } : null);
+      const catalogExclusionReason = catalog ? String(parseJson(catalog.auto_exclusions)[storeCode] || "") : "";
+      const fact = manualFacts.get(`${storeCode}\u0000${sku}`) || (catalog ? { product_name: catalog.product_name, calculation_date: currentArrivalDate, base_quantity: 0, display_gap: 0, daily_usage: 0, system_projection: "近期無現場銷售", system_reason: catalogExclusionReason || "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", hq_available: catalog.hq_available, hq_reserve: catalog.hq_reserve, hq_releasable: catalog.hq_releasable, auto_excluded: catalogExclusionReason ? 1 : 0, exclusion_reason: catalogExclusionReason } : null);
       if (!fact) throw new RequestValidationError(`${storeCode}／${sku}缺少本批次的庫存與銷售推估基準，無法人工新增。`);
       const productName = text(fact.product_name, "人工新增品名");
       if (approved === 0) throw new RequestValidationError(`${storeCode}／${sku}為人工新增品項，核准量須大於0。`);
       if (!reason) throw new RequestValidationError(`${storeCode}／${sku}為人工新增品項，請填寫新增原因。`);
       if (fact.hq_releasable != null) supplyCeilingBySku.set(sku, Number(fact.hq_releasable));
       addedCount += 1;
-      const snapshot = JSON.stringify({ hqAvailable: Number(fact.hq_available || 0), hqReserve: Number(fact.hq_reserve || 0), hqReleasable: Number(fact.hq_releasable || 0), hqSupplyCeiling: Number(fact.hq_releasable || 0) });
-      return env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, store_confirmed_quantity, store_reason, hq_approved_quantity, hq_reason, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, decision_snapshot, updated_at, updated_by) VALUES (?, ?, ?, ?, 0, 0, '', ?, ?, '總部人工新增；沿用批次建立時的庫存與近42天銷售基準', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(batchId, storeCode, sku, productName, approved, reason, type, fact.calculation_date, fact.base_quantity, fact.display_gap, fact.daily_usage, fact.system_projection, String(fact.system_reason || ""), snapshot, now, who.email);
+      const exclusionReason = String(fact.exclusion_reason || "");
+      const snapshot = JSON.stringify({ hqAvailable: Number(fact.hq_available || 0), hqReserve: Number(fact.hq_reserve || 0), hqReleasable: Number(fact.hq_releasable || 0), hqSupplyCeiling: Number(fact.hq_releasable || 0), autoExcluded: Number(fact.auto_excluded || 0) === 1, exclusionReason });
+      const ruleSummary = exclusionReason ? `總部人工新增（原自動排除：${exclusionReason}）` : "總部人工新增；沿用批次建立時的庫存與近42天銷售基準";
+      return env.DB.prepare("INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, store_confirmed_quantity, store_reason, hq_approved_quantity, hq_reason, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, decision_snapshot, updated_at, updated_by) VALUES (?, ?, ?, ?, 0, 0, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(batchId, storeCode, sku, productName, approved, reason, ruleSummary, type, fact.calculation_date, fact.base_quantity, fact.display_gap, fact.daily_usage, fact.system_projection, String(fact.system_reason || ""), snapshot, now, who.email);
     }
     if (correctionRows.results.length && !correctionStoreCodes.has(storeCode) && (approved !== original.previousApproved || reason !== original.previousReason)) {
       throw new RequestValidationError(`更正期間只能修改指定門市；${storeCode}的原核准內容不可變更。`, 409);

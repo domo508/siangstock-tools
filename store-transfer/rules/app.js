@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const APP_VERSION = "20261014-transfer-applicability-r1";
+  const APP_VERSION = "20261015-transfer-applicability-r2";
   const GOOGLE_READ_SCOPE = "openid email https://www.googleapis.com/auth/drive.readonly";
   const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   const STORE_ORDER = ["R00", "R01", "R03", "R06", "R07", "R10"];
@@ -189,13 +189,34 @@
 
   function renderRules() {
     const hardRows = state.exclusions.map((item, index) => ({ kind: "hard", index, enabled: item.enabled !== false, condition: `${item.sku}<span class="rule-kind">${escapeHtml(item.productName)}</span>`, action: "完全排除周調撥", stores: "全部門市", schedule: "長期生效", priority: "固定最高", reason: "ERP品號硬性排除" }));
-    const normalRows = state.rules.map((item, index) => ({ kind: "rule", index, enabled: item.enabled !== false, condition: item.matchType === "sku" ? `${escapeHtml(item.sku)}<span class="rule-kind">${escapeHtml(item.productName)}</span>` : `${escapeHtml((item.keywords || []).join("、"))}<span class="rule-kind">品名關鍵字・${item.keywordMode === "all" ? "全部符合" : "任一符合"}</span>`, action: { exclude: "完全排除周調撥", include_period: "只在生效期間納入", allow: "允許周調撥" }[item.action] || item.action, stores: item.storeScope === "selected" ? (item.stores || []).join("、") : "全部門市", schedule: scheduleLabel(item), priority: item.matchType === "sku" ? `品號・${item.priority}` : `關鍵字・${item.priority}`, reason: `${item.reasonType}${item.reasonNote ? `：${item.reasonNote}` : ""}` }));
+    const normalRows = state.rules.map((item, index) => ({ kind: "rule", index, item, enabled: item.enabled !== false, condition: item.matchType === "sku" ? `${escapeHtml(item.sku)}<span class="rule-kind">${escapeHtml(item.productName)}</span>` : `${escapeHtml((item.keywords || []).join("、"))}<span class="rule-kind">品名關鍵字・${item.keywordMode === "all" ? "全部符合" : "任一符合"}</span>`, action: { exclude: "完全排除周調撥", include_period: "只在生效期間納入", allow: "允許周調撥" }[item.action] || item.action, stores: item.storeScope === "selected" ? (item.stores || []).join("、") : "全部門市", schedule: scheduleLabel(item), priority: item.matchType === "sku" ? `品號・${item.priority}` : `關鍵字・${item.priority}`, reason: `${item.reasonType}${item.reasonNote ? `：${item.reasonNote}` : ""}` }));
     const rows = [...hardRows, ...normalRows];
-    $("rule-rows").innerHTML = rows.map((row) => `<tr><td>${row.enabled ? "啟用" : "暫停"}</td><td><strong>${row.condition}</strong></td><td>${escapeHtml(row.action)}</td><td>${escapeHtml(row.stores)}</td><td>${escapeHtml(row.schedule)}</td><td class="${row.kind === "hard" ? "hard-priority" : ""}">${escapeHtml(row.priority)}</td><td>${escapeHtml(row.reason)}</td><td><span class="table-actions"><button class="table-action" type="button" data-toggle-kind="${row.kind}" data-index="${row.index}">${row.enabled ? "暫停" : "啟用"}</button><button class="table-action danger" type="button" data-delete-kind="${row.kind}" data-index="${row.index}">刪除</button></span></td></tr>`).join("");
+    $("rule-rows").innerHTML = rows.map((row) => {
+      const previewButton = row.item?.matchType === "keyword" ? `<button class="table-action" type="button" data-preview-rule="${row.index}" aria-expanded="false">查看命中品號</button>` : "";
+      const main = `<tr><td>${row.enabled ? "啟用" : "暫停"}</td><td><strong>${row.condition}</strong></td><td>${escapeHtml(row.action)}</td><td>${escapeHtml(row.stores)}</td><td>${escapeHtml(row.schedule)}</td><td class="${row.kind === "hard" ? "hard-priority" : ""}">${escapeHtml(row.priority)}</td><td>${escapeHtml(row.reason)}</td><td><span class="table-actions">${previewButton}<button class="table-action" type="button" data-toggle-kind="${row.kind}" data-index="${row.index}">${row.enabled ? "暫停" : "啟用"}</button><button class="table-action danger" type="button" data-delete-kind="${row.kind}" data-index="${row.index}">刪除</button></span></td></tr>`;
+      return row.item?.matchType === "keyword" ? `${main}<tr class="saved-keyword-preview" data-preview-row="${row.index}" hidden><td colspan="8"><div data-preview-content>尚未載入命中品號。</div></td></tr>` : main;
+    }).join("");
     $("rule-empty").hidden = rows.length > 0; $("rule-count").textContent = `共${rows.length}筆；硬性排除${hardRows.length}筆`;
   }
 
+  async function toggleSavedKeywordPreview(button) {
+    const index = Number(button.dataset.previewRule); const rule = state.rules[index];
+    const row = $("rule-rows").querySelector(`[data-preview-row="${index}"]`); if (!row || !rule) return;
+    if (!row.hidden) { row.hidden = true; button.textContent = "查看命中品號"; button.setAttribute("aria-expanded", "false"); return; }
+    row.hidden = false; button.textContent = "收合命中品號"; button.setAttribute("aria-expanded", "true");
+    const content = row.querySelector("[data-preview-content]");
+    if (content.dataset.loaded === "true") return;
+    content.textContent = "正在讀取最新商品主檔並比對…";
+    try {
+      const values = (rule.keywords || []).map((value) => String(value).normalize("NFKC").toLowerCase()).filter(Boolean);
+      const matches = [...(await loadLatestProductMaster()).values()].filter((product) => { const name = String(product.name || "").normalize("NFKC").toLowerCase(); return rule.keywordMode === "all" ? values.every((value) => name.includes(value)) : values.some((value) => name.includes(value)); }).sort((left, right) => String(left.sku).localeCompare(String(right.sku)));
+      content.innerHTML = `<p><strong>最新版商品主檔目前命中 ${matches.length} 個ERP品號</strong>；正式產生批次時仍會依當時最新版主檔重新判斷。</p><div class="saved-keyword-preview-scroll"><table><thead><tr><th>ERP品號</th><th>品名</th></tr></thead><tbody>${matches.map((product) => `<tr><td><strong>${escapeHtml(product.sku)}</strong></td><td>${escapeHtml(product.name)}</td></tr>`).join("") || '<tr><td colspan="2">目前沒有命中品項。</td></tr>'}</tbody></table></div>`;
+      content.dataset.loaded = "true";
+    } catch (error) { content.textContent = `無法載入命中品號：${error.message}`; }
+  }
+
   function ruleListAction(event) {
+    const previewButton = event.target.closest("button[data-preview-rule]"); if (previewButton) { toggleSavedKeywordPreview(previewButton); return; }
     const button = event.target.closest("button[data-index]"); if (!button) return;
     const collection = button.dataset.toggleKind === "hard" || button.dataset.deleteKind === "hard" ? state.exclusions : state.rules; const index = Number(button.dataset.index);
     if (button.dataset.toggleKind) collection[index].enabled = collection[index].enabled === false;

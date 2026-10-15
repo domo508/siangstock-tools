@@ -147,6 +147,10 @@ html, body { max-width: 100%; overflow-x: clip; }
 .risk-label.safe { color: #2f725b; background: #eaf5ef; }
 .risk-label.warn { color: #8a3e32; background: #faeae6; }
 .manual-item-badge { display: block; width: fit-content; margin-top: .3rem; padding: .18rem .42rem; border-radius: 999px; color: #176b87; background: #e7f4f6; font-size: .72rem; font-weight: 800; white-space: nowrap; }
+.manual-item-badge.warn { color: #714b00; background: #ffe9a8; }
+.manual-excluded-item,
+.workflow-table tr:has(.manual-item-badge.warn) { background: #fff9df; }
+.workflow-table tr:has(.manual-item-badge.warn) td { border-color: #ead797; }
 .remove-item-button { color: #8a3e32; border-color: #ddb9b0; background: #fff8f6; white-space: nowrap; }
 .item-marked-removed { background: #fff7f5; }
 .item-marked-removed td { color: #7f6d69; }

@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261014-store-transfer-r14";
+  const APP_VERSION = "20261015-store-transfer-r15";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -256,13 +256,14 @@
       calculationDate: row.calculationDate, baseQuantity: row.baseQuantity,
       displayGap: row.displayGap, dailyUsage: row.dailyUsage, systemProjection: row.systemProjection,
       systemReason: row.systemReason, hqAvailable: row.hqAvailable,
-      hqReserve: row.hqReserve, hqReleasable: row.hqReleasable
+      hqReserve: row.hqReserve, hqReleasable: row.hqReleasable,
+      autoExcluded: Boolean(row.autoExcluded), exclusionReason: row.exclusionReason || ""
     }));
   }
 
   function compactManualItemCatalog(rows) {
     const bySku = new Map();
-    (rows || []).forEach((row) => { if (!bySku.has(row.sku)) bySku.set(row.sku, { sku: row.sku, productName: row.productName, hqAvailable: row.hqAvailable, hqReserve: row.hqReserve, hqReleasable: row.hqReleasable }); });
+    (rows || []).forEach((row) => { if (!bySku.has(row.sku)) bySku.set(row.sku, { sku: row.sku, productName: row.productName, hqAvailable: row.hqAvailable, hqReserve: row.hqReserve, hqReleasable: row.hqReleasable, autoExclusions: row.autoExclusions || {} }); });
     return [...bySku.values()];
   }
 
@@ -945,7 +946,8 @@
       const id = detailId("batch", item);
       const snapshot = savedDecisionSnapshot(item);
       const hasSnapshot = Object.keys(snapshot).length > 0;
-      const identity = `${itemIdentity(item)}${manual ? '<span class="manual-item-badge">人工新增</span>' : ""}`;
+      const autoExcluded = manual && snapshot.autoExcluded === true;
+      const identity = `${itemIdentity(item)}${manual ? `<span class="manual-item-badge${autoExcluded ? " warn" : ""}">${autoExcluded ? "自動排除・人工申請" : "人工新增"}</span>` : ""}`;
       const systemCell = `<strong class="decision-quantity">${item.suggested_quantity}</strong><small>系統建議後可售至：${escapeHtml(item.system_projection || rowProjection(projectionItem, item.suggested_quantity))}</small>`;
       const confirmedCell = `<input data-confirmed type="number" min="0" step="${step}" value="${confirmed}" ${editable ? "" : "disabled"}><small data-confirmed-projection>申請後預估可售至：${escapeHtml(rowProjection(projectionItem, confirmed))}</small>`;
       const approvedCell = `<input data-approved type="number" min="0" step="${step}" value="${approved}" ${rowHqEditable ? "" : "disabled"}><small data-approved-projection>核准後預估可售至：${escapeHtml(rowProjection(projectionItem, approved))}</small>`;
@@ -1072,9 +1074,9 @@
       const fact = await api(`/batches/${encodeURIComponent(state.activeBatch.batch.id)}/manual-item-fact?store=${encodeURIComponent(storeCode)}&sku=${encodeURIComponent(sku)}`);
       if (skuInput.value !== sku || (state.config.role !== "store" && detail.querySelector("[data-manual-store]").value !== storeCode)) return null;
       nameInput.value = fact.productName;
-      Object.assign(skuInput.dataset, { lookupSku: fact.sku, lookupStore: fact.storeCode, calculationDate: fact.calculationDate, base: String(fact.baseQuantity), daily: String(fact.dailyUsage), displayGap: String(fact.displayGap), systemProjection: fact.systemProjection || "", systemReason: fact.systemReason || "", hqAvailable: String(fact.hqAvailable || 0), hqReserve: String(fact.hqReserve || 0), hqReleasable: String(fact.hqReleasable || 0), supplyKnown: String(fact.supplyKnown === true), otherAllocated: String(fact.otherAllocated || 0) });
+      Object.assign(skuInput.dataset, { lookupSku: fact.sku, lookupStore: fact.storeCode, calculationDate: fact.calculationDate, base: String(fact.baseQuantity), daily: String(fact.dailyUsage), displayGap: String(fact.displayGap), systemProjection: fact.systemProjection || "", systemReason: fact.systemReason || "", autoExcluded: String(fact.autoExcluded === true), exclusionReason: fact.exclusionReason || "", hqAvailable: String(fact.hqAvailable || 0), hqReserve: String(fact.hqReserve || 0), hqReleasable: String(fact.hqReleasable || 0), supplyKnown: String(fact.supplyKnown === true), otherAllocated: String(fact.otherAllocated || 0) });
       systemReasonOutput.textContent = state.config.role === "store" ? storeFacingSystemReason(fact.systemReason, 0) : fact.systemReason || "本批次未保存系統未建議原因";
-      status.textContent = `${fact.storeCode}／${fact.sku} 已帶入批次建立時的庫存、近42天銷售及總倉可供應基準。`;
+      status.textContent = fact.autoExcluded ? `${fact.storeCode}／${fact.sku} 原屬自動排除品；仍可人工申請，送出後會以黃色標示供總部覆核。` : `${fact.storeCode}／${fact.sku} 已帶入批次建立時的庫存、近42天銷售及總倉可供應基準。`;
       updateManualFormProjection();
       return fact;
     } catch (error) {
@@ -1113,8 +1115,10 @@
     const projectionItem = { item_type: type, calculation_date: skuInput.dataset.calculationDate, base_quantity: Number(skuInput.dataset.base || 0), daily_usage: Number(skuInput.dataset.daily || 0), display_gap: Number(skuInput.dataset.displayGap || 0), system_projection: skuInput.dataset.systemProjection || "", manual: true };
     const internalSystemReason = skuInput.dataset.systemReason || "本批次未保存系統未建議原因";
     const systemReason = state.config.role === "store" ? storeFacingSystemReason(internalSystemReason, 0) : internalSystemReason;
+    const autoExcluded = skuInput.dataset.autoExcluded === "true";
+    row.classList.toggle("manual-excluded-item", autoExcluded);
     row.dataset.storeRow = ""; row.dataset.store = storeCode; row.dataset.sku = sku; row.dataset.suggested = "0"; row.dataset.reviewBase = "0"; row.dataset.supplyKnown = skuInput.dataset.supplyKnown || "false"; row.dataset.supplyCeiling = skuInput.dataset.hqReleasable || "0"; row.dataset.otherAllocated = skuInput.dataset.otherAllocated || "0"; row.dataset.allocationRow = ""; row.dataset.allocationQuantity = String(quantity); row.dataset.productName = productName; row.dataset.itemType = type; row.dataset.calculationDate = projectionItem.calculation_date; row.dataset.base = String(projectionItem.base_quantity); row.dataset.daily = String(projectionItem.daily_usage); row.dataset.displayGap = String(projectionItem.display_gap); row.dataset.systemProjection = projectionItem.system_projection; row.dataset.systemReason = systemReason; row.dataset.manual = "true";
-    row.innerHTML = `<td>${storeCode}</td><td>${escapeHtml(sku)}<span class="manual-item-badge">尚未儲存</span></td><td>${escapeHtml(productName)}</td><td>${labels[type]}</td><td>0</td><td class="decision-reason-cell">${escapeHtml(systemReason)}</td><td>${state.config.role === "store" ? `<input data-confirmed type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">` : `<input data-confirmed type="number" value="0" disabled><input data-approved type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">`}</td><td data-${state.config.role === "store" ? "confirmed" : "approved"}-projection>${state.config.role === "store" ? "申請後" : "核准後"}預估可售至：${escapeHtml(rowProjection(projectionItem, quantity))}</td><td>${state.config.role === "store" ? `<input data-reason class="reason-input" value="${escapeHtml(reason)}">` : `<input data-reason type="hidden" value=""><input data-hq-reason class="reason-input" value="${escapeHtml(reason)}">`}</td><td><button class="secondary-button compact remove-item-button" type="button" data-remove-unsaved>取消新增</button></td>`;
+    row.innerHTML = `<td>${storeCode}</td><td>${escapeHtml(sku)}<span class="manual-item-badge${autoExcluded ? " warn" : ""}">${autoExcluded ? "自動排除・人工申請" : "尚未儲存"}</span></td><td>${escapeHtml(productName)}</td><td>${labels[type]}</td><td>0</td><td class="decision-reason-cell">${escapeHtml(systemReason)}</td><td>${state.config.role === "store" ? `<input data-confirmed type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">` : `<input data-confirmed type="number" value="0" disabled><input data-approved type="number" min="1" step="${type === "consumable" ? 100 : 1}" value="${quantity}">`}</td><td data-${state.config.role === "store" ? "confirmed" : "approved"}-projection>${state.config.role === "store" ? "申請後" : "核准後"}預估可售至：${escapeHtml(rowProjection(projectionItem, quantity))}</td><td>${state.config.role === "store" ? `<input data-reason class="reason-input" value="${escapeHtml(reason)}">` : `<input data-reason type="hidden" value=""><input data-hq-reason class="reason-input" value="${escapeHtml(reason)}">`}</td><td><button class="secondary-button compact remove-item-button" type="button" data-remove-unsaved>取消新增</button></td>`;
     const warning = document.createElement("tr"); warning.className = "decision-warning-row"; warning.dataset.quantityWarning = ""; warning.hidden = true; warning.innerHTML = '<td colspan="10"></td>';
     detail.querySelector("[data-manual-rows]").append(row, warning);
     applyResultFilters("batch");
@@ -1185,7 +1189,7 @@
     const scheduleText = Object.values(schedule).map((row) => `${row.storeCode} 本批${row.currentArrivalDate}／下一輪${row.nextArrivalDate}`).join("；");
     const activeCorrection = p.storeStatuses.find((row) => row.correction_mode);
     const correctionNotice = activeCorrection ? `<p class="result-alert warn"><strong>${activeCorrection.correction_mode === "store" ? "已退回門市修改" : "總部更正中"}：</strong>${escapeHtml(activeCorrection.store_code)}・第${escapeHtml(activeCorrection.correction_revision)}版・${escapeHtml(activeCorrection.correction_reason || "未填原因")}。原核准內容已保留，重新核准後才可產生ERP。</p>` : "";
-    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${correctionNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${skuFilterBar("batch", state.batchSku)}${statusOverview(p)}${approvedCorrectionPanel(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
+    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${correctionNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${skuFilterBar("batch", state.batchSku)}${approvedCorrectionPanel(p)}${statusOverview(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
     $("batch-dialog").showModal();
     applyStoreFilter("batch", state.batchStore);
     refreshDialogQuantityWarnings();

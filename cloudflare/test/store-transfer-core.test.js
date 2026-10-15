@@ -155,7 +155,7 @@ describe("待發貨與A/B測試比對", () => {
     }
   });
 
-  it("客製品號內含SA、SB、OA或OB時固定排除周調撥與人工新增", () => {
+  it("客製品號內含SA、SB、OA或OB時固定排除自動周調撥，但保留人工新增入口與警示", () => {
     for (const sku of ["SA42002", "XSA42002", "XSB53001", "XOA41361", "XOB00001"]) {
       const input = transferModeInput("formal");
       const original = input.master.bySku.get("A102061");
@@ -168,11 +168,28 @@ describe("待發貨與A/B測試比對", () => {
       expect(result.rows).toHaveLength(0);
       expect(result.shortageRows).toHaveLength(0);
       expect(result.comparisonFacts).toHaveLength(0);
-      expect(result.manualItemFacts).toHaveLength(0);
-      expect(result.manualItemCatalog).toHaveLength(0);
+      expect(result.manualItemFacts[0]).toMatchObject({ autoExcluded: true, exclusionReason: expect.stringContaining("客製品號") });
+      expect(result.manualItemCatalog[0].autoExclusions.R00).toContain("客製品號");
       expect(result.pendingTransferRows).toHaveLength(1);
     }
     expect(core.isCustomTransferSku("A102061")).toBe(false);
+  });
+
+  it("O與OC開頭組合號不產生自動建議，但可由人工申請並保留原因", () => {
+    for (const sku of ["O10001", "OC20002"]) {
+      const input = transferModeInput("formal");
+      const original = input.master.bySku.get("A102061");
+      input.master.bySku = new Map([[sku, { ...original, sku, name: `組合測試 ${sku}` }]]);
+      input.inventory.records = input.inventory.records.map((row) => ({ ...row, sku }));
+      input.transfer.records = input.transfer.records.map((row) => ({ ...row, sku }));
+      input.sales[0].records = input.sales[0].records.map((row) => ({ ...row, sku }));
+      const result = core.buildSuggestions(input);
+      expect(core.isCombinationTransferSku(sku)).toBe(true);
+      expect(result.rows).toHaveLength(0);
+      expect(result.shortageRows).toHaveLength(0);
+      expect(result.manualItemCatalog[0].autoExclusions.R00).toContain("組合號");
+    }
+    expect(core.isCombinationTransferSku("A102061")).toBe(false);
   });
 
   it("周調撥適用規則不能重新納入客製品號", () => {
