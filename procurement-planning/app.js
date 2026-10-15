@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261014-ledger-history-r1";
+  const APP_VERSION = "20261015-ledger-timepoint-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -1261,11 +1261,17 @@
     [get(".stage-two"), get(".stage-three"), elements.resultPanel, elements.activityCard, get("#budget-details")].filter(Boolean).forEach((section) => { section.inert = historical; });
     elements.orderDate.disabled = historical;
   }
-  function historyItem(title, detail) {
+  function historyErpReferences(row) {
+    const references = [...new Set([...(Array.isArray(row?.erp_references) ? row.erp_references : []), row?.erp_reference].map((value) => String(value || "").trim()).filter(Boolean))];
+    return references;
+  }
+  function historyItem(title, detail, row) {
     const item = document.createElement("article"); item.className = "history-item";
     const heading = document.createElement("strong"); heading.textContent = title;
+    const erp = document.createElement("span"); erp.className = `history-erp ${historyErpReferences(row).length ? "has-reference" : "is-pending"}`;
+    erp.textContent = historyErpReferences(row).length ? `ERP：${historyErpReferences(row).join("、")}` : "ERP：待填ERP";
     const meta = document.createElement("small"); meta.textContent = detail;
-    item.append(heading, meta); return item;
+    item.append(heading, erp, meta); return item;
   }
   function renderHistory() {
     const history = state.history;
@@ -1274,19 +1280,24 @@
     const payments = history.recognized?.payments || [];
     const receipts = history.recognized?.receipts || [];
     const batches = history.snapshot?.batches || [];
-    const openOrders = history.live?.openOrders || [];
+    const currentBatchIds = new Set(batches.map((row) => row.id));
+    const openOrders = (history.live?.openOrders || []).filter((row) => !currentBatchIds.has(row.id));
     const sum = (rows, field = "amount") => rows.reduce((total, row) => total + Number(row[field] || 0), 0);
     const plan = history.snapshot?.monthPlan;
+    const pendingErpCount = batches.filter((row) => !historyErpReferences(row).length && row.status === "approved").length;
+    const openCount = batches.filter((row) => ["approved", "erp_created"].includes(row.status)).length;
+    const closedCount = batches.filter((row) => row.status === "received").length;
+    const checkpointLabel = history.purchaseCheckpoint === "mid-month" ? "月中採購" : "月初採購";
     elements.historySummary.innerHTML = `
       <div><span>當月營業額快照</span><strong>${plan ? formatCurrency(plan.forecastRevenue || 0) : "尚無快照"}</strong><small>${plan ? "保存於本次使用時點" : "此時點尚未儲存"}</small></div>
       <div><span>當月承諾認列</span><strong>${formatCurrency(sum(commitments))}</strong><small>國內100%；國外訂金30%＋實際到貨70%</small></div>
       <div><span>當月實際付款</span><strong>${formatCurrency(sum(payments))}</strong><small>${receipts.length}筆到貨異動</small></div>
       <div><span>已核准採購批次</span><strong>${formatNumber(batches.length)}筆</strong><small>${formatCurrency(sum(batches, "approved_amount"))}</small></div>`;
-    const batchNodes = batches.map((row) => historyItem(`${row.id}・${statusLabel(row.status)}`, `${(row.supplier_summary || []).join("、") || "未提供供應商"}・核准${formatCurrency(row.approved_amount)}・${(row.items || []).length}項`));
-    elements.historyBatches.replaceChildren(...(batchNodes.length ? batchNodes : [Object.assign(document.createElement("p"), { className: "history-empty", textContent: "此月份與時點尚無已保存批次。" })]));
-    const openNodes = openOrders.map((row) => historyItem(`${row.erp_reference || row.id}・${statusLabel(row.status)}`, `${(row.supplier_summary || []).join("、") || "未提供供應商"}・未認列承諾${formatCurrency(row.pending_commitment_amount)}・更新${String(row.updated_at || "").replace("T", " ").slice(0, 19)}`));
-    elements.historyOpenOrders.replaceChildren(...(openNodes.length ? openNodes : [Object.assign(document.createElement("p"), { className: "history-empty", textContent: "截至此月份沒有仍待到貨的ERP採購單。" })]));
-    elements.historyStatus.textContent = `${history.month}・${({ "month-start": "月初", "mid-month": "月中", "month-end": "月底" })[history.checkpoint] || history.checkpoint}；快照固定、未結案採購單持續更新。`;
+    const batchNodes = batches.map((row) => historyItem(`${row.id}・${statusLabel(row.status)}`, `${(row.supplier_summary || []).join("、") || "未提供供應商"}・核准${formatCurrency(row.approved_amount)}・${(row.items || []).length}項`, row));
+    elements.historyBatches.replaceChildren(...(batchNodes.length ? batchNodes : [Object.assign(document.createElement("p"), { className: "history-empty", textContent: `此月份尚無${checkpointLabel}採購單。` })]));
+    const openNodes = openOrders.map((row) => historyItem(`${row.id}・${statusLabel(row.status)}`, `${(row.supplier_summary || []).join("、") || "未提供供應商"}・未認列承諾${formatCurrency(row.pending_commitment_amount)}・更新${String(row.updated_at || "").replace("T", " ").slice(0, 19)}`, row));
+    elements.historyOpenOrders.replaceChildren(...(openNodes.length ? openNodes : [Object.assign(document.createElement("p"), { className: "history-empty", textContent: "沒有其他時點仍待填ERP或尚未到貨的採購單。" })]));
+    elements.historyStatus.textContent = `${history.month}・${checkpointLabel}${batches.length}筆：待填ERP ${pendingErpCount}筆・未結案 ${openCount}筆・已結案 ${closedCount}筆；其他時點未結案 ${openOrders.length}筆。`;
   }
   async function loadHistory() {
     if (!state.config || !elements.month.value) return;

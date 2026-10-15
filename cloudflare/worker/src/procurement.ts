@@ -1172,8 +1172,16 @@ async function procurementHistory(request: Request, env: ProcurementEnv): Promis
 
   const planRow = await env.DB.prepare("SELECT snapshot, created_at, created_by FROM procurement_month_plan_history WHERE analysis_month = ? AND checkpoint = ? ORDER BY created_at DESC, id DESC LIMIT 1").bind(requestedMonth, checkpoint).first<Record<string, unknown>>();
   const costRow = await env.DB.prepare("SELECT snapshot, created_at, created_by FROM procurement_cost_snapshot_history WHERE analysis_month = ? AND checkpoint = ? ORDER BY created_at DESC, id DESC LIMIT 1").bind(requestedMonth, checkpoint).first<Record<string, unknown>>();
-  const batchRows = await env.DB.prepare("SELECT id, analysis_month, checkpoint, workflow_type, erp_reference, supplier_summary, status, approved_amount, recognized_commitment_amount, pending_commitment_amount, created_at, created_by, approved_at, approved_by, updated_at, revision FROM procurement_batches WHERE analysis_month = ? AND checkpoint = ? ORDER BY approved_at DESC, updated_at DESC LIMIT 200").bind(requestedMonth, checkpoint).all<Record<string, unknown>>();
-  const batchIds = batchRows.results.map((row) => String(row.id));
+  const batchRows = await env.DB.prepare("SELECT id, analysis_month, checkpoint, workflow_type, erp_reference, supplier_summary, status, approved_amount, recognized_commitment_amount, pending_commitment_amount, created_at, created_by, approved_at, approved_by, updated_at, revision FROM procurement_batches WHERE analysis_month = ? ORDER BY approved_at DESC, updated_at DESC LIMIT 200").bind(requestedMonth).all<Record<string, unknown>>();
+  const midMonthBoundary = await env.DB.prepare("SELECT MIN(activated_at) activated_at FROM (SELECT created_at activated_at FROM procurement_collaboration_drafts WHERE analysis_month = ? AND checkpoint = 'mid-month' AND stage = 'analysis' AND (work_unit_label = '' OR work_unit_label = '尚未選擇審核單位') AND (parent_batch_id IS NULL OR parent_batch_id = '' OR id = parent_batch_id) UNION ALL SELECT COALESCE(approved_at, created_at) activated_at FROM procurement_batches WHERE analysis_month = ? AND checkpoint = 'mid-month')").bind(requestedMonth, requestedMonth).first<{ activated_at: string | null }>();
+  const midMonthStartedAt = String(midMonthBoundary?.activated_at || "");
+  const selectedPurchaseCheckpoint = checkpoint === "month-end" ? (midMonthStartedAt ? "mid-month" : "month-start") : checkpoint;
+  const assignedBatchRows = batchRows.results.map((row): Record<string, unknown> & { assigned_checkpoint: string } => {
+    const eventTime = String(row.approved_at || row.created_at || "");
+    const assignedCheckpoint = midMonthStartedAt && eventTime >= midMonthStartedAt ? "mid-month" : "month-start";
+    return { ...row, assigned_checkpoint: assignedCheckpoint };
+  }).filter((row) => row.assigned_checkpoint === selectedPurchaseCheckpoint);
+  const batchIds = assignedBatchRows.map((row) => String(row.id));
   const itemRows = batchIds.length
     ? await env.DB.prepare(`SELECT batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, erp_quantity, received_quantity, remaining_quantity, lifecycle_status, updated_at FROM procurement_batch_items WHERE batch_id IN (${batchIds.map(() => "?").join(",")}) ORDER BY batch_id, sku`).bind(...batchIds).all<Record<string, unknown>>()
     : { results: [] as Record<string, unknown>[] };
@@ -1186,10 +1194,28 @@ async function procurementHistory(request: Request, env: ProcurementEnv): Promis
   const paymentRows = await env.DB.prepare("SELECT batch_id, supplier, erp_reference, event_type, event_date, amount, created_at FROM procurement_payment_events WHERE payment_month = ? ORDER BY event_date, id").bind(requestedMonth).all<Record<string, unknown>>();
   const receiptRows = await env.DB.prepare("SELECT batch_id, erp_reference, sku, supplier, receipt_date, quantity_delta, unit_cost, receipt_amount, commitment_amount, payment_amount, cumulative_quantity FROM procurement_receipt_events WHERE receipt_month = ? ORDER BY receipt_date, id").bind(requestedMonth).all<Record<string, unknown>>();
   const liveOpenRows = await env.DB.prepare("SELECT id, analysis_month, checkpoint, erp_reference, supplier_summary, status, approved_amount, recognized_commitment_amount, pending_commitment_amount, updated_at FROM procurement_batches WHERE status IN ('approved', 'erp_created') AND analysis_month <= ? ORDER BY analysis_month, updated_at DESC LIMIT 200").bind(requestedMonth).all<Record<string, unknown>>();
+  const referenceBatchIds = [...new Set([...batchIds, ...liveOpenRows.results.map((row) => String(row.id))])];
+  const documentRows = referenceBatchIds.length
+    ? await env.DB.prepare(`SELECT batch_id, erp_reference FROM procurement_batch_erp_documents WHERE batch_id IN (${referenceBatchIds.map(() => "?").join(",")}) ORDER BY batch_id, erp_reference`).bind(...referenceBatchIds).all<Record<string, unknown>>()
+    : { results: [] as Record<string, unknown>[] };
+  const referencesByBatch = new Map<string, string[]>();
+  for (const row of documentRows.results) {
+    const id = String(row.batch_id);
+    const references = referencesByBatch.get(id) || [];
+    const reference = String(row.erp_reference || "").trim();
+    if (reference && !references.includes(reference)) references.push(reference);
+    referencesByBatch.set(id, references);
+  }
+  const withErpReferences = (row: Record<string, unknown>) => {
+    const references = referencesByBatch.get(String(row.id)) || [];
+    const primary = String(row.erp_reference || "").trim();
+    if (primary && !references.includes(primary)) references.unshift(primary);
+    return { ...row, erp_references: references };
+  };
   const parseSnapshot = (row: Record<string, unknown> | null) => row ? parseJsonText(String(row.snapshot || "{}")) : null;
-  const batches = batchRows.results.map((row) => ({ ...row, supplier_summary: parseJsonText(String(row.supplier_summary || "[]")) || [], items: itemsByBatch.get(String(row.id)) || [] }));
+  const batches = assignedBatchRows.map((row) => ({ ...withErpReferences(row), supplier_summary: parseJsonText(String(row.supplier_summary || "[]")) || [], items: itemsByBatch.get(String(row.id)) || [] }));
   return json({
-    month: requestedMonth, checkpoint, retentionStartMonth: earliest,
+    month: requestedMonth, checkpoint, purchaseCheckpoint: selectedPurchaseCheckpoint, midMonthStartedAt: midMonthStartedAt || null, retentionStartMonth: earliest,
     snapshot: {
       monthPlan: parseSnapshot(planRow), monthPlanCreatedAt: planRow?.created_at || null, monthPlanCreatedBy: planRow?.created_by || null,
       cost: parseSnapshot(costRow), costCreatedAt: costRow?.created_at || null, costCreatedBy: costRow?.created_by || null,
@@ -1197,7 +1223,7 @@ async function procurementHistory(request: Request, env: ProcurementEnv): Promis
     },
     recognized: { commitments: commitmentRows.results, payments: paymentRows.results, receipts: receiptRows.results },
     live: {
-      openOrders: liveOpenRows.results.map((row) => ({ ...row, supplier_summary: parseJsonText(String(row.supplier_summary || "[]")) || [] }))
+      openOrders: liveOpenRows.results.map((row) => ({ ...withErpReferences(row), supplier_summary: parseJsonText(String(row.supplier_summary || "[]")) || [] }))
     }
   });
 }

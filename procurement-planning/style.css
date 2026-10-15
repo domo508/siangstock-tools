@@ -675,10 +675,14 @@
 .history-columns { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
 .history-columns section { padding: 14px; border: 1px solid #d7e5e9; border-radius: 14px; }
 .history-columns h3 { margin: 0 0 10px; color: var(--navy); font-size: 1rem; }
+.history-section-note { margin: -4px 0 12px; color: var(--muted); font-size: .86rem; line-height: 1.5; }
 .history-list { display: grid; gap: 8px; }
 .history-item { padding: 10px 12px; border-radius: 10px; background: #f7fafb; line-height: 1.45; }
 .history-item strong, .history-item small { display: block; }
 .history-item small { margin-top: 3px; color: var(--muted); }
+.history-erp { display: inline-flex; margin-top: 6px; padding: 3px 8px; border-radius: 999px; font-size: .8rem; font-weight: 800; }
+.history-erp.has-reference { color: #245c49; background: #e7f4ed; }
+.history-erp.is-pending { color: #7b5a00; background: #fff2c9; }
 .history-empty { margin: 0; color: var(--muted); }
 body.history-readonly .stage-two, body.history-readonly .stage-three, body.history-readonly .stage-two-results, body.history-readonly #activity-demand-card, body.history-readonly #budget-details { opacity: .58; }
 .resume-draft-card {
