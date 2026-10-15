@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261015-ledger-timepoint-r1";
+  const APP_VERSION = "20261015-ledger-timepoint-r2";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -1268,8 +1268,10 @@
   function historyItem(title, detail, row) {
     const item = document.createElement("article"); item.className = "history-item";
     const heading = document.createElement("strong"); heading.textContent = title;
-    const erp = document.createElement("span"); erp.className = `history-erp ${historyErpReferences(row).length ? "has-reference" : "is-pending"}`;
-    erp.textContent = historyErpReferences(row).length ? `ERP：${historyErpReferences(row).join("、")}` : "ERP：待填ERP";
+    const references = historyErpReferences(row);
+    const revoked = row?.status === "revoked";
+    const erp = document.createElement("span"); erp.className = `history-erp ${references.length ? "has-reference" : revoked ? "is-neutral" : "is-pending"}`;
+    erp.textContent = references.length ? `ERP：${references.join("、")}` : revoked ? "ERP：不適用（已撤銷）" : "ERP：待填ERP";
     const meta = document.createElement("small"); meta.textContent = detail;
     item.append(heading, erp, meta); return item;
   }
@@ -1292,7 +1294,7 @@
       <div><span>當月營業額快照</span><strong>${plan ? formatCurrency(plan.forecastRevenue || 0) : "尚無快照"}</strong><small>${plan ? "保存於本次使用時點" : "此時點尚未儲存"}</small></div>
       <div><span>當月承諾認列</span><strong>${formatCurrency(sum(commitments))}</strong><small>國內100%；國外訂金30%＋實際到貨70%</small></div>
       <div><span>當月實際付款</span><strong>${formatCurrency(sum(payments))}</strong><small>${receipts.length}筆到貨異動</small></div>
-      <div><span>已核准採購批次</span><strong>${formatNumber(batches.length)}筆</strong><small>${formatCurrency(sum(batches, "approved_amount"))}</small></div>`;
+      <div><span>該時點採購批次</span><strong>${formatNumber(batches.length)}筆</strong><small>${formatCurrency(sum(batches.filter((row) => row.status !== "revoked"), "approved_amount"))}（不含已撤銷）</small></div>`;
     const batchNodes = batches.map((row) => historyItem(`${row.id}・${statusLabel(row.status)}`, `${(row.supplier_summary || []).join("、") || "未提供供應商"}・核准${formatCurrency(row.approved_amount)}・${(row.items || []).length}項`, row));
     elements.historyBatches.replaceChildren(...(batchNodes.length ? batchNodes : [Object.assign(document.createElement("p"), { className: "history-empty", textContent: `此月份尚無${checkpointLabel}採購單。` })]));
     const openNodes = openOrders.map((row) => historyItem(`${row.id}・${statusLabel(row.status)}`, `${(row.supplier_summary || []).join("、") || "未提供供應商"}・未認列承諾${formatCurrency(row.pending_commitment_amount)}・更新${String(row.updated_at || "").replace("T", " ").slice(0, 19)}`, row));

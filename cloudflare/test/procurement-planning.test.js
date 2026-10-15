@@ -2053,15 +2053,15 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('style.css?v=20261015-ledger-timepoint-r1');
-    expect(toolHtml).toContain('core.js?v=20261015-ledger-timepoint-r1');
+    expect(toolHtml).toContain('style.css?v=20261015-ledger-timepoint-r2');
+    expect(toolHtml).toContain('core.js?v=20261015-ledger-timepoint-r2');
     expect(toolHtml).toContain('google-sources.js?v=20261006-notification-audit-r2');
-    expect(toolHtml).toContain('app.js?v=20261015-ledger-timepoint-r1');
+    expect(toolHtml).toContain('app.js?v=20261015-ledger-timepoint-r2');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261015-ledger-timepoint-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261015-ledger-timepoint-r2");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2145,7 +2145,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261015-ledger-timepoint-r1");
+    expect(toolHtml).toContain("app.js?v=20261015-ledger-timepoint-r2");
     expect(toolHtml).toContain('id="activity-demand-card"');
     expect(toolHtml).toContain("活動期間預計營業額");
     expect(toolHtml).toContain("需求加乘倍數");
@@ -2186,6 +2186,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).not.toContain('<details id="history-panel" class="history-panel" open>');
     expect(toolApp).toContain('function applyHistoryMode()');
     expect(toolApp).toContain('ERP：待填ERP');
+    expect(toolApp).toContain('ERP：不適用（已撤銷）');
     expect(toolApp).toContain('!currentBatchIds.has(row.id)');
     expect(procurementWorker).toContain('assigned_checkpoint');
     expect(procurementWorker).toContain('procurement_batch_erp_documents');

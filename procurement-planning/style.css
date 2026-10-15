@@ -683,6 +683,7 @@
 .history-erp { display: inline-flex; margin-top: 6px; padding: 3px 8px; border-radius: 999px; font-size: .8rem; font-weight: 800; }
 .history-erp.has-reference { color: #245c49; background: #e7f4ed; }
 .history-erp.is-pending { color: #7b5a00; background: #fff2c9; }
+.history-erp.is-neutral { color: var(--muted); background: #edf2f4; }
 .history-empty { margin: 0; color: var(--muted); }
 body.history-readonly .stage-two, body.history-readonly .stage-three, body.history-readonly .stage-two-results, body.history-readonly #activity-demand-card, body.history-readonly #budget-details { opacity: .58; }
 .resume-draft-card {
