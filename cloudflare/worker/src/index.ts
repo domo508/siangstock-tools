@@ -22,6 +22,17 @@ function errorResponse(message: string, status: number): Response {
   return json({ error: message }, status);
 }
 
+function d1QuotaError(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/exceeded D1's free tier daily row write limit/i.test(message)) {
+    return "今日資料庫寫入額度已滿，暫存、送出與核准目前無法保存；請於台灣時間上午 8 點額度重置後重試，或聯絡管理者確認 Cloudflare 方案。";
+  }
+  if (/exceeded D1's free tier daily row read limit/i.test(message)) {
+    return "今日資料庫讀取額度已滿，週調撥資料目前無法載入；請於台灣時間上午 8 點額度重置後重試，或聯絡管理者確認 Cloudflare 方案。";
+  }
+  return null;
+}
+
 async function readCurrent(env: Env): Promise<{ version: number; payload: string; updated_at: string } | null> {
   return env.DB.prepare("SELECT version, payload, updated_at FROM rules_current WHERE id = 1").first();
 }
@@ -97,6 +108,8 @@ export default {
     } catch (error) {
       if (error instanceof Response) return new Response(error.body, { status: error.status, headers: API_HEADERS });
       if (error instanceof RequestValidationError) return errorResponse(error.message, error.status);
+      const quotaMessage = d1QuotaError(error);
+      if (quotaMessage) return errorResponse(quotaMessage, 503);
       console.error("Unhandled Worker error", error);
       return errorResponse("規則服務暫時無法使用。", 503);
     }

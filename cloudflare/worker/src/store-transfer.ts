@@ -860,7 +860,7 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
   if (who.role === "store" && String(storeState.status) === "submitted") throw new RequestValidationError("已送出總部覆核；請先按撤回修改。", 409);
   const input = await readBody(request);
   if (!Array.isArray(input.items) || input.items.length > 2000) throw new RequestValidationError("確認明細格式錯誤。");
-  const allExisting = await env.DB.prepare("SELECT store_code, sku, item_type, suggested_quantity, store_confirmed_quantity, rule_summary, decision_snapshot FROM store_transfer_items WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
+  const allExisting = await env.DB.prepare("SELECT store_code, sku, item_type, suggested_quantity, store_confirmed_quantity, store_reason, rule_summary, decision_snapshot FROM store_transfer_items WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
   const existing = { results: allExisting.results.filter((row) => String(row.store_code) === storeCode) };
   const manualFactsResult = await env.DB.prepare("SELECT * FROM store_transfer_manual_item_facts WHERE batch_id = ? AND store_code = ?").bind(batchId, storeCode).all<Record<string, unknown>>();
   const manualFacts = new Map(manualFactsResult.results.map((row) => [String(row.sku), row]));
@@ -869,7 +869,7 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
   const schedule = parseJson(batch.arrival_schedule);
   const currentArrivalDate = String((schedule[storeCode] as Record<string, unknown> | undefined)?.currentArrivalDate || batch.proposal_date);
   const suggested = new Map(existing.results.map((row) => [`${row.sku}\u0000${row.item_type}`, {
-    suggested: Number(row.suggested_quantity), current: Number(row.store_confirmed_quantity ?? row.suggested_quantity), manual: /人工新增/.test(String(row.rule_summary || "")), snapshot: parseJson(row.decision_snapshot)
+    suggested: Number(row.suggested_quantity), current: Number(row.store_confirmed_quantity ?? row.suggested_quantity), reason: String(row.store_reason || ""), manual: /人工新增/.test(String(row.rule_summary || "")), snapshot: parseJson(row.decision_snapshot)
   }]));
   if (input.items.length < existing.results.length) throw new RequestValidationError("確認明細不完整；移除品項請使用移除按鈕，系統會保留稽核紀錄。", 409);
   const now = new Date().toISOString();
@@ -919,7 +919,7 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
     if (Object.prototype.hasOwnProperty.call(original.snapshot, "hqSupplyCeiling")) supplyCeilingBySku.set(sku, Math.max(supplyCeilingBySku.get(sku) || 0, Number(original.snapshot.hqSupplyCeiling || 0)));
     if ((confirmed !== original.suggested || original.manual) && !reason) throw new RequestValidationError(`${sku}的門市確認量與系統建議不同，請填寫人工調整原因。`);
     if (original.current > 0 && confirmed === 0) removedCount += 1;
-    existingUpdates.push({ sku, type, confirmed, reason });
+    if (confirmed !== original.current || reason !== original.reason) existingUpdates.push({ sku, type, confirmed, reason });
   });
   for (const [sku, requested] of requestedBySku) {
     if (!supplyCeilingBySku.has(sku)) continue;
@@ -1090,7 +1090,7 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
     if (Object.prototype.hasOwnProperty.call(original.snapshot, "hqSupplyCeiling")) supplyCeilingBySku.set(sku, Math.max(supplyCeilingBySku.get(sku) || 0, Number(original.snapshot.hqSupplyCeiling || 0)));
     if (approved !== original.quantity && !reason) throw new RequestValidationError(`${storeCode}／${sku}的核准量與門市確認量不同，請填寫總部調整原因。`);
     if (original.quantity > 0 && approved === 0) removedCount += 1;
-    existingUpdates.push({ storeCode, sku, type, approved, reason });
+    if (approved !== original.previousApproved || reason !== original.previousReason) existingUpdates.push({ storeCode, sku, type, approved, reason });
   });
   for (const [sku, approved] of approvedBySku) {
     if (!supplyCeilingBySku.has(sku)) continue;

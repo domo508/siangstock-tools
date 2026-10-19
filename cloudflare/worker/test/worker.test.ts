@@ -54,4 +54,25 @@ describe("規則 Worker 路由與 fail closed", () => {
     const response = await worker.fetch(new Request("https://siangstock.com/api/upload", { method: "POST", body: "secret" }), env());
     expect(response.status).toBe(404);
   });
+
+  it("D1 免費額度用罄時回傳可操作的繁中提示", async () => {
+    const quotaEnv = {
+      ...env(),
+      DB: {
+        prepare() {
+          return {
+            bind() { return this; },
+            async first() {
+              throw new Error("D1_ERROR: Your account has exceeded D1's free tier daily row write limit.");
+            }
+          };
+        }
+      }
+    } as unknown as Parameters<typeof worker.fetch>[1];
+    const response = await worker.fetch(new Request("https://siangstock.com/api/rules"), quotaEnv);
+    const body = await response.json() as { error: string };
+    expect(response.status).toBe(503);
+    expect(body.error).toContain("資料庫寫入額度已滿");
+    expect(body.error).toContain("台灣時間上午 8 點");
+  });
 });

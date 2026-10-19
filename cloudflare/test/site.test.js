@@ -284,6 +284,8 @@ describe("前台導覽", () => {
     expect(worker).toContain("hq_review_saved");
     expect(worker).toContain("hq-save");
     expect(worker).toContain("移除品項請使用移除按鈕");
+    expect(worker).toContain("confirmed !== original.current || reason !== original.reason");
+    expect(worker).toContain("approved !== original.previousApproved || reason !== original.previousReason");
   });
 
   it("人工新增品號會沿用批次快照顯示可售至並傳遞到總部覆核", () => {
