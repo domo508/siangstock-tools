@@ -1017,7 +1017,7 @@ async function openApprovedCorrection(request: Request, env: StoreTransferEnv, b
   return json({ batchId, storeCode, mode, status: targetBatchStatus, storeStatus: targetStoreStatus, correctionRevision, openedAt: now });
 }
 
-async function approveBatch(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
+async function approveBatch(request: Request, env: StoreTransferEnv, batchId: string, saveOnly = false): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
   const batch = await env.DB.prepare("SELECT status, proposal_date, arrival_schedule FROM store_transfer_batches WHERE id = ?").bind(batchId).first<Record<string, unknown>>();
@@ -1029,7 +1029,7 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   if (correctionRows.results.some((row) => String(row.correction_mode) === "store" && !["submitted", "approved"].includes(String((row as Record<string, unknown>).status || "")))) {
     throw new RequestValidationError("退回門市修改的內容尚未重新送出，不能略過門市直接核准。", 409);
   }
-  if (Number(pending?.count || 0) > 0 && input.confirmPendingStores !== true) throw new RequestValidationError("仍有門市尚未送出；確認要以目前資料核准後再操作。", 409);
+  if (!saveOnly && Number(pending?.count || 0) > 0 && input.confirmPendingStores !== true) throw new RequestValidationError("仍有門市尚未送出；確認要以目前資料核准後再操作。", 409);
   if (!Array.isArray(input.items) || input.items.length > 5000) throw new RequestValidationError("總部核准明細格式錯誤。");
   const existing = await env.DB.prepare("SELECT store_code, sku, item_type, suggested_quantity, store_confirmed_quantity, hq_approved_quantity, hq_reason, decision_snapshot FROM store_transfer_items WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
   const allowedStores = await env.DB.prepare("SELECT store_code FROM store_transfer_store_status WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
@@ -1113,6 +1113,16 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
     manualInsertIndex = statements.length;
     statements.push(env.DB.prepare(`INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, store_confirmed_quantity, store_reason, hq_approved_quantity, hq_reason, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, decision_snapshot, updated_at, updated_by)
       SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), 0, 0, '', json_extract(value, '$.approved'), json_extract(value, '$.reason'), json_extract(value, '$.ruleSummary'), json_extract(value, '$.type'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.systemProjection'), json_extract(value, '$.systemReason'), json_extract(value, '$.snapshot'), ?3, ?4 FROM json_each(?2)`).bind(batchId, JSON.stringify(manualInserts), now, who.email));
+  }
+  if (saveOnly) {
+    statements.push(
+      env.DB.prepare("UPDATE store_transfer_batches SET updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ? AND status IN ('open', 'review')").bind(now, who.email, batchId),
+      env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'hq_review_saved', ?, ?, ?)").bind(batchId, `總部暫存覆核；人工新增${addedCount}項、移除${removedCount}項`, now, who.email)
+    );
+    const results = await env.DB.batch(statements);
+    if ((existingUpdateIndex >= 0 && Number(results[existingUpdateIndex].meta.changes || 0) !== existingUpdates.length)
+      || (manualInsertIndex >= 0 && Number(results[manualInsertIndex].meta.changes || 0) !== manualInserts.length)) throw new RequestValidationError("部分品號不存在或已變更，請重新載入。", 409);
+    return json({ batchId, status: "saved", approvedQuantity: total, updatedAt: now, updatedBy: who.email });
   }
   statements.push(
     env.DB.prepare("UPDATE store_transfer_store_status SET status = 'approved', updated_at = ? WHERE batch_id = ?").bind(now, batchId),
@@ -1248,6 +1258,8 @@ export async function storeTransferRoute(request: Request, env: StoreTransferEnv
   if (notificationMatch && request.method === "POST") return sendBatchNotifications(request, env, decodeURIComponent(notificationMatch[1]));
   const approveMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/approve$/);
   if (approveMatch && request.method === "POST") return approveBatch(request, env, decodeURIComponent(approveMatch[1]));
+  const hqSaveMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/hq-save$/);
+  if (hqSaveMatch && request.method === "PUT") return approveBatch(request, env, decodeURIComponent(hqSaveMatch[1]), true);
   const correctionMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/corrections\/open$/);
   if (correctionMatch && request.method === "POST") return openApprovedCorrection(request, env, decodeURIComponent(correctionMatch[1]));
   const erpMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/erp-created$/);

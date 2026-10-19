@@ -152,8 +152,20 @@ html, body { max-width: 100%; overflow-x: clip; }
 .workflow-table tr:has(.manual-item-badge.warn) { background: #fff9df; }
 .workflow-table tr:has(.manual-item-badge.warn) td { border-color: #ead797; }
 .remove-item-button { color: #8a3e32; border-color: #ddb9b0; background: #fff8f6; white-space: nowrap; }
-.item-marked-removed { background: #fff7f5; }
+.item-human-change,
+.item-marked-removed { background: #fff0ed; }
+.item-human-change td,
+.item-marked-removed td { border-color: #e8c5bd; }
 .item-marked-removed td { color: #7f6d69; }
+.item-warning,
+.workflow-table tr.item-warning { background: #fff9df; }
+.item-warning td,
+.workflow-table tr.item-warning td { border-color: #ead797; }
+.change-badges { display: flex; flex-wrap: wrap; gap: .28rem; margin-top: .3rem; }
+.change-badges:empty { display: none; }
+.change-badges span { display: inline-flex; padding: .16rem .4rem; border-radius: 999px; color: #8a3e32; background: #f8dcd6; font-size: .7rem; font-weight: 800; white-space: nowrap; }
+.item-warning .change-badges span { color: #714b00; background: #ffe9a8; }
+.change-meta { display: block; margin-top: .3rem; color: #6f7f89; font-size: .7rem; overflow-wrap: anywhere; }
 .manual-item-section { border-color: #b9d4dc; background: #f4fafb; }
 .manual-item-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .8rem; align-items: end; }
 .manual-item-form label { display: grid; gap: .35rem; color: #233d52; font-weight: 800; }

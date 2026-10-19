@@ -267,12 +267,22 @@ describe("前台導覽", () => {
 
   it("週調撥允許門市與總部人工新增或移除品項並保留原因", () => {
     const app = readFileSync("../store-transfer/app.js", "utf8");
+    const style = readFileSync("../store-transfer/style.css", "utf8");
     const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
     expect(app).toContain("人工新增品項");
     expect(app).toContain("data-remove-item");
+    expect(app).toContain("恢復此品項");
+    expect(app).toContain("暫存覆核");
+    expect(app).toContain("/hq-save");
+    expect(app).toContain("待暫存");
+    expect(app).toContain("數量已調整");
     expect(app).toContain("productName: row.dataset.productName");
+    expect(style).toContain(".item-human-change");
+    expect(style).toContain(".item-warning");
     expect(worker).toContain("門市人工新增");
     expect(worker).toContain("總部人工新增");
+    expect(worker).toContain("hq_review_saved");
+    expect(worker).toContain("hq-save");
     expect(worker).toContain("移除品項請使用移除按鈕");
   });
 
