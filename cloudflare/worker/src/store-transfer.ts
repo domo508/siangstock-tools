@@ -113,6 +113,23 @@ function chunks<T>(rows: T[], size = 750): T[][] {
   return result;
 }
 
+function manualFactDecisionSnapshot(fact: Record<string, unknown>): string {
+  return JSON.stringify({
+    inventoryEvidenceVersion: 1,
+    localSales42: Number(fact.local_sales_42 || 0), b3Sales42: Number(fact.b3_sales_42 || 0),
+    physicalInventory: Number(fact.physical_inventory || 0),
+    pendingSubmittedQuantity: Number(fact.pending_submitted_quantity || 0),
+    inTransitQuantity: Number(fact.in_transit_quantity || 0), currentQuantity: Number(fact.current_quantity || 0),
+    targetQuantity: Number(fact.target_quantity || 0), displayQuantity: Number(fact.display_quantity || 0),
+    currentArrivalDate: String(fact.current_arrival_date || fact.calculation_date || ""),
+    nextArrivalDate: String(fact.next_arrival_date || fact.calculation_date || ""),
+    preArrivalStockoutRisk: Number(fact.pre_arrival_stockout_risk || 0) === 1,
+    hqAvailable: Number(fact.hq_available || 0), hqReserve: Number(fact.hq_reserve || 0),
+    hqReleasable: Number(fact.hq_releasable || 0), hqSupplyCeiling: Number(fact.hq_releasable || 0),
+    autoExcluded: Number(fact.auto_excluded || 0) === 1, exclusionReason: String(fact.exclusion_reason || "")
+  });
+}
+
 function assertHq(role: Role): void {
   if (role === "store") throw new RequestValidationError("此動作只限總部操作。", 403);
 }
@@ -558,7 +575,7 @@ async function manualItemFact(request: Request, env: StoreTransferEnv, batchId: 
   if (!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) throw new RequestValidationError("ERP品號格式錯誤。");
   const batchStore = await env.DB.prepare("SELECT b.proposal_date, b.arrival_schedule FROM store_transfer_store_status s JOIN store_transfer_batches b ON b.id = s.batch_id WHERE s.batch_id = ? AND s.store_code = ? AND b.deleted_at IS NULL").bind(batchId, scope).first<Record<string, unknown>>();
   if (!batchStore) throw new RequestValidationError("此批次沒有這間門市。", 404);
-  const row = await env.DB.prepare("SELECT store_code, sku, product_name, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, hq_available, hq_reserve, hq_releasable, auto_excluded, exclusion_reason FROM store_transfer_manual_item_facts WHERE batch_id = ? AND store_code = ? AND sku = ?").bind(batchId, scope, sku).first<Record<string, unknown>>();
+  const row = await env.DB.prepare("SELECT * FROM store_transfer_manual_item_facts WHERE batch_id = ? AND store_code = ? AND sku = ?").bind(batchId, scope, sku).first<Record<string, unknown>>();
   const allocated = await env.DB.prepare("SELECT COALESCE(SUM(COALESCE(store_confirmed_quantity, suggested_quantity)), 0) quantity FROM store_transfer_items WHERE batch_id = ? AND sku = ? AND store_code <> ?").bind(batchId, sku, scope).first<Record<string, unknown>>();
   const otherAllocated = Number(allocated?.quantity || 0);
   if (!row) {
@@ -567,12 +584,18 @@ async function manualItemFact(request: Request, env: StoreTransferEnv, batchId: 
     const schedule = parseJson(batchStore.arrival_schedule);
     const storeSchedule = schedule[scope] && typeof schedule[scope] === "object" && !Array.isArray(schedule[scope]) ? schedule[scope] as Record<string, unknown> : {};
     const exclusionReason = String(parseJson(catalog.auto_exclusions)[scope] || "");
-    return json({ storeCode: scope, sku, productName: String(catalog.product_name), calculationDate: String(storeSchedule.currentArrivalDate || batchStore.proposal_date), baseQuantity: 0, displayGap: 0, dailyUsage: 0, systemProjection: "近期無現場銷售", systemReason: exclusionReason || "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", autoExcluded: Boolean(exclusionReason), exclusionReason, hqAvailable: Number(catalog.hq_available || 0), hqReserve: Number(catalog.hq_reserve || 0), hqReleasable: Number(catalog.hq_releasable || 0), supplyKnown: catalog.hq_releasable != null, otherAllocated });
+    return json({ storeCode: scope, sku, productName: String(catalog.product_name), calculationDate: String(storeSchedule.currentArrivalDate || batchStore.proposal_date), baseQuantity: 0, displayGap: 0, dailyUsage: 0, physicalInventory: 0, pendingSubmittedQuantity: 0, inTransitQuantity: 0, currentQuantity: 0, localSales42: 0, b3Sales42: 0, targetQuantity: 0, displayQuantity: 0, currentArrivalDate: String(storeSchedule.currentArrivalDate || batchStore.proposal_date), nextArrivalDate: String(storeSchedule.nextArrivalDate || storeSchedule.currentArrivalDate || batchStore.proposal_date), preArrivalStockoutRisk: false, inventoryEvidenceVersion: 1, systemProjection: "近期無現場銷售", systemReason: exclusionReason || "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", autoExcluded: Boolean(exclusionReason), exclusionReason, hqAvailable: Number(catalog.hq_available || 0), hqReserve: Number(catalog.hq_reserve || 0), hqReleasable: Number(catalog.hq_releasable || 0), supplyKnown: catalog.hq_releasable != null, otherAllocated });
   }
   return json({
     storeCode: String(row.store_code), sku: String(row.sku), productName: String(row.product_name),
     calculationDate: String(row.calculation_date), baseQuantity: Number(row.base_quantity || 0),
     displayGap: Number(row.display_gap || 0), dailyUsage: Number(row.daily_usage || 0), systemProjection: String(row.system_projection || ""),
+    physicalInventory: Number(row.physical_inventory || 0), pendingSubmittedQuantity: Number(row.pending_submitted_quantity || 0),
+    inTransitQuantity: Number(row.in_transit_quantity || 0), currentQuantity: Number(row.current_quantity || 0),
+    localSales42: Number(row.local_sales_42 || 0), b3Sales42: Number(row.b3_sales_42 || 0),
+    targetQuantity: Number(row.target_quantity || 0), displayQuantity: Number(row.display_quantity || 0),
+    currentArrivalDate: String(row.current_arrival_date || row.calculation_date), nextArrivalDate: String(row.next_arrival_date || row.calculation_date),
+    preArrivalStockoutRisk: Number(row.pre_arrival_stockout_risk || 0) === 1, inventoryEvidenceVersion: 1,
     systemReason: who.role === "store" ? storeFacingReason(row.system_reason, 0) : String(row.system_reason || ""), hqAvailable: Number(row.hq_available || 0),
     hqReserve: Number(row.hq_reserve || 0), hqReleasable: Number(row.hq_releasable || 0), autoExcluded: Number(row.auto_excluded || 0) === 1,
     exclusionReason: String(row.exclusion_reason || ""), supplyKnown: row.hq_releasable != null, otherAllocated
@@ -633,11 +656,13 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
     const rawSnapshot = item.decisionSnapshot && typeof item.decisionSnapshot === "object" && !Array.isArray(item.decisionSnapshot)
       ? item.decisionSnapshot as Record<string, unknown> : {};
     const decisionSnapshot = JSON.stringify({
+      inventoryEvidenceVersion: 1,
       localSales42: nonnegativeNumber(rawSnapshot.localSales42 || 0, "近42天現場銷售"),
       b3Sales42: nonnegativeNumber(rawSnapshot.b3Sales42 || 0, "近42天B3銷售"),
       physicalInventory: nonnegativeNumber(rawSnapshot.physicalInventory || 0, "現有實體庫存"),
       pendingSubmittedQuantity: nonnegativeNumber(rawSnapshot.pendingSubmittedQuantity || 0, "待發貨量"),
       inTransitQuantity: nonnegativeNumber(rawSnapshot.inTransitQuantity || 0, "在途量"),
+      currentQuantity: nonnegativeNumber(rawSnapshot.currentQuantity ?? (Number(rawSnapshot.physicalInventory || 0) + Number(rawSnapshot.pendingSubmittedQuantity || 0) + Number(rawSnapshot.inTransitQuantity || 0)), "計算可用量"),
       targetQuantity: nonnegativeNumber(rawSnapshot.targetQuantity || 0, "目標量"),
       displayQuantity: nonnegativeNumber(rawSnapshot.displayQuantity || 0, "不可售展示量"),
       currentArrivalDate: rawSnapshot.currentArrivalDate ? dateText(rawSnapshot.currentArrivalDate, "本批到店日") : "",
@@ -697,6 +722,17 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
       baseQuantity: nonnegativeNumber(row.baseQuantity || 0, "調撥前可售量"),
       displayGap: quantity(row.displayGap || 0, "不可售展示缺口"),
       dailyUsage: nonnegativeNumber(row.dailyUsage || 0, "日均現場銷售"),
+      physicalInventory: nonnegativeNumber(row.physicalInventory || 0, "現有實體庫存"),
+      pendingSubmittedQuantity: nonnegativeNumber(row.pendingSubmittedQuantity || 0, "待發貨量"),
+      inTransitQuantity: nonnegativeNumber(row.inTransitQuantity || 0, "在途量"),
+      currentQuantity: nonnegativeNumber(row.currentQuantity || 0, "計算可用量"),
+      localSales42: nonnegativeNumber(row.localSales42 || 0, "近42天現場銷售"),
+      b3Sales42: nonnegativeNumber(row.b3Sales42 || 0, "近42天B3銷售"),
+      targetQuantity: nonnegativeNumber(row.targetQuantity || 0, "目標量"),
+      displayQuantity: nonnegativeNumber(row.displayQuantity || 0, "不可售展示量"),
+      currentArrivalDate: row.currentArrivalDate ? dateText(row.currentArrivalDate, "本批到店日") : dateText(row.calculationDate || proposalDate, "本批到店日"),
+      nextArrivalDate: row.nextArrivalDate ? dateText(row.nextArrivalDate, "下一輪到店日") : dateText(row.calculationDate || proposalDate, "下一輪到店日"),
+      preArrivalStockoutRisk: Boolean(row.preArrivalStockoutRisk),
       systemProjection: String(row.systemProjection || "").normalize("NFKC").trim().slice(0, 80),
       systemReason: String(row.systemReason || "").normalize("NFKC").trim().slice(0, 500),
       hqAvailable: quantity(row.hqAvailable || 0, "總倉可用量"),
@@ -723,8 +759,8 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
     SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.suggested'), json_extract(value, '$.ruleSummary'), json_extract(value, '$.itemType'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.systemProjection'), json_extract(value, '$.systemReason'), json_extract(value, '$.decisionSnapshot'), ?3, ?4 FROM json_each(?2)`;
   const shortageInsertSql = `INSERT INTO store_transfer_shortages (batch_id, store_code, sku, product_name, item_type, demand_quantity, allocated_quantity, unfilled_quantity, reason, follow_up_status, current_arrival_date, next_arrival_date, created_at, updated_at)
     SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.type'), json_extract(value, '$.demand'), json_extract(value, '$.allocated'), json_extract(value, '$.unfilled'), json_extract(value, '$.reason'), json_extract(value, '$.followUpStatus'), json_extract(value, '$.currentArrivalDate'), json_extract(value, '$.nextArrivalDate'), ?3, ?3 FROM json_each(?2)`;
-  const manualItemFactInsertSql = `INSERT INTO store_transfer_manual_item_facts (batch_id, store_code, sku, product_name, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, hq_available, hq_reserve, hq_releasable, auto_excluded, exclusion_reason, created_at)
-    SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.systemProjection'), json_extract(value, '$.systemReason'), json_extract(value, '$.hqAvailable'), json_extract(value, '$.hqReserve'), json_extract(value, '$.hqReleasable'), CASE WHEN json_extract(value, '$.autoExcluded') THEN 1 ELSE 0 END, json_extract(value, '$.exclusionReason'), ?3 FROM json_each(?2)`;
+  const manualItemFactInsertSql = `INSERT INTO store_transfer_manual_item_facts (batch_id, store_code, sku, product_name, calculation_date, base_quantity, display_gap, daily_usage, physical_inventory, pending_submitted_quantity, in_transit_quantity, current_quantity, local_sales_42, b3_sales_42, target_quantity, display_quantity, current_arrival_date, next_arrival_date, pre_arrival_stockout_risk, system_projection, system_reason, hq_available, hq_reserve, hq_releasable, auto_excluded, exclusion_reason, created_at)
+    SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.physicalInventory'), json_extract(value, '$.pendingSubmittedQuantity'), json_extract(value, '$.inTransitQuantity'), json_extract(value, '$.currentQuantity'), json_extract(value, '$.localSales42'), json_extract(value, '$.b3Sales42'), json_extract(value, '$.targetQuantity'), json_extract(value, '$.displayQuantity'), json_extract(value, '$.currentArrivalDate'), json_extract(value, '$.nextArrivalDate'), CASE WHEN json_extract(value, '$.preArrivalStockoutRisk') THEN 1 ELSE 0 END, json_extract(value, '$.systemProjection'), json_extract(value, '$.systemReason'), json_extract(value, '$.hqAvailable'), json_extract(value, '$.hqReserve'), json_extract(value, '$.hqReleasable'), CASE WHEN json_extract(value, '$.autoExcluded') THEN 1 ELSE 0 END, json_extract(value, '$.exclusionReason'), ?3 FROM json_each(?2)`;
   const manualItemCatalogInsertSql = `INSERT INTO store_transfer_batch_product_catalog (batch_id, sku, product_name, hq_available, hq_reserve, hq_releasable, auto_exclusions, created_at)
     SELECT ?1, json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.hqAvailable'), json_extract(value, '$.hqReserve'), json_extract(value, '$.hqReleasable'), json_extract(value, '$.autoExclusions'), ?3 FROM json_each(?2)`;
   const batchInsert = collaborationId
@@ -911,7 +947,7 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
       if (fact.hq_releasable != null) supplyCeilingBySku.set(sku, Number(fact.hq_releasable));
       addedCount += 1;
       const exclusionReason = String(fact.exclusion_reason || "");
-      const snapshot = JSON.stringify({ hqAvailable: Number(fact.hq_available || 0), hqReserve: Number(fact.hq_reserve || 0), hqReleasable: Number(fact.hq_releasable || 0), hqSupplyCeiling: Number(fact.hq_releasable || 0), autoExcluded: Number(fact.auto_excluded || 0) === 1, exclusionReason });
+      const snapshot = manualFactDecisionSnapshot(fact);
       const ruleSummary = exclusionReason ? `門市人工新增（原自動排除：${exclusionReason}）` : "門市人工新增；沿用批次建立時的庫存與近42天銷售基準";
       manualInserts.push({ sku, productName, confirmed, reason, ruleSummary, type, calculationDate: fact.calculation_date, baseQuantity: fact.base_quantity, displayGap: fact.display_gap, dailyUsage: fact.daily_usage, systemProjection: fact.system_projection, systemReason: String(fact.system_reason || ""), snapshot });
       return;
@@ -1079,7 +1115,7 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
       if (fact.hq_releasable != null) supplyCeilingBySku.set(sku, Number(fact.hq_releasable));
       addedCount += 1;
       const exclusionReason = String(fact.exclusion_reason || "");
-      const snapshot = JSON.stringify({ hqAvailable: Number(fact.hq_available || 0), hqReserve: Number(fact.hq_reserve || 0), hqReleasable: Number(fact.hq_releasable || 0), hqSupplyCeiling: Number(fact.hq_releasable || 0), autoExcluded: Number(fact.auto_excluded || 0) === 1, exclusionReason });
+      const snapshot = manualFactDecisionSnapshot(fact);
       const ruleSummary = exclusionReason ? `總部人工新增（原自動排除：${exclusionReason}）` : "總部人工新增；沿用批次建立時的庫存與近42天銷售基準";
       manualInserts.push({ storeCode, sku, productName, approved, reason, ruleSummary, type, calculationDate: fact.calculation_date, baseQuantity: fact.base_quantity, displayGap: fact.display_gap, dailyUsage: fact.daily_usage, systemProjection: fact.system_projection, systemReason: String(fact.system_reason || ""), snapshot });
       return;

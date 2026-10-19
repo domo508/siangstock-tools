@@ -421,8 +421,20 @@ describe("前台導覽", () => {
     expect(style).toContain(".workflow-table tr:not(.decision-detail-row)");
     expect(style).toContain(".decision-warning-row");
     expect(style).toContain("overflow-wrap: anywhere");
+    expect(style).toContain(".workflow-col-item { width: 18%; }");
+    expect(style).toContain("textarea.reason-input");
+    expect(app).toContain("workflowColgroup");
+    expect(app).toContain("autoSizeReasonField");
+    expect(app).toContain("<textarea data-reason");
+    expect(app).toContain("<textarea data-hq-reason");
     expect(worker).toContain("decision_snapshot");
     expect(migration).toContain("ADD COLUMN decision_snapshot");
+    const inventoryEvidenceMigration = readFileSync("../cloudflare/worker/migrations/0041_store_transfer_manual_inventory_evidence.sql", "utf8");
+    expect(inventoryEvidenceMigration).toContain("physical_inventory");
+    expect(inventoryEvidenceMigration).toContain("pending_submitted_quantity");
+    expect(inventoryEvidenceMigration).toContain("in_transit_quantity");
+    expect(worker).toContain("manualFactDecisionSnapshot");
+    expect(app).toContain("inventoryEvidenceVersion");
   });
 
   it("周調撥適用與排除規則有獨立入口，並與展示最低庫存通用規則分開", () => {

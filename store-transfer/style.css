@@ -117,15 +117,35 @@ html, body { max-width: 100%; overflow-x: clip; }
 .transfer-table input.reason-input { width: 220px; }
 .decision-summary-table { min-width: 720px; }
 .workflow-table { min-width: 0; table-layout: fixed; }
-.workflow-table th, .workflow-table td { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.workflow-table th, .workflow-table td { min-width: 0; overflow: hidden; overflow-wrap: anywhere; word-break: normal; }
+.workflow-col-toggle { width: 3.5%; }
+.workflow-col-store { width: 9%; }
+.workflow-col-item { width: 18%; }
+.workflow-col-system { width: 8.5%; }
+.workflow-col-quantity { width: 10%; }
+.workflow-col-reason { width: 16%; }
+.workflow-col-action { width: 9%; }
 .workflow-table input { max-width: 100%; box-sizing: border-box; }
-.workflow-table input.reason-input { width: 100%; min-width: 0; }
+.workflow-table .reason-input { width: 100%; min-width: 0; }
+.workflow-table textarea.reason-input {
+  min-height: 62px;
+  max-height: 160px;
+  padding: .5rem .55rem;
+  border: 1px solid #bfcfd9;
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  resize: none;
+}
+.workflow-table textarea.reason-input:disabled { color: #667b89; background: #edf2f4; }
 .decision-table-note { color: #60788b; font-size: .88rem; }
 .decision-sku { display: block; color: #17324d; }
-.decision-product-name { display: block; min-width: 0; margin-top: .2rem; color: #536b7c; line-height: 1.4; }
+.decision-product-name { display: block; min-width: 0; margin-top: .2rem; color: #536b7c; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
 .decision-quantity { color: #153f63; font-size: 1rem; font-weight: 800; font-variant-numeric: tabular-nums; }
 .decision-stage-cell { min-width: 0; }
-.decision-stage-cell small { display: block; max-width: 100%; margin-top: .35rem; color: #60788b; line-height: 1.45; overflow-wrap: anywhere; }
+.decision-stage-cell small { display: block; max-width: 100%; margin-top: .35rem; color: #60788b; line-height: 1.45; white-space: normal; overflow-wrap: anywhere; }
 .decision-toggle-cell { width: 44px; padding-left: .35rem !important; padding-right: .35rem !important; text-align: center !important; }
 .decision-detail-toggle { display: inline-flex; width: 32px; min-width: 32px; height: 32px; padding: 0 !important; align-items: center; justify-content: center; border-radius: 50%; color: #174b72; font-size: 1.25rem; font-weight: 800; line-height: 1; }
 .decision-detail-toggle[aria-expanded="true"] { color: #fff; border-color: #176b87; background: #176b87; }
@@ -170,7 +190,9 @@ html, body { max-width: 100%; overflow-x: clip; }
 .manual-item-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .8rem; align-items: end; }
 .manual-item-form label { display: grid; gap: .35rem; color: #233d52; font-weight: 800; }
 .manual-item-form input,
-.manual-item-form select { width: 100%; min-height: 42px; padding: .55rem .65rem; border: 1px solid #bfcfd9; border-radius: 9px; background: #fff; font: inherit; }
+.manual-item-form select,
+.manual-item-form textarea { width: 100%; min-height: 42px; padding: .55rem .65rem; border: 1px solid #bfcfd9; border-radius: 9px; background: #fff; font: inherit; }
+.manual-item-form textarea { min-height: 62px; line-height: 1.45; overflow-wrap: anywhere; resize: none; }
 .manual-item-form input[readonly] { color: #334e62; background: #edf4f6; }
 .manual-item-form output { display: flex; align-items: center; min-height: 42px; box-sizing: border-box; padding: .55rem .65rem; border: 1px solid #9fc7ce; border-radius: 9px; color: #153f63; background: #edf8f7; font-weight: 800; }
 .manual-item-form .manual-reason-field,
@@ -272,6 +294,7 @@ html, body { max-width: 100%; overflow-x: clip; }
 @media (max-width: 960px) { .guide-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .manual-item-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } .approved-correction-controls { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 760px) { .period-grid, .transfer-sources, .fixed-source-panel, .calculation-mode-panel, .guide-grid, .status-grid, .manual-item-form, .display-exception-form-grid, .display-exception-toolbar, .sku-search-toolbar { grid-template-columns: 1fr; } .calculation-mode-panel > p { grid-column: auto; } .manual-item-form .manual-reason-field, .manual-item-form .manual-system-reason-field, .display-exception-form-grid .wide-field, .display-exception-priority, .display-exception-check { grid-column: auto; } .fixed-source-panel > .status-line { grid-column: auto; } .fixed-source-actions { justify-content: stretch; } .fixed-source-actions button, .sku-search-toolbar button { width: 100%; } .sku-search-toolbar .status-line { margin-bottom: 0; } .batch-card { grid-template-columns: 1fr; } .batch-card-actions { justify-content: stretch; } .batch-card-actions button { flex: 1 1 10rem; } .batch-history-details summary { align-items: flex-start; flex-direction: column; gap: .3rem; } .action-row, .comparison-downloads, .sub-breadcrumb { align-items: stretch; flex-direction: column; } .comparison-download-actions { justify-items: stretch; } .comparison-download-buttons, .formal-download-options { justify-content: stretch; } .comparison-download-buttons button, .comparison-download-actions > button, .formal-download-options label { width: 100%; } .heading-actions { justify-items: start; } .store-filter-bar > div { flex-wrap: nowrap; overflow-x: auto; padding-bottom: .2rem; } .store-filter-button { flex: 0 0 auto; } .topbar { align-items: stretch; flex-direction: column; } .account-controls { width: 100%; align-items: stretch; flex-direction: column; } .account-relogin { width: 100%; text-align: center; }
   .decision-summary-table, .workflow-table { display: block; min-width: 0; }
+  .workflow-table colgroup { display: none; }
   .decision-summary-table thead, .workflow-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .decision-summary-table tbody, .workflow-table tbody { display: grid; gap: .8rem; }
   .decision-summary-table tr:not(.decision-detail-row):not(.decision-warning-row), .workflow-table tr:not(.decision-detail-row):not(.decision-warning-row) { display: grid; gap: .5rem; padding: .8rem; border: 1px solid #d8e4e8; border-radius: 12px; background: #fff; }
@@ -287,7 +310,7 @@ html, body { max-width: 100%; overflow-x: clip; }
   .workflow-table .decision-warning-row > td::before { content: none; }
   .decision-evidence-grid { grid-template-columns: 1fr; }
   .decision-product-name { min-width: 0; }
-  .decision-stage-cell input, .workflow-table input.reason-input { width: 100%; }
+  .decision-stage-cell input, .workflow-table .reason-input { width: 100%; }
   .decision-toggle-cell { width: 100%; text-align: left !important; }
   .decision-detail-toggle { width: 32px; }
   .remove-item-button { width: 100%; }

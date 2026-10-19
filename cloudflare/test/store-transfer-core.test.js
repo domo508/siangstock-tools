@@ -115,7 +115,11 @@ describe("待發貨與A/B測試比對", () => {
     const result = core.buildSuggestions(input);
     expect(result.regularRows).toHaveLength(0);
     const fact = result.manualItemFacts.find((row) => row.storeCode === "R00" && row.sku === "A102061");
-    expect(fact).toMatchObject({ productName: "5尺床包 [水洗棉-淺灰](S)", calculationDate: "2026-09-16", displayGap: 0 });
+    expect(fact).toMatchObject({
+      productName: "5尺床包 [水洗棉-淺灰](S)", calculationDate: "2026-09-16", displayGap: 0,
+      physicalInventory: 10, pendingSubmittedQuantity: 1, inTransitQuantity: 0, currentQuantity: 11,
+      localSales42: 6, b3Sales42: 0, currentArrivalDate: "2026-09-16", nextArrivalDate: "2026-09-23"
+    });
     expect(fact.baseQuantity).toBeGreaterThan(0);
     expect(fact.dailyUsage).toBeCloseTo(6 / 42);
     expect(core.projectedSellThroughDate(fact.calculationDate, fact.baseQuantity, 2, fact.dailyUsage)).toMatch(/^2026-/);

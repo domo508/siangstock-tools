@@ -1116,7 +1116,10 @@
         const protection = sStockProtection(hqAvailableForDisplay, Math.max(0, hqUsage14.get(sku) || 0), Math.max(0, hqUsage42.get(sku) || 0), Math.max(0, hqUsage84.get(sku) || 0));
         if (protection.releasable === 0) displayQuantity = 0;
       }
-      const current = Math.max(0, (inventory.get(compoundKey) || 0) + includedInbound(compoundKey));
+      const physicalInventory = Math.max(0, inventory.get(compoundKey) || 0);
+      const pending = Math.max(0, submittedInbound.get(compoundKey) || 0);
+      const inTransit = Math.max(0, inTransitInbound.get(compoundKey) || 0);
+      const current = Math.max(0, physicalInventory + includedInbound(compoundKey));
       const dailyUsage = localSales42 / 42;
       const displayGap = Math.max(0, displayQuantity - current);
       const baseQuantity = Math.max(0, current - displayQuantity - dailyUsage * (schedule?.preArrivalDays || 0));
@@ -1124,8 +1127,6 @@
       const target = dailyUsage * Number(schedule?.coverageDays || 1);
       const sellable = Math.max(0, current - displayQuantity);
       const rawNeed = displayGap + Math.max(0, Math.ceil(Math.max(target, minimum) - sellable - 1e-9));
-      const pending = Math.max(0, submittedInbound.get(compoundKey) || 0);
-      const inTransit = Math.max(0, inTransitInbound.get(compoundKey) || 0);
       let systemReason = systemDecisionByKey.get(compoundKey) || "";
       if (!systemReason && rawNeed <= 0) {
         if (rule?.role === "可售最低庫存" && !ruleApplies && localSales42 <= 0) systemReason = "近42天現場銷售0件，可售最低庫存規則不適用；本次總需求0件";
@@ -1143,6 +1144,12 @@
       return {
         storeCode, sku, productName: master.name || "", calculationDate: schedule?.currentArrivalDate || latest,
         baseQuantity, displayGap, dailyUsage,
+        physicalInventory, pendingSubmittedQuantity: pending, inTransitQuantity: inTransit,
+        currentQuantity: current, localSales42, b3Sales42: Math.max(0, b3.get(compoundKey) || 0),
+        targetQuantity: Math.max(target, minimum), displayQuantity,
+        currentArrivalDate: schedule?.currentArrivalDate || latest,
+        nextArrivalDate: schedule?.nextArrivalDate || latest,
+        preArrivalStockoutRisk: dailyUsage > 0 && Math.max(0, current - displayQuantity) < dailyUsage * (schedule?.preArrivalDays || 0),
         systemProjection: projectedSellThroughDate(schedule?.currentArrivalDate || latest, baseQuantity, 0, dailyUsage),
         systemReason, hqAvailable, hqReserve: hqProtection.reserve, hqReleasable: hqProtection.releasable,
         autoExcluded: exclusionDecision.excluded, exclusionReason
