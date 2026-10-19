@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261020-store-transfer-r18";
+  const APP_VERSION = "20261020-store-transfer-r19";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -9,6 +9,15 @@
   const transferCore = globalThis.StoreTransferCore;
   const googleSources = globalThis.ProcurementGoogleSources;
   const xlsxPreflight = globalThis.StoreTransferXlsxPreflight;
+
+  function showRuntimeWarning() {
+    const warning = $("version-warning");
+    if (warning instanceof HTMLDialogElement && typeof warning.showModal === "function") {
+      if (!warning.open) warning.showModal();
+      return;
+    }
+    warning.hidden = false;
+  }
 
   async function checkRuntimeVersion() {
     if (state.runtimeOutdated) return false;
@@ -20,7 +29,7 @@
       if (!latestVersion || latestVersion === APP_VERSION) return true;
       state.runtimeOutdated = true;
       state.latestRuntimeVersion = latestVersion;
-      $("version-warning").hidden = false;
+      showRuntimeWarning();
       document.body.classList.add("runtime-outdated");
       $("hq-status").textContent = "已有新版工具，本分頁已停止操作；請按上方「重新載入最新版」。";
       return false;

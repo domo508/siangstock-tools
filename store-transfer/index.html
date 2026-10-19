@@ -9,16 +9,16 @@
   <title>門市週補貨與調撥｜翔仔居家</title>
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="../cost-analysis/style.css">
-  <link rel="stylesheet" href="style.css?v=20261020-store-transfer-r18">
+  <link rel="stylesheet" href="style.css?v=20261020-store-transfer-r19">
 </head>
 <body>
-  <section id="version-warning" class="version-warning" role="alert" hidden>
+  <dialog id="version-warning" class="version-warning" role="alertdialog" aria-labelledby="version-warning-title" aria-describedby="version-warning-description">
     <div>
-      <strong>這個分頁已有新版</strong>
-      <p>為避免使用舊規則或舊畫面送出資料，本分頁已停止操作。請重新載入最新版；已建立的批次與門市確認資料不受影響。</p>
+      <strong id="version-warning-title">這個分頁已有新版</strong>
+      <p id="version-warning-description">為避免使用舊規則或舊畫面送出資料，本分頁已停止操作。請重新載入最新版；目前開啟的明細不會被自動關閉，已建立的批次與門市確認資料不受影響。</p>
     </div>
     <button id="reload-latest-button" class="primary-button" type="button">重新載入最新版</button>
-  </section>
+  </dialog>
   <main class="page-shell">
     <header class="topbar">
       <a class="brand" href="/" aria-label="回到公司工具首頁"><span class="brand-mark" aria-hidden="true">調</span><span>翔仔居家・門市週補貨與調撥</span></a>
@@ -168,8 +168,8 @@
   <script src="../procurement-planning/core.js?v=20260917-company-cost-r1"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="../procurement-planning/google-sources.js?v=20260915-google-sources-r1"></script>
-  <script src="core.js?v=20261020-store-transfer-r18"></script>
+  <script src="core.js?v=20261020-store-transfer-r19"></script>
   <script src="xlsx-preflight.js?v=20260916-xlsx-reader-r1"></script>
-  <script src="app.js?v=20261020-store-transfer-r18"></script>
+  <script src="app.js?v=20261020-store-transfer-r19"></script>
 </body>
 </html>

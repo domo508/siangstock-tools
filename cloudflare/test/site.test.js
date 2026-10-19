@@ -161,7 +161,9 @@ describe("前台導覽", () => {
     const transferRulesApp = readFileSync("../store-transfer/rules/app.js", "utf8");
     const transferRulesVersion = JSON.parse(readFileSync("../store-transfer/rules/version.json", "utf8"));
     const headers = readFileSync("../_headers", "utf8");
-    expect(transferHtml).toContain('id="version-warning"');
+    expect(transferHtml).toContain('<dialog id="version-warning"');
+    expect(transferApp).toContain('warning.showModal()');
+    expect(transferApp).toContain('if (!warning.open)');
     expect(transferHtml).toContain(`deploy=${rulesVersion.version}`);
     expect(transferApp).toContain(`const APP_VERSION = "${transferVersion.version}"`);
     expect(transferApp).toContain("version.json?check=${Date.now()}");
