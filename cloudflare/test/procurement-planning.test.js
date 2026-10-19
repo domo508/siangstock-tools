@@ -413,15 +413,22 @@ describe("採購規劃核心鎖定公式", () => {
     expect(core.buildTemporaryAdditionalPurchaseRows([report])[0]).toMatchObject({ sku: "A1", quantity: 12 });
   });
 
-  it("新品首批名單需含上市日、通路與首月預估量", () => {
+  it("新品首批名單只需上市日與通路，首月需求改由系統估算", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
-      ["ERP品號", "預計／實際上市日", "預計販售通路或門市", "首月預估量", "相似類別", "備註"],
-      ["A1", "2026-09-20", "官網、台北門市", 30, "天絲", "首月量已含活動需求"]
+      ["ERP品號", "預計／實際上市日", "預計販售通路或門市", "相似類別", "備註"],
+      ["A1", "2026-09-20", "官網、台北門市", "天絲", "首批由系統估算"]
     ]), "新品名單");
     const parsed = core.parseNewProductWorkbook(workbook, XLSX, { fileName: "新品.xlsx" });
     expect(parsed.errors).toHaveLength(0);
-    expect(parsed.records[0]).toMatchObject({ sku: "A1", listedDate: "2026-09-20", channels: "官網、台北門市", firstMonthQty: 30, similarCategory: "天絲", remark: "首月量已含活動需求" });
+    expect(parsed.records[0]).toMatchObject({ sku: "A1", listedDate: "2026-09-20", channels: "官網、台北門市", legacyFirstMonthQty: null, similarCategory: "天絲", remark: "首批由系統估算" });
+  });
+
+  it("下載版新品空白範本已移除首月預估量欄位", () => {
+    const workbook = XLSX.read(readFileSync("../procurement-planning/assets/new-product-initial-purchase-template.xlsx"), { type: "buffer" });
+    const headers = XLSX.utils.sheet_to_json(workbook.Sheets["新品首批名單"], { header: 1, range: 3, defval: "" })[0];
+    expect(headers).toEqual(["ERP品號", "預計／實際上市日", "預計販售通路或門市", "相似類別", "備註"]);
+    expect(headers).not.toContain("首月預估量");
   });
 
   it("新品首批名單仍相容舊版相似品號欄位", () => {
@@ -432,7 +439,36 @@ describe("採購規劃核心鎖定公式", () => {
     ]), "舊版新品名單");
     const parsed = core.parseNewProductWorkbook(workbook, XLSX, { fileName: "舊版新品.xlsx" });
     expect(parsed.errors).toHaveLength(0);
-    expect(parsed.records[0]).toMatchObject({ sku: "A2", similarSku: "A42359-A", marketingIncluded: "是" });
+    expect(parsed.records[0]).toMatchObject({ sku: "A2", legacyFirstMonthQty: 20, similarSku: "A42359-A", marketingIncluded: "是" });
+  });
+
+  it("新品首月需求由成熟同類系統估算，舊版首月預估量不再左右建議", () => {
+    const peerRows = [0.8, 1, 1.2].map((daily, index) => ({
+      sku: `PEER-${index + 1}`,
+      name: "60天絲測試床包",
+      materialCategory: "天絲",
+      mainCategory: "床包",
+      size: "無尺寸",
+      forecastDailyQty: daily,
+      hqDailyQty: daily,
+      storeDailyByCode: {},
+      discontinued: false,
+      sellThroughStop: false,
+      externalPurchaseBlocked: false
+    }));
+    const common = {
+      baseAnalysis: { rows: peerRows, meta: {}, totals: {} },
+      workflowType: "new_product",
+      fileName: "新品.xlsx",
+      master: makeMaster(),
+      inventory: makeInventory(),
+      pendingReports: [],
+      supplierRules: core.SUPPLIER_RULES
+    };
+    const lowLegacy = core.buildSpecialProcurementAnalysis({ ...common, rows: [{ sku: "A1", listedDate: "2026-10-19", channels: "全部通路", similarCategory: "天絲", legacyFirstMonthQty: 1 }] });
+    const highLegacy = core.buildSpecialProcurementAnalysis({ ...common, rows: [{ sku: "A1", listedDate: "2026-10-19", channels: "全部通路", similarCategory: "天絲", legacyFirstMonthQty: 999 }] });
+    expect(lowLegacy.rows[0].newProductSystemReference).toMatchObject({ firstMonthDemandQty: 30, sampleCount: 3, reliability: "中" });
+    expect(lowLegacy.rows[0].suggestedPurchaseQty).toBe(highLegacy.rows[0].suggestedPurchaseQty);
   });
 
   it("枕頭本體固定歸四季枕芯，枕套不誤判", () => {
@@ -1104,11 +1140,11 @@ describe("採購建議第二階段", () => {
     expect(confirmedReview.rows[0]).toMatchObject({ productStatusPendingReview: true, finalQty: row.suggestedPurchaseQty });
 
     const special = core.buildSpecialProcurementAnalysis({
-      baseAnalysis: recommendations, workflowType: "new_product", rows: [{ sku: "A1", firstMonthQty: 30, channels: "官網", similarCategory: "精梳純棉" }],
+      baseAnalysis: recommendations, workflowType: "new_product", rows: [{ sku: "A1", channels: "官網", similarCategory: "精梳純棉" }],
       fileName: "新品.xlsx", master, inventory: makeInventory(), pendingReports: [makePending()], supplierRules: core.SUPPLIER_RULES
     });
-    expect(special.rows[0]).toMatchObject({ productStatusPendingReview: true, similarCategory: "精梳純棉", categoryModel: "相似類別精梳純棉" });
-    expect(special.rows[0].suggestedPurchaseQty).toBeGreaterThan(0);
+    expect(special.rows[0]).toMatchObject({ productStatusPendingReview: true, similarCategory: "精梳純棉", categoryModel: expect.any(String), skuModel: "新品首批系統建議（30天）" });
+    expect(special.rows[0].newProductSystemReference).toMatchObject({ materialCategory: "精梳純棉", reliability: expect.any(String) });
   });
 
   it("通路營收倍率參與逐店需求，寬沐45%只另列管理參考", () => {
@@ -2053,15 +2089,15 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('style.css?v=20261015-ledger-timepoint-r2');
-    expect(toolHtml).toContain('core.js?v=20261015-ledger-timepoint-r2');
+    expect(toolHtml).toContain('style.css?v=20261019-new-product-system-r1');
+    expect(toolHtml).toContain('core.js?v=20261019-new-product-system-r1');
     expect(toolHtml).toContain('google-sources.js?v=20261006-notification-audit-r2');
-    expect(toolHtml).toContain('app.js?v=20261015-ledger-timepoint-r2');
+    expect(toolHtml).toContain('app.js?v=20261019-new-product-system-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261015-ledger-timepoint-r2");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261019-new-product-system-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2145,7 +2181,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261015-ledger-timepoint-r2");
+    expect(toolHtml).toContain("app.js?v=20261019-new-product-system-r1");
     expect(toolHtml).toContain('id="activity-demand-card"');
     expect(toolHtml).toContain("活動期間預計營業額");
     expect(toolHtml).toContain("需求加乘倍數");

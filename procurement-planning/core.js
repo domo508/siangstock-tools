@@ -1029,14 +1029,14 @@
         const headers = rows[index].map(normalizeHeader);
         const mapping = {};
         for (const [key, values] of Object.entries(normalizedAliases)) mapping[key] = headers.findIndex((header) => values.includes(header));
-        if (mapping.sku >= 0 && mapping.listedDate >= 0 && mapping.channels >= 0 && mapping.firstMonthQty >= 0) {
+        if (mapping.sku >= 0 && mapping.listedDate >= 0 && mapping.channels >= 0) {
           selected = { name, rows, headerRowIndex: index, mapping };
           break;
         }
       }
       if (selected) break;
     }
-    if (!selected) throw new Error("新品首批名單缺少ERP品號、預計／實際上市日、預計販售通路或門市或首月預估量。");
+    if (!selected) throw new Error("新品首批名單缺少ERP品號、預計／實際上市日或預計販售通路或門市。");
     const records = [];
     const errors = [];
     const seen = new Set();
@@ -1047,13 +1047,22 @@
       if (!sku) continue;
       const listedDate = parseDateValue(read("listedDate"));
       const channels = String(read("channels") || "").trim();
-      const firstMonthQty = parseNumber(read("firstMonthQty"));
+      const legacyFirstMonthQty = parseNumber(read("firstMonthQty"));
       if (seen.has(sku)) errors.push({ sourceRow: index + 1, sku, message: "新品名單ERP品號重複。" });
       seen.add(sku);
       if (!listedDate) errors.push({ sourceRow: index + 1, sku, message: "上市日格式錯誤。" });
       if (!channels) errors.push({ sourceRow: index + 1, sku, message: "預計販售通路或門市不可空白。" });
-      if (firstMonthQty == null || firstMonthQty < 0 || !Number.isInteger(firstMonthQty)) errors.push({ sourceRow: index + 1, sku, message: "首月預估量須為0或正整數。" });
-      records.push({ sourceRow: index + 1, sku, listedDate, channels, firstMonthQty: Math.max(0, Number(firstMonthQty || 0)), similarCategory: String(read("similarCategory") || "").trim(), similarSku: normalizeSku(read("similarSku")), marketingIncluded: String(read("marketingIncluded") || "").trim(), remark: String(read("remark") || "").trim() });
+      records.push({
+        sourceRow: index + 1,
+        sku,
+        listedDate,
+        channels,
+        legacyFirstMonthQty: legacyFirstMonthQty != null && legacyFirstMonthQty >= 0 ? Number(legacyFirstMonthQty) : null,
+        similarCategory: String(read("similarCategory") || "").trim(),
+        similarSku: normalizeSku(read("similarSku")),
+        marketingIncluded: String(read("marketingIncluded") || "").trim(),
+        remark: String(read("remark") || "").trim()
+      });
     }
     if (!records.length) throw new Error("新品首批名單沒有可辨識的ERP品號。");
     return { fileName: options.fileName || "", sheetName: selected.name, records, errors };
@@ -3714,6 +3723,86 @@
     const sourceRows = Array.isArray(input.rows) ? input.rows : [];
     if (!sourceRows.length) throw new Error(workflowType === "new_product" ? "新品首批名單沒有可處理品項。" : "臨時追加名單沒有可處理品項。");
     const pending = aggregatePendingReports(input.pendingReports || []);
+    const newProductChannelDaily = (row, channelText) => {
+      const labels = String(channelText || "").split(/[、,，;；/]/).map((value) => normalizeText(value)).filter(Boolean);
+      const storeDaily = Object.values(row.storeDailyByCode || {}).reduce((sum, value) => sum + Math.max(0, Number(value || 0)), 0);
+      const onlineDaily = Math.max(0, Number(row.hqDailyQty ?? (Number(row.forecastDailyQty || 0) - storeDaily)));
+      if (!labels.length || labels.some((label) => label.includes("全部通路"))) return Math.max(0, Number(row.forecastDailyQty || 0));
+      let selectedDaily = 0;
+      let recognized = false;
+      if (labels.some((label) => label.includes("全部線上通路"))) {
+        selectedDaily += onlineDaily;
+        recognized = true;
+      } else if (labels.some((label) => /官網|momo|蝦皮|其它線上/.test(label))) {
+        selectedDaily += onlineDaily;
+        recognized = true;
+      }
+      if (labels.some((label) => label.includes("全部實體門市"))) {
+        selectedDaily += storeDaily;
+        recognized = true;
+      } else {
+        const selectedCodes = new Set();
+        for (const label of labels) {
+          for (const [name, code] of Object.entries(STORE_CHANNEL_CODES)) {
+            if (label.includes(normalizeText(name))) selectedCodes.add(code);
+          }
+        }
+        if (selectedCodes.size) {
+          selectedDaily += [...selectedCodes].reduce((sum, code) => sum + Math.max(0, Number(row.storeDailyByCode?.[code] || 0)), 0);
+          recognized = true;
+        }
+      }
+      return recognized ? selectedDaily : Math.max(0, Number(row.forecastDailyQty || 0));
+    };
+    const resolveNewProductReference = (source, masterRecord, sku) => {
+      const requestedCategory = String(source.similarCategory || "").trim();
+      const materialCategory = requestedCategory && requestedCategory !== "由系統判斷"
+        ? requestedCategory
+        : inferMaterialCategory(masterRecord, masterRecord.name);
+      const type = comparableProductType(masterRecord, masterRecord.name);
+      const size = comparableSize(masterRecord, masterRecord.name);
+      const peers = base.rows.filter((row) => row.sku !== sku
+        && !row.discontinued
+        && !row.sellThroughStop
+        && !row.externalPurchaseBlocked
+        && !isAutomaticProcurementExcludedItem(row.sku, row.name));
+      const candidates = [
+        {
+          label: `${materialCategory}＋${type}＋${size}`,
+          rows: peers.filter((row) => normalizeText(row.materialCategory) === normalizeText(materialCategory)
+            && comparableProductType(row, row.name) === type
+            && comparableSize(row, row.name) === size)
+        },
+        {
+          label: `${materialCategory}＋${type}`,
+          rows: peers.filter((row) => normalizeText(row.materialCategory) === normalizeText(materialCategory)
+            && comparableProductType(row, row.name) === type)
+        },
+        {
+          label: materialCategory,
+          rows: peers.filter((row) => normalizeText(row.materialCategory) === normalizeText(materialCategory))
+        },
+        {
+          label: `${type}（跨材質備援）`,
+          rows: peers.filter((row) => comparableProductType(row, row.name) === type)
+        }
+      ].map((candidate) => ({
+        ...candidate,
+        values: candidate.rows.map((row) => newProductChannelDaily(row, source.channels)).filter((value) => Number.isFinite(value) && value > 0)
+      }));
+      const selected = candidates.find((candidate) => candidate.values.length >= 3)
+        || candidates.find((candidate) => candidate.values.length > 0);
+      const daily = Math.max(0, Number(trimmedMean(selected?.values || []) || 0));
+      const sampleCount = selected?.values.length || 0;
+      return {
+        materialCategory,
+        daily,
+        firstMonthDemandQty: Math.ceil(daily * 30),
+        sampleCount,
+        label: selected?.label || "同類樣本不足",
+        reliability: sampleCount >= 8 ? "高" : sampleCount >= 3 ? "中" : sampleCount > 0 ? "低" : "不足"
+      };
+    };
     const rows = sourceRows.map((source) => {
       const sku = normalizeSku(source.sku);
       const masterRecord = input.master.bySku.get(sku);
@@ -3732,7 +3821,8 @@
       const supplier = masterRecord.supplier;
       const supplyProfile = resolveSupplyProfile(supplier, input.supplierRules || [], existing?.tier || "穩定");
       const packSize = purchaseUnitFromRules(supplier, masterRecord, masterRecord.name, input.purchaseUnitRules);
-      const requestedQty = workflowType === "new_product" ? Math.max(0, Number(source.firstMonthQty || 0)) : Math.max(0, Number(source.quantity || 0));
+      const newProductReference = workflowType === "new_product" ? resolveNewProductReference(source, masterRecord, sku) : null;
+      const requestedQty = workflowType === "new_product" ? newProductReference.firstMonthDemandQty : Math.max(0, Number(source.quantity || 0));
       const rawQty = workflowType === "new_product" ? Math.max(requestedQty - inventoryQty - pendingQty, 0) : Math.max(0, Number(existing?.rawPurchaseQty || 0));
       const minimumQty = rawQty > 0 ? Math.max(rawQty, Number(masterRecord.moq || 1)) : 0;
       const baseSuggestedPurchaseQty = workflowType === "new_product"
@@ -3744,7 +3834,6 @@
       const unitCost = Number(masterRecord.unitCost || 0);
       const baseRow = existing || {};
       const requestedSimilarCategory = String(source.similarCategory || "").trim();
-      const selectedSimilarCategory = requestedSimilarCategory && requestedSimilarCategory !== "由系統判斷" ? requestedSimilarCategory : "";
       return {
         ...baseRow,
         sku,
@@ -3762,7 +3851,7 @@
         unitCost,
         productStatus: String(masterRecord.productStatus || "").trim(),
         productStatusPendingReview,
-        materialCategory: existing?.materialCategory || inferMaterialCategory(masterRecord, masterRecord.name),
+        materialCategory: newProductReference?.materialCategory || existing?.materialCategory || inferMaterialCategory(masterRecord, masterRecord.name),
         purchaseTab: classifyPuyoumaPurchaseTab(masterRecord, masterRecord.name),
         recent6Qty: Number(existing?.recent6Qty || 0),
         recent12Qty: Number(existing?.recent12Qty || 0),
@@ -3773,13 +3862,13 @@
         activeWeeks12: Number(existing?.activeWeeks12 || 0),
         variabilityCv: Number(existing?.variabilityCv || 0),
         trendRatio: Number(existing?.trendRatio || 0),
-        skuModel: workflowType === "new_product" ? "新品首月人工預估" : (existing?.skuModel || "臨時追加比對"),
-        categoryModel: selectedSimilarCategory ? `相似類別${selectedSimilarCategory}` : (existing?.categoryModel || (source.similarSku ? `相似品號${source.similarSku}` : "新品人工預估")),
+        skuModel: workflowType === "new_product" ? "新品首批系統建議（30天）" : (existing?.skuModel || "臨時追加比對"),
+        categoryModel: workflowType === "new_product" ? newProductReference.label : (existing?.categoryModel || "臨時追加比對"),
         categorySeasonFactor: Number(existing?.categorySeasonFactor || 1),
-        categoryReliability: existing?.categoryReliability || "需人工確認",
+        categoryReliability: workflowType === "new_product" ? newProductReference.reliability : (existing?.categoryReliability || "需人工確認"),
         categoryWape: existing?.categoryWape ?? null,
         seasonalDataReady: Boolean(existing?.seasonalDataReady),
-        forecastDailyQty: workflowType === "new_product" ? requestedQty / 30 : Number(existing?.forecastDailyQty || 0),
+        forecastDailyQty: workflowType === "new_product" ? newProductReference.daily : Number(existing?.forecastDailyQty || 0),
         safetyDays: Number(existing?.safetyDays || 0),
         safetyBufferDays: Number(existing?.safetyBufferDays || 0),
         targetCoverageDays: Number(existing?.targetCoverageDays || supplyProfile.leadDays + supplyProfile.reviewDays),
@@ -3805,7 +3894,11 @@
         suggestedConsignmentQty: workflowType === "new_product" ? Number(existing?.suggestedConsignmentQty || 0) : 0,
         supplyStatus: productStatusPendingReview
           ? "待人工確認：貨品狀態空白；已保留試算建議量，第一次回匯須明確填量與原因"
-          : (workflowType === "new_product" ? `新品首批：${source.channels || "通路待確認"}` : "臨時追加採購：與系統淨需求比較後走回匯與核准"),
+          : (workflowType === "new_product"
+            ? (newProductReference.sampleCount
+              ? `新品首批：系統依${newProductReference.label}估算30天需求${requestedQty}件；${source.channels || "通路待確認"}`
+              : "新品首批：同類樣本不足，系統建議0件；請於第一次回匯人工填寫數量與原因")
+            : "臨時追加採購：與系統淨需求比較後走回匯與核准"),
         sellThroughStop: Boolean(masterRecord.sellThroughStop),
         externalPurchaseBlocked: Boolean(masterRecord.discontinued || masterRecord.sellThroughStop),
         automaticExclusionReason: "",
@@ -3813,6 +3906,7 @@
         storeDemandQty: workflowType === "new_product" ? 0 : Number(existing?.storeDemandQty || 0),
         discontinued: Boolean(masterRecord.discontinued),
         isNewProduct: workflowType === "new_product",
+        newProductSystemReference: newProductReference,
         initialManualQty: workflowType === "manual_draft" ? requestedQty : null,
         initialManualReason: workflowType === "manual_draft" ? "臨時追加採購匯入" : "",
         listedDate: source.listedDate || masterRecord.listedDate || "",
@@ -4394,6 +4488,10 @@
       "新品上市日": row.listedDate || "",
       "新品預計通路／門市": row.plannedChannels || "",
       "相似類別": row.similarCategory || row.materialCategory || "",
+      "新品系統首月需求": row.newProductSystemReference?.firstMonthDemandQty ?? "",
+      "新品參考樣本數": row.newProductSystemReference?.sampleCount ?? "",
+      "新品參考範圍": row.newProductSystemReference?.label || "",
+      "新品建議可信度": row.newProductSystemReference?.reliability || "",
       "進貨價": row.unitCost,
       "建議採購金額": row.suggestedPurchaseAmount,
       "已下架": row.discontinued ? "是" : "否",
