@@ -472,6 +472,15 @@ describe("前台導覽", () => {
     expect(worker).toContain('chunks(normalizedShortages)');
   });
 
+  it("門市送出與總部核准以集合式SQL處理大量明細", () => {
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    expect(worker).toContain("const existingUpdates: Record<string, unknown>[] = []");
+    expect(worker).toContain("UPDATE store_transfer_items SET\n      store_confirmed_quantity = (SELECT json_extract(p.value, '$.confirmed') FROM json_each(?1)");
+    expect(worker).toContain("UPDATE store_transfer_items SET\n      hq_approved_quantity = (SELECT json_extract(p.value, '$.approved') FROM json_each(?1)");
+    expect(worker).toContain("FROM store_transfer_shortages WHERE batch_id = ? ON CONFLICT(store_code, sku) DO UPDATE");
+    expect(worker).not.toContain("const bridge = approvedShortages.results.flatMap");
+  });
+
   it("正式批次建立後逐店寄送可重試且防重複的門市通知", () => {
     const html = readFileSync("../store-transfer/index.html", "utf8");
     const app = readFileSync("../store-transfer/app.js", "utf8");
