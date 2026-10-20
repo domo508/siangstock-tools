@@ -1507,31 +1507,47 @@
   }
 
   function parseLirongConsignmentWorkbook(workbook, XLSX, options = {}) {
-    const sheetName = workbook.SheetNames.includes("工作表1") ? "工作表1" : workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    if (!sheet || !sheet["!ref"]) throw new Error("力榮寄庫表沒有可讀取的資料。");
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true });
-    let headerRowIndex = -1;
-    let headers = [];
-    for (let index = 0; index < Math.min(rows.length, 30); index += 1) {
-      const candidate = rows[index].map((value) => String(value || "").trim());
-      const normalized = candidate.map(normalizeHeader);
-      if (normalized.some((value) => /^(?:erp|翔仔)?(?:品號|貨號)$|^編號$/.test(value))
-        && normalized.some((value) => /品名|商品名稱/.test(value))
-        && normalized.some((value) => /庫存|現貨/.test(value))) {
-        headerRowIndex = index;
-        headers = candidate;
-        break;
+    const preferredSheets = [...(workbook.SheetNames || [])].sort((left, right) => {
+      const rank = (name) => name === "下單" ? 0 : name === "工作表1" ? 1 : 2;
+      return rank(left) - rank(right);
+    });
+    const skuPattern = /^(?:erp|翔仔)?(?:品號|貨號)$|^編號$/;
+    const namePattern = /商品名稱|品名/;
+    const primaryStockPatterns = [/最新.*庫存/, /寄庫.*現貨/, /^現貨$/, /庫存數量/, /^(?:\d{2,4}|\d{1,2}月\d{1,2}日?)庫存$/];
+    const fallbackStockPatterns = [/剩餘庫存/, /可用庫存/];
+    const matchesAny = (value, patterns) => patterns.some((pattern) => pattern.test(normalizeHeader(value)));
+    const candidates = [];
+    for (const sheetName of preferredSheets) {
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet || !sheet["!ref"]) continue;
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true });
+      for (let headerRowIndex = 0; headerRowIndex < Math.min(rows.length, 30); headerRowIndex += 1) {
+        const headers = rows[headerRowIndex].map((value) => String(value || "").trim());
+        const skuColumns = headers.map((header, index) => skuPattern.test(normalizeHeader(header)) ? index : -1).filter((index) => index >= 0);
+        for (let blockIndex = 0; blockIndex < skuColumns.length; blockIndex += 1) {
+          const skuColumn = skuColumns[blockIndex];
+          const blockEnd = skuColumns[blockIndex + 1] ?? headers.length;
+          const blockColumns = headers.map((header, index) => ({ header, index })).filter(({ index }) => index >= skuColumn && index < blockEnd);
+          const nameColumn = blockColumns.find(({ header }) => namePattern.test(normalizeHeader(header)))?.index ?? -1;
+          const primaryCurrent = blockColumns.find(({ header }) => matchesAny(header, primaryStockPatterns));
+          const fallbackCurrent = blockColumns.find(({ header }) => matchesAny(header, fallbackStockPatterns));
+          const current = primaryCurrent || fallbackCurrent;
+          if (nameColumn < 0 || !current) continue;
+          const supplierSkuColumn = blockColumns.find(({ header }) => /供應商貨號|產品編號/.test(normalizeHeader(header)))?.index ?? -1;
+          const scheduleColumns = blockColumns.filter(({ header, index }) => index !== current.index && /(排程|製作|下單|新增|預計.*(?:入庫|完工)|完工)/.test(normalizeHeader(header)));
+          const dataRows = rows.slice(headerRowIndex + 1).filter((row) => normalizeSku(row[skuColumn])).length;
+          candidates.push({
+            sheetName, rows, headerRowIndex, headers, skuColumn, supplierSkuColumn, nameColumn,
+            currentColumn: current.index, scheduleColumns, fallbackStock: !primaryCurrent,
+            score: (primaryCurrent ? 1000 : 500) + (scheduleColumns.length ? 100 : 0) + Math.min(dataRows, 99)
+          });
+        }
       }
     }
-    if (headerRowIndex < 0) throw new Error("力榮寄庫表缺少品號、品名與寄庫現貨欄位。");
-    const findColumn = (patterns) => headers.findIndex((header) => patterns.some((pattern) => pattern.test(normalizeHeader(header))));
-    const skuColumn = findColumn([/^(?:erp|翔仔)?(?:品號|貨號)$/, /^編號$/]);
-    const supplierSkuColumn = findColumn([/供應商貨號/, /產品編號/]);
-    const nameColumn = findColumn([/商品名稱/, /品名/]);
-    const currentColumn = findColumn([/最新.*庫存/, /寄庫.*現貨/, /^現貨$/, /庫存數量/, /^(?:\d{2,4}|\d{1,2}月\d{1,2}日?)庫存$/]);
-    const scheduleColumns = headers.map((header, index) => ({ header, index })).filter(({ header, index }) => index !== currentColumn && /(排程|製作|下單|新增|預計.*(?:入庫|完工)|完工)/.test(normalizeHeader(header)));
-    if ([skuColumn, nameColumn, currentColumn].some((index) => index < 0)) throw new Error("力榮寄庫表欄位辨識失敗，已停止計算。");
+    candidates.sort((left, right) => right.score - left.score || preferredSheets.indexOf(left.sheetName) - preferredSheets.indexOf(right.sheetName) || left.skuColumn - right.skuColumn);
+    const selected = candidates[0];
+    if (!selected) throw new Error("力榮寄庫表找不到同一資料區塊內的品號、品名與寄庫現貨欄位；未猜測數量，已改為資料未驗證。");
+    const { sheetName, rows, headerRowIndex, headers, skuColumn, supplierSkuColumn, nameColumn, currentColumn, scheduleColumns } = selected;
     const records = [];
     const seen = new Set();
     for (let index = headerRowIndex + 1; index < rows.length; index += 1) {
@@ -1560,10 +1576,20 @@
       });
     }
     if (!records.length) throw new Error("力榮寄庫表沒有可辨識的商品列。");
-    return { fileName: options.fileName || "", sheetName, records, bySku: new Map(records.map((row) => [row.sku, row])) };
+    const corrections = [];
+    if (sheetName !== "下單") corrections.push(`自動改讀頁籤「${sheetName}」`);
+    if (headerRowIndex > 0) corrections.push(`自動定位第${headerRowIndex + 1}列欄名`);
+    if (skuColumn > 0) corrections.push(`自動定位第${skuColumn + 1}欄起的完整資料區塊`);
+    if (selected.fallbackStock) corrections.push(`自動將「${headers[currentColumn]}」辨識為寄庫現貨備援欄`);
+    return {
+      fileName: options.fileName || "", sheetName, headerRowIndex: headerRowIndex + 1,
+      currentHeader: headers[currentColumn], corrections, dataAvailable: true,
+      records, bySku: new Map(records.map((row) => [row.sku, row]))
+    };
   }
 
   function buildLirongConsignmentRecommendations(recommendations, lirongConsignment, options = {}) {
+    if (!lirongConsignment || lirongConsignment.dataAvailable === false || lirongConsignment.unavailable) return [];
     const orderDate = parseDateValue(options.orderDate || recommendations.asOfDate) || recommendations.asOfDate;
     const lirongRules = options.consignmentRules?.lirong || {};
     const pullLeadDays = Math.max(0, Number(lirongRules.pullLeadDays ?? PROCUREMENT_POLICY.lirongPullLeadDays));
@@ -3121,6 +3147,9 @@
       const supplier = row.masterRecord?.supplier || "未辨識供應商";
       const purchaseTab = classifyPuyoumaPurchaseTab(row.masterRecord, row.demand.name);
       const supplierConsignment = /力榮/.test(normalizeText(supplier)) ? resolvedLirongConsignment : resolvedConsignment;
+      const consignmentDataAvailable = /力榮/.test(normalizeText(supplier))
+        ? input.lirongConsignment?.dataAvailable !== false && !input.lirongConsignment?.unavailable
+        : input.consignment?.dataAvailable !== false && !input.consignment?.unavailable;
       const supplierRule = findSupplierRule(supplier, input.supplierRules || []);
       const supplyProfile = resolveSupplyProfile(supplier, input.supplierRules || [], row.tier);
       const supplierLeadDays = supplyProfile.leadDays;
@@ -3426,8 +3455,8 @@
       const holidayProtectionAdditionalQty = Math.max(holidaySuggestedPurchaseQty - standardSuggestedPurchaseQty, 0);
       const springFestivalExtraSuggestedQty = Math.max(preShopeeSuggestedPurchaseQty - holidaySuggestedPurchaseQty, 0);
       const factoryPullQty = pendingQty + suggestedPurchaseQty;
-      const consignmentCurrentQty = consignment?.currentQty || 0;
-      const consignmentScheduledQty = consignment?.scheduledQty || 0;
+      const consignmentCurrentQty = consignmentDataAvailable ? (consignment?.currentQty || 0) : null;
+      const consignmentScheduledQty = consignmentDataAvailable ? (consignment?.scheduledQty || 0) : null;
       const immediateConsignmentGap = consignment && !externalPurchaseBlocked && !sellThroughStop ? Math.max(factoryPullQty - consignmentCurrentQty, 0) : 0;
       const tierFactoryTargetDays = /普優[瑪碼]/.test(normalizedSupplier)
         ? Number(puyoumaTargetDays[row.tier] ?? PROCUREMENT_POLICY.puyoumaFactoryTargetDays[row.tier])
@@ -3441,7 +3470,9 @@
         : 0;
       const suggestedConsignmentQty = externalPurchaseBlocked || sellThroughStop ? 0 : roundSuggestedQuantity(rawConsignmentOrderQty, Math.max(score, 0.5));
       let supplyStatus = "非寄倉供應商／寄倉品號未命中";
-      if (sellThroughStop) {
+      if (!consignmentDataAvailable && /力榮|普優[瑪碼]/.test(normalizedSupplier)) {
+        supplyStatus = "寄庫資料未取得／未驗證：一般採購需求仍可試算；不產生寄庫量、缺口或可拉貨判斷";
+      } else if (sellThroughStop) {
         supplyStatus = sellThroughConsignmentAllowed
           ? `S品－既有寄庫現貨可拉回${sellThroughConsignmentAvailableQty}件；不得新增生產或新增寄庫`
           : "S品－寄庫現貨已用罄：禁止一般採購、新增生產與新增寄庫；仍可用總倉現貨銷售或調撥";
@@ -3594,6 +3625,7 @@
         springFestivalExtraAmount: springFestivalExtraSuggestedQty * unitCost,
         consignmentCurrentQty,
         consignmentScheduledQty,
+        consignmentDataAvailable,
         immediateConsignmentGap,
         factoryTargetDays: tierFactoryTargetDays,
         factoryTargetQty,
@@ -4474,10 +4506,10 @@
       "總倉目前庫存可售至": hqCurrentInventoryAvailableTo,
       "全公司合計庫存可售至": companyCurrentInventoryAvailableTo,
       "全公司系統建議採購後可售至": systemAvailableTo,
-      "寄倉現貨": row.consignmentCurrentQty,
-      "粉紅排程": row.consignmentScheduledQty,
-      "寄倉缺口": Math.max(row.suggestedPurchaseQty - row.consignmentCurrentQty - row.consignmentScheduledQty, 0),
-      "目前實際可採購量": /普優[瑪碼]|力榮/.test(row.supplier)
+      "寄倉現貨": row.consignmentDataAvailable === false ? "資料未取得" : row.consignmentCurrentQty,
+      "粉紅排程": row.consignmentDataAvailable === false ? "資料未取得" : row.consignmentScheduledQty,
+      "寄倉缺口": row.consignmentDataAvailable === false ? "未驗證" : Math.max(row.suggestedPurchaseQty - row.consignmentCurrentQty - row.consignmentScheduledQty, 0),
+      "目前實際可採購量": row.consignmentDataAvailable === false ? "待寄庫資料恢復後確認" : /普優[瑪碼]|力榮/.test(row.supplier)
         ? Math.min(row.suggestedPurchaseQty, Math.max(Number(row.consignmentCurrentQty || 0) - Number(row.pendingQty || 0), 0))
         : row.suggestedPurchaseQty,
       "人工確認採購量": row.initialManualQty ?? "",

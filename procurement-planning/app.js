@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261019-new-product-system-r1";
+  const APP_VERSION = "20261020-consignment-self-heal-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -1146,11 +1146,10 @@
   function requirementsReady() {
     if (state.runtimeOutdated) return false;
     const common = Boolean(state.config && state.procurementRules && (state.masterFile || state.masterWorkbook) && state.inventoryFile && state.pendingFiles.length && state.transferFile
-      && (state.consignmentFile || state.consignmentWorkbook) && state.salesFiles.length && elements.month.value
+      && state.salesFiles.length && elements.month.value
       && elements.inventoryDate.value && elements.pendingDate.value && elements.transferDate.value && elements.consignmentDate.value && elements.salesDate.value);
     if (elements.checkpoint.value === "month-end") return common;
-    return Boolean(common && (state.lirongConsignmentFile || state.lirongConsignmentWorkbook)
-      && state.marketingFile && state.modelFile && !modelRefreshRequired() && elements.orderDate.value);
+    return Boolean(common && state.marketingFile && state.modelFile && !modelRefreshRequired() && elements.orderDate.value);
   }
   function updateReadyState() {
     const monthEndMode = elements.checkpoint.value === "month-end";
@@ -2128,37 +2127,47 @@
       state.consignmentWorkbook = sources.puyoumaWorkbook; state.consignmentFile = null;
       state.lirongConsignmentWorkbook = sources.lirongWorkbook; state.lirongConsignmentFile = null;
       state.sourceMetadata = sources;
+      const optionalWarnings = [...(sources.optionalFailures || [])];
       let puyouma;
       try {
+        if (!state.consignmentWorkbook) throw new Error("固定來源未取得");
         puyouma = core.parseConsignmentWorkbook(state.consignmentWorkbook, XLSX);
       } catch (error) {
         const sourceError = identifySourceError(error, "puyouma", "內容解析");
-        updateSourceProgress("puyouma", "error", `內容解析失敗：${sourceError.message}`);
-        throw sourceError;
+        optionalWarnings.push(sourceError);
+        puyouma = unavailableConsignmentSource("普優瑪寄庫表", sourceError.message);
+        updateSourceProgress("puyouma", "error", `未驗證但可繼續：${sourceError.message}`);
       }
       let lirong;
       try {
+        if (!state.lirongConsignmentWorkbook) throw new Error("固定來源未取得");
         lirong = core.parseLirongConsignmentWorkbook(state.lirongConsignmentWorkbook, XLSX);
       } catch (error) {
         const sourceError = identifySourceError(error, "lirong", "內容解析");
-        updateSourceProgress("lirong", "error", `內容解析失敗：${sourceError.message}`);
-        throw sourceError;
+        optionalWarnings.push(sourceError);
+        lirong = unavailableConsignmentSource("力榮寄庫表", sourceError.message);
+        updateSourceProgress("lirong", "error", `未驗證但可繼續：${sourceError.message}`);
       }
-      if (!puyouma.styleAudit.pinkDetected) {
+      if (!puyouma.unavailable && !puyouma.styleAudit.pinkDetected) {
         updateSourceProgress("puyouma", "error", "未辨識粉紅排程格式");
-        throw identifySourceError(new Error("未辨識到粉紅排程格式，已停止採用"), "puyouma", "內容規則檢核");
+        const sourceError = identifySourceError(new Error("未辨識到粉紅排程格式，寄庫量改為未驗證"), "puyouma", "內容規則檢核");
+        optionalWarnings.push(sourceError);
+        puyouma = unavailableConsignmentSource("普優瑪寄庫表", sourceError.message);
       }
       updateSourceProgress("marketing", "success", "已取得並完成內容驗證");
-      updateSourceProgress("puyouma", "success", `已取得並讀取${puyouma.records.length}列`);
-      updateSourceProgress("lirong", "success", `已取得並讀取${lirong.records.length}列`);
+      if (!puyouma.unavailable) updateSourceProgress("puyouma", "success", `已取得並讀取${puyouma.records.length}列`);
+      if (!lirong.unavailable) updateSourceProgress("lirong", "success", `已取得並讀取${lirong.records.length}列${lirong.corrections.length ? `；${lirong.corrections.join("、")}` : ""}`);
       elements.masterFileName.textContent = `自動：${sources.master.metadata.name}・${sourceProof(sources.master.metadata.id, sources.master.metadata)}`;
       elements.marketingFileName.textContent = `自動：整體行銷策略・${sourceProof(sources.marketingMetadata.fileId, sources.marketingMetadata)}`;
-      elements.consignmentFileName.textContent = `自動：庫存+下單／庫存布，共${puyouma.records.length}列・${sourceProof(sources.puyoumaMetadata.spreadsheetId, sources.puyoumaMetadata)}`;
-      elements.lirongConsignmentFileName.textContent = `自動：${sources.lirongMetadata.selectedSheet || lirong.sheetName || "力榮寄庫"}，共${lirong.records.length}列・${sourceProof(sources.lirongMetadata.spreadsheetId, sources.lirongMetadata)}`;
-      elements.sourceStatus.textContent = masterValidation.invalidCount
+      elements.consignmentFileName.textContent = puyouma.unavailable ? `未驗證：${puyouma.unavailableReason}` : `自動：庫存+下單／庫存布，共${puyouma.records.length}列・${sourceProof(sources.puyoumaMetadata.spreadsheetId, sources.puyoumaMetadata)}`;
+      elements.lirongConsignmentFileName.textContent = lirong.unavailable ? `未驗證：${lirong.unavailableReason}` : `自動：${sources.lirongMetadata.selectedSheet || lirong.sheetName || "力榮寄庫"}，共${lirong.records.length}列・${sourceProof(sources.lirongMetadata.spreadsheetId, sources.lirongMetadata)}`;
+      const validationMessage = masterValidation.invalidCount
         ? `固定 Google 資料源已完成格式檢核；${masterValidation.hardInvalidCount}列缺供應商、正數進貨價或MOQ並停止自動採購，${masterValidation.statusReviewCount}列貨品狀態空白仍顯示試算建議，但第一次回匯必須明確填量與原因。`
         : "固定 Google 資料源已完成格式檢核；本次採用自動來源。";
-      elements.sourceStatus.className = `result-alert ${masterValidation.invalidCount ? "warn" : ""}`.trim();
+      elements.sourceStatus.textContent = optionalWarnings.length
+        ? `${validationMessage} 寄庫來源警示：${[...new Set(optionalWarnings.map((item) => `${item.sourceLabel || "寄庫表"}－${item.message}`))].join("；")}。一般採購建議仍可產生，但寄庫現貨、缺口、可拉貨量及寄庫建議標示為未驗證，不會把缺值當成0。`
+        : validationMessage;
+      elements.sourceStatus.className = `result-alert ${masterValidation.invalidCount || optionalWarnings.length ? "warn" : ""}`.trim();
       completed = true; invalidateAnalysis(); updateReadyState();
     } catch (error) {
       const hasPreviousSources = Boolean(state.sourceMetadata && state.masterFile && state.consignmentWorkbook && state.lirongConsignmentWorkbook);
@@ -2173,6 +2182,13 @@
         renderGoogleAuthorizationStatus();
       }
     }
+  }
+  function unavailableConsignmentSource(label, reason) {
+    return {
+      unavailable: true, dataAvailable: false, unavailableReason: `${label}：${reason}`,
+      records: [], bySku: new Map(), exceptions: [], confirmedExclusions: [],
+      styleAudit: { pinkDetected: false, pinkCells: 0 }
+    };
   }
   function supplierCatalog(analysis = state.analysis) {
     return core.supplierSelectionCatalog(
@@ -2631,15 +2647,25 @@
       setStatus("庫存預檢完成，正在解析其它資料並套用正式採購、寄庫與付款規則…");
       const [masterWorkbook, transferWorkbook, consignmentWorkbook, lirongWorkbook, modelWorkbook, pendingWorkbooks, salesWorkbooks] = await Promise.all([
         resolveWorkbook(state.masterFile, state.masterWorkbook), readWorkbook(state.transferFile),
-        resolveWorkbook(state.consignmentFile, state.consignmentWorkbook),
+        state.consignmentFile || state.consignmentWorkbook ? resolveWorkbook(state.consignmentFile, state.consignmentWorkbook) : Promise.resolve(null),
         monthEndMode && !(state.lirongConsignmentFile || state.lirongConsignmentWorkbook) ? Promise.resolve(null) : resolveWorkbook(state.lirongConsignmentFile, state.lirongConsignmentWorkbook),
         monthEndMode && !state.modelFile ? Promise.resolve(null) : readWorkbook(state.modelFile),
         Promise.all(state.pendingFiles.map(readWorkbook)), Promise.all(state.salesFiles.map(readWorkbook))
       ]);
       const master = core.parseProductMasterWorkbook(masterWorkbook, XLSX, { fileName: "本次商品主檔" });
       const transferReport = core.parseTransferWorkbook(transferWorkbook, XLSX, { fileName: state.transferFile.name || "期間調撥單" });
-      const consignment = core.parseConsignmentWorkbook(consignmentWorkbook, XLSX, { fileName: "普優瑪寄庫" });
-      const lirongConsignment = lirongWorkbook ? core.parseLirongConsignmentWorkbook(lirongWorkbook, XLSX, { fileName: "力榮寄庫" }) : null;
+      let consignment;
+      let lirongConsignment;
+      try {
+        consignment = consignmentWorkbook ? core.parseConsignmentWorkbook(consignmentWorkbook, XLSX, { fileName: "普優瑪寄庫" }) : unavailableConsignmentSource("普優瑪寄庫表", "本次未取得");
+      } catch (error) {
+        consignment = unavailableConsignmentSource("普優瑪寄庫表", error.message);
+      }
+      try {
+        lirongConsignment = lirongWorkbook ? core.parseLirongConsignmentWorkbook(lirongWorkbook, XLSX, { fileName: "力榮寄庫" }) : unavailableConsignmentSource("力榮寄庫表", "本次未取得");
+      } catch (error) {
+        lirongConsignment = unavailableConsignmentSource("力榮寄庫表", error.message);
+      }
       const pendingReports = pendingWorkbooks.map((workbook, index) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: state.pendingFiles[index]?.name || "未到貨採購單" }));
       state.purchaseStatusSummary = core.summarizePurchaseReports(pendingReports, elements.month.value);
       const salesReports = salesWorkbooks.map((workbook, index) => core.parseSalesWorkbook(workbook, XLSX, { fileName: state.salesFiles[index]?.name || "銷售明細" }));
@@ -2696,8 +2722,8 @@
         sourceHashes: state.sourceMetadata ? {
           master: state.sourceMetadata.master.metadata.sha256,
           marketing: state.sourceMetadata.marketingMetadata.sha256,
-          puyouma: state.sourceMetadata.puyoumaMetadata.sha256,
-          lirong: state.sourceMetadata.lirongMetadata.sha256
+          puyouma: state.sourceMetadata.puyoumaMetadata?.sha256 || "unavailable",
+          lirong: state.sourceMetadata.lirongMetadata?.sha256 || "unavailable"
         } : {}
       };
       state.analysis = analysis; state.baseAnalysis = analysis; state.workflowType = state.shortageRunMode === "new_order" ? "store_shortage_replenishment" : "system_recommendation";

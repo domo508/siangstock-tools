@@ -347,15 +347,22 @@
       tracked("puyouma", "普優瑪寄庫表", () => loadSpreadsheet(source.puyoumaSpreadsheetId, ["'庫存+下單'", "'庫存布'"], XLSX)),
       tracked("lirong", "力榮寄庫表", () => loadPreferredSpreadsheet(source.lirongSpreadsheetId, ["下單", ...(source.lirongSheets || []), "工作表1"], XLSX))
     ]);
-    const failures = results.filter((result) => result.status === "rejected").map((result) => result.reason);
-    if (failures.length === 1) throw failures[0];
-    if (failures.length > 1) {
-      const error = new Error(`${failures.length}個固定來源未完成`);
-      error.sourceFailures = failures;
+    const criticalFailures = results.slice(0, 2).filter((result) => result.status === "rejected").map((result) => result.reason);
+    if (criticalFailures.length === 1) throw criticalFailures[0];
+    if (criticalFailures.length > 1) {
+      const error = new Error(`${criticalFailures.length}個必要固定來源未完成`);
+      error.sourceFailures = criticalFailures;
       throw error;
     }
-    const [master, marketing, puyouma, lirong] = results.map((result) => result.value);
-    return { master, marketingFile: marketing.file, marketingMetadata: marketing.metadata, puyoumaWorkbook: puyouma.workbook, puyoumaMetadata: puyouma.metadata, lirongWorkbook: lirong.workbook, lirongMetadata: lirong.metadata };
+    const [master, marketing] = results.map((result) => result.value);
+    const puyouma = results[2].status === "fulfilled" ? results[2].value : null;
+    const lirong = results[3].status === "fulfilled" ? results[3].value : null;
+    return {
+      master, marketingFile: marketing.file, marketingMetadata: marketing.metadata,
+      puyoumaWorkbook: puyouma?.workbook || null, puyoumaMetadata: puyouma?.metadata || null,
+      lirongWorkbook: lirong?.workbook || null, lirongMetadata: lirong?.metadata || null,
+      optionalFailures: results.slice(2).filter((result) => result.status === "rejected").map((result) => result.reason)
+    };
   }
 
   function token() { return accessToken; }

@@ -728,6 +728,34 @@ describe("五來源匯入與品號串接", () => {
     expect(consignment.records[0].scheduleNotes).toEqual(["9/2新增\n預計9/16完工"]);
   });
 
+  it("力榮表版面移位時只在同一資料區塊自動校正，並可採用剩餘庫存安全別名", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["說明", "供應商調整中"],
+      ["翔仔貨號", "翔仔品名", "成品價", "暫停更新", "", "", "", "", "", "翔仔貨號", "翔仔品名", "成品價", "剩餘庫存"],
+      ["A42335-A", "左側未完成資料", "", "", "", "", "", "", "", "A42335-A", "5尺床包 [綠町 A]", 400, 20]
+    ]), "盤點備份");
+    const consignment = core.parseLirongConsignmentWorkbook(workbook, XLSX);
+    expect(consignment).toMatchObject({ sheetName: "盤點備份", headerRowIndex: 2, currentHeader: "剩餘庫存", dataAvailable: true });
+    expect(consignment.records).toEqual([expect.objectContaining({ sku: "A42335-A", currentQty: 20 })]);
+    expect(consignment.corrections).toEqual(expect.arrayContaining([
+      "自動改讀頁籤「盤點備份」",
+      "自動定位第2列欄名",
+      "自動定位第10欄起的完整資料區塊",
+      "自動將「剩餘庫存」辨識為寄庫現貨備援欄"
+    ]));
+  });
+
+  it("力榮表核心數量語意不明時不猜測，也不產生寄庫建議", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["翔仔貨號", "翔仔品名", "待確認數字"],
+      ["A42335-A", "5尺床包 [綠町 A]", 20]
+    ]), "下單");
+    expect(() => core.parseLirongConsignmentWorkbook(workbook, XLSX)).toThrow(/未猜測數量/);
+    expect(core.buildLirongConsignmentRecommendations({ rows: [{ supplier: "力榮" }] }, { unavailable: true, dataAvailable: false, bySku: new Map() })).toEqual([]);
+  });
+
   it("力榮採購頁使用力榮寄庫現貨與製作中數量，不再誤用普優瑪來源", () => {
     const masterWorkbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(masterWorkbook, XLSX.utils.aoa_to_sheet([
@@ -2035,8 +2063,8 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain("寬承＋寬沐終端通路預估營收");
     expect(toolHtml).toContain('id="auto-source-progress"');
     expect(toolHtml.match(/data-source-progress=/g)).toHaveLength(4);
-    expect(toolHtml).toContain("普優瑪寄庫表</h3><span class=\"source-badge required\">自動取得・必要");
-    expect(toolHtml).toContain("力榮寄庫表</h3><span class=\"source-badge required\">自動取得・必要");
+    expect(toolHtml).toContain("普優瑪寄庫表</h3><span class=\"source-badge recommended\">自動取得・可警示降級");
+    expect(toolHtml).toContain("力榮寄庫表</h3><span class=\"source-badge recommended\">自動取得・可自動校正");
     expect(toolHtml).toContain('class="source-group automatic-source-group"');
     expect(toolHtml).toContain('class="source-group manual-source-group"');
     expect(toolHtml).toContain('id="automatic-source-title">自動取得資料');
@@ -2090,14 +2118,14 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
     expect(toolHtml).toContain('style.css?v=20261019-new-product-system-r1');
-    expect(toolHtml).toContain('core.js?v=20261019-new-product-system-r1');
-    expect(toolHtml).toContain('google-sources.js?v=20261006-notification-audit-r2');
-    expect(toolHtml).toContain('app.js?v=20261019-new-product-system-r1');
+    expect(toolHtml).toContain('core.js?v=20261020-consignment-self-heal-r1');
+    expect(toolHtml).toContain('google-sources.js?v=20261020-consignment-self-heal-r1');
+    expect(toolHtml).toContain('app.js?v=20261020-consignment-self-heal-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261019-new-product-system-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261020-consignment-self-heal-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2181,7 +2209,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261019-new-product-system-r1");
+    expect(toolHtml).toContain("app.js?v=20261020-consignment-self-heal-r1");
     expect(toolHtml).toContain('id="activity-demand-card"');
     expect(toolHtml).toContain("活動期間預計營業額");
     expect(toolHtml).toContain("需求加乘倍數");

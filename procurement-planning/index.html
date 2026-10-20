@@ -212,16 +212,16 @@
             </article>
 
             <article class="upload-card" data-source="consignment">
-              <div class="upload-card-header"><h3>普優瑪寄庫表</h3><span class="source-badge required">自動取得・必要</span></div>
-              <p class="upload-help">固定線上表單自動讀取最新庫存、粉紅底未完成量及黃色欄首原文；下方選檔只供自動取得失敗時備援。</p>
+              <div class="upload-card-header"><h3>普優瑪寄庫表</h3><span class="source-badge recommended">自動取得・可警示降級</span></div>
+              <p class="upload-help">固定線上表單自動讀取最新庫存、粉紅底未完成量及黃色欄首原文；失效時仍可產生一般採購建議，但寄庫數量不猜測並標示未驗證。</p>
               <a class="source-file-link" href="https://docs.google.com/spreadsheets/d/1MPG0mSYQZ_ITp79eTHZ71z3ra9pq6pNhmHLlWDS0Ec4/edit?gid=0#gid=0" target="_blank" rel="noopener noreferrer">查看普優瑪寄庫表 <span aria-hidden="true">↗</span></a>
               <label class="file-button">手動備援<input id="consignment-file" type="file" accept=".xlsx"></label>
               <p id="consignment-file-name" class="file-name">尚未取得</p>
             </article>
 
             <article class="upload-card" data-source="lirong-consignment">
-              <div class="upload-card-header"><h3>力榮寄庫表</h3><span class="source-badge required">自動取得・必要</span></div>
-              <p class="upload-help">固定線上表單自動讀取；現貨拉貨5天、製作14天、製作後最早19天。下方選檔只供自動取得失敗時備援。</p>
+              <div class="upload-card-header"><h3>力榮寄庫表</h3><span class="source-badge recommended">自動取得・可自動校正</span></div>
+              <p class="upload-help">可自動辨識頁籤、欄位位置、日期庫存欄及安全別名；現貨拉貨5天、製作14天。若品號或數量語意無法確認，仍可產生一般採購建議，但寄庫判斷標示未驗證。</p>
               <a class="source-file-link" href="https://docs.google.com/spreadsheets/d/1uEc8DBg50lB4uqM8UrTYYEuZz8blPLJgP8JCm1IUzWI/edit?gid=0#gid=0" target="_blank" rel="noopener noreferrer">查看力榮寄庫表 <span aria-hidden="true">↗</span></a>
               <label class="file-button">手動備援<input id="lirong-consignment-file" type="file" accept=".xlsx"></label>
               <p id="lirong-consignment-file-name" class="file-name">尚未取得</p>
@@ -578,9 +578,9 @@
   <script src="xlsx-style-runtime.js?v=20260930-month-end-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20261019-new-product-system-r1"></script>
+  <script src="core.js?v=20261020-consignment-self-heal-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
-  <script src="google-sources.js?v=20261006-notification-audit-r2"></script>
-  <script src="app.js?v=20261019-new-product-system-r1"></script>
+  <script src="google-sources.js?v=20261020-consignment-self-heal-r1"></script>
+  <script src="app.js?v=20261020-consignment-self-heal-r1"></script>
 </body>
 </html>
