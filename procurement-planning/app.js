@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261020-new-product-import-r1";
+  const APP_VERSION = "20261020-activity-floor-confirm-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -1717,6 +1717,7 @@
     return document.querySelector('input[name="activity-method"]:checked')?.value || "revenue";
   }
   function activitySettings() {
+    const multiplierText = elements.activityMultiplier.value.trim();
     return {
       enabled: Boolean(elements.activityEnabled.checked),
       name: elements.activityName.value.trim(),
@@ -1725,7 +1726,7 @@
       scope: elements.activityScope.value,
       method: selectedActivityMethod(),
       targetRevenue: Number(elements.activityTargetRevenue.value.replace(/[^\d]/g, "") || 0),
-      multiplier: Number(elements.activityMultiplier.value || 1)
+      multiplier: multiplierText === "" ? 1 : Number(multiplierText)
     };
   }
   function activityBaselineRevenue(settings = activitySettings()) {
@@ -1757,10 +1758,19 @@
       message = "活動日期須落在本次分析月份；跨月活動請依月份分開設定。";
       warning = true;
     } else if (settings.method === "revenue" && settings.targetRevenue > 0 && baseline > 0) {
-      const factor = Math.max(1, Math.min(3, settings.targetRevenue / baseline));
-      message = `一般情況約${formatCurrency(baseline)}；活動目標${formatCurrency(settings.targetRevenue)}，本次將以${factor.toFixed(2)}倍試算活動期間需求。`;
+      const requestedFactor = settings.targetRevenue / baseline;
+      const factor = Math.max(1, Math.min(3, requestedFactor));
+      if (requestedFactor < 1) {
+        message = `活動目標${formatCurrency(settings.targetRevenue)}低於一般情況${formatCurrency(baseline)}；大活動不會降低原採購需求，系統將以1.00倍執行，產生建議前會再次請您確認。`;
+        warning = true;
+      } else {
+        message = `一般情況約${formatCurrency(baseline)}；活動目標${formatCurrency(settings.targetRevenue)}，本次將以${factor.toFixed(2)}倍試算活動期間需求。`;
+      }
     } else if (settings.method === "multiplier" && settings.multiplier >= 1 && settings.multiplier <= 3) {
       message = `本次將以${settings.multiplier.toFixed(2)}倍試算活動期間需求；一般期間仍維持原日需求。`;
+    } else if (settings.method === "multiplier" && Number.isFinite(settings.multiplier) && settings.multiplier < 1) {
+      message = `填入倍率${settings.multiplier.toFixed(2)}低於1.00；大活動不會降低原採購需求，系統將以1.00倍執行，產生建議前會再次請您確認。`;
+      warning = true;
     } else if (settings.method === "revenue") {
       message = "請先完成本月通路營收、活動日期及活動期間預計營業額。";
       warning = true;
@@ -1770,6 +1780,16 @@
     }
     elements.activityPreview.textContent = message;
     elements.activityPreview.classList.toggle("is-warning", warning);
+  }
+  function confirmActivityDemandFloor() {
+    const settings = activitySettings();
+    if (!settings.enabled) return true;
+    const baseline = activityBaselineRevenue(settings);
+    const requestedFactor = settings.method === "revenue"
+      ? (baseline > 0 && settings.targetRevenue > 0 ? settings.targetRevenue / baseline : 1)
+      : settings.multiplier;
+    if (!(Number.isFinite(requestedFactor) && requestedFactor < 1)) return true;
+    return window.confirm("大活動需求設定低於1.00倍。\n\n為避免誤減一般採購需求，系統會以1.00倍執行，不會降低原本的建議採購量。\n\n是否確認繼續產生採購建議？");
   }
   function updateAutomaticForecastCost() {
     if (state.sharedCostSnapshot?.forecastCost >= 0) {
@@ -2640,6 +2660,10 @@
   async function analyze() {
     if (!(await checkRuntimeVersion())) return;
     if (!requirementsReady()) return;
+    if (!confirmActivityDemandFloor()) {
+      setStatus("已取消產生採購建議；請重新確認大活動需求倍率。", "warning");
+      return;
+    }
     elements.analyze.disabled = true; elements.download.disabled = true; setStatus("正在以大型檔專用模式預檢庫存；門市店倉會完整保留…");
     try {
       const monthEndMode = elements.checkpoint.value === "month-end";

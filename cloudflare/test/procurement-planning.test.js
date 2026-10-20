@@ -488,6 +488,117 @@ describe("採購規劃核心鎖定公式", () => {
     expect(lowLegacy.rows[0].suggestedPurchaseQty).toBe(highLegacy.rows[0].suggestedPurchaseQty);
   });
 
+  it("新品首批由匯入一路驗收到未修改核准、人工異動覆核與ERP守恆", () => {
+    const sourceWorkbook = XLSX.utils.book_new();
+    const sourceSheet = XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "預計／實際上市日", "預計販售通路或門市", "相似類別", "備註"],
+      ["NP-E2E-1", "2026-11-03", "全部通路", "天絲", "端到端驗收樣本"]
+    ]);
+    sourceSheet.A2.z = "yyyy-mm-dd";
+    XLSX.utils.book_append_sheet(sourceWorkbook, sourceSheet, "新品首批名單");
+    const sourceBytes = XLSX.write(sourceWorkbook, { type: "buffer", bookType: "xlsx" });
+    const browserReadWorkbook = XLSX.read(sourceBytes, { type: "buffer", cellDates: false });
+    const parsed = core.parseNewProductWorkbook(browserReadWorkbook, XLSX, { fileName: "新品首批_端到端驗收.xlsx" });
+    expect(parsed.errors).toHaveLength(0);
+    expect(parsed.records).toEqual([expect.objectContaining({
+      sku: "NP-E2E-1", listedDate: "2026-11-03", channels: "全部通路", similarCategory: "天絲"
+    })]);
+
+    const master = makeMaster();
+    master.bySku.set("NP-E2E-1", {
+      ...master.bySku.get("A3"),
+      sku: "NP-E2E-1",
+      supplierSku: "V-NP-E2E-1",
+      name: "60天絲新品5尺床包",
+      supplier: "上林",
+      unitCost: 600,
+      moq: 1,
+      productStatus: "尚可追加"
+    });
+    const base = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-10-20", checkpoint: "month-start"
+    });
+    base.rows.push(...[0.8, 1, 1.2].map((daily, index) => ({
+      sku: `NP-PEER-${index + 1}`,
+      name: "60天絲5尺床包",
+      materialCategory: "天絲",
+      mainCategory: "床包",
+      size: "5尺床包",
+      forecastDailyQty: daily,
+      hqDailyQty: daily,
+      storeDailyByCode: {},
+      discontinued: false,
+      sellThroughStop: false,
+      externalPurchaseBlocked: false
+    })));
+    const special = core.buildSpecialProcurementAnalysis({
+      baseAnalysis: base,
+      workflowType: "new_product",
+      rows: parsed.records,
+      fileName: "新品首批_端到端驗收.xlsx",
+      master,
+      inventory: makeInventory(),
+      pendingReports: [makePending()],
+      supplierRules: core.SUPPLIER_RULES
+    });
+    expect(special.rows).toHaveLength(1);
+    expect(special.rows[0]).toMatchObject({
+      sku: "NP-E2E-1",
+      suggestedPurchaseQty: 30,
+      suggestedPurchaseAmount: 18000,
+      newProductSystemReference: expect.objectContaining({ firstMonthDemandQty: 30, sampleCount: 3 })
+    });
+
+    const baselineBySku = new Map(special.rows.map((row) => [row.sku, row]));
+    const allowedSkuSet = new Set(special.rows.map((row) => row.sku));
+    const unchangedWorkbook = core.buildRecommendationWorkbook(special, XLSX);
+    const unchangedReview = core.reviewReturnedWorkbook(unchangedWorkbook, XLSX, {
+      asOfDate: "2026-10-20", orderDate: "2026-10-20", baselineBySku, allowedSkuSet
+    });
+    expect(unchangedReview.errors).toHaveLength(0);
+    expect(unchangedReview.rows).toEqual([expect.objectContaining({
+      sku: "NP-E2E-1", suggestedQty: 30, finalQty: 30, approvedAmount: 18000, reason: ""
+    })]);
+    const unchangedErp = core.buildErpPurchaseWorkbook(unchangedReview, XLSX, { approved: true, batchId: "PP-E2E-UNCHANGED" });
+    const unchangedErpRows = XLSX.utils.sheet_to_json(unchangedErp.Sheets["通用貨品數量"], { header: 1, defval: "" });
+    expect(unchangedErpRows.slice(1)).toEqual([["NP-E2E-1", "60天絲新品5尺床包", "", "", 30, 600, "", "寬承總倉"]]);
+    expect(unchangedErpRows.slice(1).reduce((sum, row) => sum + Number(row[4] || 0), 0)).toBe(unchangedReview.rows.reduce((sum, row) => sum + row.finalQty, 0));
+    expect(unchangedErpRows.slice(1).reduce((sum, row) => sum + Number(row[4] || 0) * Number(row[5] || 0), 0)).toBe(unchangedReview.totals.approvedAmount);
+
+    const adjustedWorkbook = core.buildRecommendationWorkbook(special, XLSX);
+    const purchaseSheetName = adjustedWorkbook.SheetNames.find((name) => /^03(?:A|B\d|C|D)_/.test(name)
+      && XLSX.utils.sheet_to_json(adjustedWorkbook.Sheets[name], { defval: "" }).some((row) => row["ERP品號"] === "NP-E2E-1"));
+    const purchaseSheet = adjustedWorkbook.Sheets[purchaseSheetName];
+    const purchaseHeaders = XLSX.utils.sheet_to_json(purchaseSheet, { header: 1, defval: "" })[0];
+    const manualQtyColumn = purchaseHeaders.indexOf("人工確認採購量");
+    const manualReasonColumn = purchaseHeaders.indexOf("人工調整原因類別");
+    expect(manualQtyColumn).toBeGreaterThanOrEqual(0);
+    expect(manualReasonColumn).toBeGreaterThanOrEqual(0);
+    purchaseSheet[XLSX.utils.encode_cell({ r: 1, c: manualQtyColumn })] = { t: "n", v: 36 };
+    purchaseSheet[XLSX.utils.encode_cell({ r: 1, c: manualReasonColumn })] = { t: "s", v: "需求增加，人工提高數量" };
+    expect(XLSX.utils.sheet_to_json(purchaseSheet, { defval: "" })[0]).toMatchObject({
+      "人工確認採購量": 36,
+      "人工調整原因類別": "需求增加，人工提高數量"
+    });
+    const firstReview = core.reviewReturnedWorkbook(adjustedWorkbook, XLSX, {
+      asOfDate: "2026-10-20", orderDate: "2026-10-20", baselineBySku, allowedSkuSet
+    });
+    expect(firstReview.errors).toHaveLength(0);
+    expect(firstReview.rows[0]).toMatchObject({ suggestedQty: 30, confirmedQty: 36, finalQty: 36, approvedAmount: 21600 });
+    const secondWorkbook = core.buildSecondReviewWorkbook(firstReview, XLSX, { batchId: "PP-E2E-ADJUSTED" });
+    const finalReview = core.reviewSecondApprovalWorkbook(secondWorkbook, XLSX, {
+      asOfDate: "2026-10-20", orderDate: "2026-10-20", baselineBySku: new Map(firstReview.rows.map((row) => [row.sku, row]))
+    });
+    expect(finalReview.errors).toHaveLength(0);
+    expect(finalReview.rows[0]).toMatchObject({ sku: "NP-E2E-1", finalQty: 36, approvedAmount: 21600 });
+    const adjustedErp = core.buildErpPurchaseWorkbook(finalReview, XLSX, { approved: true, batchId: "PP-E2E-ADJUSTED" });
+    const adjustedErpRows = XLSX.utils.sheet_to_json(adjustedErp.Sheets["通用貨品數量"], { header: 1, defval: "" }).slice(1);
+    expect(adjustedErpRows).toHaveLength(finalReview.rows.filter((row) => row.finalQty > 0).length);
+    expect(adjustedErpRows.reduce((sum, row) => sum + Number(row[4] || 0), 0)).toBe(finalReview.rows.reduce((sum, row) => sum + row.finalQty, 0));
+    expect(adjustedErpRows.reduce((sum, row) => sum + Number(row[4] || 0) * Number(row[5] || 0), 0)).toBe(finalReview.totals.approvedAmount);
+  });
+
   it("枕頭本體固定歸四季枕芯，枕套不誤判", () => {
     expect(core.inferMaterialCategory({ mainCategory: "枕頭", style2: "羽絨", name: "PRIMARIO羽絨軟枕" })).toBe("枕芯");
     expect(core.inferMaterialCategory({ mainCategory: "枕芯", name: "機能記憶枕" })).toBe("枕芯");
@@ -2041,6 +2152,173 @@ describe("採購建議第二階段", () => {
     expect(analysis.appliedRules.activityDemand).toMatchObject({ enabled: true, method: "revenue", methodLabel: "活動營業額換算", baselineRevenue: 30000, multiplier: 2 });
     expect(analysis.totals.activityDemandAdditionalRawQty).toBeGreaterThan(0);
   });
+
+  it("大活動需求卡片完整驗收到報表、回匯、ERP與輸出守恆", () => {
+    const master = makeMaster();
+    master.bySku.set("A1", { ...master.bySku.get("A1"), supplier: "上林", unitCost: 500, moq: 1 });
+    const source = {
+      master,
+      inventory: makeInventory(),
+      pendingReports: [],
+      consignment: { records: [], exceptions: [], confirmedExclusions: [] },
+      salesReports: [makeSales()],
+      model: makeForecastModel(),
+      blacklist: [],
+      asOfDate: "2026-08-28",
+      analysisMonth: "2026-08",
+      checkpoint: "mid-month",
+      supplierRules: core.SUPPLIER_RULES,
+      revenueChannels: [{ company: "寬承", name: "官網", amount: 310000 }]
+    };
+    const ordinary = core.buildProcurementRecommendations(source);
+    const disabled = core.buildProcurementRecommendations({
+      ...source,
+      activityDemand: { enabled: false, name: "不應套用", startDate: "2026-08-29", endDate: "2026-08-31", method: "multiplier", multiplier: 3 }
+    });
+    const ordinaryRow = ordinary.rows.find((row) => row.sku === "A1");
+    const disabledRow = disabled.rows.find((row) => row.sku === "A1");
+    expect(disabled.appliedRules.activityDemand).toEqual({ enabled: false });
+    expect(disabledRow).toMatchObject({
+      forecastDailyQty: ordinaryRow.forecastDailyQty,
+      suggestedPurchaseQty: ordinaryRow.suggestedPurchaseQty,
+      suggestedPurchaseAmount: ordinaryRow.suggestedPurchaseAmount,
+      activityDemandApplied: false,
+      activityDemandAdditionalSuggestedQty: 0
+    });
+
+    const multiplierAnalysis = core.buildProcurementRecommendations({
+      ...source,
+      activityDemand: {
+        enabled: true, name: "雙11倍率驗收", startDate: "2026-08-29", endDate: "2026-08-31",
+        scope: "supplier-shanglin", method: "multiplier", multiplier: 2
+      }
+    });
+    const revenueAnalysis = core.buildProcurementRecommendations({
+      ...source,
+      activityDemand: {
+        enabled: true, name: "雙11營收驗收", startDate: "2026-08-29", endDate: "2026-08-31",
+        scope: "supplier-shanglin", method: "revenue", targetRevenue: 60000
+      }
+    });
+    const multiplierRow = multiplierAnalysis.rows.find((row) => row.sku === "A1");
+    const revenueRow = revenueAnalysis.rows.find((row) => row.sku === "A1");
+    expect(multiplierAnalysis.appliedRules.activityDemand).toMatchObject({
+      enabled: true, method: "multiplier", multiplier: 2, scope: "supplier-shanglin"
+    });
+    expect(revenueAnalysis.appliedRules.activityDemand).toMatchObject({
+      enabled: true, method: "revenue", targetRevenue: 60000, baselineRevenue: 30000, multiplier: 2, scope: "supplier-shanglin"
+    });
+    expect(multiplierRow.forecastDailyQty).toBe(ordinaryRow.forecastDailyQty);
+    expect(revenueRow.forecastDailyQty).toBe(ordinaryRow.forecastDailyQty);
+    expect(multiplierRow).toMatchObject({
+      activityDemandApplied: true,
+      activityDemandCoverageDays: 3,
+      activityDemandMultiplier: 2
+    });
+    expect(multiplierRow.activityDemandAdditionalRawQty).toBeGreaterThan(0);
+    expect(ordinaryRow.suggestedPurchaseQty).toBe(29);
+    expect(multiplierRow.activityDemandAdditionalSuggestedQty).toBe(3);
+    expect(multiplierRow.suggestedPurchaseQty).toBe(32);
+    expect(multiplierRow.suggestedPurchaseAmount).toBe(16000);
+    expect(multiplierRow.suggestedPurchaseQty).toBe(revenueRow.suggestedPurchaseQty);
+    expect(multiplierRow.activityDemandAdditionalSuggestedQty).toBe(revenueRow.activityDemandAdditionalSuggestedQty);
+    expect(multiplierAnalysis.totals.activityDemandAdditionalAmount).toBe(
+      multiplierAnalysis.totals.activityDemandAdditionalSuggestedQty * multiplierRow.unitCost
+    );
+
+    const outOfScope = core.buildProcurementRecommendations({
+      ...source,
+      activityDemand: {
+        enabled: true, name: "僅力榮", startDate: "2026-08-29", endDate: "2026-08-31",
+        scope: "supplier-lirong", method: "multiplier", multiplier: 2
+      }
+    }).rows.find((row) => row.sku === "A1");
+    expect(outOfScope).toMatchObject({
+      activityDemandApplied: false,
+      activityDemandAdditionalSuggestedQty: 0,
+      suggestedPurchaseQty: ordinaryRow.suggestedPurchaseQty
+    });
+
+    const belowOneMultiplier = core.buildProcurementRecommendations({
+      ...source,
+      activityDemand: {
+        enabled: true, name: "倍率低於一", startDate: "2026-08-29", endDate: "2026-08-31",
+        scope: "supplier-shanglin", method: "multiplier", multiplier: 0.8
+      }
+    });
+    const belowOneRevenue = core.buildProcurementRecommendations({
+      ...source,
+      activityDemand: {
+        enabled: true, name: "營收倍率低於一", startDate: "2026-08-29", endDate: "2026-08-31",
+        scope: "supplier-shanglin", method: "revenue", targetRevenue: 15000
+      }
+    });
+    expect(belowOneMultiplier.appliedRules.activityDemand).toMatchObject({ enabled: true, multiplier: 1 });
+    expect(belowOneRevenue.appliedRules.activityDemand).toMatchObject({ enabled: true, baselineRevenue: 30000, multiplier: 1 });
+    expect(belowOneMultiplier.rows.find((row) => row.sku === "A1")).toMatchObject({
+      activityDemandApplied: false,
+      activityDemandAdditionalSuggestedQty: 0,
+      suggestedPurchaseQty: ordinaryRow.suggestedPurchaseQty
+    });
+    expect(belowOneRevenue.rows.find((row) => row.sku === "A1")).toMatchObject({
+      activityDemandApplied: false,
+      activityDemandAdditionalSuggestedQty: 0,
+      suggestedPurchaseQty: ordinaryRow.suggestedPurchaseQty
+    });
+
+    expect(() => core.buildProcurementRecommendations({
+      ...source,
+      activityDemand: { enabled: true, name: "", startDate: "2026-08-29", endDate: "2026-08-31", method: "multiplier", multiplier: 2 }
+    })).toThrow("尚未填寫活動名稱");
+    expect(() => core.buildProcurementRecommendations({
+      ...source,
+      activityDemand: { enabled: true, name: "跨月", startDate: "2026-08-31", endDate: "2026-09-01", method: "multiplier", multiplier: 2 }
+    })).toThrow("跨月活動請依月份分開設定");
+    expect(() => core.buildProcurementRecommendations({
+      ...source,
+      activityDemand: { enabled: true, name: "倍率過高", startDate: "2026-08-29", endDate: "2026-08-31", method: "multiplier", multiplier: 3.1 }
+    })).toThrow("須介於1.0至3.0倍");
+    expect(() => core.buildProcurementRecommendations({
+      ...source,
+      revenueChannels: [],
+      activityDemand: { enabled: true, name: "缺營收基準", startDate: "2026-08-29", endDate: "2026-08-31", method: "revenue", targetRevenue: 60000 }
+    })).toThrow("本月通路營收尚未完整設定");
+
+    const workbook = core.buildRecommendationWorkbook(multiplierAnalysis, XLSX, { selectedSuppliers: ["上林"] });
+    const summaryRows = XLSX.utils.sheet_to_json(workbook.Sheets["01_採購摘要"], { header: 1, defval: "" });
+    expect(summaryRows.some((row) => row[0] === "大活動需求設定" && row[1] === "雙11倍率驗收・需求加乘倍數・2倍")).toBe(true);
+    expect(summaryRows.some((row) => row[0] === "大活動適用期間／範圍" && row[1] === "2026-08-29～2026-08-31・上林")).toBe(true);
+    const purchaseRows = XLSX.utils.sheet_to_json(workbook.Sheets["03C_上林採購"], { defval: "" });
+    expect(purchaseRows).toHaveLength(1);
+    expect(purchaseRows[0]).toMatchObject({
+      "ERP品號": "A1",
+      "大活動名稱": "雙11倍率驗收",
+      "大活動估算方式": "需求加乘倍數",
+      "大活動需求倍率": 2,
+      "大活動涵蓋天數": 3,
+      "大活動增加建議量": multiplierRow.activityDemandAdditionalSuggestedQty,
+      "建議採購量": multiplierRow.suggestedPurchaseQty
+    });
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, {
+      asOfDate: "2026-08-28",
+      orderDate: "2026-08-28",
+      supplierRules: core.SUPPLIER_RULES,
+      baselineBySku: new Map([[multiplierRow.sku, multiplierRow]]),
+      allowedSkuSet: new Set([multiplierRow.sku])
+    });
+    expect(review.errors).toHaveLength(0);
+    expect(review.rows[0]).toMatchObject({
+      sku: "A1",
+      suggestedQty: multiplierRow.suggestedPurchaseQty,
+      finalQty: multiplierRow.suggestedPurchaseQty,
+      approvedAmount: multiplierRow.suggestedPurchaseQty * multiplierRow.unitCost
+    });
+    const erp = core.buildErpPurchaseWorkbook(review, XLSX, { approved: true, batchId: "PP-ACTIVITY-E2E" });
+    const erpRows = XLSX.utils.sheet_to_json(erp.Sheets["通用貨品數量"], { header: 1, defval: "" }).slice(1);
+    expect(erpRows).toHaveLength(review.rows.filter((row) => row.finalQty > 0).length);
+    expect(erpRows.reduce((sum, row) => sum + Number(row[4] || 0), 0)).toBe(review.rows.reduce((sum, row) => sum + row.finalQty, 0));
+    expect(erpRows.reduce((sum, row) => sum + Number(row[4] || 0) * Number(row[5] || 0), 0)).toBe(review.totals.approvedAmount);
+  });
 });
 
 describe("採購規劃前台與入口", () => {
@@ -2134,15 +2412,15 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('style.css?v=20261019-new-product-system-r1');
-    expect(toolHtml).toContain('core.js?v=20261020-new-product-import-r1');
-    expect(toolHtml).toContain('google-sources.js?v=20261020-new-product-import-r1');
-    expect(toolHtml).toContain('app.js?v=20261020-new-product-import-r1');
+    expect(toolHtml).toContain('style.css?v=20261020-activity-floor-confirm-r1');
+    expect(toolHtml).toContain('core.js?v=20261020-activity-floor-confirm-r1');
+    expect(toolHtml).toContain('google-sources.js?v=20261020-activity-floor-confirm-r1');
+    expect(toolHtml).toContain('app.js?v=20261020-activity-floor-confirm-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261020-new-product-import-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261020-activity-floor-confirm-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2226,10 +2504,13 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261020-new-product-import-r1");
+    expect(toolHtml).toContain("app.js?v=20261020-activity-floor-confirm-r1");
     expect(toolHtml).toContain('id="activity-demand-card"');
     expect(toolHtml).toContain("活動期間預計營業額");
     expect(toolHtml).toContain("需求加乘倍數");
+    expect(toolAppSource).toContain("大活動不會降低原採購需求，系統將以1.00倍執行");
+    expect(toolAppSource).toContain("是否確認繼續產生採購建議？");
+    expect(toolAppSource).toContain("if (!confirmActivityDemandFloor())");
     expect(toolApp).toContain("function detachChildSharedIdentity");
     expect(toolApp).toContain("state.sharedDraftId = \"\"; state.sharedDraftRevision = 0;");
     expect(toolApp).toContain("function repairOverwrittenParentDraft");
