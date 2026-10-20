@@ -26,6 +26,15 @@ describe("門市週調撥日期規則", () => {
     expect(core.storeSchedule("2026-09-13", "R00", {})).toMatchObject({ currentArrivalDate: "2026-09-16", nextArrivalDate: "2026-09-23", coverageDays: 10 });
     expect(core.storeSchedule("2026-09-13", "R06", {})).toMatchObject({ currentArrivalDate: "2026-09-17", nextArrivalDate: "2026-09-24", coverageDays: 11 });
   });
+
+  it("以預定核准日後第2天作為所有門市本批預計到貨日", () => {
+    expect(core.storeSchedule("2026-10-19", "R00", {}, "2026-10-20")).toMatchObject({
+      currentArrivalDate: "2026-10-22", nextArrivalDate: "2026-10-29", coverageDays: 10, preArrivalDays: 3
+    });
+    expect(core.storeSchedule("2026-10-20", "R06", {}, "2026-10-21")).toMatchObject({
+      currentArrivalDate: "2026-10-23", nextArrivalDate: "2026-10-30", coverageDays: 10, preArrivalDays: 3
+    });
+  });
 });
 
 describe("總倉不足分配", () => {

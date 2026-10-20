@@ -196,6 +196,22 @@ describe("前台導覽", () => {
     expect(style).toContain(".batch-history-details summary:focus-visible");
   });
 
+  it("週調撥依實際建立日排下一工作日回覆，核准後第2天預計到店", () => {
+    const html = readFileSync("../store-transfer/index.html", "utf8");
+    const app = readFileSync("../store-transfer/app.js", "utf8");
+    const core = readFileSync("../store-transfer/core.js", "utf8");
+    const worker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
+    expect(html).toContain("下一個工作日前回覆");
+    expect(html).toContain("核准後第2天到店");
+    expect(app).toContain('const proposal = iso(new Date())');
+    expect(app).toContain('approvalDate: $("lock-at").value.slice(0, 10)');
+    expect(app).toContain("門市回覆鎖定時間已經過期");
+    expect(core).toContain("addCalendarDays(approvalDate, 2)");
+    expect(worker).toContain("arrivalScheduleAfterApproval");
+    expect(worker).toContain("Date.parse(lockAt) <= Date.now()");
+    expect(worker).toContain("arrival_schedule = ?");
+  });
+
   it("已核准週調撥只能由總部開啟更正或退回門市，並保留版本紀錄", () => {
     const html = readFileSync("../store-transfer/index.html", "utf8");
     const app = readFileSync("../store-transfer/app.js", "utf8");

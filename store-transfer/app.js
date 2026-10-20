@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261020-store-transfer-r19";
+  const APP_VERSION = "20261020-store-transfer-r20";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -587,17 +587,11 @@
 
   function applyScheduleForWeek(weekKey) {
     const match = String(weekKey || "").match(/^(\d{4})-W(\d{2})$/); if (!match) return;
-    const jan4 = new Date(Number(match[1]), 0, 4, 12), jan4Offset = (jan4.getDay() + 6) % 7;
-    const monday = new Date(jan4); monday.setDate(jan4.getDate() - jan4Offset + (Number(match[2]) - 1) * 7);
-    const tuesday = new Date(monday); tuesday.setDate(monday.getDate() + 1);
     const iso = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
     const holidays = state.config.storeInventoryRules?.config?.workdayHolidays || [];
-    const proposal = transferCore.nextWorkingDay(iso(monday), holidays);
-    let lock = transferCore.nextWorkingDay(iso(tuesday), holidays);
-    if (lock <= proposal) {
-      const following = new Date(`${proposal}T12:00:00`); following.setDate(following.getDate() + 1);
-      lock = transferCore.nextWorkingDay(iso(following), holidays);
-    }
+    const proposal = iso(new Date());
+    const following = new Date(`${proposal}T12:00:00`); following.setDate(following.getDate() + 1);
+    const lock = transferCore.nextWorkingDay(iso(following), holidays);
     $("proposal-date").value = proposal; $("lock-at").value = `${lock}T09:00`;
   }
 
@@ -737,6 +731,7 @@
         marketing: transferCore.parseMarketingWorkbook(marketingBook, inputXlsx, latestSalesDate),
         consumableHistory: historyPayload.snapshots || [],
         proposalDate: $("proposal-date").value,
+        approvalDate: $("lock-at").value.slice(0, 10),
         calculationMode: mode,
         storeInventory: state.config.storeInventoryRules?.config || {},
         storeDisplayExceptions: state.config.displayExceptions || []
@@ -796,6 +791,7 @@
     if (state.calculation.calculationMode === "comparison") throw new Error("A/B測試比對只能預覽，請切回正式補貨並重新計算後再建立批次。");
     const weekKey = $("week-key").value, proposalDate = $("proposal-date").value, localLock = $("lock-at").value;
     if (!weekKey || !proposalDate || !localLock) throw new Error("請填妥週次、建議產生日與鎖定時間。");
+    if (Date.parse(localLock) <= Date.now()) throw new Error("門市回覆鎖定時間已經過期；請改成下一個工作日的未來時間後再建立批次。");
     $("publish-button").disabled = true;
     try {
       let notificationAuthorizationError = "";

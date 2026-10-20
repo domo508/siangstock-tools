@@ -138,8 +138,21 @@
     return isoDate(date);
   }
 
-  function storeSchedule(proposalDate, storeCode, storeInventory) {
+  function storeSchedule(proposalDate, storeCode, storeInventory, approvalDate = "") {
     const holidays = storeInventory?.workdayHolidays || [];
+    if (approvalDate) {
+      const currentArrivalDate = addCalendarDays(approvalDate, 2);
+      const nextArrivalDate = addCalendarDays(currentArrivalDate, 7);
+      return {
+        storeCode,
+        arrivalWeekday: localDate(currentArrivalDate).getDay(),
+        currentArrivalDate,
+        nextProposalDate: addCalendarDays(approvalDate, 7),
+        nextArrivalDate,
+        coverageDays: Math.max(1, daysBetween(proposalDate, nextArrivalDate)),
+        preArrivalDays: Math.max(0, daysBetween(proposalDate, currentArrivalDate))
+      };
+    }
     const defaultWeekdays = { R00: 3, R01: 4, R03: 4, R10: 3, R07: 3, R06: 4 };
     const weekday = Math.min(4, Math.max(3, Number(storeInventory?.arrivalWeekdayByStore?.[storeCode] ?? defaultWeekdays[storeCode] ?? 3)));
     const currentArrivalBase = nextWeekdayAfter(proposalDate, weekday);
@@ -663,7 +676,7 @@
   function buildSuggestions(input) {
     const stores = input.storeCodes || STORE_ORDER;
     const proposalDate = input.proposalDate || input.sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "");
-    const scheduleByStore = Object.fromEntries(stores.map((store) => [store, storeSchedule(proposalDate, store, input.storeInventory || {})]));
+    const scheduleByStore = Object.fromEntries(stores.map((store) => [store, storeSchedule(proposalDate, store, input.storeInventory || {}, input.approvalDate || "")]));
     const masterBySku = input.master.bySku;
     const transferExclusions = transferExclusionSkus(input.storeInventory);
     const applicabilityRules = normalizedApplicabilityRules(input.storeInventory);

@@ -9,7 +9,7 @@
   <title>門市週補貨與調撥｜翔仔居家</title>
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="../cost-analysis/style.css">
-  <link rel="stylesheet" href="style.css?v=20261020-store-transfer-r19">
+  <link rel="stylesheet" href="style.css?v=20261020-store-transfer-r20">
 </head>
 <body>
   <dialog id="version-warning" class="version-warning" role="alertdialog" aria-labelledby="version-warning-title" aria-describedby="version-warning-description">
@@ -31,7 +31,7 @@
     <nav class="breadcrumb" aria-label="頁面導覽"><ol><li><a href="/">公司工具首頁</a></li><li aria-current="page">門市週補貨與調撥</li></ol><a class="back-link" href="/">← 返回公司工具首頁</a></nav>
 
     <section class="hero compact-hero" data-weekly-view aria-labelledby="page-title">
-      <div><p class="eyebrow">WEEKLY STORE REPLENISHMENT</p><h1 id="page-title">總部算一次，<br>各門市只確認自己的量。</h1><p id="hero-description" class="hero-description">星期一由總部建立六間門市建議；門市於星期二前回覆，總部核准後依門市分開產生 ERP 調撥檔，預計星期三、四到店。</p></div>
+      <div><p class="eyebrow">WEEKLY STORE REPLENISHMENT</p><h1 id="page-title">總部算一次，<br>各門市只確認自己的量。</h1><p id="hero-description" class="hero-description">總部建立六間門市建議後，門市於下一個工作日前回覆；總部核准後依門市分開產生 ERP 調撥檔，預計核准後第2天到店。</p></div>
       <aside class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>原始 Excel 不會上傳</strong><p>庫存與銷售只在瀏覽器運算；雲端只保存流程必要欄位、門市展示例外及提袋週彙總，異動紀錄12個月後刪除。</p></div></aside>
     </section>
 
@@ -42,11 +42,11 @@
     </section>
 
     <section id="hq-panel" class="panel" data-weekly-view hidden aria-labelledby="hq-title">
-      <div class="section-heading"><div><p class="eyebrow">總部工作台</p><h2 id="hq-title">建立本週調撥建議</h2></div><div class="heading-actions"><p>星期一建立、星期二完成回覆與審核；遇公司不作業日會順延至下一個工作日。</p><div class="heading-rule-links"><a id="transfer-rules-link" class="secondary-button compact" href="rules/?deploy=20261015-transfer-applicability-r2" hidden>周調撥適用／排除規則</a><a id="rules-link" class="secondary-button compact" href="../procurement-planning/rules-admin/?from=store-transfer&amp;deploy=20261015-transfer-rules-r8#store-inventory" hidden>展示／最低庫存規則</a></div></div></div>
+      <div class="section-heading"><div><p class="eyebrow">總部工作台</p><h2 id="hq-title">建立本週調撥建議</h2></div><div class="heading-actions"><p>依實際建立日排下一個工作日回覆；遇公司不作業日自動順延，總部核准後第2天預計到店。</p><div class="heading-rule-links"><a id="transfer-rules-link" class="secondary-button compact" href="rules/?deploy=20261015-transfer-applicability-r2" hidden>周調撥適用／排除規則</a><a id="rules-link" class="secondary-button compact" href="../procurement-planning/rules-admin/?from=store-transfer&amp;deploy=20261015-transfer-rules-r8#store-inventory" hidden>展示／最低庫存規則</a></div></div></div>
       <div class="period-grid">
         <label><span>本週週次</span><input id="week-key" type="week" required></label>
         <label><span>建議產生日</span><input id="proposal-date" type="date" required></label>
-        <label><span>門市回覆鎖定時間</span><input id="lock-at" type="datetime-local" required></label>
+        <label><span>門市回覆鎖定時間（下一工作日09:00）</span><input id="lock-at" type="datetime-local" required></label>
       </div>
       <div class="store-picker" aria-labelledby="store-picker-title"><h3 id="store-picker-title">本週產生門市</h3><div id="store-options" class="store-options"></div></div>
       <fieldset class="calculation-mode-panel" aria-describedby="calculation-mode-help">
@@ -137,7 +137,7 @@
     <section class="panel operation-guide" data-weekly-view aria-labelledby="guide-title">
       <div class="section-heading"><div><p class="eyebrow">操作說明</p><h2 id="guide-title">每週流程怎麼走</h2></div></div>
       <p class="result-alert info"><strong>建立批次後通知：</strong>正式批次建立成功後，系統會以建立者完成授權的公司 Gmail，寄信通知本批實際包含的門市；寄送失敗可在批次清單重試，已寄成功的門市不會重複收到。</p>
-      <div class="guide-grid"><article><strong>登入失敗怎麼辦</strong><p>按右上角「重新登入／切換帳號」，先清除公司工具登入狀態，再以本店被指派的公司 Google 帳號重新開啟週調撥。</p></article><article><strong>正式與A/B模式</strong><p>正式模式會以待發貨及在途量防止重複補貨；A/B模式忽略提交單，可依門市下載差異表或發布公司共用協作批次。</p></article><article><strong>總部查某品號分到哪裡</strong><p>總部可在建議預覽或批次明細輸入完整或部分ERP品號，直接查看分配門市、筆數與合計件數。</p></article><article><strong>下載正式補貨報表</strong><p>完成正式計算後，可勾選需要的門市分別下載；每份檔案包含本次建議、缺貨未配與待發貨／在途三個頁籤，不會改寫原始Excel。</p></article><article><strong>本店展示例外</strong><p>門市可用單一ERP貨號設定自己的不可售展示最低量；下次總部重算生效，不會改寫已建立批次。</p></article><article><strong>展示與42天銷售</strong><p>可售最低庫存仍要求近42天有現場銷售；不可售展示不受零銷售影響。S品總倉無可釋出量時取消展示需求。</p></article><article><strong>A/B協作怎麼走</strong><p>四位總部帳號皆可接續查看、調整決議量及備註；只有siang01與service1能轉正式批次。尚未轉正式的A/B協作批次可由總部刪除。</p></article><article><strong>同週批次版本</strong><p>同一週重新建立時，新批次會成為目前作業版本；舊的未完成批次保留紀錄，但不能再修改或送出。</p></article><article><strong>門市批次怎麼顯示</strong><p>上方只列尚未處理、已暫存或已送出等待總部的批次；其它狀態放在預設收合的近一個月歷史區，完整稽核資料仍保留12個月。</p></article><article><strong>刪除批次</strong><p>總部可刪除尚未轉正式的A/B協作批次，以及仍在等待門市且尚無任何門市核准的正式批次；已進總部覆核、已核准或已完成批次不能刪除。已取代／已取消批次仍可移出前台，稽核資料均保留12個月。</p></article><article><strong>核准後需要修改</strong><p>尚未產生ERP時，只有總部可選「開啟總部更正」或「退回門市修改」；原核准內容保留版本，重新核准後才可產生ERP。已產生ERP須改走作廢、補調或沖銷。</p></article><article><strong>門市可撤回</strong><p>送出後、星期二審核鎖定前可不限次數撤回；鎖定後只能由總部更正。</p></article><article><strong>人工增減品項</strong><p>門市與總部皆可新增品項；移除時以本階段數量歸零處理，原因與原始建議仍會保留。</p></article><article><strong>人工調整原因</strong><p>新增、移除或數量不同於上一階段時，必須填原因才可送出。</p></article><article><strong>B3判斷</strong><p>只有來源單號＋ERP品號成功配對的總倉代出才認列；無法配對會列待人工確認。</p></article><article><strong>批次狀態</strong><p>等待門市→總部覆核→已核准→ERP皆完成→本週完成，每店進度會分開顯示。</p></article></div>
+      <div class="guide-grid"><article><strong>建立、回覆與到店日期</strong><p>依實際建立日排下一個工作日09:00前回覆；遇公司不作業日自動順延。系統以總部核准後第2天作為門市預計到貨日。</p></article><article><strong>登入失敗怎麼辦</strong><p>按右上角「重新登入／切換帳號」，先清除公司工具登入狀態，再以本店被指派的公司 Google 帳號重新開啟週調撥。</p></article><article><strong>正式與A/B模式</strong><p>正式模式會以待發貨及在途量防止重複補貨；A/B模式忽略提交單，可依門市下載差異表或發布公司共用協作批次。</p></article><article><strong>總部查某品號分到哪裡</strong><p>總部可在建議預覽或批次明細輸入完整或部分ERP品號，直接查看分配門市、筆數與合計件數。</p></article><article><strong>下載正式補貨報表</strong><p>完成正式計算後，可勾選需要的門市分別下載；每份檔案包含本次建議、缺貨未配與待發貨／在途三個頁籤，不會改寫原始Excel。</p></article><article><strong>本店展示例外</strong><p>門市可用單一ERP貨號設定自己的不可售展示最低量；下次總部重算生效，不會改寫已建立批次。</p></article><article><strong>展示與42天銷售</strong><p>可售最低庫存仍要求近42天有現場銷售；不可售展示不受零銷售影響。S品總倉無可釋出量時取消展示需求。</p></article><article><strong>A/B協作怎麼走</strong><p>四位總部帳號皆可接續查看、調整決議量及備註；只有siang01與service1能轉成正式批次。尚未轉正式的A/B協作批次可由總部刪除。</p></article><article><strong>同週批次版本</strong><p>同一週重新建立時，新批次會成為目前作業版本；舊的未完成批次保留紀錄，但不能再修改或送出。</p></article><article><strong>門市批次怎麼顯示</strong><p>上方只列尚未處理、已暫存或已送出等待總部的批次；其它狀態放在預設收合的近一個月歷史區，完整稽核資料仍保留12個月。</p></article><article><strong>刪除批次</strong><p>總部可刪除尚未轉正式的A/B協作批次，以及仍在等待門市且尚無任何門市核准的正式批次；已進總部覆核、已核准或已完成批次不能刪除。已取代／已取消批次仍可移出前台，稽核資料均保留12個月。</p></article><article><strong>核准後需要修改</strong><p>尚未產生ERP時，只有總部可選「開啟總部更正」或「退回門市修改」；原核准內容保留版本，重新核准後才可產生ERP。已產生ERP須改走作廢、補調或沖銷。</p></article><article><strong>門市可撤回</strong><p>送出後、門市回覆鎖定前可不限次數撤回；鎖定後只能由總部更正。</p></article><article><strong>人工增減品項</strong><p>門市與總部皆可新增品項；移除時以本階段數量歸零處理，原因與原始建議仍會保留。</p></article><article><strong>人工調整原因</strong><p>新增、移除或數量不同於上一階段時，必須填原因才可送出。</p></article><article><strong>B3判斷</strong><p>只有來源單號＋ERP品號成功配對的總倉代出才認列；無法配對會列待人工確認。</p></article><article><strong>批次狀態</strong><p>等待門市→總部覆核→已核准→ERP皆完成→本週完成，每店進度會分開顯示。</p></article></div>
     </section>
 
     <dialog id="batch-dialog" class="batch-dialog"><form method="dialog"><button class="dialog-close" aria-label="關閉">×</button></form><div id="batch-detail"></div></dialog>
@@ -168,8 +168,8 @@
   <script src="../procurement-planning/core.js?v=20260917-company-cost-r1"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="../procurement-planning/google-sources.js?v=20260915-google-sources-r1"></script>
-  <script src="core.js?v=20261020-store-transfer-r19"></script>
+  <script src="core.js?v=20261020-store-transfer-r20"></script>
   <script src="xlsx-preflight.js?v=20260916-xlsx-reader-r1"></script>
-  <script src="app.js?v=20261020-store-transfer-r19"></script>
+  <script src="app.js?v=20261020-store-transfer-r20"></script>
 </body>
 </html>

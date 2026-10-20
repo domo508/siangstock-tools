@@ -103,6 +103,28 @@ function isWorkday(value: string, holidays: Set<string>): boolean {
   return day !== 0 && day !== 6 && !holidays.has(value);
 }
 
+function taipeiDate(value: string | Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit"
+  }).format(typeof value === "string" ? new Date(value) : value);
+}
+
+function addCalendarDays(value: string, days: number): string {
+  const date = new Date(`${value}T12:00:00+08:00`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return taipeiDate(date);
+}
+
+function arrivalScheduleAfterApproval(rawSchedule: Record<string, unknown>, approvedAt: string): Record<string, unknown> {
+  const approvalDate = taipeiDate(approvedAt);
+  const currentArrivalDate = addCalendarDays(approvalDate, 2);
+  const nextArrivalDate = addCalendarDays(currentArrivalDate, 7);
+  return Object.fromEntries(Object.entries(rawSchedule).map(([storeCode, raw]) => {
+    const row = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    return [storeCode, { ...row, storeCode, approvalDate, currentArrivalDate, nextArrivalDate }];
+  }));
+}
+
 function validateConsumablePack(type: ItemType, value: number, label: string): void {
   if (type === "consumable" && value % 100 !== 0) throw new RequestValidationError(`${label}須為0或100的倍數。`);
 }
@@ -626,6 +648,7 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   const lockAt = text(input.lockAt, "鎖定時間", 40);
   if (Number.isNaN(Date.parse(responseDueAt)) || Number.isNaN(Date.parse(lockAt))) throw new RequestValidationError("回覆期限或鎖定時間格式錯誤。");
   if (Date.parse(responseDueAt) > Date.parse(lockAt)) throw new RequestValidationError("門市回覆期限不可晚於鎖定時間。");
+  if (Date.parse(lockAt) <= Date.now()) throw new RequestValidationError("門市回覆鎖定時間已經過期；請改成下一個工作日的未來時間後再建立批次。", 409);
   const inventoryRules = await storeInventoryConfig(env);
   const holidays = new Set(Array.isArray(inventoryRules.config.workdayHolidays) ? inventoryRules.config.workdayHolidays.map(String) : []);
   // 建議日以實際執行日為準，允許臨時於週末補跑；標準週次仍由前台依假日規則帶入。
@@ -1079,6 +1102,8 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   const schedule = parseJson(batch.arrival_schedule);
   if (input.items.length < existing.results.length) throw new RequestValidationError("總部核准明細不完整；移除品項請使用移除按鈕，系統會保留稽核紀錄。", 409);
   const now = new Date().toISOString();
+  const approvedSchedule = arrivalScheduleAfterApproval(schedule, now);
+  const approvedScheduleText = JSON.stringify(approvedSchedule);
   let total = 0;
   let addedCount = 0;
   let removedCount = 0;
@@ -1162,8 +1187,11 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   }
   statements.push(
     env.DB.prepare("UPDATE store_transfer_store_status SET status = 'approved', updated_at = ? WHERE batch_id = ?").bind(now, batchId),
-    env.DB.prepare("UPDATE store_transfer_batches SET status = 'approved', item_count = (SELECT COUNT(*) FROM store_transfer_items WHERE batch_id = ? AND COALESCE(hq_approved_quantity, store_confirmed_quantity, suggested_quantity) > 0), approved_quantity = ?, updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ? AND status IN ('open', 'review')").bind(batchId, total, now, who.email, batchId),
+    env.DB.prepare("UPDATE store_transfer_batches SET status = 'approved', item_count = (SELECT COUNT(*) FROM store_transfer_items WHERE batch_id = ? AND COALESCE(hq_approved_quantity, store_confirmed_quantity, suggested_quantity) > 0), approved_quantity = ?, arrival_schedule = ?, updated_at = ?, updated_by = ?, revision = revision + 1 WHERE id = ? AND status IN ('open', 'review')").bind(batchId, total, approvedScheduleText, now, who.email, batchId),
+    env.DB.prepare("UPDATE store_transfer_items SET decision_snapshot = json_set(COALESCE(decision_snapshot, '{}'), '$.currentArrivalDate', COALESCE(json_extract(?1, '$.' || store_code || '.currentArrivalDate'), json_extract(decision_snapshot, '$.currentArrivalDate')), '$.nextArrivalDate', COALESCE(json_extract(?1, '$.' || store_code || '.nextArrivalDate'), json_extract(decision_snapshot, '$.nextArrivalDate'))), updated_at = ?2, updated_by = ?3 WHERE batch_id = ?4").bind(approvedScheduleText, now, who.email, batchId),
+    env.DB.prepare("UPDATE store_transfer_manual_item_facts SET current_arrival_date = COALESCE(json_extract(?1, '$.' || store_code || '.currentArrivalDate'), current_arrival_date), next_arrival_date = COALESCE(json_extract(?1, '$.' || store_code || '.nextArrivalDate'), next_arrival_date) WHERE batch_id = ?2").bind(approvedScheduleText, batchId),
     env.DB.prepare("UPDATE store_transfer_shortages SET allocated_quantity = MIN(demand_quantity, COALESCE((SELECT COALESCE(i.hq_approved_quantity, i.store_confirmed_quantity, i.suggested_quantity) FROM store_transfer_items i WHERE i.batch_id = store_transfer_shortages.batch_id AND i.store_code = store_transfer_shortages.store_code AND i.sku = store_transfer_shortages.sku AND i.item_type = store_transfer_shortages.item_type), 0)), unfilled_quantity = demand_quantity - MIN(demand_quantity, COALESCE((SELECT COALESCE(i.hq_approved_quantity, i.store_confirmed_quantity, i.suggested_quantity) FROM store_transfer_items i WHERE i.batch_id = store_transfer_shortages.batch_id AND i.store_code = store_transfer_shortages.store_code AND i.sku = store_transfer_shortages.sku AND i.item_type = store_transfer_shortages.item_type), 0)), follow_up_status = CASE WHEN COALESCE((SELECT COALESCE(i.hq_approved_quantity, i.store_confirmed_quantity, i.suggested_quantity) FROM store_transfer_items i WHERE i.batch_id = store_transfer_shortages.batch_id AND i.store_code = store_transfer_shortages.store_code AND i.sku = store_transfer_shortages.sku AND i.item_type = store_transfer_shortages.item_type), 0) >= demand_quantity THEN '已於本批補配' ELSE '待回拋主採購' END, updated_at = ? WHERE batch_id = ?").bind(now, batchId),
+    env.DB.prepare("UPDATE store_transfer_shortages SET current_arrival_date = COALESCE(json_extract(?1, '$.' || store_code || '.currentArrivalDate'), current_arrival_date), next_arrival_date = COALESCE(json_extract(?1, '$.' || store_code || '.nextArrivalDate'), next_arrival_date), updated_at = ?2 WHERE batch_id = ?3").bind(approvedScheduleText, now, batchId),
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'hq_approved', ?, ?, ?)").bind(batchId, `總部核准${total}件；人工新增${addedCount}項、移除${removedCount}項`, now, who.email)
   );
   if (correctionRows.results.length) {
