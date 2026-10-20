@@ -1043,7 +1043,13 @@
     for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
       const row = selected.rows[index];
       const read = (key) => selected.mapping[key] >= 0 ? row[selected.mapping[key]] : "";
-      const sku = normalizeSku(read("sku"));
+      const rawSku = read("sku");
+      const skuIsDate = Object.prototype.toString.call(rawSku) === "[object Date]";
+      const sku = skuIsDate ? "" : normalizeSku(rawSku);
+      if (skuIsDate || /^INVALID DATE$/i.test(sku)) {
+        errors.push({ sourceRow: index + 1, sku: "", message: "ERP品號欄被讀成日期格式；請保留品號文字，上市日填在下一欄。" });
+        continue;
+      }
       if (!sku) continue;
       const listedDate = parseDateValue(read("listedDate"));
       const channels = String(read("channels") || "").trim();

@@ -442,6 +442,23 @@ describe("採購規劃核心鎖定公式", () => {
     expect(parsed.records[0]).toMatchObject({ sku: "A2", legacyFirstMonthQty: 20, similarSku: "A42359-A", marketingIncluded: "是" });
   });
 
+  it("新品ERP品號若被Excel讀成日期，不會誤當INVALID DATE重複品號", () => {
+    const workbook = { SheetNames: ["新品名單"], Sheets: { 新品名單: {} } };
+    const invalidDate = new Date(Number.NaN);
+    const fixtureXlsx = { utils: { sheet_to_json: () => [
+      ["ERP品號", "預計／實際上市日", "預計販售通路或門市", "相似類別", "備註"],
+      [invalidDate, "2026-11-03", "全部通路", "水洗棉", ""],
+      [new Date(Number.NaN), "2026-11-03", "全部通路", "水洗棉", ""],
+      ["A101112", "2026-11-03", "全部通路", "水洗棉", ""]
+    ] } };
+    const parsed = core.parseNewProductWorkbook(workbook, fixtureXlsx, { fileName: "日期格式錯置.xlsx" });
+    expect(parsed.records).toHaveLength(1);
+    expect(parsed.records[0]).toMatchObject({ sku: "A101112", listedDate: "2026-11-03" });
+    expect(parsed.errors).toHaveLength(2);
+    expect(parsed.errors.every((row) => row.message.includes("ERP品號欄被讀成日期格式"))).toBe(true);
+    expect(parsed.errors.some((row) => row.message.includes("重複"))).toBe(false);
+  });
+
   it("新品首月需求由成熟同類系統估算，舊版首月預估量不再左右建議", () => {
     const peerRows = [0.8, 1, 1.2].map((daily, index) => ({
       sku: `PEER-${index + 1}`,
@@ -2118,14 +2135,14 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
     expect(toolHtml).toContain('style.css?v=20261019-new-product-system-r1');
-    expect(toolHtml).toContain('core.js?v=20261020-consignment-self-heal-r1');
-    expect(toolHtml).toContain('google-sources.js?v=20261020-consignment-self-heal-r1');
-    expect(toolHtml).toContain('app.js?v=20261020-consignment-self-heal-r1');
+    expect(toolHtml).toContain('core.js?v=20261020-new-product-import-r1');
+    expect(toolHtml).toContain('google-sources.js?v=20261020-new-product-import-r1');
+    expect(toolHtml).toContain('app.js?v=20261020-new-product-import-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261020-consignment-self-heal-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261020-new-product-import-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2209,7 +2226,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261020-consignment-self-heal-r1");
+    expect(toolHtml).toContain("app.js?v=20261020-new-product-import-r1");
     expect(toolHtml).toContain('id="activity-demand-card"');
     expect(toolHtml).toContain("活動期間預計營業額");
     expect(toolHtml).toContain("需求加乘倍數");
