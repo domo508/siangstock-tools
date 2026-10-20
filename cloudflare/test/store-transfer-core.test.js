@@ -330,20 +330,37 @@ describe("S品、建議備貨與可售至", () => {
 });
 
 describe("ERP調撥輸出", () => {
-  it("保留人工新增品項，排除最後核准量為0的移除品項", () => {
+  function fakeXlsx() {
     const sheets = {};
-    const fakeXlsx = { utils: {
+    return { utils: {
       book_new: () => ({ SheetNames: [], Sheets: sheets }),
       json_to_sheet: (rows) => ({ rows }),
       book_append_sheet: (workbook, sheet, name) => { workbook.SheetNames.push(name); workbook.Sheets[name] = sheet; }
     } };
+  }
+
+  it("以總部核准、門市確認、系統建議的順序輸出所有最終核准品項", () => {
     const workbook = core.buildErpWorkbook([
-      { store_code: "R00", sku: "A001", product_name: "已移除品項", item_type: "regular", hq_approved_quantity: 0 },
+      { store_code: "R00", sku: "HQ", product_name: "總部改量", item_type: "regular", suggested_quantity: 1, store_confirmed_quantity: 2, hq_approved_quantity: 3 },
+      { store_code: "R00", sku: "STORE", product_name: "門市改量但總部未另存", item_type: "regular", suggested_quantity: 1, store_confirmed_quantity: 2, hq_approved_quantity: null },
+      { store_code: "R00", sku: "PASS", product_name: "未改量直接核准", item_type: "regular", suggested_quantity: 1, store_confirmed_quantity: null, hq_approved_quantity: null },
+      { store_code: "R01", sku: "OTHER", product_name: "其它門市", item_type: "regular", suggested_quantity: 9, store_confirmed_quantity: 9, hq_approved_quantity: 9 }
+    ], fakeXlsx(), "R00");
+    expect(workbook.Sheets["通用貨品數量"].rows.map((row) => [row.貨號, row.數量])).toEqual([
+      ["HQ", 3], ["STORE", 2], ["PASS", 1]
+    ]);
+  });
+
+  it("保留人工新增與同品號合併，排除各階段明確改為0的品項", () => {
+    const workbook = core.buildErpWorkbook([
+      { store_code: "R00", sku: "A001", product_name: "總部已移除", item_type: "regular", suggested_quantity: 2, store_confirmed_quantity: 2, hq_approved_quantity: 0 },
+      { store_code: "R00", sku: "A002", product_name: "門市已移除", item_type: "regular", suggested_quantity: 2, store_confirmed_quantity: 0, hq_approved_quantity: null },
       { store_code: "R00", sku: "M001", product_name: "人工新增品項", item_type: "regular", hq_approved_quantity: 2 },
+      { store_code: "R00", sku: "M001", product_name: "人工新增品項", item_type: "activity_gift", suggested_quantity: 1, hq_approved_quantity: null },
       { store_code: "R01", sku: "B001", product_name: "其它門市品項", item_type: "regular", hq_approved_quantity: 3 }
-    ], fakeXlsx, "R00");
+    ], fakeXlsx(), "R00");
     expect(workbook.Sheets["通用貨品數量"].rows).toEqual([
-      { 貨號: "M001", 品名: "人工新增品項", 顏色: "", 尺碼: "", 數量: 2, 價格: "", 備註: "一般補貨", 倉庫: "" }
+      { 貨號: "M001", 品名: "人工新增品項", 顏色: "", 尺碼: "", 數量: 3, 價格: "", 備註: "一般補貨＋活動／贈品", 倉庫: "" }
     ]);
   });
 });

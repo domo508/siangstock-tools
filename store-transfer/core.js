@@ -1204,15 +1204,25 @@
     };
   }
 
+  function finalApprovedQuantity(item) {
+    return Number(item.hq_approved_quantity ?? item.store_confirmed_quantity ?? item.suggested_quantity ?? 0);
+  }
+
   function buildErpWorkbook(items, XLSX, storeCode) {
     const grouped = new Map();
-    items.filter((item) => item.store_code === storeCode && Number(item.hq_approved_quantity) > 0).forEach((item) => {
+    const approvedItems = items.filter((item) => item.store_code === storeCode && finalApprovedQuantity(item) > 0);
+    approvedItems.forEach((item) => {
       const current = grouped.get(item.sku) || { sku: item.sku, productName: item.product_name, quantity: 0, types: new Set() };
-      current.quantity += Number(item.hq_approved_quantity);
+      current.quantity += finalApprovedQuantity(item);
       current.types.add(({ activity_gift: "活動／贈品", special_stock: "建議備貨", consumable: "門市耗材" })[item.item_type] || "一般補貨");
       grouped.set(item.sku, current);
     });
     const rows = [...grouped.values()].map((item) => ({ 貨號: item.sku, 品名: item.productName, 顏色: "", 尺碼: "", 數量: item.quantity, 價格: "", 備註: [...item.types].join("＋"), 倉庫: "" }));
+    const sourceQuantity = approvedItems.reduce((sum, item) => sum + finalApprovedQuantity(item), 0);
+    const outputQuantity = rows.reduce((sum, item) => sum + Number(item.數量 || 0), 0);
+    if (rows.length !== grouped.size || outputQuantity !== sourceQuantity) {
+      throw new Error(`ERP匯出核對失敗：核准${grouped.size}個品號／${sourceQuantity}件，產檔${rows.length}個品號／${outputQuantity}件。請勿使用此檔案並通知管理同事。`);
+    }
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows, { header: ["貨號", "品名", "顏色", "尺碼", "數量", "價格", "備註", "倉庫"] }), "通用貨品數量");
     return workbook;

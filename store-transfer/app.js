@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261020-store-transfer-r20";
+  const APP_VERSION = "20261020-store-transfer-r21";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -1294,6 +1294,7 @@
         try { await api(`/batches/${encodeURIComponent(batch.batch.id)}/approve`, { method: "POST", body: { items: rowsFromDialog("approve") } }); }
         catch (error) { if (!/尚未送出/.test(error.message) || !confirm(`${error.message}\n\n是否以目前資料繼續核准？`)) throw error; await api(`/batches/${encodeURIComponent(batch.batch.id)}/approve`, { method: "POST", body: { items: rowsFromDialog("approve"), confirmPendingStores: true } }); }
       } else if (action === "erp") {
+        if (!(await checkRuntimeVersion())) throw new Error("已有新版工具，請先重新載入最新版再匯出ERP調撥檔。");
         const store = button.dataset.store, wb = transferCore.buildErpWorkbook(batch.items, outputXlsx, store);
         outputXlsx.writeFile(wb, `${batch.batch.week_key}_${store}_ERP調撥單.xlsx`, { compression: true });
         await api(`/batches/${encodeURIComponent(batch.batch.id)}/erp-created`, { method: "POST", body: { storeCode: store } });
