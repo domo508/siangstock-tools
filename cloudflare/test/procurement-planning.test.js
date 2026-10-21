@@ -651,6 +651,10 @@ describe("採購規劃核心鎖定公式", () => {
     const baselineBySku = new Map(special.rows.map((row) => [row.sku, row]));
     const allowedSkuSet = new Set(special.rows.map((row) => row.sku));
     const unchangedWorkbook = core.buildRecommendationWorkbook(special, XLSX);
+    expect(unchangedWorkbook.SheetNames).toContain("05_新品採購建議");
+    expect(unchangedWorkbook.SheetNames).toContain("06_普優瑪新品寄庫");
+    expect(unchangedWorkbook.SheetNames.some((name) => /^03(?:A|B\d|C|D)_/.test(name))).toBe(false);
+    expect(unchangedWorkbook.SheetNames.some((name) => /^04[AB]_/.test(name))).toBe(false);
     const unchangedReview = core.reviewReturnedWorkbook(unchangedWorkbook, XLSX, {
       asOfDate: "2026-10-20", orderDate: "2026-10-20", baselineBySku, allowedSkuSet
     });
@@ -658,6 +662,15 @@ describe("採購規劃核心鎖定公式", () => {
     expect(unchangedReview.rows).toEqual([expect.objectContaining({
       sku: "NP-E2E-1", suggestedQty: 30, finalQty: 30, approvedAmount: 18000, reason: ""
     })]);
+    const legacyNewProductWorkbook = core.buildRecommendationWorkbook(special, XLSX);
+    legacyNewProductWorkbook.SheetNames.splice(1, 0, "03B1_普優瑪_天絲");
+    legacyNewProductWorkbook.Sheets["03B1_普優瑪_天絲"] = legacyNewProductWorkbook.Sheets["05_新品採購建議"];
+    const legacyNewProductReview = core.reviewReturnedWorkbook(legacyNewProductWorkbook, XLSX, {
+      asOfDate: "2026-10-20", orderDate: "2026-10-20", baselineBySku, allowedSkuSet
+    });
+    expect(legacyNewProductReview.errors).toHaveLength(0);
+    expect(legacyNewProductReview.rows).toHaveLength(1);
+    expect(legacyNewProductReview.rows[0]).toMatchObject({ sku: "NP-E2E-1", finalQty: 30 });
     const unchangedErp = core.buildErpPurchaseWorkbook(unchangedReview, XLSX, { approved: true, batchId: "PP-E2E-UNCHANGED" });
     const unchangedErpRows = XLSX.utils.sheet_to_json(unchangedErp.Sheets["通用貨品數量"], { header: 1, defval: "" });
     expect(unchangedErpRows.slice(1)).toEqual([["NP-E2E-1", "60天絲新品5尺床包", "", "", 30, 600, "", "寬承總倉"]]);
@@ -665,8 +678,7 @@ describe("採購規劃核心鎖定公式", () => {
     expect(unchangedErpRows.slice(1).reduce((sum, row) => sum + Number(row[4] || 0) * Number(row[5] || 0), 0)).toBe(unchangedReview.totals.approvedAmount);
 
     const adjustedWorkbook = core.buildRecommendationWorkbook(special, XLSX);
-    const purchaseSheetName = adjustedWorkbook.SheetNames.find((name) => /^03(?:A|B\d|C|D)_/.test(name)
-      && XLSX.utils.sheet_to_json(adjustedWorkbook.Sheets[name], { defval: "" }).some((row) => row["ERP品號"] === "NP-E2E-1"));
+    const purchaseSheetName = "05_新品採購建議";
     const purchaseSheet = adjustedWorkbook.Sheets[purchaseSheetName];
     const purchaseHeaders = XLSX.utils.sheet_to_json(purchaseSheet, { header: 1, defval: "" })[0];
     const manualQtyColumn = purchaseHeaders.indexOf("人工確認採購量");
@@ -2424,7 +2436,7 @@ describe("採購規劃前台與入口", () => {
     const homeHtml = readFileSync("../index.html", "utf8");
     const toolHtml = readFileSync("../procurement-planning/index.html", "utf8");
     const headers = readFileSync("../_headers", "utf8");
-    expect(homeHtml).toContain('href="/procurement-planning/?deploy=20261021-new-product-season-compare-r1"');
+    expect(homeHtml).toContain('href="/procurement-planning/?deploy=20261021-new-product-tabs-r1"');
     expect(homeHtml).toContain("庫存採購規劃");
     expect(toolHtml).toContain("公司工具首頁");
     expect(toolHtml).toContain("← 返回公司工具首頁");
@@ -2510,15 +2522,15 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('style.css?v=20261021-new-product-season-compare-r1');
-    expect(toolHtml).toContain('core.js?v=20261021-new-product-season-compare-r1');
-    expect(toolHtml).toContain('google-sources.js?v=20261021-new-product-season-compare-r1');
-    expect(toolHtml).toContain('app.js?v=20261021-new-product-season-compare-r1');
+    expect(toolHtml).toContain('style.css?v=20261021-new-product-tabs-r1');
+    expect(toolHtml).toContain('core.js?v=20261021-new-product-tabs-r1');
+    expect(toolHtml).toContain('google-sources.js?v=20261021-new-product-tabs-r1');
+    expect(toolHtml).toContain('app.js?v=20261021-new-product-tabs-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261021-new-product-season-compare-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261021-new-product-tabs-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2602,7 +2614,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261021-new-product-season-compare-r1");
+    expect(toolHtml).toContain("app.js?v=20261021-new-product-tabs-r1");
     expect(toolHtml).toContain('id="activity-demand-card"');
     expect(toolHtml).toContain("活動期間預計營業額");
     expect(toolHtml).toContain("需求加乘倍數");

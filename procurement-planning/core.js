@@ -316,7 +316,9 @@
 
   function manualReasonSourceSheets(workbook) {
     const preferred = workbook.SheetNames.filter((name) => /^03(?:A|B\d|C|D)_/.test(name));
-    return preferred.length ? preferred : workbook.SheetNames.filter((name) => ["02_全部採購建議", "02_所選範圍採購建議"].includes(name));
+    if (preferred.length) return preferred;
+    if (workbook.SheetNames.includes("05_新品採購建議")) return ["05_新品採購建議"];
+    return workbook.SheetNames.filter((name) => ["02_全部採購建議", "02_所選範圍採購建議"].includes(name));
   }
 
   function listManualReasonCandidates(workbook, XLSX, options = {}) {
@@ -4786,6 +4788,7 @@
     const allSupplierSet = new Set(recommendations.suggestedRows.map((row) => normalizeText(row.supplier)).filter(Boolean));
     const isFullScope = !requestedSet || (requestedSet.size === allSupplierSet.size && [...allSupplierSet].every((supplier) => requestedSet.has(supplier)));
     const workUnit = options.workUnit || null;
+    const isNewProductWorkflow = recommendations.meta?.workflowType === "new_product";
     const supplierIncluded = (supplier) => !requestedSet || requestedSet.has(normalizeText(supplier));
     const rowIncluded = (row) => supplierIncluded(row.supplier) && rowMatchesProcurementWorkUnit(row, workUnit);
     const selectedSuggestedRows = recommendations.suggestedRows.filter(rowIncluded);
@@ -4886,12 +4889,14 @@
     const shanglinRows = selectedSuggestedRows.filter((row) => /上林/.test(row.supplier));
     const dedicated = (row) => /普優[瑪碼]|力榮|上林/.test(row.supplier);
     const appendIfRows = (sheetName, rows, widths) => { if (!requestedSet || rows.length) appendJsonSheet(workbook, XLSX, sheetName, rows, widths); };
-    appendIfRows("03A_力榮採購", recommendationSheetRows(lirongRows, recommendations.asOfDate), recommendationWidths);
-    appendIfRows("03B1_普優瑪_天絲", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "天絲＋天絲棉"), recommendations.asOfDate), recommendationWidths);
-    appendIfRows("03B2_普優瑪_長絨棉", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "長絨棉"), recommendations.asOfDate), recommendationWidths);
-    appendIfRows("03B3_普優瑪_無尺寸", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "無尺寸品項"), recommendations.asOfDate), recommendationWidths);
-    appendIfRows("03C_上林採購", recommendationSheetRows(shanglinRows, recommendations.asOfDate), recommendationWidths);
-    appendIfRows("03D_其它供應商", recommendationSheetRows(selectedSuggestedRows.filter((row) => !dedicated(row)), recommendations.asOfDate), recommendationWidths);
+    if (!isNewProductWorkflow) {
+      appendIfRows("03A_力榮採購", recommendationSheetRows(lirongRows, recommendations.asOfDate), recommendationWidths);
+      appendIfRows("03B1_普優瑪_天絲", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "天絲＋天絲棉"), recommendations.asOfDate), recommendationWidths);
+      appendIfRows("03B2_普優瑪_長絨棉", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "長絨棉"), recommendations.asOfDate), recommendationWidths);
+      appendIfRows("03B3_普優瑪_無尺寸", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "無尺寸品項"), recommendations.asOfDate), recommendationWidths);
+      appendIfRows("03C_上林採購", recommendationSheetRows(shanglinRows, recommendations.asOfDate), recommendationWidths);
+      appendIfRows("03D_其它供應商", recommendationSheetRows(selectedSuggestedRows.filter((row) => !dedicated(row)), recommendations.asOfDate), recommendationWidths);
+    }
 
     const sourceBySku = new Map(recommendations.rows.map((row) => [row.sku, row]));
     const consignmentRows = recommendations.consignmentRows.filter((row) => selectedSkuSet.has(row.sku)).map((row) => ({
@@ -4928,7 +4933,7 @@
           sku: row["ERP品號"]
         };
       });
-    if (!requestedSet || puyoumaConsignmentRows.length) appendPuyoumaConsignmentSheet(workbook, XLSX, puyoumaConsignmentRows);
+    if (!isNewProductWorkflow && (!requestedSet || puyoumaConsignmentRows.length)) appendPuyoumaConsignmentSheet(workbook, XLSX, puyoumaConsignmentRows);
     const withReportHierarchy = (row) => {
       const source = sourceBySku.get(row["ERP品號"]) || {};
       const hierarchy = reportProductHierarchy({ ...source, name: row["商品品名"] || source.name, sku: row["ERP品號"] });
@@ -4949,8 +4954,8 @@
       .filter((row) => /力榮/.test(sourceBySku.get(row["ERP品號"])?.supplier || ""))
       .map(withReportHierarchy)
       .sort(hierarchySort);
-    appendIfRows("04B_力榮寄庫建議", lirongFallbackRows, [26, 16, 16, 18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
-    if (recommendations.lirongConsignmentRows?.length && selectedRows.some((row) => /力榮/.test(row.supplier))) {
+    if (!isNewProductWorkflow) appendIfRows("04B_力榮寄庫建議", lirongFallbackRows, [26, 16, 16, 18, 16, 28, 50, 12, 16, 16, 18, 16, 20, 18, 16, 16, 20, 38, 60]);
+    if (!isNewProductWorkflow && recommendations.lirongConsignmentRows?.length && selectedRows.some((row) => /力榮/.test(row.supplier))) {
       const lirongReportRows = recommendations.lirongConsignmentRows.filter((row) => !row.sellThroughStop).map((row) => {
         const source = sourceBySku.get(row.sku) || {};
         const hierarchy = reportProductHierarchy({
@@ -5058,7 +5063,11 @@
 
   function reviewReturnedWorkbook(workbook, XLSX, options = {}) {
     const preferredSheets = workbook.SheetNames.filter((name) => /^03(?:A|B\d|C|D)_/.test(name));
-    const sourceSheets = preferredSheets.length ? preferredSheets : workbook.SheetNames.filter((name) => ["02_全部採購建議", "02_所選範圍採購建議"].includes(name));
+    const sourceSheets = preferredSheets.length
+      ? preferredSheets
+      : workbook.SheetNames.includes("05_新品採購建議")
+        ? ["05_新品採購建議"]
+        : workbook.SheetNames.filter((name) => ["02_全部採購建議", "02_所選範圍採購建議"].includes(name));
     if (!sourceSheets.length && workbook.SheetNames.some((name) => /回匯.*覆核|二次覆核/.test(name))) throw new Error("這是舊版或已產生的二次覆核檔，不能作為第一次人工回匯；請使用本頁本次下載的採購建議Excel。");
     if (!sourceSheets.length) throw new Error("回匯檔缺少本工具的採購建議分頁；請使用本頁本次下載的Excel。");
     const rows = [];
