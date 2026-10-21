@@ -345,7 +345,10 @@
         const reservedConsignmentQty = Math.max(0, Number(options.reservedConsignmentBySku?.get?.(sku) || 0));
         const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
         const consignmentSupplier = /普優[瑪碼]|力榮/.test(normalizeText(supplier)) || consignmentAvailableQty > 0;
-        const defaultQty = consignmentSupplier ? Math.min(Math.max(0, Number(suggestedQty || 0)), consignmentAvailableQty) : suggestedQty;
+        const newProductWorkflow = options.workflowType === "new_product" || sheetName === "05_新品採購建議";
+        const defaultQty = newProductWorkflow
+          ? suggestedQty
+          : (consignmentSupplier ? Math.min(Math.max(0, Number(suggestedQty || 0)), consignmentAvailableQty) : suggestedQty);
         const changed = !manualBlank && manualQty !== defaultQty;
         const pendingStatus = Boolean(baseline?.productStatusPendingReview);
         const sellThroughException = Boolean(baseline?.sellThroughStop && Number(manualQty || 0) > consignmentAvailableQty);
@@ -2312,7 +2315,7 @@
     if (combined.includes("熊冷")) return "熊冷";
     if (combined.includes("麻糬被")) return "麻糬被";
     if (combined.includes("華爾紗")) return "華爾紗";
-    if (combined.includes("水洗棉")) return "水洗棉";
+    if (combined.includes("水洗棉") || /水洗(?:燕麥杏|可可咖|藍灰)/.test(combined)) return "水洗棉";
     if (combined.includes("雙層紗")) return "雙層紗";
     if (combined.includes("有機棉")) return "有機棉";
     if (combined.includes("長絨棉")) return "長絨棉";
@@ -2326,8 +2329,24 @@
     const combined = [masterRecord?.name, masterRecord?.style1, masterRecord?.style2, fallbackName]
       .filter(Boolean).join(" ").replace(/\s/g, "");
     if (combined.includes("天絲")) return "天絲＋天絲棉";
-    if (/(華爾紗|水洗棉|雙層紗|有機棉|純棉|長絨棉|(?:40|60|80|100)(?:支)?棉)/.test(combined)) return "長絨棉";
+    if (/(華爾紗|水洗(?:棉|燕麥杏|可可咖|藍灰)|雙層紗|有機棉|純棉|長絨棉|(?:40|60|80|100)(?:支)?棉)/.test(combined)) return "長絨棉";
     return "無尺寸品項";
+  }
+
+  function inferMaterialHierarchy(masterRecord, fallbackName = "", requestedSubMaterial = "") {
+    const subMaterialCategory = String(requestedSubMaterial || "").trim()
+      || String(masterRecord?.subMaterialCategory || "").trim()
+      || String(masterRecord?.materialCategory || "").trim()
+      || inferMaterialCategory(masterRecord, fallbackName);
+    const purchaseTab = String(masterRecord?.purchaseTab || "").trim()
+      || classifyPuyoumaPurchaseTab(masterRecord, fallbackName);
+    let parentMaterialCategory = String(masterRecord?.parentMaterialCategory || "").trim();
+    if (!parentMaterialCategory) {
+      if (purchaseTab === "長絨棉" || /水洗棉|華爾紗|雙層紗|有機棉|精梳純棉|純棉|長絨棉/.test(subMaterialCategory)) parentMaterialCategory = "長絨棉";
+      else if (purchaseTab === "天絲＋天絲棉" || /天絲/.test(subMaterialCategory)) parentMaterialCategory = "天絲／天絲棉";
+      else parentMaterialCategory = purchaseTab === "無尺寸品項" ? "無尺寸" : (subMaterialCategory || "其他");
+    }
+    return { parentMaterialCategory, subMaterialCategory, purchaseTab };
   }
 
   function reportProductHierarchy(row) {
@@ -3838,45 +3857,55 @@
       const materialCategory = requestedCategory && requestedCategory !== "由系統判斷"
         ? requestedCategory
         : inferMaterialCategory(masterRecord, masterRecord.name);
+      const materialHierarchy = inferMaterialHierarchy(masterRecord, masterRecord.name, materialCategory);
+      const parentMaterialCategory = materialHierarchy.parentMaterialCategory;
+      const subMaterialCategory = materialHierarchy.subMaterialCategory;
       const type = comparableProductType(masterRecord, masterRecord.name);
       const size = comparableSize(masterRecord, masterRecord.name);
       const peers = base.rows.filter((row) => row.sku !== sku
-        && !row.discontinued
-        && !row.sellThroughStop
-        && !row.externalPurchaseBlocked
-        && !isAutomaticProcurementExcludedItem(row.sku, row.name));
+        && !isAutomaticProcurementExcludedItem(row.sku, row.name)
+        && (!row.externalPurchaseBlocked || row.sellThroughStop || row.discontinued));
+      const peerHierarchy = (row) => inferMaterialHierarchy(row, row.name, row.subMaterialCategory || row.materialCategory);
+      const sameParent = (row) => normalizeText(peerHierarchy(row).parentMaterialCategory) === normalizeText(parentMaterialCategory);
+      const sameSubMaterial = (row) => normalizeText(peerHierarchy(row).subMaterialCategory) === normalizeText(subMaterialCategory);
       const candidates = [
         {
-          label: `${materialCategory}＋${type}＋${size}`,
-          rows: peers.filter((row) => normalizeText(row.materialCategory) === normalizeText(materialCategory)
+          label: `${parentMaterialCategory}／${subMaterialCategory}＋${type}＋${size}`,
+          scope: "同父材質／子材質／品類／尺寸",
+          rows: peers.filter((row) => sameParent(row) && sameSubMaterial(row)
             && comparableProductType(row, row.name) === type
             && comparableSize(row, row.name) === size)
         },
         {
-          label: `${materialCategory}＋${type}`,
-          rows: peers.filter((row) => normalizeText(row.materialCategory) === normalizeText(materialCategory)
+          label: `${parentMaterialCategory}／${subMaterialCategory}＋${type}`,
+          scope: "同父材質／子材質／品類",
+          rows: peers.filter((row) => sameParent(row) && sameSubMaterial(row)
             && comparableProductType(row, row.name) === type)
         },
         {
-          label: materialCategory,
-          rows: peers.filter((row) => normalizeText(row.materialCategory) === normalizeText(materialCategory))
-        },
-        {
-          label: `${type}（跨材質備援）`,
-          rows: peers.filter((row) => comparableProductType(row, row.name) === type)
+          label: `${parentMaterialCategory}＋${type}＋${size}（跨子材質備援）`,
+          scope: "同父材質／品類／尺寸（跨子材質備援）",
+          rows: peers.filter((row) => sameParent(row)
+            && comparableProductType(row, row.name) === type
+            && comparableSize(row, row.name) === size)
         }
       ].map((candidate) => ({
         ...candidate,
-        values: candidate.rows.map((row) => newProductChannelDaily(row, source.channels)).filter((value) => Number.isFinite(value) && value > 0),
-        recentValues: candidate.rows.map((row) => newProductRecentChannelDaily(row, source.channels)).filter((value) => Number.isFinite(value) && value > 0)
+        values: candidate.rows.map((row) => newProductChannelDaily(row, source.channels) * ((row.sellThroughStop || row.discontinued) ? 0.5 : 1)).filter((value) => Number.isFinite(value) && value > 0),
+        recentValues: candidate.rows.map((row) => newProductRecentChannelDaily(row, source.channels) * ((row.sellThroughStop || row.discontinued) ? 0.5 : 1)).filter((value) => Number.isFinite(value) && value > 0),
+        historicalOnlyCount: candidate.rows.filter((row) => row.sellThroughStop || row.discontinued).length
       }));
-      const selected = candidates.find((candidate) => candidate.values.length >= 3)
+      const selected = candidates.find((candidate) => candidate.values.length >= 2)
         || candidates.find((candidate) => candidate.values.length > 0);
       const daily = Math.max(0, Number(trimmedMean(selected?.values || []) || 0));
       const recent12WeekDaily = Math.max(0, Number(trimmedMean(selected?.recentValues || []) || 0));
       const sampleCount = selected?.values.length || 0;
       return {
         materialCategory,
+        parentMaterialCategory,
+        subMaterialCategory,
+        productType: type,
+        productSize: size,
         daily,
         firstMonthDemandQty: Math.ceil(daily * 30),
         recent12WeekDaily,
@@ -3889,9 +3918,37 @@
         comparisonNote: "系統採用成熟同類既有季節調整結果；不重複加乘季節倍率",
         sampleCount,
         label: selected?.label || "同類樣本不足",
-        reliability: sampleCount >= 8 ? "高" : sampleCount >= 3 ? "中" : sampleCount > 0 ? "低" : "不足"
+        referenceScope: selected?.scope || "同類樣本不足",
+        historicalOnlyCount: selected?.historicalOnlyCount || 0,
+        reliability: sampleCount >= 8 && !(selected?.historicalOnlyCount > 0) ? "高" : sampleCount >= 3 ? "中" : sampleCount > 0 ? "低" : "不足"
       };
     };
+    const referenceBySku = new Map();
+    const groupedReferences = new Map();
+    for (const source of sourceRows) {
+      const sku = normalizeSku(source.sku);
+      const masterRecord = input.master.bySku.get(sku);
+      if (!masterRecord || workflowType !== "new_product") continue;
+      const reference = resolveNewProductReference(source, masterRecord, sku);
+      referenceBySku.set(sku, reference);
+      const groupKey = [reference.parentMaterialCategory, reference.subMaterialCategory, reference.productType, reference.productSize, normalizeText(source.channels || "全部通路")].join("||");
+      if (!groupedReferences.has(groupKey)) groupedReferences.set(groupKey, []);
+      groupedReferences.get(groupKey).push({ sku, reference });
+    }
+    for (const group of groupedReferences.values()) {
+      const totalDemand = Math.max(0, ...group.map(({ reference }) => Number(reference.firstMonthDemandQty || 0)));
+      const baseAllocation = Math.floor(totalDemand / group.length);
+      let remainder = totalDemand - baseAllocation * group.length;
+      group.sort((left, right) => left.sku.localeCompare(right.sku, "zh-Hant", { numeric: true })).forEach(({ reference }) => {
+        const allocated = baseAllocation + (remainder > 0 ? 1 : 0);
+        if (remainder > 0) remainder -= 1;
+        reference.categoryDemandPoolQty = totalDemand;
+        reference.categoryDemandPoolSkuCount = group.length;
+        reference.firstMonthDemandQty = allocated;
+        reference.adoptedFirstMonthDemandQty = allocated;
+        if (group.length > 1) reference.comparisonNote = `同品類同尺寸${group.length}個新品共用${totalDemand}件首批需求池；本品分配${allocated}件`;
+      });
+    }
     const rows = sourceRows.map((source) => {
       const sku = normalizeSku(source.sku);
       const masterRecord = input.master.bySku.get(sku);
@@ -3910,7 +3967,7 @@
       const supplier = masterRecord.supplier;
       const supplyProfile = resolveSupplyProfile(supplier, input.supplierRules || [], existing?.tier || "穩定");
       const packSize = purchaseUnitFromRules(supplier, masterRecord, masterRecord.name, input.purchaseUnitRules);
-      const newProductReference = workflowType === "new_product" ? resolveNewProductReference(source, masterRecord, sku) : null;
+      const newProductReference = workflowType === "new_product" ? referenceBySku.get(sku) : null;
       const requestedQty = workflowType === "new_product" ? newProductReference.firstMonthDemandQty : Math.max(0, Number(source.quantity || 0));
       const rawQty = workflowType === "new_product" ? Math.max(requestedQty - inventoryQty - pendingQty, 0) : Math.max(0, Number(existing?.rawPurchaseQty || 0));
       const minimumQty = rawQty > 0 ? Math.max(rawQty, Number(masterRecord.moq || 1)) : 0;
@@ -3941,6 +3998,8 @@
         productStatus: String(masterRecord.productStatus || "").trim(),
         productStatusPendingReview,
         materialCategory: newProductReference?.materialCategory || existing?.materialCategory || inferMaterialCategory(masterRecord, masterRecord.name),
+        parentMaterialCategory: newProductReference?.parentMaterialCategory || inferMaterialHierarchy(masterRecord, masterRecord.name).parentMaterialCategory,
+        subMaterialCategory: newProductReference?.subMaterialCategory || inferMaterialHierarchy(masterRecord, masterRecord.name).subMaterialCategory,
         purchaseTab: classifyPuyoumaPurchaseTab(masterRecord, masterRecord.name),
         recent6Qty: Number(existing?.recent6Qty || 0),
         recent12Qty: Number(existing?.recent12Qty || 0),
@@ -4577,6 +4636,10 @@
       "新品上市日": row.listedDate || "",
       "新品預計通路／門市": row.plannedChannels || "",
       "相似類別": row.similarCategory || row.materialCategory || "",
+      "父材質／採購頁籤": row.newProductSystemReference?.parentMaterialCategory || row.parentMaterialCategory || "",
+      "子材質": row.newProductSystemReference?.subMaterialCategory || row.subMaterialCategory || row.materialCategory || "",
+      "相似品類": row.newProductSystemReference?.productType || comparableProductType(row, row.name),
+      "相似尺寸": row.newProductSystemReference?.productSize || comparableSize(row, row.name),
       "新品近12週首月需求": row.newProductSystemReference?.recent12WeekFirstMonthDemandQty ?? "",
       "新品三年同季首月需求": row.newProductSystemReference?.seasonalFirstMonthDemandQty ?? "",
       "新品季節倍率": row.newProductSystemReference?.seasonalMultiplier == null ? "" : Number(row.newProductSystemReference.seasonalMultiplier.toFixed(2)),
@@ -4585,6 +4648,10 @@
       "新品需求採用說明": row.newProductSystemReference?.comparisonNote || "",
       "新品參考樣本數": row.newProductSystemReference?.sampleCount ?? "",
       "新品參考範圍": row.newProductSystemReference?.label || "",
+      "新品參考層級": row.newProductSystemReference?.referenceScope || "",
+      "停採歷史低權重樣本數": row.newProductSystemReference?.historicalOnlyCount ?? "",
+      "新品共用需求池": row.newProductSystemReference?.categoryDemandPoolQty ?? "",
+      "共用需求池新品數": row.newProductSystemReference?.categoryDemandPoolSkuCount ?? "",
       "新品建議可信度": row.newProductSystemReference?.reliability || "",
       "進貨價": row.unitCost,
       "建議採購金額": row.suggestedPurchaseAmount,
@@ -4984,7 +5051,17 @@
       if (workbook.Sheets["04B_力榮寄庫建議"]) workbook.Sheets["04B_力榮寄庫建議"] = replacement;
       else XLSX.utils.book_append_sheet(workbook, replacement, "04B_力榮寄庫建議");
     }
-    appendIfRows("05_新品採購建議", recommendationSheetRows(selectedRows.filter((row) => row.isNewProduct), recommendations.asOfDate), recommendationWidths);
+    const newProductPurchaseRows = recommendationSheetRows(selectedRows.filter((row) => row.isNewProduct), recommendations.asOfDate).map((row) => {
+      const {
+        "寄倉現貨": _consignmentCurrent,
+        "粉紅排程": _consignmentScheduled,
+        "寄倉缺口": _consignmentGap,
+        "目前實際可採購量": _currentAvailable,
+        ...newProductRow
+      } = row;
+      return newProductRow;
+    });
+    appendIfRows("05_新品採購建議", newProductPurchaseRows, recommendationWidths);
     appendIfRows("06_普優瑪新品寄庫", consignmentRows
       .filter((row) => sourceBySku.get(row["ERP品號"])?.isNewProduct && /普優[瑪碼]/.test(sourceBySku.get(row["ERP品號"])?.supplier || ""))
       .map(withReportHierarchy)
@@ -5072,6 +5149,7 @@
     if (!sourceSheets.length) throw new Error("回匯檔缺少本工具的採購建議分頁；請使用本頁本次下載的Excel。");
     const rows = [];
     const errors = [];
+    const warnings = [];
     const seen = new Set();
     for (const sheetName of sourceSheets) {
       const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "", raw: true });
@@ -5109,9 +5187,12 @@
         const reservedConsignmentQty = Math.max(0, Number(options.reservedConsignmentBySku?.get?.(sku) || 0));
         const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
         const consignmentSupplier = /普優[瑪碼]|力榮/.test(normalizeText(supplier)) || consignmentAvailableQty > 0;
-        const defaultConfirmedQty = consignmentSupplier
-          ? Math.min(Math.max(0, Number(suggestedQty || 0)), consignmentAvailableQty)
-          : Math.max(0, Number(suggestedQty || 0));
+        const newProductWorkflow = options.workflowType === "new_product" || sheetName === "05_新品採購建議";
+        const defaultConfirmedQty = newProductWorkflow
+          ? Math.max(0, Number(suggestedQty || 0))
+          : (consignmentSupplier
+            ? Math.min(Math.max(0, Number(suggestedQty || 0)), consignmentAvailableQty)
+            : Math.max(0, Number(suggestedQty || 0)));
         const confirmedQty = manualBlank ? defaultConfirmedQty : parseNumber(manualCell);
         const unitCost = manuallyAdded ? Number(baseline.unitCost || 0) : sourceUnitCost;
         const productStatusPendingReview = Boolean(baseline?.productStatusPendingReview);
@@ -5155,7 +5236,11 @@
           sheetName, sourceRow: index + 2, sku,
           message: `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，人工量必須等於扣除正式未到貨與其他有效批次占用後的可清回量${consignmentAvailableQty}件。`
         });
-        if (confirmedQty != null && confirmedQty > 0 && confirmedQty % packSize !== 0 && !tailBoxException && !existingSellThroughConsignmentPull) errors.push({ sheetName, sourceRow: index + 2, sku, message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件；人工量必須填0或${packSize}的倍數。` });
+        const purchaseUnitException = Boolean(confirmedQty != null && confirmedQty > 0 && confirmedQty % packSize !== 0 && !tailBoxException && !existingSellThroughConsignmentPull);
+        if (purchaseUnitException) warnings.push({
+          type: "purchase_unit_exception", sheetName, sourceRow: index + 2, sku, supplier, quantity: confirmedQty, packSize,
+          message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件，本次人工量為${confirmedQty}件；確認後可仍採用人工量。`
+        });
         if (unitCost == null || unitCost < 0) errors.push({ sheetName, sourceRow: index + 2, sku, message: "缺少有效進貨價，禁止核准金額。" });
         const supplierRule = findSupplierRule(supplier, options.supplierRules || []);
         let blockedReason = "";
@@ -5193,7 +5278,9 @@
           consignmentCurrentQty: Math.max(0, Number(baseline?.consignmentCurrentQty ?? source["寄倉現貨"] ?? 0)),
           consignmentScheduledQty: Math.max(0, Number(baseline?.consignmentScheduledQty ?? source["粉紅排程"] ?? 0)),
           currentAvailableQty: /普優[瑪碼]|力榮/.test(supplier) ? consignmentAvailableQty : Math.max(0, Number(source["目前實際可採購量"] || finalQty)),
-          reservedConsignmentQty, fullConsignmentReturn: tailBoxException, packSize
+          reservedConsignmentQty, fullConsignmentReturn: tailBoxException, packSize,
+          purchaseUnitException, purchaseUnitExceptionConfirmed: false,
+          purchaseUnitExceptionConfirmedBy: "", purchaseUnitExceptionConfirmedAt: ""
         });
       }
     }
@@ -5216,7 +5303,7 @@
     const blockedAmount = rows.reduce((sum, row) => sum + row.blockedAmount, 0);
     const approvedAmount = rows.reduce((sum, row) => sum + row.approvedAmount, 0);
     return {
-      rows, errors, payments, orderDate,
+      rows, errors, warnings, payments, orderDate,
       totals: { suggestedAmount, manualAmount, blockedAmount, approvedAmount, adjustmentAmount: approvedAmount - suggestedAmount }
     };
   }
@@ -5246,16 +5333,20 @@
       "預估日需求": row.forecastDaily, "可用公司庫存": row.inventoryQty, "門市可售庫存": row.storeInventoryQty, "已採購未到貨": row.pendingQty,
       "本次人工新增": row.manuallyAdded ? "是；資料已由本次計算批次補回" : "否", "需求摘要": row.demandSummary || "",
       "寄倉現貨": row.consignmentCurrentQty || 0, "粉紅排程": row.consignmentScheduledQty || 0,
-      "目前實際可採購量": row.currentAvailableQty, "箱入／採購單位": row.packSize
+      "目前實際可採購量": row.currentAvailableQty, "箱入／採購單位": row.packSize,
+      "箱數例外": row.purchaseUnitException ? "仍採用人工量" : "",
+      "箱數例外確認者": row.purchaseUnitExceptionConfirmedBy || "",
+      "箱數例外確認時間": row.purchaseUnitExceptionConfirmedAt || ""
     })), [18, 14, 16, 28, 52, 16, 18, 32, 20, 18, 32, 30, 24, 18, 18, 18, 20, 18, 14, 16, 16, 16, 18, 20, 34, 16, 16, 18, 16]);
     appendJsonSheet(workbook, XLSX, "03_付款月份", review.payments.flatMap((supplier) => supplier.entries.map((entry) => ({
       "供應商": supplier.supplier, "供應商分類": supplier.supplierCountry, "平均採購週期": supplier.leadDays,
       "付款觸發": entry.trigger, "預計日期": entry.date, "付款月份": entry.month, "預計付款金額": entry.amount,
       "預計出貨日": supplier.expectedShipmentDate, "預計到貨日": supplier.expectedArrivalDate
     }))), [20, 14, 16, 20, 16, 14, 20, 16, 16]);
-    appendJsonSheet(workbook, XLSX, "04_阻擋與警示", review.errors.map((error) => ({
-      "來源分頁": error.sheetName, "來源列": error.sourceRow, "ERP品號": error.sku, "阻擋原因": error.message
-    })), [26, 12, 18, 70]);
+    appendJsonSheet(workbook, XLSX, "04_阻擋與警示", [
+      ...review.errors.map((error) => ({ "層級": "阻擋", "來源分頁": error.sheetName, "來源列": error.sourceRow, "ERP品號": error.sku, "訊息": error.message })),
+      ...(review.warnings || []).map((warning) => ({ "層級": "提醒（已可確認放行）", "來源分頁": warning.sheetName, "來源列": warning.sourceRow, "ERP品號": warning.sku, "訊息": warning.message }))
+    ], [22, 26, 12, 18, 70]);
     appendManualReasonSheet(workbook, XLSX);
     return workbook;
   }
@@ -5268,6 +5359,7 @@
     const sourceRows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: true });
     const rows = [];
     const errors = [];
+    const warnings = [];
     const seen = new Set();
     for (let index = 0; index < sourceRows.length; index += 1) {
       const source = sourceRows[index];
@@ -5322,7 +5414,17 @@
         message: `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，第二次異動量必須維持第一次覆核確認的可清回量${Number(baseline?.currentAvailableQty || 0)}件。`
       });
       const existingSellThroughConsignmentPull = Boolean(baseline?.sellThroughConsignmentAllowed && finalQty > 0 && finalQty <= Number(baseline.currentAvailableQty || 0));
-      if (finalQty != null && finalQty > 0 && finalQty % packSize !== 0 && !tailBoxException && !existingSellThroughConsignmentPull) errors.push({ sheetName, sourceRow: index + 2, sku, message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件；第二次異動量必須填0或${packSize}的倍數。` });
+      const purchaseUnitException = Boolean(finalQty != null && finalQty > 0 && finalQty % packSize !== 0 && !tailBoxException && !existingSellThroughConsignmentPull);
+      const sameConfirmedException = Boolean(
+        purchaseUnitException
+        && confirmationBlank
+        && baseline?.purchaseUnitExceptionConfirmed
+        && Number(finalQty) === Number(baseline.finalQty)
+      );
+      if (purchaseUnitException && !sameConfirmedException) warnings.push({
+        type: "purchase_unit_exception", sheetName, sourceRow: index + 2, sku, supplier, quantity: finalQty, packSize,
+        message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件，本次人工量為${finalQty}件；確認後可仍採用人工量。`
+      });
       if (baseline?.sellThroughConsignmentAllowed && !baseline?.sellThroughRestartException && Number(finalQty || 0) > Number(baseline.currentAvailableQty || 0)) errors.push({ sheetName, sourceRow: index + 2, sku, message: `S品只能拉回既有寄庫現貨；本批最多可拉${baseline.currentAvailableQty}件。` });
       if (blockedReason && finalQty !== 0) errors.push({ sheetName, sourceRow: index + 2, sku, message: `規則阻擋品項必須維持0：${blockedReason}` });
       if (!confirmationBlank && finalQty !== firstFinalQty && !secondReason) errors.push({ sheetName, sourceRow: index + 2, sku, message: "第二次異動數量時必須填寫第二次異動原因。" });
@@ -5345,7 +5447,10 @@
         blockedAmount: blockedReason ? firstConfirmedQty * Math.max(0, Number(unitCost || 0)) : 0,
         approvedAmount: Math.max(0, Number(finalQty || 0)) * Math.max(0, Number(unitCost || 0)), forecastDaily, inventoryQty, storeInventoryQty, pendingQty,
         availableTo, aiJudgment, currentAvailableQty: Math.max(0, Number(source["目前實際可採購量"] || finalQty || 0)),
-        fullConsignmentReturn: tailBoxException, packSize
+        fullConsignmentReturn: tailBoxException, packSize, purchaseUnitException,
+        purchaseUnitExceptionConfirmed: sameConfirmedException,
+        purchaseUnitExceptionConfirmedBy: sameConfirmedException ? String(baseline.purchaseUnitExceptionConfirmedBy || "") : "",
+        purchaseUnitExceptionConfirmedAt: sameConfirmedException ? String(baseline.purchaseUnitExceptionConfirmedAt || "") : ""
       });
     }
     const orderDate = parseDateValue(options.orderDate) || new Date().toISOString().slice(0, 10);
@@ -5366,7 +5471,7 @@
     const manualAmount = rows.reduce((sum, row) => sum + row.manualAmount, 0);
     const blockedAmount = rows.reduce((sum, row) => sum + row.blockedAmount, 0);
     const approvedAmount = rows.reduce((sum, row) => sum + row.approvedAmount, 0);
-    return { rows, errors, payments, orderDate, totals: { suggestedAmount, manualAmount, blockedAmount, approvedAmount, adjustmentAmount: approvedAmount - suggestedAmount } };
+    return { rows, errors, warnings, payments, orderDate, totals: { suggestedAmount, manualAmount, blockedAmount, approvedAmount, adjustmentAmount: approvedAmount - suggestedAmount } };
   }
 
   function buildErpPurchaseWorkbook(review, XLSX, options = {}) {
@@ -5450,6 +5555,7 @@
     calculatePurchaseBudget,
     resolveReleasedBudgetAmount,
     inferMaterialCategory,
+    inferMaterialHierarchy,
     classifyPuyoumaPurchaseTab,
     puyoumaConsignmentGroup,
     applyDemandModel,

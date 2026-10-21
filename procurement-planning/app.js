@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261021-new-product-tabs-r1";
+  const APP_VERSION = "20261022-procurement-rules-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -307,7 +307,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261005-inventory-stream-r1");
+        const worker = new Worker("inventory-reader-worker.js?v=20261022-procurement-rules-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1069,7 +1069,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20260914-seasonal-wape-r2");
+      const worker = new Worker("seasonal-model-worker.js?v=20261022-procurement-rules-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -3091,6 +3091,25 @@
     return reservations;
   }
 
+  function confirmPurchaseUnitExceptions(review) {
+    const warnings = (review?.warnings || []).filter((warning) => warning.type === "purchase_unit_exception");
+    if (!warnings.length) return true;
+    const preview = warnings.slice(0, 8).map((warning) => `• ${warning.sku}：人工量${warning.quantity}件／採購單位${warning.packSize}件`).join("\n");
+    const remainder = warnings.length > 8 ? `\n另有${warnings.length - 8}項。` : "";
+    const confirmed = globalThis.confirm(`本次有${warnings.length}項人工量不符合箱數／採購單位：\n\n${preview}${remainder}\n\n系統不會自動改量。是否確認「仍採用人工量」並繼續？`);
+    if (!confirmed) return false;
+    const confirmedAt = new Date().toISOString();
+    const confirmedBy = state.config?.email || "公司授權使用者";
+    const warningSkus = new Set(warnings.map((warning) => warning.sku));
+    for (const row of review.rows || []) {
+      if (!warningSkus.has(row.sku)) continue;
+      row.purchaseUnitExceptionConfirmed = true;
+      row.purchaseUnitExceptionConfirmedBy = confirmedBy;
+      row.purchaseUnitExceptionConfirmedAt = confirmedAt;
+    }
+    return true;
+  }
+
   async function reviewReturn() {
     if (!state.reviewFile || !state.analysis || !state.returnScope) return;
     elements.reviewButton.disabled = true; setWorkflowStatus("正在重新檢查人工數量、力榮10件規則、可售至、付款月份與額度…");
@@ -3105,9 +3124,15 @@
         baselineBySku: new Map(analysisBaselineRows().map((row) => [row.sku, row])),
         allowedSkuSet: new Set(baselineRows.map((row) => row.sku)),
         exportedSkuSet: new Set(exportedRows.map((row) => row.sku)),
+        workflowType: state.analysis?.meta?.workflowType || "general",
         manualAdditionCatalogAvailable: Boolean(state.analysis.manualAdditionCatalog?.rows?.length),
         reservedConsignmentBySku
       });
+      if (!state.firstReview.errors.length && !confirmPurchaseUnitExceptions(state.firstReview)) {
+        state.review = null;
+        setWorkflowStatus("已取消箱數例外確認；尚未產生覆核表，也未寫入批次。可調整人工量後重新檢查。", "warning");
+        return;
+      }
       const t = state.firstReview.totals;
       elements.workflowSummary.replaceChildren(
         createSummaryCard("系統建議金額", formatCurrency(t.suggestedAmount), "原始工具建議", "currency"),
@@ -3147,6 +3172,11 @@
     try {
       clearWorkflowErrors();
       state.review = core.reviewSecondApprovalWorkbook(await readWorkbook(state.secondReviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, baselineBySku: new Map(state.firstReview.rows.map((row) => [row.sku, row])) });
+      if (!state.review.errors.length && !confirmPurchaseUnitExceptions(state.review)) {
+        state.review = null;
+        setWorkflowStatus("已取消箱數例外確認；本次第二次異動尚未套用。", "warning");
+        return;
+      }
       const t = state.review.totals;
       elements.workflowSummary.replaceChildren(
         createSummaryCard("系統建議金額", formatCurrency(t.suggestedAmount), "原始工具建議", "currency"),
@@ -3181,6 +3211,10 @@
       availableBySku.set(row.sku, remaining - quantity);
       return { storeCode: row.store_code, sku: row.sku, quantity };
     }).filter((row) => row.quantity > 0);
+    const warningParts = [];
+    if (currentBudget().remainingBudget - state.review.totals.approvedAmount < 0) warningParts.push("本批核准後超出中性情境尚可承諾額度");
+    const purchaseUnitExceptionCount = state.review.rows.filter((row) => row.finalQty > 0 && row.purchaseUnitException && row.purchaseUnitExceptionConfirmed).length;
+    if (purchaseUnitExceptionCount) warningParts.push(`箱數例外${purchaseUnitExceptionCount}項（已確認仍採用人工量）`);
     return {
       batchId: state.batchId, analysisMonth: elements.month.value, checkpoint: elements.checkpoint.value,
       parentBatchId: state.parentBatchId, workUnitIds: core.procurementWorkUnitIdsForReview(state.review.rows, analysisBaselineRows()),
@@ -3195,7 +3229,7 @@
         unitCost: Number(row.unitCost || 0), amount: Number(row.finalQty || 0) * Number(row.unitCost || 0)
       })),
       storeShortageNeeds: linkedNeeds,
-      warningSummary: currentBudget().remainingBudget - state.review.totals.approvedAmount < 0 ? "本批核准後超出中性情境尚可承諾額度" : "無",
+      warningSummary: warningParts.join("；") || "無",
       idempotencyKey: `${state.batchId}:submit`
     };
   }
@@ -3324,7 +3358,8 @@
       const exportedRows = state.analysis.suggestedRows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
       state.manualReasonCandidates = core.listManualReasonCandidates(state.reviewWorkbook, XLSX, {
         baselineBySku: new Map(baselineRows.map((row) => [row.sku, row])),
-        exportedSkuSet: new Set(exportedRows.map((row) => row.sku))
+        exportedSkuSet: new Set(exportedRows.map((row) => row.sku)),
+        workflowType: state.analysis?.meta?.workflowType || "general"
       });
       if (state.reviewWorkbook.SheetNames.includes("09_人工調整原因")) renderReasonBatchPanel();
       else elements.reasonBatchPanel.hidden = true;

@@ -17,6 +17,7 @@ const JSZip = jszipContext.JSZip;
 const core = loadBrowserScript("../procurement-planning/core.js", { XLSX }).ProcurementPlanningCore;
 const googleSources = loadBrowserScript("../procurement-planning/google-sources.js").ProcurementGoogleSources;
 const streamReader = loadBrowserScript("../procurement-planning/inventory-stream-reader.js", { Response, DecompressionStream, File }).ProcurementInventoryStreamReader;
+const procurementVersion = JSON.parse(readFileSync("../procurement-planning/version.json", "utf8")).version;
 
 describe("固定 Google 來源頁籤選擇", () => {
   it("力榮優先使用現行下單頁籤並相容舊名", () => {
@@ -585,6 +586,58 @@ describe("採購規劃核心鎖定公式", () => {
     });
   });
 
+  it("水洗棉保留長絨棉父材質，並優先採同品類同尺寸成熟樣本", () => {
+    expect(core.inferMaterialHierarchy({ name: "4.5x6.5尺薄被套 [水洗燕麥杏]", supplier: "普優瑪" })).toMatchObject({
+      parentMaterialCategory: "長絨棉", subMaterialCategory: "水洗棉", purchaseTab: "長絨棉"
+    });
+    const master = makeMaster();
+    master.bySku.set("NP-WASH-1", {
+      ...master.bySku.get("A1"), sku: "NP-WASH-1", supplierSku: "V-NP-WASH-1", supplier: "普優瑪",
+      name: "4.5x6.5尺薄被套 [水洗棉-岩棕]", mainCategory: "薄被套", size: "4.5x6.5尺", unitCost: 500, moq: 1
+    });
+    const peers = [0.2, 0.4].map((daily, index) => ({
+      sku: `WASH-PEER-${index + 1}`, name: `4.5x6.5尺薄被套 [水洗${index ? "藍灰" : "燕麥杏"}]`,
+      materialCategory: "水洗棉", purchaseTab: "長絨棉", mainCategory: "薄被套", size: "4.5x6.5尺",
+      forecastDailyQty: daily, hqDailyQty: daily, storeDailyByCode: {}, discontinued: false, sellThroughStop: false, externalPurchaseBlocked: false
+    }));
+    peers.push({
+      sku: "WASH-OTHER-SIZE", name: "6x7尺薄被套 [水洗可可咖]", materialCategory: "水洗棉", purchaseTab: "長絨棉",
+      mainCategory: "薄被套", size: "6x7尺", forecastDailyQty: 3, hqDailyQty: 3, storeDailyByCode: {}, discontinued: false, sellThroughStop: false, externalPurchaseBlocked: false
+    });
+    const result = core.buildSpecialProcurementAnalysis({
+      baseAnalysis: { rows: peers, meta: {}, totals: {} }, workflowType: "new_product",
+      rows: [{ sku: "NP-WASH-1", listedDate: "2026-10-21", channels: "全部通路", similarCategory: "水洗棉" }],
+      fileName: "新品.xlsx", master, inventory: makeInventory(), pendingReports: [], supplierRules: core.SUPPLIER_RULES
+    });
+    expect(result.rows[0].newProductSystemReference).toMatchObject({
+      parentMaterialCategory: "長絨棉", subMaterialCategory: "水洗棉", productType: "薄被套", productSize: "4.5x6.5尺",
+      firstMonthDemandQty: 10, sampleCount: 2, referenceScope: "同父材質／子材質／品類／尺寸", reliability: "低"
+    });
+  });
+
+  it("同品類同尺寸多個新品共用首批需求池，不把完整需求複製到每個花色", () => {
+    const master = makeMaster();
+    for (const [sku, color] of [["NP-COLOR-1", "岩棕"], ["NP-COLOR-2", "微曦"]]) {
+      master.bySku.set(sku, {
+        ...master.bySku.get("A1"), sku, supplierSku: `V-${sku}`, supplier: "普優瑪", name: `5尺床包組 [水洗棉-${color}]`,
+        mainCategory: "床包", size: "5尺", unitCost: 500, moq: 1
+      });
+    }
+    const peers = [1, 1, 1].map((daily, index) => ({
+      sku: `COLOR-PEER-${index + 1}`, name: `5尺床包組 [水洗棉-${index}]`, materialCategory: "水洗棉", purchaseTab: "長絨棉",
+      mainCategory: "床包", size: "5尺", forecastDailyQty: daily, hqDailyQty: daily, storeDailyByCode: {},
+      discontinued: false, sellThroughStop: false, externalPurchaseBlocked: false
+    }));
+    const result = core.buildSpecialProcurementAnalysis({
+      baseAnalysis: { rows: peers, meta: {}, totals: {} }, workflowType: "new_product",
+      rows: ["NP-COLOR-1", "NP-COLOR-2"].map((sku) => ({ sku, listedDate: "2026-10-21", channels: "全部通路", similarCategory: "水洗棉" })),
+      fileName: "新品.xlsx", master, inventory: makeInventory(), pendingReports: [], supplierRules: core.SUPPLIER_RULES
+    });
+    expect(result.rows.map((row) => row.newProductSystemReference.firstMonthDemandQty)).toEqual([15, 15]);
+    expect(result.rows.reduce((sum, row) => sum + row.newProductSystemReference.firstMonthDemandQty, 0)).toBe(30);
+    expect(result.rows.every((row) => row.newProductSystemReference.categoryDemandPoolQty === 30)).toBe(true);
+  });
+
   it("新品首批由匯入一路驗收到未修改核准、人工異動覆核與ERP守恆", () => {
     const sourceWorkbook = XLSX.utils.book_new();
     const sourceSheet = XLSX.utils.aoa_to_sheet([
@@ -655,6 +708,11 @@ describe("採購規劃核心鎖定公式", () => {
     expect(unchangedWorkbook.SheetNames).toContain("06_普優瑪新品寄庫");
     expect(unchangedWorkbook.SheetNames.some((name) => /^03(?:A|B\d|C|D)_/.test(name))).toBe(false);
     expect(unchangedWorkbook.SheetNames.some((name) => /^04[AB]_/.test(name))).toBe(false);
+    const newProductHeaders = XLSX.utils.sheet_to_json(unchangedWorkbook.Sheets["05_新品採購建議"], { header: 1, defval: "" })[0];
+    expect(newProductHeaders).not.toContain("寄倉現貨");
+    expect(newProductHeaders).not.toContain("粉紅排程");
+    expect(newProductHeaders).not.toContain("寄倉缺口");
+    expect(newProductHeaders).not.toContain("目前實際可採購量");
     const unchangedReview = core.reviewReturnedWorkbook(unchangedWorkbook, XLSX, {
       asOfDate: "2026-10-20", orderDate: "2026-10-20", baselineBySku, allowedSkuSet
     });
@@ -1947,7 +2005,28 @@ describe("採購建議第二階段", () => {
     expect(confirmed.rows.map((row) => row.finalQty)).toEqual([14, 6, 20, 8, 7]);
   });
 
-  it("普優瑪尾箱若改成非預設量，仍要求原因並維持採購單位檢核", () => {
+  it("新品首批以建議採購量為回匯基準，不受寄庫現貨為0影響", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "供應商", "商品品名", "建議採購量", "採購單位", "進貨價", "人工確認採購量", "人工調整原因類別"],
+      ["NP-PUYO-1", "普優瑪寢具有限公司", "5尺新品床包組", 40, 20, 500, "", ""]
+    ]), "05_新品採購建議");
+    const baseline = {
+      sku: "NP-PUYO-1", supplier: "普優瑪寢具有限公司", name: "5尺新品床包組", unitCost: 500,
+      suggestedPurchaseQty: 40, packSize: 20, pendingQty: 0, consignmentCurrentQty: 0, isNewProduct: true
+    };
+    const review = core.reviewReturnedWorkbook(workbook, XLSX, {
+      workflowType: "new_product", baselineBySku: new Map([[baseline.sku, baseline]]), allowedSkuSet: new Set([baseline.sku])
+    });
+    expect(review.errors).toHaveLength(0);
+    expect(review.warnings).toHaveLength(0);
+    expect(review.rows[0]).toMatchObject({ suggestedQty: 40, confirmedQty: 40, finalQty: 40, reason: "" });
+    expect(core.listManualReasonCandidates(workbook, XLSX, {
+      workflowType: "new_product", baselineBySku: new Map([[baseline.sku, baseline]]), exportedSkuSet: new Set([baseline.sku])
+    })).toHaveLength(0);
+  });
+
+  it("普優瑪尾箱若改成非預設量，仍要求原因但採購單位改為確認提醒", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
       ["ERP品號", "供應商", "商品品名", "建議採購量", "採購單位", "進貨價", "人工確認採購量", "人工調整原因"],
@@ -1958,7 +2037,40 @@ describe("採購建議第二階段", () => {
       baselineBySku: new Map([[baseline.sku, baseline]]), allowedSkuSet: new Set([baseline.sku])
     });
     expect(review.errors.some((error) => error.message === "修改採購量時必須填人工調整原因。")).toBe(true);
-    expect(review.errors.some((error) => error.message.includes("人工量必須填0或20的倍數"))).toBe(true);
+    expect(review.errors.some((error) => error.message.includes("人工量必須填0或20的倍數"))).toBe(false);
+    expect(review.warnings).toEqual([expect.objectContaining({
+      type: "purchase_unit_exception", sku: "A43398", quantity: 13, packSize: 20
+    })]);
+  });
+
+  it("箱數例外確認後若數量未變不重複提醒，再改成另一個尾數才重新提醒", () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "供應商", "商品品名", "建議採購量", "採購單位", "進貨價", "人工確認採購量", "人工調整原因類別"],
+      ["PACK-1", "上林", "測試毛巾", 20, 10, 100, 13, "庫存／銷售風險，人工降低數量"]
+    ]), "03C_上林採購");
+    const baseline = { sku: "PACK-1", supplier: "上林", name: "測試毛巾", unitCost: 100, suggestedPurchaseQty: 20, packSize: 10 };
+    const first = core.reviewReturnedWorkbook(workbook, XLSX, { baselineBySku: new Map([[baseline.sku, baseline]]) });
+    expect(first.errors).toHaveLength(0);
+    expect(first.warnings).toHaveLength(1);
+    Object.assign(first.rows[0], {
+      purchaseUnitExceptionConfirmed: true,
+      purchaseUnitExceptionConfirmedBy: "buyer@example.com",
+      purchaseUnitExceptionConfirmedAt: "2026-10-22T01:00:00.000Z"
+    });
+    const secondWorkbook = core.buildSecondReviewWorkbook(first, XLSX);
+    const unchanged = core.reviewSecondApprovalWorkbook(secondWorkbook, XLSX, { baselineBySku: new Map([["PACK-1", first.rows[0]]]) });
+    expect(unchanged.errors).toHaveLength(0);
+    expect(unchanged.warnings).toHaveLength(0);
+    expect(unchanged.rows[0]).toMatchObject({ purchaseUnitExceptionConfirmed: true, purchaseUnitExceptionConfirmedBy: "buyer@example.com" });
+
+    const sheet = secondWorkbook.Sheets["02_覆核與異動確認"];
+    const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })[0];
+    sheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("第二次異動採購量") })] = { t: "n", v: 11 };
+    sheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("第二次異動原因類別") })] = { t: "s", v: "庫存／銷售風險，人工降低數量" };
+    const changed = core.reviewSecondApprovalWorkbook(secondWorkbook, XLSX, { baselineBySku: new Map([["PACK-1", first.rows[0]]]) });
+    expect(changed.errors).toHaveLength(0);
+    expect(changed.warnings).toEqual([expect.objectContaining({ sku: "PACK-1", quantity: 11, packSize: 10 })]);
   });
 
   it("普優瑪可用指定原因精確清回全部寄庫現貨，粉紅排程不計入且二次覆核沿用", () => {
@@ -2436,7 +2548,8 @@ describe("採購規劃前台與入口", () => {
     const homeHtml = readFileSync("../index.html", "utf8");
     const toolHtml = readFileSync("../procurement-planning/index.html", "utf8");
     const headers = readFileSync("../_headers", "utf8");
-    expect(homeHtml).toContain('href="/procurement-planning/?deploy=20261021-new-product-tabs-r1"');
+    const procurementVersion = JSON.parse(readFileSync("../procurement-planning/version.json", "utf8")).version;
+    expect(homeHtml).toContain(`href="/procurement-planning/?deploy=${procurementVersion}"`);
     expect(homeHtml).toContain("庫存採購規劃");
     expect(toolHtml).toContain("公司工具首頁");
     expect(toolHtml).toContain("← 返回公司工具首頁");
@@ -2522,15 +2635,15 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('style.css?v=20261021-new-product-tabs-r1');
-    expect(toolHtml).toContain('core.js?v=20261021-new-product-tabs-r1');
-    expect(toolHtml).toContain('google-sources.js?v=20261021-new-product-tabs-r1');
-    expect(toolHtml).toContain('app.js?v=20261021-new-product-tabs-r1');
+    expect(toolHtml).toContain(`style.css?v=${procurementVersion}`);
+    expect(toolHtml).toContain(`core.js?v=${procurementVersion}`);
+    expect(toolHtml).toContain(`google-sources.js?v=${procurementVersion}`);
+    expect(toolHtml).toContain(`app.js?v=${procurementVersion}`);
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261021-new-product-tabs-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain(procurementVersion);
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2614,7 +2727,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261021-new-product-tabs-r1");
+    expect(toolHtml).toContain(`app.js?v=${procurementVersion}`);
     expect(toolHtml).toContain('id="activity-demand-card"');
     expect(toolHtml).toContain("活動期間預計營業額");
     expect(toolHtml).toContain("需求加乘倍數");
