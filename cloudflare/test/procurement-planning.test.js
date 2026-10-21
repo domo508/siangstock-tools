@@ -531,6 +531,60 @@ describe("採購規劃核心鎖定公式", () => {
     expect(lowLegacy.rows[0].suggestedPurchaseQty).toBe(highLegacy.rows[0].suggestedPurchaseQty);
   });
 
+  it("新品報表並列近12週與三年同季需求，但正式建議不重複加乘季節倍率", () => {
+    const peerRows = [0.8, 1, 1.2].map((daily, index) => ({
+      sku: `SEASON-PEER-${index + 1}`,
+      name: "60天絲測試床包",
+      materialCategory: "天絲",
+      mainCategory: "床包",
+      size: "無尺寸",
+      recent12Qty: 42,
+      forecastDailyQty: daily,
+      hqDailyQty: daily,
+      storeDailyByCode: {},
+      seasonalProfileReliability: "高",
+      discontinued: false,
+      sellThroughStop: false,
+      externalPurchaseBlocked: false
+    }));
+    const baseAnalysis = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-10-21", checkpoint: "month-start"
+    });
+    baseAnalysis.rows = peerRows;
+    const special = core.buildSpecialProcurementAnalysis({
+      baseAnalysis,
+      workflowType: "new_product",
+      rows: [{ sku: "A1", listedDate: "2026-10-21", channels: "全部通路", similarCategory: "天絲" }],
+      fileName: "新品.xlsx",
+      master: makeMaster(),
+      inventory: makeInventory(),
+      pendingReports: [],
+      supplierRules: core.SUPPLIER_RULES
+    });
+    const row = special.rows[0];
+    expect(row.newProductSystemReference).toMatchObject({
+      recent12WeekFirstMonthDemandQty: 15,
+      seasonalFirstMonthDemandQty: 30,
+      adoptedFirstMonthDemandQty: 30,
+      firstMonthDemandQty: 30,
+      seasonalMultiplier: 2,
+      seasonalReliability: "高"
+    });
+    expect(row.suggestedPurchaseQty).toBe(22);
+    const output = core.buildRecommendationWorkbook(special, XLSX);
+    const report = XLSX.utils.sheet_to_json(output.Sheets["05_新品採購建議"], { defval: "" })[0];
+    expect(report).toMatchObject({
+      "新品近12週首月需求": 15,
+      "新品三年同季首月需求": 30,
+      "新品季節倍率": 2,
+      "新品季節可信度": "高",
+      "新品系統首月需求": 30,
+      "新品需求採用說明": "系統採用成熟同類既有季節調整結果；不重複加乘季節倍率",
+      "建議採購量": 22
+    });
+  });
+
   it("新品首批由匯入一路驗收到未修改核准、人工異動覆核與ERP守恆", () => {
     const sourceWorkbook = XLSX.utils.book_new();
     const sourceSheet = XLSX.utils.aoa_to_sheet([
@@ -2370,7 +2424,7 @@ describe("採購規劃前台與入口", () => {
     const homeHtml = readFileSync("../index.html", "utf8");
     const toolHtml = readFileSync("../procurement-planning/index.html", "utf8");
     const headers = readFileSync("../_headers", "utf8");
-    expect(homeHtml).toContain('href="/procurement-planning/?deploy=20261021-new-product-style-r1"');
+    expect(homeHtml).toContain('href="/procurement-planning/?deploy=20261021-new-product-season-compare-r1"');
     expect(homeHtml).toContain("庫存採購規劃");
     expect(toolHtml).toContain("公司工具首頁");
     expect(toolHtml).toContain("← 返回公司工具首頁");
@@ -2456,15 +2510,15 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('style.css?v=20261021-new-product-style-r1');
-    expect(toolHtml).toContain('core.js?v=20261021-new-product-style-r1');
-    expect(toolHtml).toContain('google-sources.js?v=20261021-new-product-style-r1');
-    expect(toolHtml).toContain('app.js?v=20261021-new-product-style-r1');
+    expect(toolHtml).toContain('style.css?v=20261021-new-product-season-compare-r1');
+    expect(toolHtml).toContain('core.js?v=20261021-new-product-season-compare-r1');
+    expect(toolHtml).toContain('google-sources.js?v=20261021-new-product-season-compare-r1');
+    expect(toolHtml).toContain('app.js?v=20261021-new-product-season-compare-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261021-new-product-style-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261021-new-product-season-compare-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2548,7 +2602,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261021-new-product-style-r1");
+    expect(toolHtml).toContain("app.js?v=20261021-new-product-season-compare-r1");
     expect(toolHtml).toContain('id="activity-demand-card"');
     expect(toolHtml).toContain("活動期間預計營業額");
     expect(toolHtml).toContain("需求加乘倍數");

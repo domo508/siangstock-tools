@@ -3812,6 +3812,25 @@
       }
       return recognized ? selectedDaily : Math.max(0, Number(row.forecastDailyQty || 0));
     };
+    const newProductRecentChannelDaily = (row, channelText) => {
+      const recentTotalDaily = Math.max(0, Number(row.recent12Qty || 0)) / 84;
+      const seasonalTotalDaily = Math.max(0, Number(row.forecastDailyQty || 0));
+      if (!(recentTotalDaily > 0) || !(seasonalTotalDaily > 0)) return 0;
+      const selectedSeasonalDaily = newProductChannelDaily(row, channelText);
+      return recentTotalDaily * Math.min(Math.max(selectedSeasonalDaily / seasonalTotalDaily, 0), 1);
+    };
+    const seasonalReliabilityFromRows = (rows) => {
+      if (!rows.length) return "不足";
+      const weights = rows.map((row) => {
+        const value = normalizeText(row.seasonalProfileReliability || row.categoryReliability || "");
+        if (/高|high/.test(value)) return 3;
+        if (/中|medium/.test(value)) return 2;
+        if (/低|low/.test(value)) return 1;
+        return 0;
+      });
+      const average = weights.reduce((sum, value) => sum + value, 0) / weights.length;
+      return average >= 2.5 ? "高" : average >= 1.5 ? "中" : average > 0 ? "低" : "不足";
+    };
     const resolveNewProductReference = (source, masterRecord, sku) => {
       const requestedCategory = String(source.similarCategory || "").trim();
       const materialCategory = requestedCategory && requestedCategory !== "由系統判斷"
@@ -3846,16 +3865,26 @@
         }
       ].map((candidate) => ({
         ...candidate,
-        values: candidate.rows.map((row) => newProductChannelDaily(row, source.channels)).filter((value) => Number.isFinite(value) && value > 0)
+        values: candidate.rows.map((row) => newProductChannelDaily(row, source.channels)).filter((value) => Number.isFinite(value) && value > 0),
+        recentValues: candidate.rows.map((row) => newProductRecentChannelDaily(row, source.channels)).filter((value) => Number.isFinite(value) && value > 0)
       }));
       const selected = candidates.find((candidate) => candidate.values.length >= 3)
         || candidates.find((candidate) => candidate.values.length > 0);
       const daily = Math.max(0, Number(trimmedMean(selected?.values || []) || 0));
+      const recent12WeekDaily = Math.max(0, Number(trimmedMean(selected?.recentValues || []) || 0));
       const sampleCount = selected?.values.length || 0;
       return {
         materialCategory,
         daily,
         firstMonthDemandQty: Math.ceil(daily * 30),
+        recent12WeekDaily,
+        recent12WeekFirstMonthDemandQty: Math.ceil(recent12WeekDaily * 30),
+        seasonalDaily: daily,
+        seasonalFirstMonthDemandQty: Math.ceil(daily * 30),
+        seasonalMultiplier: recent12WeekDaily > 0 ? daily / recent12WeekDaily : null,
+        seasonalReliability: seasonalReliabilityFromRows(selected?.rows || []),
+        adoptedFirstMonthDemandQty: Math.ceil(daily * 30),
+        comparisonNote: "系統採用成熟同類既有季節調整結果；不重複加乘季節倍率",
         sampleCount,
         label: selected?.label || "同類樣本不足",
         reliability: sampleCount >= 8 ? "高" : sampleCount >= 3 ? "中" : sampleCount > 0 ? "低" : "不足"
@@ -4546,7 +4575,12 @@
       "新品上市日": row.listedDate || "",
       "新品預計通路／門市": row.plannedChannels || "",
       "相似類別": row.similarCategory || row.materialCategory || "",
+      "新品近12週首月需求": row.newProductSystemReference?.recent12WeekFirstMonthDemandQty ?? "",
+      "新品三年同季首月需求": row.newProductSystemReference?.seasonalFirstMonthDemandQty ?? "",
+      "新品季節倍率": row.newProductSystemReference?.seasonalMultiplier == null ? "" : Number(row.newProductSystemReference.seasonalMultiplier.toFixed(2)),
+      "新品季節可信度": row.newProductSystemReference?.seasonalReliability || "",
       "新品系統首月需求": row.newProductSystemReference?.firstMonthDemandQty ?? "",
+      "新品需求採用說明": row.newProductSystemReference?.comparisonNote || "",
       "新品參考樣本數": row.newProductSystemReference?.sampleCount ?? "",
       "新品參考範圍": row.newProductSystemReference?.label || "",
       "新品建議可信度": row.newProductSystemReference?.reliability || "",
