@@ -24,6 +24,12 @@
   const DEMAND_SALE_TYPES = Object.freeze(["銷貨", "訂貨", "退貨", "退訂"]);
   const CUSTOM_SKU_PREFIXES = Object.freeze(["SA", "OA", "SB", "OB"]);
   const CONFIRMED_COMBINATION_SKUS = Object.freeze(new Set(["OA41361", "OA42361", "OA43361", "OA44361"]));
+  const NEW_PRODUCT_WORKBOOK_READ_OPTIONS = Object.freeze({
+    type: "array",
+    cellDates: false,
+    cellStyles: true,
+    nodim: true
+  });
 
   function isAutomaticProcurementExcludedSku(value) {
     const sku = normalizeSku(value);
@@ -1024,13 +1030,14 @@
     const normalizedAliases = Object.fromEntries(Object.entries(aliases).map(([key, values]) => [key, values.map(normalizeHeader)]));
     let selected = null;
     for (const name of workbook.SheetNames) {
-      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: true, defval: "" });
+      const sheet = workbook.Sheets[name];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" });
       for (let index = 0; index < Math.min(rows.length, 30); index += 1) {
         const headers = rows[index].map(normalizeHeader);
         const mapping = {};
         for (const [key, values] of Object.entries(normalizedAliases)) mapping[key] = headers.findIndex((header) => values.includes(header));
         if (mapping.sku >= 0 && mapping.listedDate >= 0 && mapping.channels >= 0) {
-          selected = { name, rows, headerRowIndex: index, mapping };
+          selected = { name, sheet, rows, headerRowIndex: index, mapping };
           break;
         }
       }
@@ -1043,8 +1050,21 @@
     for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
       const row = selected.rows[index];
       const read = (key) => selected.mapping[key] >= 0 ? row[selected.mapping[key]] : "";
-      const rawSku = read("sku");
-      const skuIsDate = Object.prototype.toString.call(rawSku) === "[object Date]";
+      const skuColumn = selected.mapping.sku;
+      const skuCellRef = typeof XLSX.utils.encode_cell === "function"
+        ? XLSX.utils.encode_cell({ r: index, c: skuColumn })
+        : "";
+      const skuCell = Array.isArray(selected.sheet)
+        ? selected.sheet[index]?.[skuColumn]
+        : skuCellRef ? selected.sheet[skuCellRef] : null;
+      const parsedSku = read("sku");
+      const rawSku = skuCell?.t === "s" && typeof skuCell.v === "string" ? skuCell.v : parsedSku;
+      const skuHasDateNumberFormat = skuCell?.t === "n"
+        && typeof XLSX.SSF?.is_date === "function"
+        && XLSX.SSF.is_date(String(skuCell.z || ""));
+      const skuIsDate = Object.prototype.toString.call(rawSku) === "[object Date]"
+        || skuCell?.t === "d"
+        || skuHasDateNumberFormat;
       const sku = skuIsDate ? "" : normalizeSku(rawSku);
       if (skuIsDate || /^INVALID DATE$/i.test(sku)) {
         errors.push({ sourceRow: index + 1, sku: "", message: "ERP品號欄被讀成日期格式；請保留品號文字，上市日填在下一欄。" });
@@ -5332,6 +5352,7 @@
     DEMAND_SALE_TYPES,
     CUSTOM_SKU_PREFIXES,
     CONFIRMED_COMBINATION_SKUS,
+    NEW_PRODUCT_WORKBOOK_READ_OPTIONS,
     PROCUREMENT_POLICY,
     SUPPLIER_RULES,
     DEFAULT_SPRING_FESTIVAL_RULE,

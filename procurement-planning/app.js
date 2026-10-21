@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261020-activity-floor-confirm-r1";
+  const APP_VERSION = "20261021-new-product-style-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -291,6 +291,10 @@
   async function readWorkbook(file, options = {}) {
     const data = await file.arrayBuffer();
     return XLSX.read(data, { type: "array", cellDates: options.cellDates !== false, cellStyles: true, nodim: true });
+  }
+  async function readNewProductWorkbook(file) {
+    const data = await file.arrayBuffer();
+    return XLSX.read(data, core.NEW_PRODUCT_WORKBOOK_READ_OPTIONS);
   }
   function inventoryReadError(error) {
     const message = String(error?.message || "庫存檔讀取失敗");
@@ -2796,7 +2800,7 @@
     elements.newProductButton.disabled = true;
     elements.specialWorkflowStatus.textContent = `正在檢查${state.newProductFile.name}與最新商品主檔…`;
     try {
-      const parsed = core.parseNewProductWorkbook(await readWorkbook(state.newProductFile, { cellDates: false }), XLSX, { fileName: state.newProductFile.name });
+      const parsed = core.parseNewProductWorkbook(await readNewProductWorkbook(state.newProductFile), XLSX, { fileName: state.newProductFile.name });
       if (parsed.errors.length) {
         const visibleErrors = parsed.errors.slice(0, 8).map((row) => `第${row.sourceRow}列${row.sku ? `（${row.sku}）` : ""}：${row.message}`);
         const remaining = parsed.errors.length - visibleErrors.length;

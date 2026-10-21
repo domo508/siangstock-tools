@@ -459,6 +459,49 @@ describe("採購規劃核心鎖定公式", () => {
     expect(parsed.errors.some((row) => row.message.includes("重複"))).toBe(false);
   });
 
+  it("新品ERP品號全欄誤套日期格式時仍從原始文字完整還原", () => {
+    const rows = [
+      ["ERP品號", "預計／實際上市日", "預計販售通路或門市", "相似類別", "備註"],
+      ...Array.from({ length: 36 }, (_, index) => [
+        `NP-STYLE-${String(index + 1).padStart(3, "0")}`,
+        "2026-11-03",
+        "全部通路",
+        "水洗棉",
+        ""
+      ])
+    ];
+    const sourceWorkbook = XLSX.utils.book_new();
+    const sourceSheet = XLSX.utils.aoa_to_sheet(rows);
+    for (let row = 2; row <= 37; row += 1) sourceSheet[`A${row}`].z = "yyyy-mm-dd";
+    XLSX.utils.book_append_sheet(sourceWorkbook, sourceSheet, "新品首批名單");
+    const sourceBytes = XLSX.write(sourceWorkbook, { type: "buffer", bookType: "xlsx", cellStyles: true });
+    const browserBytes = sourceBytes.buffer.slice(sourceBytes.byteOffset, sourceBytes.byteOffset + sourceBytes.byteLength);
+    const browserReadWorkbook = XLSX.read(browserBytes, core.NEW_PRODUCT_WORKBOOK_READ_OPTIONS);
+    const parsed = core.parseNewProductWorkbook(browserReadWorkbook, XLSX, { fileName: "新品首批_格式污染驗收.xlsx" });
+    expect(parsed.errors).toHaveLength(0);
+    expect(parsed.records).toHaveLength(36);
+    expect(parsed.records[0].sku).toBe("NP-STYLE-001");
+    expect(parsed.records[35].sku).toBe("NP-STYLE-036");
+  });
+
+  it("新品ERP欄真正填入日期時仍逐列阻擋，不影響其它正常品號", () => {
+    const sourceWorkbook = XLSX.utils.book_new();
+    const sourceSheet = XLSX.utils.aoa_to_sheet([
+      ["ERP品號", "預計／實際上市日", "預計販售通路或門市", "相似類別", "備註"],
+      [46329, "2026-11-03", "全部通路", "水洗棉", "錯填日期"],
+      ["NP-VALID-001", "2026-11-03", "全部通路", "水洗棉", "正常品號"]
+    ]);
+    sourceSheet.A2.z = "yyyy-mm-dd";
+    sourceSheet.A3.z = "yyyy-mm-dd";
+    XLSX.utils.book_append_sheet(sourceWorkbook, sourceSheet, "新品首批名單");
+    const sourceBytes = XLSX.write(sourceWorkbook, { type: "buffer", bookType: "xlsx", cellStyles: true });
+    const browserBytes = sourceBytes.buffer.slice(sourceBytes.byteOffset, sourceBytes.byteOffset + sourceBytes.byteLength);
+    const browserReadWorkbook = XLSX.read(browserBytes, core.NEW_PRODUCT_WORKBOOK_READ_OPTIONS);
+    const parsed = core.parseNewProductWorkbook(browserReadWorkbook, XLSX, { fileName: "新品首批_日期誤填驗收.xlsx" });
+    expect(parsed.records).toEqual([expect.objectContaining({ sku: "NP-VALID-001" })]);
+    expect(parsed.errors).toEqual([expect.objectContaining({ sourceRow: 2, message: expect.stringContaining("ERP品號欄被讀成日期格式") })]);
+  });
+
   it("新品首月需求由成熟同類系統估算，舊版首月預估量不再左右建議", () => {
     const peerRows = [0.8, 1, 1.2].map((daily, index) => ({
       sku: `PEER-${index + 1}`,
@@ -497,7 +540,8 @@ describe("採購規劃核心鎖定公式", () => {
     sourceSheet.A2.z = "yyyy-mm-dd";
     XLSX.utils.book_append_sheet(sourceWorkbook, sourceSheet, "新品首批名單");
     const sourceBytes = XLSX.write(sourceWorkbook, { type: "buffer", bookType: "xlsx" });
-    const browserReadWorkbook = XLSX.read(sourceBytes, { type: "buffer", cellDates: false });
+    const browserBytes = sourceBytes.buffer.slice(sourceBytes.byteOffset, sourceBytes.byteOffset + sourceBytes.byteLength);
+    const browserReadWorkbook = XLSX.read(browserBytes, core.NEW_PRODUCT_WORKBOOK_READ_OPTIONS);
     const parsed = core.parseNewProductWorkbook(browserReadWorkbook, XLSX, { fileName: "新品首批_端到端驗收.xlsx" });
     expect(parsed.errors).toHaveLength(0);
     expect(parsed.records).toEqual([expect.objectContaining({
@@ -2326,7 +2370,7 @@ describe("採購規劃前台與入口", () => {
     const homeHtml = readFileSync("../index.html", "utf8");
     const toolHtml = readFileSync("../procurement-planning/index.html", "utf8");
     const headers = readFileSync("../_headers", "utf8");
-    expect(homeHtml).toContain('href="/procurement-planning/"');
+    expect(homeHtml).toContain('href="/procurement-planning/?deploy=20261021-new-product-style-r1"');
     expect(homeHtml).toContain("庫存採購規劃");
     expect(toolHtml).toContain("公司工具首頁");
     expect(toolHtml).toContain("← 返回公司工具首頁");
@@ -2412,15 +2456,15 @@ describe("採購規劃前台與入口", () => {
     expect(toolHtml).toContain('id="reason-batch-panel"');
     expect(toolHtml).toContain('id="reason-apply-selected"');
     expect(toolHtml).toContain('../cost-analysis/assets/jszip.min.js');
-    expect(toolHtml).toContain('style.css?v=20261020-activity-floor-confirm-r1');
-    expect(toolHtml).toContain('core.js?v=20261020-activity-floor-confirm-r1');
-    expect(toolHtml).toContain('google-sources.js?v=20261020-activity-floor-confirm-r1');
-    expect(toolHtml).toContain('app.js?v=20261020-activity-floor-confirm-r1');
+    expect(toolHtml).toContain('style.css?v=20261021-new-product-style-r1');
+    expect(toolHtml).toContain('core.js?v=20261021-new-product-style-r1');
+    expect(toolHtml).toContain('google-sources.js?v=20261021-new-product-style-r1');
+    expect(toolHtml).toContain('app.js?v=20261021-new-product-style-r1');
     expect(toolHtml).toContain('id="version-warning"');
     expect(toolHtml).toContain('id="reload-latest-button"');
     expect(toolAppSource).toContain('version.json?check=');
     expect(toolAppSource).toContain('runtimeOutdated');
-    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261020-activity-floor-confirm-r1");
+    expect(readFileSync("../procurement-planning/version.json", "utf8")).toContain("20261021-new-product-style-r1");
     expect(toolAppSource).toContain("未另填正數時，自動釋放整月額度50%");
     expect(toolHtml).toContain('id="google-auth-priority"');
     expect(toolHtml).toContain('id="google-auth-status"');
@@ -2504,7 +2548,7 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("同月份另一個母批次已有");
     expect(toolApp).toContain("本次新版母批次尚未發布到公司協作區");
     expect(toolApp).toContain("資料截止");
-    expect(toolHtml).toContain("app.js?v=20261020-activity-floor-confirm-r1");
+    expect(toolHtml).toContain("app.js?v=20261021-new-product-style-r1");
     expect(toolHtml).toContain('id="activity-demand-card"');
     expect(toolHtml).toContain("活動期間預計營業額");
     expect(toolHtml).toContain("需求加乘倍數");
