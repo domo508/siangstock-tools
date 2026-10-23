@@ -17,6 +17,10 @@
     {
       "pattern": "siangstock.com/api/store-transfer*",
       "zone_name": "siangstock.com"
+    },
+    {
+      "pattern": "siangstock.com/api/competitive-analysis*",
+      "zone_name": "siangstock.com"
     }
   ],
   "triggers": {

@@ -44,6 +44,16 @@ describe("商控競品分析核心", () => {
     }
   });
 
+  it("AI 候選預設未確認時不會進入定價樣本", () => {
+    const candidates = [
+      { id: "manual", price: 399, included: true },
+      { id: "ai", price: 199, included: false }
+    ];
+    const included = core.includedCompetitors(candidates);
+    expect(included.map((item) => item.id)).toEqual(["manual"]);
+    expect(core.priceScenarios({ competitors: included, unitCost: 100, fixedCost: 20, channelRate: 10, targetMargin: 50 }).market.median).toBe(399);
+  });
+
   it("行銷建議依新商品欄位產生，不寫死測試角色", () => {
     const product = { name: "新品收納袋", category: "旅行收納", dimensions: "30 × 20 cm", materials: "再生聚酯纖維", techniques: "防潑水塗層", designHighlights: "可折疊" };
     const pricing = core.priceScenarios({ competitors: core.EXAMPLE_COMPETITORS, unitCost: 100, fixedCost: 20, channelRate: 10, targetMargin: 50 });

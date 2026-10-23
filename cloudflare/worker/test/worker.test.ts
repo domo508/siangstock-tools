@@ -55,6 +55,16 @@ describe("規則 Worker 路由與 fail closed", () => {
     expect(response.status).toBe(404);
   });
 
+  it("競品 AI 搜尋在 Access 尚未設定時 fail closed", async () => {
+    const response = await worker.fetch(new Request("https://siangstock.com/api/competitive-analysis/search", {
+      method: "POST",
+      headers: { Origin: "https://siangstock.com", "Content-Type": "application/json" },
+      body: JSON.stringify({ consent: true, product: { name: "商品", category: "手持鏡", dimensions: "", materials: "玻璃", techniques: "印刷", designHighlights: "", packaging: "" } })
+    }), env());
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain("公司登入尚未啟用");
+  });
+
   it("D1 免費額度用罄時回傳可操作的繁中提示", async () => {
     const quotaEnv = {
       ...env(),

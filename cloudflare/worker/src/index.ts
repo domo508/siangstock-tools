@@ -2,6 +2,7 @@ import { verifyAdmin } from "./access";
 import { RequestValidationError, validateRules, validateUpdateBody } from "./schema";
 import { cleanupNotifications, procurementRoute } from "./procurement";
 import { cleanupStoreTransfers, storeTransferRoute } from "./store-transfer";
+import { competitiveAnalysisRoute } from "./competitive-analysis";
 
 const API_HEADERS = {
   "Cache-Control": "no-store, max-age=0",
@@ -101,6 +102,8 @@ export default {
       if (procurementResponse) return procurementResponse;
       const storeTransferResponse = await storeTransferRoute(request, env);
       if (storeTransferResponse) return storeTransferResponse;
+      const competitiveAnalysisResponse = await competitiveAnalysisRoute(request, env);
+      if (competitiveAnalysisResponse) return competitiveAnalysisResponse;
       if (url.pathname === "/api/rules" && (request.method === "GET" || request.method === "HEAD")) return await publicRules(request, env);
       if (url.pathname === "/api/rules/admin" && request.method === "PUT") return await updateRules(request, env);
       if (url.pathname.startsWith("/api/rules")) return errorResponse("不支援此方法或路徑。", 405);
@@ -111,7 +114,7 @@ export default {
       const quotaMessage = d1QuotaError(error);
       if (quotaMessage) return errorResponse(quotaMessage, 503);
       console.error("Unhandled Worker error", error);
-      return errorResponse("規則服務暫時無法使用。", 503);
+      return errorResponse("公司工具服務暫時無法使用。", 503);
     }
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {

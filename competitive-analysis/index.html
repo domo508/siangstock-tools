@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; object-src 'self' blob:; base-uri 'none'; form-action 'none'">
   <title>商控競品分析工具｜翔仔居家公司工具</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=20261023-competitive-analysis-r2">
+  <link rel="stylesheet" href="style.css?v=20261023-competitive-analysis-r3">
 </head>
 <body>
   <dialog id="version-warning" class="version-dialog">
@@ -31,7 +31,7 @@
         <h1>從工單到定價，<br>把判斷依據攤開來。</h1>
         <p class="hero-description">上傳 PDF 或圖片，整理規格、材質與工法，再用有來源的市售商品比較價格、相似度、毛利與行銷情境。</p>
       </div>
-      <aside class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>工單只在目前分頁讀取</strong><p>檔案不會上傳；規格由同仁依工單覆核，市場資料使用人工確認的來源清單。</p></div></aside>
+      <aside class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>工單檔案只在目前分頁讀取</strong><p>PDF／圖片不會上傳；啟用 AI 搜尋時，只傳送同仁已覆核的文字規格摘要。</p></div></aside>
     </section>
 
     <section class="notice-card" role="note">
@@ -44,10 +44,11 @@
         <p class="eyebrow">操作手冊</p>
         <h2 id="manual-title">五步完成一份可追溯的商品分析</h2>
       </div>
-      <ol class="quick-steps"><li>選擇工單</li><li>覆核規格</li><li>確認競品來源</li><li>輸入成本條件</li><li>產生並匯出報告</li></ol>
+      <ol class="quick-steps"><li>選擇工單</li><li>覆核規格</li><li>搜尋並確認競品</li><li>輸入成本條件</li><li>產生並匯出報告</li></ol>
       <details open><summary>分析前要準備什麼？</summary><p>準備商品細部工單 PDF 或清晰圖片、單件含稅或未稅成本、包材／物流等固定費、通路抽成與目標毛利。工單中的材質、尺寸、工法仍要由商品或採購同事覆核。</p></details>
       <details><summary>相似度與價格建議怎麼看？</summary><p>相似度依品類、材質、工法、尺寸與市場定位加權，只用於縮小比較範圍，不代表消費者願付價格。定價情境同時考慮市售價格與目標毛利底線。</p></details>
-      <details><summary>哪些結果不能直接當成結論？</summary><p>來源價格可能因促銷、缺貨或規格差異而改變；報告是決策輔助，不取代授權、產品安全、成本、稅務與實際市場測試。</p></details>
+      <details><summary>AI 搜尋會傳送什麼？</summary><p>只有步驟 2 中同仁已覆核的商品名稱、品類、尺寸、材質、工法、設計差異與包裝文字會送往 AI 服務；工單檔案、檔名、成本與其他欄位不會送出。每次最多進行 3 次網路搜尋並回傳 8 筆候選。</p></details>
+      <details><summary>哪些結果不能直接當成結論？</summary><p>AI 摘要與候選競品可能不完整或判斷錯誤，來源價格也可能因促銷、缺貨或規格差異而改變。請開啟原始來源並勾選確認後再納入報告；報告不取代授權、產品安全、成本、稅務與實際市場測試。</p></details>
     </section>
 
     <section class="workspace-card" aria-labelledby="upload-title">
@@ -79,8 +80,15 @@
 
     <section class="workspace-card" aria-labelledby="market-title">
       <div class="section-heading"><div><p class="step-label">步驟 3</p><h2 id="market-title">比對有來源的市售商品</h2></div><span id="source-date" class="source-date">請加入實際競品來源</span></div>
-      <p class="section-intro">本工具不會自動爬站。請加入已人工確認的競品網址與規格；產生報告前再次開啟來源，確認售價、促銷與庫存狀態。</p>
-      <div class="table-wrap"><table><thead><tr><th>相似度</th><th>商品與定位</th><th>參考價</th><th>來源</th></tr></thead><tbody id="competitor-rows"></tbody></table></div>
+      <p class="section-intro">可讓 AI 搜尋公開市售商品頁並產生簡要比較。AI 結果一律先列為「待人工確認」；請開啟來源核對商品、價格、促銷與庫存，再勾選納入報告。</p>
+      <div class="ai-search-card">
+        <div><strong>AI 搜尋候選競品</strong><p>工單檔案不會送出，只傳送步驟 2 的文字規格；搜尋結果由 OpenAI 提供，最多 3 次搜尋、8 筆候選。</p></div>
+        <label class="consent-check"><input id="ai-search-consent" type="checkbox">我確認上方文字規格已覆核，並同意只傳送這些文字進行 AI 搜尋。</label>
+        <div class="button-row"><button id="ai-search-button" class="primary-button" type="button">AI 搜尋候選競品</button></div>
+        <p id="ai-search-status" class="status-text" aria-live="polite">尚未執行 AI 搜尋；也可直接人工新增來源。</p>
+        <div id="ai-search-summary" class="ai-summary" hidden></div>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>納入</th><th>相似度</th><th>商品與定位</th><th>參考價</th><th>來源</th></tr></thead><tbody id="competitor-rows"></tbody></table></div>
       <details class="add-source"><summary>新增一筆人工確認的競品來源</summary><form id="source-form" class="source-form"><label>商品名稱<input id="source-name" required></label><label>售價<input id="source-price" type="number" min="1" required></label><label>來源網址<input id="source-url" type="url" required></label><label>商品品類<input id="source-category" required placeholder="例如：毛絨手持鏡"></label><label>材質<input id="source-materials" placeholder="例如：毛絨、玻璃"></label><label>工法<input id="source-techniques" placeholder="例如：角色刺繡、立體造型"></label><label>尺寸<input id="source-size" placeholder="例如：約 20 × 14 cm"></label><label>定位<input id="source-positioning" placeholder="例如：角色生活雜貨"></label><button class="secondary-button" type="submit">加入比較</button></form></details>
     </section>
 
@@ -94,6 +102,7 @@
     <section id="report" class="report-card" aria-labelledby="report-title" hidden>
       <div class="report-heading"><div><p class="eyebrow">分析結果</p><h2 id="report-title">商控競品分析報告</h2><p id="report-meta"></p></div><div class="button-row"><button id="download-json" class="secondary-button" type="button">下載資料檔</button><button id="print-report" class="primary-button" type="button">列印／另存 PDF</button></div></div>
       <div id="summary-cards" class="summary-grid"></div>
+      <section id="report-ai-section" hidden><h3>AI 搜尋摘要（待人工判讀）</h3><div id="report-ai-summary" class="ai-summary"></div></section>
       <section><h3>定價情境</h3><div id="pricing-cards" class="pricing-grid"></div></section>
       <section><h3>相似競品</h3><div id="report-competitors" class="table-wrap"></div></section>
       <section><h3>行銷策略建議</h3><ol id="marketing-list" class="strategy-list"></ol></section>
@@ -102,7 +111,7 @@
 
     <footer><a href="/">← 回公司工具首頁</a><p>商控競品分析工具・正式版</p></footer>
   </main>
-  <script src="core.js?v=20261023-competitive-analysis-r2"></script>
-  <script src="app.js?v=20261023-competitive-analysis-r2"></script>
+  <script src="core.js?v=20261023-competitive-analysis-r3"></script>
+  <script src="app.js?v=20261023-competitive-analysis-r3"></script>
 </body>
 </html>

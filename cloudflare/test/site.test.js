@@ -134,9 +134,16 @@ describe("前台導覽", () => {
     expect(html).toContain("拉拉手持鏡填寫範例");
     expect(html).not.toContain("小波");
     expect(html).not.toContain("安全測試版");
-    expect(html).toContain("本工具不會自動爬站");
+    expect(html).toContain("AI 搜尋候選競品");
+    expect(html).toContain("工單檔案、檔名、成本與其他欄位不會送出");
+    expect(app).toContain("AI 候選・待人工確認");
+    expect(app).toContain('fetch("/api/competitive-analysis/search"');
+    expect(app).toContain("JSON.stringify({ consent: true, product: item })");
+    expect(html).toContain('id="report-ai-section"');
+    expect(app).toContain("摘要涵蓋本次搜尋候選");
+    expect(app).not.toContain("body: JSON.stringify({ consent: true, product: item, file");
     expect(app).toContain("state.competitors = []");
-    expect(app).toContain("請至少加入 1 筆已確認的競品來源");
+    expect(app).toContain("請至少勾選納入 1 筆已人工確認的競品來源");
     expect(html).toContain('id="version-warning"');
     expect(app).toContain(`const APP_VERSION = "${version.version}"`);
     expect(app).toContain("version.json?check=${Date.now()}");

@@ -70,6 +70,10 @@
       .sort((a, b) => b.similarity - a.similarity || a.price - b.price);
   }
 
+  function includedCompetitors(competitors) {
+    return (competitors || []).filter((item) => item.included !== false);
+  }
+
   function percentile(values, ratio) {
     const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
     if (!sorted.length) return 0;
@@ -124,5 +128,5 @@
     ];
   }
 
-  root.CompetitiveAnalysisCore = { EXAMPLE_COMPETITORS, EXAMPLE_PROFILES, similarity, rankCompetitors, priceScenarios, marketingAdvice, margin };
+  root.CompetitiveAnalysisCore = { EXAMPLE_COMPETITORS, EXAMPLE_PROFILES, similarity, rankCompetitors, includedCompetitors, priceScenarios, marketingAdvice, margin };
 })(typeof globalThis !== "undefined" ? globalThis : window);
