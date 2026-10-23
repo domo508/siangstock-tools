@@ -53,7 +53,7 @@ const PREFILL_FIELD_SCHEMA = {
   required: ["value", "confidence", "evidence"],
   properties: {
     value: { type: "string", maxLength: 1200 },
-    confidence: { type: "number", minimum: 0, maximum: 100 },
+    confidence: { type: "number", minimum: 0, maximum: 100, description: "0 到 100 的信心百分比" },
     evidence: { type: "string", maxLength: 240 }
   }
 } as const;
@@ -295,7 +295,8 @@ export function sanitizeCompetitivePrefillOutput(response: unknown): PrefillOutp
     const raw = rawFields[field] && typeof rawFields[field] === "object" && !Array.isArray(rawFields[field]) ? rawFields[field] as Record<string, unknown> : {};
     const maximum = ["materials", "techniques", "designHighlights"].includes(field) ? 1200 : field === "packaging" ? 500 : 300;
     const value = outputValue(raw.value, `${field}_value`, maximum);
-    const confidence = Math.max(0, Math.min(100, Math.round(Number(raw.confidence) || 0)));
+    const rawConfidence = Number(raw.confidence) || 0;
+    const confidence = Math.max(0, Math.min(100, Math.round(rawConfidence > 0 && rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence)));
     const source = outputValue(raw.evidence, `${field}_evidence`, 240);
     profile[field] = value;
     evidence[field] = { value, confidence, evidence: source };

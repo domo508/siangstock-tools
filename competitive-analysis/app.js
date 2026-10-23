@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261023-competitive-analysis-r4";
+  const APP_VERSION = "20261023-competitive-analysis-r5";
   const core = globalThis.CompetitiveAnalysisCore;
   const $ = (id) => document.getElementById(id);
   const state = { competitors: [], profile: null, file: null, previewUrl: "", result: null, aiSummary: "", aiSearchNotes: [], dirtyFields: new Set(), runtimeOutdated: false, latestRuntimeVersion: "" };
@@ -162,7 +162,7 @@
     const button = $("prefill-button");
     button.disabled = true;
     try {
-      const { extractTextLocally } = await import("./document-reader.mjs?v=20261023-competitive-analysis-r4");
+      const { extractTextLocally } = await import("./document-reader.mjs?v=20261023-competitive-analysis-r5");
       const extraction = await extractTextLocally(state.file, prefillProgress);
       $("prefill-status").textContent = "文字已在本機擷取，正在交由 AI 整理欄位……";
       const response = await fetch("/api/competitive-analysis/prefill", {

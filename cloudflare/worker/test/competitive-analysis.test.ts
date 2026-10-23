@@ -105,4 +105,10 @@ describe("商控競品工單預填邊界", () => {
     expect(result.evidence.techniques.confidence).toBe(91);
     expect(result.notices).toEqual(["包裝資訊仍需確認"]);
   });
+
+  it("將 0 到 1 的小數信心換算成百分比", () => {
+    const fractionalFields = Object.fromEntries(Object.entries(fields).map(([field, detail]) => [field, { ...detail, confidence: 0.88 }]));
+    const result = sanitizeCompetitivePrefillOutput({ output_text: JSON.stringify({ fields: fractionalFields, notices: [] }) });
+    expect(result.evidence.name.confidence).toBe(88);
+  });
 });
