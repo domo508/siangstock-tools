@@ -8,6 +8,7 @@ const OPENAI_MODEL = "gpt-6.1-sol";
 type CompetitiveAnalysisEnv = AccessConfig & {
   ALLOWED_ORIGINS: string;
   OPENAI_API_KEY?: string;
+  PROCUREMENT_ACCESS_AUD?: string;
 };
 
 type ProductSummary = {
@@ -289,7 +290,7 @@ function buildRequest(product: ProductSummary): Record<string, unknown> {
 
 async function search(request: Request, env: CompetitiveAnalysisEnv): Promise<Response> {
   requireSameOrigin(request, env);
-  await verifyCompanyUser(request, env);
+  await verifyCompanyUser(request, { ...env, ACCESS_AUD: (env.PROCUREMENT_ACCESS_AUD || env.ACCESS_AUD || "").trim() });
   const apiKey = (env.OPENAI_API_KEY || "").trim();
   if (!apiKey) throw new Response("AI 搜尋服務尚未完成金鑰設定，請聯絡管理者。", { status: 503 });
   const { product } = validateCompetitiveSearchBody(await readJsonBody(request));
