@@ -142,9 +142,12 @@ describe("前台導覽", () => {
     expect(app).toContain('fetch("/api/competitive-analysis/prefill"');
     expect(app).toContain("extractedText: extraction.text");
     expect(app).not.toContain("extractedText: state.file");
-    expect(app).toContain("未覆蓋已人工修改欄位");
+    expect(app).toContain("未自動帶入低於");
+    expect(html).toContain("低於 60% 信心的欄位不會自動帶入");
+    expect(html).toContain("最多 6 次搜尋");
+    expect(html).toContain('class="competitor-table"');
     expect(headers).toContain("/competitive-analysis/vendor/*\n  Cache-Control: public, max-age=31536000, immutable");
-    expect(app).toContain("AI 候選・待人工確認");
+    expect(app).toContain("AI ${comparisonLabel}・待人工確認");
     expect(app).toContain('fetch("/api/competitive-analysis/search"');
     expect(app).toContain("JSON.stringify({ consent: true, product: item })");
     expect(html).toContain('id="report-ai-section"');

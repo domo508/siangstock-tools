@@ -43,6 +43,12 @@
 
   const normalized = (value) => String(value || "").trim().toLocaleLowerCase("zh-TW");
   const tokens = (value) => normalized(value).split(/[\s,，、/×x()（）・]+/).filter(Boolean);
+  const PREFILL_AUTO_APPLY_CONFIDENCE = 60;
+
+  function shouldAutoApplyPrefill(value, confidence) {
+    const score = Number(confidence);
+    return Boolean(String(value || "").trim()) && Number.isFinite(score) && score >= PREFILL_AUTO_APPLY_CONFIDENCE;
+  }
 
   function overlap(left, right) {
     const a = new Set(tokens(Array.isArray(left) ? left.join(" ") : left));
@@ -62,7 +68,12 @@
     const technique = overlap(product.techniques, competitor.techniques);
     const size = overlap(product.dimensions, competitor.size) || (normalized(product.dimensions).includes("23") && /手持|便攜|隨身/.test(competitor.size || "") ? 0.55 : 0.25);
     const positioning = /角色|授權|生活雜貨|精品/.test(competitor.positioning || "") ? 0.82 : 0.45;
-    return Math.round(category * 35 + material * 20 + technique * 20 + size * 10 + positioning * 15);
+    const localScore = Math.round(category * 35 + material * 20 + technique * 20 + size * 10 + positioning * 15);
+    const aiScore = Number(competitor.aiSimilarity);
+    if (!Number.isFinite(aiScore)) return localScore;
+    const levelCaps = { direct: 100, similar: 85, functional: 55 };
+    const cap = levelCaps[competitor.comparisonLevel] || 85;
+    return Math.min(cap, Math.round(localScore * 0.5 + Math.max(0, Math.min(100, aiScore)) * 0.5));
   }
 
   function rankCompetitors(product, competitors) {
@@ -128,5 +139,5 @@
     ];
   }
 
-  root.CompetitiveAnalysisCore = { EXAMPLE_COMPETITORS, EXAMPLE_PROFILES, similarity, rankCompetitors, includedCompetitors, priceScenarios, marketingAdvice, margin };
+  root.CompetitiveAnalysisCore = { EXAMPLE_COMPETITORS, EXAMPLE_PROFILES, PREFILL_AUTO_APPLY_CONFIDENCE, shouldAutoApplyPrefill, similarity, rankCompetitors, includedCompetitors, priceScenarios, marketingAdvice, margin };
 })(typeof globalThis !== "undefined" ? globalThis : window);

@@ -54,6 +54,20 @@ describe("商控競品分析核心", () => {
     expect(core.priceScenarios({ competitors: included, unitCost: 100, fixedCost: 20, channelRate: 10, targetMargin: 50 }).market.median).toBe(399);
   });
 
+  it("低信心 AI 預填不會自動寫入，60 分以上才可帶入", () => {
+    expect(core.shouldAutoApplyPrefill("14 × 10 cm", 0)).toBe(false);
+    expect(core.shouldAutoApplyPrefill("PP 袋", 59)).toBe(false);
+    expect(core.shouldAutoApplyPrefill("超細纖維", 60)).toBe(true);
+    expect(core.shouldAutoApplyPrefill("", 95)).toBe(false);
+  });
+
+  it("AI 相似度會與本機結構分數合併，功能替代品最高不超過 55 分", () => {
+    const direct = core.similarity(core.EXAMPLE_PROFILES.lala, { ...core.EXAMPLE_COMPETITORS[1], aiSimilarity: 90, comparisonLevel: "direct" });
+    const functional = core.similarity(core.EXAMPLE_PROFILES.lala, { ...core.EXAMPLE_COMPETITORS[0], aiSimilarity: 95, comparisonLevel: "functional" });
+    expect(direct).toBeGreaterThan(functional);
+    expect(functional).toBeLessThanOrEqual(55);
+  });
+
   it("行銷建議依新商品欄位產生，不寫死測試角色", () => {
     const product = { name: "新品收納袋", category: "旅行收納", dimensions: "30 × 20 cm", materials: "再生聚酯纖維", techniques: "防潑水塗層", designHighlights: "可折疊" };
     const pricing = core.priceScenarios({ competitors: core.EXAMPLE_COMPETITORS, unitCost: 100, fixedCost: 20, channelRate: 10, targetMargin: 50 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  sanitizeCompetitivePrefillOutput, sanitizeCompetitiveSearchOutput, validateCompetitivePrefillBody, validateCompetitiveSearchBody
+  buildCompetitiveSearchRequest, sanitizeCompetitivePrefillOutput, sanitizeCompetitiveSearchOutput, validateCompetitivePrefillBody, validateCompetitiveSearchBody
 } from "../src/competitive-analysis";
 
 const product = {
@@ -27,6 +27,7 @@ function candidate(sourceUrl = "https://shop.example.com/products/mirror") {
     name: "角色毛絨手持鏡", brand: "Example", priceTwd: 399, originalPriceTwd: 499, category: "毛絨手持鏡",
     materials: ["毛絨", "玻璃"], techniques: ["刺繡"], size: "20 × 13 cm", positioning: "角色生活雜貨",
     sourceUrl, sourceTitle: "Example 官方商店", checkedAt: "2026-10-23", confidence: 88,
+    similarityScore: 86, comparisonLevel: "direct",
     similarityReasons: ["品類及材質相近"], differences: ["角色造型不同"], priceEvidence: "商品頁標示售價 NT$399"
   };
 }
@@ -47,12 +48,20 @@ describe("商控競品 AI 搜尋邊界", () => {
     expect(result.candidates[0].priceTwd).toBe(399);
   });
 
-  it("來源有轉址或追蹤路徑差異時，允許同一 HTTPS 商店網域進入人工確認", () => {
+  it("只接受同一商品路徑，移除追蹤參數後再交給前台", () => {
     const result = sanitizeCompetitiveSearchOutput(upstream(
-      [candidate("https://shop.example.com/products/mirror")],
-      ["https://shop.example.com/search?q=mirror&utm_source=openai"]
+      [candidate("https://shop.example.com/products/mirror?utm_source=openai&gclid=abc")],
+      ["https://shop.example.com/products/mirror?utm_source=openai"]
     ));
     expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].sourceUrl).toBe("https://shop.example.com/products/mirror");
+  });
+
+  it("同網域不同路徑不能冒充已核對的商品來源", () => {
+    expect(() => sanitizeCompetitiveSearchOutput(upstream(
+      [candidate("https://shop.example.com/products/mirror")],
+      ["https://shop.example.com/search?q=mirror"]
+    ))).toThrow(/no_cited_candidates/);
   });
 
   it("接受 OpenAI 開啟商品頁動作所提供的來源網址", () => {
@@ -74,6 +83,29 @@ describe("商控競品 AI 搜尋邊界", () => {
     const result = sanitizeCompetitiveSearchOutput(upstream([accepted], [accepted.sourceUrl]));
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0].positioning).toHaveLength(160);
+  });
+
+  it("移除摘要網址並去除重複附註與候選", () => {
+    const accepted = candidate();
+    const response = upstream([accepted, accepted], [accepted.sourceUrl]);
+    response.output[1] = {
+      type: "message",
+      content: [{ type: "output_text", text: JSON.stringify({
+        summary: "找到角色商品。([來源](https://shop.example.com/products/mirror?utm_source=openai))",
+        searchNotes: ["找到角色商品。", "促銷價需再確認 https://shop.example.com/products/mirror"],
+        candidates: [accepted, accepted]
+      }) }]
+    };
+    const result = sanitizeCompetitiveSearchOutput(response);
+    expect(result.summary).not.toContain("http");
+    expect(result.searchNotes).toEqual(["促銷價需再確認"]);
+    expect(result.candidates).toHaveLength(1);
+  });
+
+  it("搜尋採中等推理與最多六次工具呼叫", () => {
+    const request = buildCompetitiveSearchRequest(product);
+    expect(request.reasoning).toEqual({ effort: "medium" });
+    expect(request.max_tool_calls).toBe(6);
   });
 
   it("拒絕 localhost、私人位址及沒有可驗證來源的結果", () => {

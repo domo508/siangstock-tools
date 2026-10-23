@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261023-competitive-analysis-r5";
+  const APP_VERSION = "20261023-competitive-analysis-r6";
   const core = globalThis.CompetitiveAnalysisCore;
   const $ = (id) => document.getElementById(id);
   const state = { competitors: [], profile: null, file: null, previewUrl: "", result: null, aiSummary: "", aiSearchNotes: [], dirtyFields: new Set(), runtimeOutdated: false, latestRuntimeVersion: "" };
@@ -140,7 +140,8 @@
       const detail = data.evidence?.[field] || {};
       const confidence = Math.max(0, Math.min(100, Math.round(Number(detail.confidence) || 0)));
       confidenceValues.push(confidence);
-      if (!state.dirtyFields.has(id) && value) { input.value = value; applied.push(label); }
+      if (!state.dirtyFields.has(id) && core.shouldAutoApplyPrefill(value, confidence)) { input.value = value; applied.push(label); }
+      else if (!state.dirtyFields.has(id) && value) skipped.push(`${label}（信心 ${confidence}%）`);
       else if (state.dirtyFields.has(id)) skipped.push(label);
       evidenceItems.push(`<li><strong>${escapeHtml(label)} ${confidence}%：</strong>${escapeHtml(detail.evidence || "未找到明確證據")}</li>`);
     }
@@ -149,7 +150,7 @@
     const notices = Array.isArray(data.notices) ? data.notices.map((item) => `<li>${escapeHtml(item)}</li>`).join("") : "";
     const truncated = extraction.truncatedPages ? `<p><strong>注意：</strong>檔案共 ${extraction.totalPages} 頁，本次只辨識前 ${extraction.pageCount} 頁。</p>` : "";
     $("review-notices").hidden = false;
-    $("review-notices").innerHTML = `<strong>AI 預填・仍需逐欄覆核</strong><ul class="prefill-evidence">${evidenceItems.join("")}${notices}</ul>${skipped.length ? `<p>未覆蓋已人工修改欄位：${escapeHtml(skipped.join("、"))}。</p>` : ""}${truncated}`;
+    $("review-notices").innerHTML = `<strong>AI 預填・仍需逐欄覆核</strong><ul class="prefill-evidence">${evidenceItems.join("")}${notices}</ul>${skipped.length ? `<p>未自動帶入低於 ${core.PREFILL_AUTO_APPLY_CONFIDENCE}% 信心或已人工修改的欄位：${escapeHtml(skipped.join("、"))}。請直接查看工單後填寫。</p>` : ""}${truncated}`;
     $("analysis-status").textContent = `已預填 ${applied.length} 個欄位；請依工單逐欄覆核，不確定內容保留「待確認」。`;
     $("ai-search-consent").checked = false;
     renderCompetitors();
@@ -162,7 +163,7 @@
     const button = $("prefill-button");
     button.disabled = true;
     try {
-      const { extractTextLocally } = await import("./document-reader.mjs?v=20261023-competitive-analysis-r5");
+      const { extractTextLocally } = await import("./document-reader.mjs?v=20261023-competitive-analysis-r6");
       const extraction = await extractTextLocally(state.file, prefillProgress);
       $("prefill-status").textContent = "文字已在本機擷取，正在交由 AI 整理欄位……";
       const response = await fetch("/api/competitive-analysis/prefill", {
@@ -187,8 +188,9 @@
     const ranked = core.rankCompetitors(product(), state.competitors);
     $("competitor-rows").innerHTML = ranked.length ? ranked.map((item) => {
       const isAi = item.origin === "ai";
-      const details = isAi ? `<details class="ai-detail"><summary>查看 AI 比較摘要</summary><p><strong>相似：</strong>${escapeHtml((item.similarityReasons || []).join("；") || "待人工確認")}</p><p><strong>差異：</strong>${escapeHtml((item.differences || []).join("；") || "待人工確認")}</p><p><strong>價格證據：</strong>${escapeHtml(item.priceEvidence || "待人工確認")}・AI 信心 ${escapeHtml(item.aiConfidence)}%</p></details>` : "";
-      return `<tr><td><input class="include-check" type="checkbox" data-include-id="${escapeHtml(item.id)}" aria-label="納入 ${escapeHtml(item.name)}" ${item.included !== false ? "checked" : ""}></td><td><span class="score">${item.similarity}%</span></td><td><strong>${escapeHtml(item.name)}</strong><span class="table-note">${escapeHtml(item.brand)}・${escapeHtml(item.positioning)}</span><span class="candidate-badge ${item.included !== false ? "confirmed" : ""}">${isAi && item.included === false ? "AI 候選・待人工確認" : "已納入比較"}</span>${details}</td><td><strong>${currency(item.salePrice || item.price)}</strong>${item.salePrice ? `<span class="table-note">標示原價 ${currency(item.price)}</span>` : ""}</td><td><a class="source-link" href="${escapeHtml(item.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.sourceLabel)} ↗</a><span class="table-note">檢查日 ${escapeHtml(item.checkedAt)}</span></td></tr>`;
+      const comparisonLabel = ({ direct: "直接競品", similar: "相似商品", functional: "功能替代" })[item.comparisonLevel] || "待分類";
+      const details = isAi ? `<details class="ai-detail"><summary>查看此商品差異</summary><p><strong>相似：</strong>${escapeHtml((item.similarityReasons || []).join("；") || "待人工確認")}</p><p><strong>差異：</strong>${escapeHtml((item.differences || []).join("；") || "待人工確認")}</p><p><strong>價格證據：</strong>${escapeHtml(item.priceEvidence || "待人工確認")}・來源信心 ${escapeHtml(item.aiConfidence)}%</p></details>` : "";
+      return `<tr><td><input class="include-check" type="checkbox" data-include-id="${escapeHtml(item.id)}" aria-label="納入 ${escapeHtml(item.name)}" ${item.included !== false ? "checked" : ""}></td><td><span class="score">${item.similarity}%</span></td><td><strong>${escapeHtml(item.name)}</strong><span class="table-note">${escapeHtml(item.brand)}・${escapeHtml(item.positioning)}</span><span class="candidate-badge ${item.included !== false ? "confirmed" : ""}">${isAi && item.included === false ? `AI ${comparisonLabel}・待人工確認` : "已納入比較"}</span>${details}</td><td><strong>${currency(item.salePrice || item.price)}</strong>${item.salePrice ? `<span class="table-note">標示原價 ${currency(item.price)}</span>` : ""}</td><td><a class="source-link" href="${escapeHtml(item.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.sourceLabel)} ↗</a><span class="table-note">檢查日 ${escapeHtml(item.checkedAt)}</span></td></tr>`;
     }).join("") : '<tr><td colspan="5"><span class="table-note">尚未加入競品來源。建議至少加入 3 筆規格接近且仍在販售的商品。</span></td></tr>';
     return ranked;
   }
@@ -233,7 +235,8 @@
           salePrice: candidate.originalPriceTwd ? candidate.priceTwd : undefined, category: candidate.category, materials: candidate.materials || [],
           techniques: candidate.techniques || [], size: candidate.size || "待確認", positioning: candidate.positioning || "待確認",
           sourceUrl: candidate.sourceUrl, sourceLabel: candidate.sourceTitle, checkedAt: candidate.checkedAt,
-          aiConfidence: candidate.confidence, similarityReasons: candidate.similarityReasons || [], differences: candidate.differences || [],
+          aiConfidence: candidate.confidence, aiSimilarity: candidate.similarityScore, comparisonLevel: candidate.comparisonLevel,
+          similarityReasons: candidate.similarityReasons || [], differences: candidate.differences || [],
           priceEvidence: candidate.priceEvidence || "", origin: "ai", included: false
         });
       }
