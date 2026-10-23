@@ -1,7 +1,7 @@
 (function (root) {
   "use strict";
 
-  const DEMO_COMPETITORS = [
+  const EXAMPLE_COMPETITORS = [
     {
       id: "miniso-sanrio", name: "MINISO Sanrio 方形手持化妝鏡", brand: "MINISO / Sanrio", price: 104,
       category: "手持鏡", materials: ["玻璃", "塑膠"], techniques: ["角色印刷"], size: "便攜", positioning: "平價角色小物",
@@ -31,32 +31,18 @@
     }
   ];
 
-  const TEST_PROFILES = {
+  const EXAMPLE_PROFILES = {
     lala: {
       name: "拉拉角色立體絨毛手持鏡", category: "毛絨手持鏡", dimensions: "約 23 × 13.7 × 5–6 cm",
       materials: "QQ 毛 1209 黃、水晶絨、玻璃鏡面",
       techniques: "角色五官刺繡、握柄文字刺繡、耳朵內凹、圓弧包邊、天線捲起並以鐵絲增加支撐",
       designHighlights: "正面完整拉拉角色，背面圓鏡；立體頭型、耳朵與天線形成高辨識輪廓", packaging: "工單未標示，需補充", confidence: 92,
       notices: ["鏡面材質與直徑需向工廠確認", "鐵絲端點與縫線需做安全檢查", "包裝、授權標示與洗標尚未提供"]
-    },
-    po: {
-      name: "小波角色立體絨毛手持鏡", category: "毛絨手持鏡", dimensions: "約 23 × 13.7 × 5–6 cm",
-      materials: "QQ 毛 1215 大紅、水晶絨、玻璃鏡面",
-      techniques: "角色五官刺繡、握柄文字刺繡、耳朵內凹、圓弧包邊、中空圓環天線",
-      designHighlights: "正面完整小波角色，背面圓鏡；中空圓環天線與紅色角色輪廓辨識度高", packaging: "工單未標示，需補充", confidence: 92,
-      notices: ["鏡面材質與直徑需向工廠確認", "中空天線需做拉力與變形測試", "包裝、授權標示與洗標尚未提供"]
     }
   };
 
   const normalized = (value) => String(value || "").trim().toLocaleLowerCase("zh-TW");
   const tokens = (value) => normalized(value).split(/[\s,，、/×x()（）・]+/).filter(Boolean);
-
-  function inferProfile(fileName) {
-    const name = normalized(fileName);
-    if (name.includes("拉拉") || name.includes("laa")) return { key: "lala", ...TEST_PROFILES.lala };
-    if (name.includes("小波") || name.includes("po")) return { key: "po", ...TEST_PROFILES.po };
-    return null;
-  }
 
   function overlap(left, right) {
     const a = new Set(tokens(Array.isArray(left) ? left.join(" ") : left));
@@ -126,14 +112,17 @@
 
   function marketingAdvice(product, pricing) {
     const regular = pricing.scenarios.find((item) => item.key === "regular")?.price || 0;
+    const category = product.category || "此商品";
+    const evidence = [product.dimensions, product.materials, product.techniques].filter(Boolean).join("、");
+    const difference = product.designHighlights || "材質、尺寸、工法與使用情境";
     return [
-      "商品定位：以「可以使用的立體角色收藏」溝通，不只描述為一般手持鏡。",
-      "價值證據：主圖同時呈現 23 cm 尺寸、5–6 cm 立體厚度、刺繡細節與角色正反面，讓消費者看見工法差異。",
-      `價格結構：常態價可先以 NT$${regular.toLocaleString("zh-TW")} 做小量測試，另保留雙角色套組與會員價，避免單靠折扣成交。`,
-      "上架前補件：確認鏡面材質與直徑、包裝、授權標示、鐵絲／天線安全與掉毛測試；未確認項目不寫入商品頁承諾。",
-      "驗證方式：先以拉拉、小波各一款做 A/B 主圖與價格測試，分開記錄點擊、加購與實際成交，不把按讚數當成購買意願。"
+      `商品定位：以「${category}的使用價值與設計差異」溝通，優先說明${difference}。`,
+      `價值證據：主圖、尺寸圖與細節圖應完整呈現${evidence || "實際尺寸、材質與工法"}，讓消費者看見與相似商品的差異。`,
+      `價格結構：常態價可先以 NT$${regular.toLocaleString("zh-TW")} 做小量測試，另規劃會員價或組合方案，避免只靠折扣成交。`,
+      `上架前補件：確認實際材質、尺寸、包裝、產品安全與授權標示；未確認內容保持「待確認」，不要直接寫入商品頁承諾。`,
+      `驗證方式：針對${product.name || "新商品"}做主圖與價格 A/B 測試，分開記錄點擊、加購與實際成交，不把按讚數當成購買意願。`
     ];
   }
 
-  root.CompetitiveAnalysisCore = { DEMO_COMPETITORS, TEST_PROFILES, inferProfile, similarity, rankCompetitors, priceScenarios, marketingAdvice, margin };
+  root.CompetitiveAnalysisCore = { EXAMPLE_COMPETITORS, EXAMPLE_PROFILES, similarity, rankCompetitors, priceScenarios, marketingAdvice, margin };
 })(typeof globalThis !== "undefined" ? globalThis : window);

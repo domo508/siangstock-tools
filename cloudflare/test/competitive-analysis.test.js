@@ -13,15 +13,15 @@ function loadCore() {
 const core = loadCore();
 
 describe("商控競品分析核心", () => {
-  it("可辨識拉拉與小波測試工單，未知檔名不冒充 AI 結果", () => {
-    expect(core.inferProfile("拉拉_手持鏡_打樣.pdf").key).toBe("lala");
-    expect(core.inferProfile("小波_手持鏡_打樣.pdf").key).toBe("po");
-    expect(core.inferProfile("新商品工單.pdf")).toBeNull();
+  it("正式版只保留一組拉拉填寫範例", () => {
+    expect(Object.keys(core.EXAMPLE_PROFILES)).toEqual(["lala"]);
+    expect(core.EXAMPLE_PROFILES.lala.name).toContain("拉拉");
+    expect(core.EXAMPLE_PROFILES.po).toBeUndefined();
   });
 
   it("毛絨角色鏡比一般塑膠鏡取得較高相似度", () => {
-    const product = core.TEST_PROFILES.lala;
-    const ranked = core.rankCompetitors(product, core.DEMO_COMPETITORS);
+    const product = core.EXAMPLE_PROFILES.lala;
+    const ranked = core.rankCompetitors(product, core.EXAMPLE_COMPETITORS);
     const plush = ranked.find((item) => item.id === "dinotaeng-plush");
     const plastic = ranked.find((item) => item.id === "miniso-sanrio");
     expect(plush.similarity).toBeGreaterThan(plastic.similarity);
@@ -29,7 +29,7 @@ describe("商控競品分析核心", () => {
   });
 
   it("活動底價仍守住指定目標毛利，並保留三種情境", () => {
-    const result = core.priceScenarios({ competitors: core.DEMO_COMPETITORS, unitCost: 120, fixedCost: 30, channelRate: 12, targetMargin: 55 });
+    const result = core.priceScenarios({ competitors: core.EXAMPLE_COMPETITORS, unitCost: 120, fixedCost: 30, channelRate: 12, targetMargin: 55 });
     expect(result.scenarios.map((item) => item.key)).toEqual(["list", "regular", "campaign"]);
     expect(result.scenarios.find((item) => item.key === "campaign").grossMargin).toBeGreaterThanOrEqual(55);
     expect(result.scenarios[0].price).toBeGreaterThanOrEqual(result.scenarios[1].price);
@@ -37,10 +37,20 @@ describe("商控競品分析核心", () => {
   });
 
   it("所有示範競品都保留來源網址、價格與檢查日", () => {
-    for (const item of core.DEMO_COMPETITORS) {
+    for (const item of core.EXAMPLE_COMPETITORS) {
       expect(item.sourceUrl).toMatch(/^https:\/\//);
       expect(item.price).toBeGreaterThan(0);
       expect(item.checkedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     }
+  });
+
+  it("行銷建議依新商品欄位產生，不寫死測試角色", () => {
+    const product = { name: "新品收納袋", category: "旅行收納", dimensions: "30 × 20 cm", materials: "再生聚酯纖維", techniques: "防潑水塗層", designHighlights: "可折疊" };
+    const pricing = core.priceScenarios({ competitors: core.EXAMPLE_COMPETITORS, unitCost: 100, fixedCost: 20, channelRate: 10, targetMargin: 50 });
+    const advice = core.marketingAdvice(product, pricing).join(" ");
+    expect(advice).toContain("旅行收納");
+    expect(advice).toContain("再生聚酯纖維");
+    expect(advice).toContain("新品收納袋");
+    expect(advice).not.toContain("小波");
   });
 });

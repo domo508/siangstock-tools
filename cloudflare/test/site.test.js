@@ -121,7 +121,7 @@ describe("前台導覽", () => {
     expect(homeHtml).toContain('name="twitter:title" content="翔仔居家-公司工具"');
   });
 
-  it("首頁提供商控競品分析入口，工具保留版本阻擋與來源揭露", () => {
+  it("首頁提供正式商控競品分析入口，工具保留版本阻擋與來源揭露", () => {
     const homeHtml = readFileSync("../index.html", "utf8");
     const html = readFileSync("../competitive-analysis/index.html", "utf8");
     const app = readFileSync("../competitive-analysis/app.js", "utf8");
@@ -129,7 +129,14 @@ describe("前台導覽", () => {
     const headers = readFileSync("../_headers", "utf8");
     expect(homeHtml).toContain(`/competitive-analysis/?deploy=${version.version}`);
     expect(homeHtml).toContain("商控競品分析工具");
-    expect(html).toContain("真正雲端 AI 與即時搜尋尚未啟用");
+    expect(homeHtml).toContain("立即使用");
+    expect(html).toContain("正式使用說明");
+    expect(html).toContain("拉拉手持鏡填寫範例");
+    expect(html).not.toContain("小波");
+    expect(html).not.toContain("安全測試版");
+    expect(html).toContain("本工具不會自動爬站");
+    expect(app).toContain("state.competitors = []");
+    expect(app).toContain("請至少加入 1 筆已確認的競品來源");
     expect(html).toContain('id="version-warning"');
     expect(app).toContain(`const APP_VERSION = "${version.version}"`);
     expect(app).toContain("version.json?check=${Date.now()}");

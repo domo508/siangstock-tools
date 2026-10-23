@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; object-src 'self' blob:; base-uri 'none'; form-action 'none'">
   <title>商控競品分析工具｜翔仔居家公司工具</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=20261023-competitive-analysis-r1">
+  <link rel="stylesheet" href="style.css?v=20261023-competitive-analysis-r2">
 </head>
 <body>
   <dialog id="version-warning" class="version-dialog">
@@ -31,12 +31,12 @@
         <h1>從工單到定價，<br>把判斷依據攤開來。</h1>
         <p class="hero-description">上傳 PDF 或圖片，整理規格、材質與工法，再用有來源的市售商品比較價格、相似度、毛利與行銷情境。</p>
       </div>
-      <aside class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>工單只在目前分頁讀取</strong><p>這個測試版不會上傳檔案；市場資料採人工確認的來源清單。真正雲端 AI 與即時搜尋尚未啟用。</p></div></aside>
+      <aside class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>工單只在目前分頁讀取</strong><p>檔案不會上傳；規格由同仁依工單覆核，市場資料使用人工確認的來源清單。</p></div></aside>
     </section>
 
     <section class="notice-card" role="note">
-      <strong>目前是安全測試版</strong>
-      <p>拉拉、小波工單會用已核對的範例規則帶入候選規格，方便驗證完整流程；其他檔案可預覽並人工填寫。畫面中的「辨識信心」不是已串接雲端 AI 的結果。</p>
+      <strong>正式使用說明</strong>
+      <p>上傳全新工單後，請依預覽內容人工填寫並覆核規格，再加入實際競品來源。需要操作參考時，可載入「拉拉手持鏡填寫範例」查看完整欄位與報告格式。</p>
     </section>
 
     <section class="manual-card" aria-labelledby="manual-title">
@@ -56,8 +56,8 @@
         <div>
           <label class="drop-zone" for="work-order"><span class="drop-icon">圖</span><strong>選擇 PDF 或圖片</strong><span>支援 PDF、PNG、JPG、WEBP；單檔上限 40 MB</span></label>
           <input id="work-order" type="file" accept="application/pdf,image/png,image/jpeg,image/webp">
-          <p id="file-status" class="status-text" aria-live="polite">尚未選擇檔案。可先載入拉拉或小波測試資料。</p>
-          <div class="button-row"><button class="secondary-button" type="button" data-demo="lala">載入拉拉測試資料</button><button class="secondary-button" type="button" data-demo="po">載入小波測試資料</button></div>
+          <p id="file-status" class="status-text" aria-live="polite">尚未選擇檔案。第一次使用可先查看填寫範例。</p>
+          <div class="button-row"><button class="secondary-button" type="button" data-example="lala">載入拉拉手持鏡填寫範例</button></div>
         </div>
         <div id="preview-panel" class="preview-panel"><p>選檔後會在這裡顯示預覽。PDF 預覽由瀏覽器直接開啟，不會送出分頁。</p></div>
       </div>
@@ -78,10 +78,10 @@
     </section>
 
     <section class="workspace-card" aria-labelledby="market-title">
-      <div class="section-heading"><div><p class="step-label">步驟 3</p><h2 id="market-title">比對有來源的市售商品</h2></div><span class="source-date">示範來源檢查日 2026-10-22</span></div>
-      <p class="section-intro">測試版不會自動爬站。預載來源供流程驗證；正式判斷前請開啟來源，確認規格、售價、促銷與庫存狀態。</p>
+      <div class="section-heading"><div><p class="step-label">步驟 3</p><h2 id="market-title">比對有來源的市售商品</h2></div><span id="source-date" class="source-date">請加入實際競品來源</span></div>
+      <p class="section-intro">本工具不會自動爬站。請加入已人工確認的競品網址與規格；產生報告前再次開啟來源，確認售價、促銷與庫存狀態。</p>
       <div class="table-wrap"><table><thead><tr><th>相似度</th><th>商品與定位</th><th>參考價</th><th>來源</th></tr></thead><tbody id="competitor-rows"></tbody></table></div>
-      <details class="add-source"><summary>新增一筆人工確認的競品來源</summary><form id="source-form" class="source-form"><label>商品名稱<input id="source-name" required></label><label>售價<input id="source-price" type="number" min="1" required></label><label>來源網址<input id="source-url" type="url" required></label><label>定位<input id="source-positioning" placeholder="例如：角色生活雜貨"></label><button class="secondary-button" type="submit">加入比較</button></form></details>
+      <details class="add-source"><summary>新增一筆人工確認的競品來源</summary><form id="source-form" class="source-form"><label>商品名稱<input id="source-name" required></label><label>售價<input id="source-price" type="number" min="1" required></label><label>來源網址<input id="source-url" type="url" required></label><label>商品品類<input id="source-category" required placeholder="例如：毛絨手持鏡"></label><label>材質<input id="source-materials" placeholder="例如：毛絨、玻璃"></label><label>工法<input id="source-techniques" placeholder="例如：角色刺繡、立體造型"></label><label>尺寸<input id="source-size" placeholder="例如：約 20 × 14 cm"></label><label>定位<input id="source-positioning" placeholder="例如：角色生活雜貨"></label><button class="secondary-button" type="submit">加入比較</button></form></details>
     </section>
 
     <section class="workspace-card" aria-labelledby="pricing-title">
@@ -100,9 +100,9 @@
       <aside class="report-warning"><strong>決策前最後檢查</strong><p>確認來源價格、實際完整成本、產品安全、包裝與授權；對未確認規格保持「待確認」，不要把推定內容直接放進商品頁。</p></aside>
     </section>
 
-    <footer><a href="/">← 回公司工具首頁</a><p>商控競品分析工具・安全測試版</p></footer>
+    <footer><a href="/">← 回公司工具首頁</a><p>商控競品分析工具・正式版</p></footer>
   </main>
-  <script src="core.js?v=20261023-competitive-analysis-r1"></script>
-  <script src="app.js?v=20261023-competitive-analysis-r1"></script>
+  <script src="core.js?v=20261023-competitive-analysis-r2"></script>
+  <script src="app.js?v=20261023-competitive-analysis-r2"></script>
 </body>
 </html>

@@ -1,9 +1,9 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261023-competitive-analysis-r1";
+  const APP_VERSION = "20261023-competitive-analysis-r2";
   const core = globalThis.CompetitiveAnalysisCore;
   const $ = (id) => document.getElementById(id);
-  const state = { competitors: core.DEMO_COMPETITORS.map((item) => ({ ...item })), profile: null, file: null, previewUrl: "", result: null, runtimeOutdated: false, latestRuntimeVersion: "" };
+  const state = { competitors: [], profile: null, file: null, previewUrl: "", result: null, runtimeOutdated: false, latestRuntimeVersion: "" };
   const currency = (value) => new Intl.NumberFormat("zh-TW", { style: "currency", currency: "TWD", maximumFractionDigits: 0 }).format(Number(value || 0));
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 
@@ -45,10 +45,23 @@
     $("product-techniques").value = profile.techniques;
     $("product-highlights").value = profile.designHighlights;
     $("product-packaging").value = profile.packaging;
-    $("confidence-badge").textContent = `候選規格信心 ${profile.confidence}%・待人工覆核`;
+    $("confidence-badge").textContent = "填寫範例・請依實際工單覆核";
     $("review-notices").hidden = false;
     $("review-notices").innerHTML = `<strong>仍需確認</strong><ul>${profile.notices.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
     $("analysis-status").textContent = `${label}候選規格已帶入；請先覆核內容，再產生分析。`;
+    renderCompetitors();
+  }
+
+  function resetNewProduct() {
+    state.profile = null;
+    state.result = null;
+    state.competitors = [];
+    for (const id of ["product-name", "product-category", "product-dimensions", "product-materials", "product-techniques", "product-highlights", "product-packaging"]) $(id).value = "";
+    $("confidence-badge").textContent = "新工單・請人工填寫並覆核";
+    $("review-notices").hidden = false;
+    $("review-notices").innerHTML = "<strong>填寫原則</strong><p>請依工單填寫規格；不確定的內容保留「待確認」，不要推定成已確認資訊。本工具不會把檔案送往雲端辨識。</p>";
+    $("source-date").textContent = "請加入實際競品來源";
+    $("report").hidden = true;
     renderCompetitors();
   }
 
@@ -68,28 +81,24 @@
     if (!/^(application\/pdf|image\/(png|jpeg|webp))$/.test(file.type)) { event.target.value = ""; $("file-status").textContent = "檔案格式不支援，請選擇 PDF、PNG、JPG 或 WEBP。"; return; }
     state.file = file;
     renderFile(file);
-    const inferred = core.inferProfile(file.name);
+    resetNewProduct();
     $("file-status").textContent = `已在本機讀取：${file.name}（${(file.size / 1024 / 1024).toFixed(1)} MB）`;
-    if (inferred) fillProfile(inferred, file.name.includes("拉拉") ? "拉拉" : "小波");
-    else {
-      state.profile = null;
-      $("confidence-badge").textContent = "未套用範例規則・請人工填寫";
-      $("review-notices").hidden = false;
-      $("review-notices").innerHTML = "<strong>尚未連接雲端 AI</strong><p>目前只提供檔案本機預覽。請依工單人工填寫規格，或改用拉拉／小波測試資料驗證流程。</p>";
-    }
+    $("analysis-status").textContent = "新工單已載入；請先填寫規格，再加入實際競品來源。";
   }
 
-  function loadDemo(key) {
-    const profile = { key, ...core.TEST_PROFILES[key] };
+  function loadExample(key) {
+    const profile = { key, ...core.EXAMPLE_PROFILES[key] };
     state.file = null;
-    fillProfile(profile, key === "lala" ? "拉拉" : "小波");
-    $("file-status").textContent = `已載入${key === "lala" ? "拉拉" : "小波"}手持鏡測試資料；未讀取實際檔案。`;
-    showPlaceholder("測試資料模式：選擇實際 PDF 或圖片後，這裡會顯示工單預覽。");
+    state.competitors = core.EXAMPLE_COMPETITORS.map((item) => ({ ...item }));
+    fillProfile(profile, "拉拉範例");
+    $("file-status").textContent = "已載入拉拉手持鏡填寫範例；這是操作參考，不代表新的工單內容。";
+    $("source-date").textContent = "範例來源檢查日 2026-10-22";
+    showPlaceholder("填寫範例模式：上傳新工單後，範例資料會清空並改由同仁依工單填寫。");
   }
 
   function renderCompetitors() {
     const ranked = core.rankCompetitors(product(), state.competitors);
-    $("competitor-rows").innerHTML = ranked.map((item) => `<tr><td><span class="score">${item.similarity}%</span></td><td><strong>${escapeHtml(item.name)}</strong><span class="table-note">${escapeHtml(item.brand)}・${escapeHtml(item.positioning)}</span></td><td><strong>${currency(item.salePrice || item.price)}</strong>${item.salePrice ? `<span class="table-note">標示原價 ${currency(item.price)}</span>` : ""}</td><td><a class="source-link" href="${escapeHtml(item.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.sourceLabel)} ↗</a><span class="table-note">檢查日 ${escapeHtml(item.checkedAt)}</span></td></tr>`).join("");
+    $("competitor-rows").innerHTML = ranked.length ? ranked.map((item) => `<tr><td><span class="score">${item.similarity}%</span></td><td><strong>${escapeHtml(item.name)}</strong><span class="table-note">${escapeHtml(item.brand)}・${escapeHtml(item.positioning)}</span></td><td><strong>${currency(item.salePrice || item.price)}</strong>${item.salePrice ? `<span class="table-note">標示原價 ${currency(item.price)}</span>` : ""}</td><td><a class="source-link" href="${escapeHtml(item.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.sourceLabel)} ↗</a><span class="table-note">檢查日 ${escapeHtml(item.checkedAt)}</span></td></tr>`).join("") : '<tr><td colspan="4"><span class="table-note">尚未加入競品來源。建議至少加入 3 筆規格接近且仍在販售的商品。</span></td></tr>';
     return ranked;
   }
 
@@ -97,10 +106,12 @@
     event.preventDefault();
     state.competitors.push({
       id: `manual-${Date.now()}`, name: $("source-name").value.trim(), brand: "人工新增", price: Number($("source-price").value),
-      category: $("product-category").value.trim() || "同類商品", materials: [], techniques: [], size: "待確認",
+      category: $("source-category").value.trim(), materials: $("source-materials").value.split(/[、,，]/).map((item) => item.trim()).filter(Boolean),
+      techniques: $("source-techniques").value.split(/[、,，]/).map((item) => item.trim()).filter(Boolean), size: $("source-size").value.trim() || "待確認",
       positioning: $("source-positioning").value.trim() || "待確認", sourceUrl: $("source-url").value, sourceLabel: "人工確認來源", checkedAt: new Date().toISOString().slice(0, 10)
     });
     event.currentTarget.reset();
+    $("source-date").textContent = `最近加入來源 ${new Date().toISOString().slice(0, 10)}`;
     renderCompetitors();
   }
 
@@ -112,13 +123,14 @@
     if (!(await checkRuntimeVersion())) return;
     const item = product();
     if (!item.name || !item.category || !item.materials || !item.techniques) { $("analysis-status").textContent = "請先完成商品名稱、品類、材質與工法。"; return; }
+    if (!state.competitors.length) { $("analysis-status").textContent = "請至少加入 1 筆已確認的競品來源；建議 3 筆以上再做價格判斷。"; return; }
     const competitors = core.rankCompetitors(item, state.competitors);
     const pricing = core.priceScenarios({
       competitors, unitCost: Number($("unit-cost").value), fixedCost: Number($("fixed-cost").value),
       channelRate: Number($("channel-rate").value), targetMargin: Number($("target-margin").value)
     });
     const marketing = core.marketingAdvice(item, pricing);
-    state.result = { version: APP_VERSION, generatedAt: new Date().toISOString(), product: item, fileName: state.file?.name || "測試資料", competitors, pricing, marketing, assumptions: { unitCost: Number($("unit-cost").value), fixedCost: Number($("fixed-cost").value), channelRate: Number($("channel-rate").value), targetMargin: Number($("target-margin").value) } };
+    state.result = { version: APP_VERSION, generatedAt: new Date().toISOString(), product: item, fileName: state.file?.name || "拉拉手持鏡填寫範例", competitors, pricing, marketing, assumptions: { unitCost: Number($("unit-cost").value), fixedCost: Number($("fixed-cost").value), channelRate: Number($("channel-rate").value), targetMargin: Number($("target-margin").value) } };
     const best = competitors[0];
     $("report-meta").textContent = `${item.name}・產生時間 ${new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}`;
     $("summary-cards").innerHTML = `<div class="summary-item"><span>市售價格中位數</span><strong>${currency(pricing.market.median)}</strong></div><div class="summary-item"><span>最高相似競品</span><strong>${best.similarity}%</strong><small>${escapeHtml(best.name)}</small></div><div class="summary-item"><span>來源筆數</span><strong>${competitors.length} 筆</strong><small>每筆保留網址與檢查日</small></div>`;
@@ -142,7 +154,7 @@
   async function printReport() { if (state.result && await checkRuntimeVersion()) window.print(); }
 
   $("work-order").addEventListener("change", handleFile);
-  document.querySelectorAll("[data-demo]").forEach((button) => button.addEventListener("click", () => loadDemo(button.dataset.demo)));
+  document.querySelectorAll("[data-example]").forEach((button) => button.addEventListener("click", () => loadExample(button.dataset.example)));
   $("product-form").addEventListener("input", renderCompetitors);
   $("source-form").addEventListener("submit", addSource);
   $("analyze-button").addEventListener("click", analyze);
