@@ -67,6 +67,13 @@ describe("商控競品 AI 搜尋邊界", () => {
     expect(sanitizeCompetitiveSearchOutput(response).candidates).toHaveLength(1);
   });
 
+  it("AI 回傳欄位過長時安全截斷，不讓單一欄位使整批來源失敗", () => {
+    const accepted = { ...candidate(), positioning: "角色生活雜貨".repeat(40) };
+    const result = sanitizeCompetitiveSearchOutput(upstream([accepted], [accepted.sourceUrl]));
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].positioning).toHaveLength(160);
+  });
+
   it("拒絕 localhost、私人位址及沒有可驗證來源的結果", () => {
     expect(() => sanitizeCompetitiveSearchOutput(upstream([candidate("https://127.0.0.1/item")], ["https://127.0.0.1/item"]))).toThrow(/no_cited_candidates/);
     expect(() => sanitizeCompetitiveSearchOutput(upstream([candidate()], []))).toThrow(/no_cited_candidates/);

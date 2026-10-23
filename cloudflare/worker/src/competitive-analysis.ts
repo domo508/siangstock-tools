@@ -225,6 +225,13 @@ function safeStringList(value: unknown, maximum: number): string[] {
   return value.slice(0, maximum).map((item) => typeof item === "string" ? item.normalize("NFKC").trim().slice(0, 300) : "").filter(Boolean);
 }
 
+function outputValue(value: unknown, label: string, maximum: number, required = false): string {
+  if (typeof value !== "string") throw new Error(`invalid_${label}`);
+  const normalized = value.normalize("NFKC").trim();
+  if (required && !normalized) throw new Error(`missing_${label}`);
+  return normalized.slice(0, maximum);
+}
+
 export function sanitizeCompetitiveSearchOutput(response: unknown): SearchOutput {
   if (!response || typeof response !== "object" || Array.isArray(response)) throw new Error("invalid_response");
   const object = response as Record<string, unknown>;
@@ -243,27 +250,27 @@ export function sanitizeCompetitiveSearchOutput(response: unknown): SearchOutput
     if (!url || !citedSource(url, cited) || !Number.isFinite(price) || price <= 0 || price > 1000000) continue;
     const original = candidate.originalPriceTwd === null ? null : Number(candidate.originalPriceTwd);
     candidates.push({
-      name: text(candidate.name, "競品名稱", 160, true),
-      brand: text(candidate.brand, "品牌", 100),
+      name: outputValue(candidate.name, "candidate_name", 160, true),
+      brand: outputValue(candidate.brand, "brand", 100),
       priceTwd: Math.round(price),
       originalPriceTwd: Number.isFinite(original) && Number(original) > price && Number(original) <= 1000000 ? Math.round(Number(original)) : null,
-      category: text(candidate.category, "競品品類", 100),
+      category: outputValue(candidate.category, "category", 100),
       materials: safeStringList(candidate.materials, 12),
       techniques: safeStringList(candidate.techniques, 12),
-      size: text(candidate.size, "競品尺寸", 120),
-      positioning: text(candidate.positioning, "市場定位", 160),
+      size: outputValue(candidate.size, "size", 120),
+      positioning: outputValue(candidate.positioning, "positioning", 160),
       sourceUrl: url.toString(),
-      sourceTitle: text(candidate.sourceTitle, "來源名稱", 180, true),
+      sourceTitle: outputValue(candidate.sourceTitle, "source_title", 180, true),
       checkedAt: typeof candidate.checkedAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(candidate.checkedAt) ? candidate.checkedAt : new Date().toISOString().slice(0, 10),
       confidence: Math.max(0, Math.min(100, Math.round(Number(candidate.confidence) || 0))),
       similarityReasons: safeStringList(candidate.similarityReasons, 6),
       differences: safeStringList(candidate.differences, 6),
-      priceEvidence: text(candidate.priceEvidence, "價格證據", 300)
+      priceEvidence: outputValue(candidate.priceEvidence, "price_evidence", 300)
     });
   }
   if (!candidates.length) throw new Error("no_cited_candidates");
   return {
-    summary: text(data.summary, "AI 摘要", 900, true),
+    summary: outputValue(data.summary, "summary", 900, true),
     searchNotes: safeStringList(data.searchNotes, 6),
     candidates
   };
