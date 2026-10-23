@@ -196,6 +196,7 @@ h1 {
 .cost-icon { background: linear-gradient(145deg, #2f725b, #26947b); }
 .reconciliation-icon { background: linear-gradient(145deg, #176b87, #2f725b); }
 .procurement-icon { background: linear-gradient(145deg, #153f63, #2f725b); }
+.competitive-icon { background: linear-gradient(145deg, #7b5b24, #176b87); }
 .tool-status.testing { color: #755f19; background: #fff4cf; }
 .tool-card h3 { margin: 0 0 12px; font-size: 1.42rem; }
 .tool-card p { margin: 0; color: var(--muted); line-height: 1.65; }

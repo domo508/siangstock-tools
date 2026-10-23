@@ -38,6 +38,7 @@ build/
 # 本機活動分析及歷史來源不可發布
 /.local-context/
 !store-transfer/rules/version.json
+!competitive-analysis/version.json
 
 # 隔離工作區的依賴可能採本機連結
 /cloudflare/node_modules

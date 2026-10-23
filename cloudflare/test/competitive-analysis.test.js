@@ -1,0 +1,46 @@
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import { describe, expect, it } from "vitest";
+
+function loadCore() {
+  const sandbox = { console, Intl };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(readFileSync("../competitive-analysis/core.js", "utf8"), sandbox);
+  return sandbox.CompetitiveAnalysisCore;
+}
+
+const core = loadCore();
+
+describe("商控競品分析核心", () => {
+  it("可辨識拉拉與小波測試工單，未知檔名不冒充 AI 結果", () => {
+    expect(core.inferProfile("拉拉_手持鏡_打樣.pdf").key).toBe("lala");
+    expect(core.inferProfile("小波_手持鏡_打樣.pdf").key).toBe("po");
+    expect(core.inferProfile("新商品工單.pdf")).toBeNull();
+  });
+
+  it("毛絨角色鏡比一般塑膠鏡取得較高相似度", () => {
+    const product = core.TEST_PROFILES.lala;
+    const ranked = core.rankCompetitors(product, core.DEMO_COMPETITORS);
+    const plush = ranked.find((item) => item.id === "dinotaeng-plush");
+    const plastic = ranked.find((item) => item.id === "miniso-sanrio");
+    expect(plush.similarity).toBeGreaterThan(plastic.similarity);
+    expect(ranked[0].similarity).toBeGreaterThanOrEqual(ranked.at(-1).similarity);
+  });
+
+  it("活動底價仍守住指定目標毛利，並保留三種情境", () => {
+    const result = core.priceScenarios({ competitors: core.DEMO_COMPETITORS, unitCost: 120, fixedCost: 30, channelRate: 12, targetMargin: 55 });
+    expect(result.scenarios.map((item) => item.key)).toEqual(["list", "regular", "campaign"]);
+    expect(result.scenarios.find((item) => item.key === "campaign").grossMargin).toBeGreaterThanOrEqual(55);
+    expect(result.scenarios[0].price).toBeGreaterThanOrEqual(result.scenarios[1].price);
+    expect(result.scenarios[1].price).toBeGreaterThanOrEqual(result.scenarios[2].price);
+  });
+
+  it("所有示範競品都保留來源網址、價格與檢查日", () => {
+    for (const item of core.DEMO_COMPETITORS) {
+      expect(item.sourceUrl).toMatch(/^https:\/\//);
+      expect(item.price).toBeGreaterThan(0);
+      expect(item.checkedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+  });
+});

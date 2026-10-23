@@ -121,6 +121,23 @@ describe("前台導覽", () => {
     expect(homeHtml).toContain('name="twitter:title" content="翔仔居家-公司工具"');
   });
 
+  it("首頁提供商控競品分析入口，工具保留版本阻擋與來源揭露", () => {
+    const homeHtml = readFileSync("../index.html", "utf8");
+    const html = readFileSync("../competitive-analysis/index.html", "utf8");
+    const app = readFileSync("../competitive-analysis/app.js", "utf8");
+    const version = JSON.parse(readFileSync("../competitive-analysis/version.json", "utf8"));
+    const headers = readFileSync("../_headers", "utf8");
+    expect(homeHtml).toContain(`/competitive-analysis/?deploy=${version.version}`);
+    expect(homeHtml).toContain("商控競品分析工具");
+    expect(html).toContain("真正雲端 AI 與即時搜尋尚未啟用");
+    expect(html).toContain('id="version-warning"');
+    expect(app).toContain(`const APP_VERSION = "${version.version}"`);
+    expect(app).toContain("version.json?check=${Date.now()}");
+    expect(app).toContain('window.addEventListener("focus", checkRuntimeVersion)');
+    expect(headers).toContain("/competitive-analysis/index.html\n  Cache-Control: no-store, max-age=0, must-revalidate");
+    expect(headers).toContain("/competitive-analysis/version.json\n  Cache-Control: no-store, max-age=0, must-revalidate");
+  });
+
   it("週調撥以新版元件讀取輸入，並保留獨立的ERP樣式輸出元件", () => {
     const html = readFileSync("../store-transfer/index.html", "utf8");
     const app = readFileSync("../store-transfer/app.js", "utf8");
