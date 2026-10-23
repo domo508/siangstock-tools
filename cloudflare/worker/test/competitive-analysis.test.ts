@@ -45,6 +45,14 @@ describe("商控競品 AI 搜尋邊界", () => {
     expect(result.candidates[0].priceTwd).toBe(399);
   });
 
+  it("來源有轉址或追蹤路徑差異時，允許同一 HTTPS 商店網域進入人工確認", () => {
+    const result = sanitizeCompetitiveSearchOutput(upstream(
+      [candidate("https://shop.example.com/products/mirror")],
+      ["https://shop.example.com/search?q=mirror&utm_source=openai"]
+    ));
+    expect(result.candidates).toHaveLength(1);
+  });
+
   it("拒絕 localhost、私人位址及沒有可驗證來源的結果", () => {
     expect(() => sanitizeCompetitiveSearchOutput(upstream([candidate("https://127.0.0.1/item")], ["https://127.0.0.1/item"]))).toThrow(/no_cited_candidates/);
     expect(() => sanitizeCompetitiveSearchOutput(upstream([candidate()], []))).toThrow(/no_cited_candidates/);

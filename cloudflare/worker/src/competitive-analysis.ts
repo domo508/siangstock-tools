@@ -163,6 +163,13 @@ function canonicalUrl(value: URL): string {
   return `${value.hostname.toLocaleLowerCase("en-US")}${pathname}`;
 }
 
+function citedSource(url: URL, cited: Set<string>): boolean {
+  const canonical = canonicalUrl(url);
+  if (cited.has(canonical)) return true;
+  const hostname = url.hostname.toLocaleLowerCase("en-US");
+  return [...cited].some((source) => source.split("/")[0] === hostname);
+}
+
 function sourceUrls(response: Record<string, unknown>): Set<string> {
   const urls = new Set<string>();
   const output = Array.isArray(response.output) ? response.output : [];
@@ -223,7 +230,7 @@ export function sanitizeCompetitiveSearchOutput(response: unknown): SearchOutput
     const candidate = value as Record<string, unknown>;
     const url = safeSourceUrl(candidate.sourceUrl);
     const price = Number(candidate.priceTwd);
-    if (!url || !cited.has(canonicalUrl(url)) || !Number.isFinite(price) || price <= 0 || price > 1000000) continue;
+    if (!url || !citedSource(url, cited) || !Number.isFinite(price) || price <= 0 || price > 1000000) continue;
     const original = candidate.originalPriceTwd === null ? null : Number(candidate.originalPriceTwd);
     candidates.push({
       name: text(candidate.name, "競品名稱", 160, true),
