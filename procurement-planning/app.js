@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261022-procurement-rules-r1";
+  const APP_VERSION = "20261023-activity-stock-r1";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -25,7 +25,7 @@
     newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], storeShortagePermissions: { canDecide: false }, storeShortageRendered: false, shortageRunMode: "merge_next",
     monthEndWorkbook: null, monthEndReportBytes: null, monthEndSummary: null,
     purchaseStatusSummary: null, costSummary: null, sharedCostSnapshot: null, draftId: "", draftStage: "", latestDraft: null, workflowDrafts: [], sharedDrafts: [], sharedDraftId: "", sharedDraftRevision: 0, parentBatchId: "", activeWorkUnit: null, selectedWorkUnitIds: new Set(), forecastCostRate: DEFAULT_COST_RATE,
-    runtimeOutdated: false, latestRuntimeVersion: "", history: null, historyMode: false
+    activityTargets: {}, activityTargetSignature: "", activityPlanRequests: new Map(), legacyActivity: null, runtimeOutdated: false, latestRuntimeVersion: "", history: null, historyMode: false
   };
 
   const get = (selector) => document.querySelector(selector);
@@ -53,7 +53,7 @@
     supplierReturns: get("#supplier-returns"), releasedBudget: get("#released-budget"), purchasedToDate: get("#purchased-to-date"), budgetSourceNote: get("#budget-source-note"),
     saveBudget: get("#save-budget-button"), budgetPlanStatus: get("#budget-plan-status"), budgetSummary: get("#budget-summary"), ledgerStatus: get("#ledger-status"), costBreakdown: get("#cost-breakdown"), costSnapshotStatus: get("#cost-snapshot-status"),
     channelRows: get("#channel-rows"), kuanchengTotal: get("#kuancheng-total"), kuanmuTotal: get("#kuanmu-total"), addChannel: get("#add-channel-button"),
-    activityCard: get("#activity-demand-card"), activityEnabled: get("#activity-enabled"), activityFields: get("#activity-demand-fields"), activityName: get("#activity-name"), activityStartDate: get("#activity-start-date"), activityEndDate: get("#activity-end-date"), activityScope: get("#activity-scope"), activityRevenueFields: get("#activity-revenue-fields"), activityMultiplierFields: get("#activity-multiplier-fields"), activityTargetRevenue: get("#activity-target-revenue"), activityMultiplier: get("#activity-multiplier"), activityBaselineRevenue: get("#activity-baseline-revenue"), activityPreview: get("#activity-demand-preview"),
+    activityCard: get("#activity-demand-card"), activityEnabled: get("#activity-enabled"), activityFields: get("#activity-demand-fields"), activityName: get("#activity-name"), activityStartDate: get("#activity-start-date"), activityEndDate: get("#activity-end-date"), activityScope: get("#activity-scope"), activityMonthlyTargets: get("#activity-monthly-targets"), activityPreview: get("#activity-demand-preview"), activityStockResults: get("#activity-stock-results"), activityStockSummary: get("#activity-stock-summary"), activityModelSummary: get("#activity-model-summary"), activityStockRows: get("#activity-stock-rows"),
     reviewFile: get("#review-file"), reviewButton: get("#review-button"), secondReviewFile: get("#second-review-file"), confirmReview: get("#confirm-review-button"),
     submitApproval: get("#submit-approval-button"), approve: get("#approve-button"), retryNotification: get("#retry-notification-button"),
     erp: get("#erp-button"), workflowStatus: get("#workflow-status"), workflowSummary: get("#workflow-summary"),
@@ -307,7 +307,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261022-procurement-rules-r1");
+        const worker = new Worker("inventory-reader-worker.js?v=20261023-activity-stock-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -576,11 +576,9 @@
       elements.activityStartDate.value = activity.startDate || "";
       elements.activityEndDate.value = activity.endDate || "";
       elements.activityScope.value = activity.scope || "all";
-      const method = activity.method === "multiplier" ? "multiplier" : "revenue";
-      const methodInput = document.querySelector(`input[name="activity-method"][value="${method}"]`);
-      if (methodInput) methodInput.checked = true;
-      elements.activityTargetRevenue.value = activity.targetRevenue ? formatIntegerAmount(activity.targetRevenue) : "";
-      elements.activityMultiplier.value = activity.requestedMultiplier || activity.multiplier || 1.3;
+      state.legacyActivity = activity.method === "monthly-target" ? null : activity;
+      state.activityTargets = activity.monthlyTargets ? structuredClone(activity.monthlyTargets) : {};
+      state.activityTargetSignature = "";
     } else {
       elements.activityEnabled.checked = false;
     }
@@ -1069,7 +1067,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261022-procurement-rules-r1");
+      const worker = new Worker("seasonal-model-worker.js?v=20261023-activity-stock-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -1715,85 +1713,120 @@
       elements.forecastRevenue.value = String(kuancheng);
       updateAutomaticForecastCost();
     }
+    const activityMonth = elements.month.value;
+    if (state.activityTargets[activityMonth]?.source === "本次分析月份通路營收，已含活動") {
+      state.activityTargets[activityMonth].amount = kuancheng + kuanmu;
+      renderActivityTargets(true);
+    }
     renderActivityControls();
   }
-  function selectedActivityMethod() {
-    return document.querySelector('input[name="activity-method"]:checked')?.value || "revenue";
-  }
   function activitySettings() {
-    const multiplierText = elements.activityMultiplier.value.trim();
-    return {
-      enabled: Boolean(elements.activityEnabled.checked),
-      name: elements.activityName.value.trim(),
-      startDate: elements.activityStartDate.value,
-      endDate: elements.activityEndDate.value,
-      scope: elements.activityScope.value,
-      method: selectedActivityMethod(),
-      targetRevenue: Number(elements.activityTargetRevenue.value.replace(/[^\d]/g, "") || 0),
-      multiplier: multiplierText === "" ? 1 : Number(multiplierText)
-    };
+    if (state.legacyActivity && elements.activityEnabled.checked) return { ...state.legacyActivity };
+    return { enabled: Boolean(elements.activityEnabled.checked), name: elements.activityName.value.trim(), startDate: elements.activityStartDate.value, endDate: elements.activityEndDate.value, scope: elements.activityScope.value, method: "monthly-target", monthlyTargets: structuredClone(state.activityTargets) };
   }
-  function activityBaselineRevenue(settings = activitySettings()) {
-    if (!settings.startDate || !settings.endDate || settings.endDate < settings.startDate) return 0;
-    const start = new Date(`${settings.startDate}T00:00:00Z`);
-    const end = new Date(`${settings.endDate}T00:00:00Z`);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
-    const activityDays = Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
-    const monthMatch = /^(\d{4})-(\d{2})$/.exec(elements.month.value);
-    const daysInMonth = monthMatch ? new Date(Date.UTC(Number(monthMatch[1]), Number(monthMatch[2]), 0)).getUTCDate() : 30;
-    const monthlyRevenue = state.revenueChannels.reduce((sum, row) => sum + Math.max(0, Number(row.amount || 0)), 0);
-    return monthlyRevenue / daysInMonth * activityDays;
+  function activityMonthList() { return globalThis.ProcurementActivityPlanning.months(elements.activityStartDate.value, elements.activityEndDate.value); }
+  function renderActivityTargets(force = false) {
+    const list = activityMonthList();
+    const signature = list.join("|");
+    if (!force && signature === state.activityTargetSignature) return;
+    state.activityTargetSignature = signature;
+    const fragment = document.createDocumentFragment();
+    for (const month of list) {
+      const current = state.activityTargets[month] || {};
+      const label = document.createElement("label"); label.className = "activity-target-field";
+      const title = document.createElement("span"); title.textContent = `${month}整月營收目標（元，已含活動）＊`;
+      const input = document.createElement("input"); input.type = "text"; input.inputMode = "numeric"; input.maxLength = 16; input.placeholder = "請填整月終端通路營收目標"; input.value = current.amount > 0 ? formatIntegerAmount(current.amount) : ""; input.setAttribute("aria-label", `${month}整月營收目標`);
+      const source = document.createElement("small"); source.textContent = current.source || "本次活動草稿；不改寫正式月份計畫";
+      input.addEventListener("input", () => { input.value = input.value.replace(/[^\d]/g, ""); state.legacyActivity = null; state.activityTargets[month] = { amount: input.value === "" ? null : Number(input.value), source: "本次活動草稿" }; source.textContent = "本次活動草稿；不改寫正式月份計畫"; if (state.analysis) invalidateAnalysis(); renderActivityControls(); });
+      input.addEventListener("blur", () => { const value = state.activityTargets[month]?.amount; input.value = value > 0 ? formatIntegerAmount(value) : ""; });
+      label.append(title, input, source); fragment.appendChild(label);
+    }
+    elements.activityMonthlyTargets.replaceChildren(fragment);
+  }
+  async function loadActivityMonthTargets() {
+    const list = activityMonthList();
+    for (const month of list) {
+      if (state.activityTargets[month]?.amount > 0 || state.activityPlanRequests.has(month)) continue;
+      if (month === elements.month.value && state.revenueChannels.length && state.revenueChannels.every(row => row.amount != null)) {
+        const amount = state.revenueChannels.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        if (amount > 0) state.activityTargets[month] = { amount, source: "本次分析月份通路營收，已含活動" };
+        continue;
+      }
+      const request = fetchMonthPlan(month).then(plan => {
+        if (state.activityTargets[month]?.source === "本次活動草稿") return;
+        const rows = plan?.revenueChannels || [];
+        if (rows.length && rows.every(row => row.amount != null && Number.isFinite(Number(row.amount)))) {
+          const amount = rows.reduce((sum, row) => sum + Number(row.amount), 0);
+          if (amount > 0) state.activityTargets[month] = { amount, source: "已儲存月份通路營收（唯讀帶入）", updatedAt: plan.updatedAt || "" };
+        }
+      }).catch(error => { state.activityTargets[month] ||= { amount: null, source: `月份目標未取得：${error.message}；可填本次草稿` }; }).finally(() => { state.activityPlanRequests.delete(month); renderActivityTargets(true); });
+      state.activityPlanRequests.set(month, request);
+    }
+    renderActivityTargets(true);
   }
   function renderActivityControls() {
     if (!elements.activityCard) return;
     const monthEndMode = elements.checkpoint.value === "month-end";
     elements.activityCard.hidden = monthEndMode;
-    if (monthEndMode) return;
-    const settings = activitySettings();
-    elements.activityFields.hidden = !settings.enabled;
-    elements.activityRevenueFields.hidden = settings.method !== "revenue";
-    elements.activityMultiplierFields.hidden = settings.method !== "multiplier";
-    if (!settings.enabled) return;
-    const baseline = activityBaselineRevenue(settings);
-    elements.activityBaselineRevenue.textContent = baseline > 0 ? formatCurrency(baseline) : "待完成本月營收與活動日期";
-    let message = "完成日期與估算方式後，這裡會先顯示活動倍率；實際影響SKU與增加採購量會在產生建議後列出。";
-    let warning = false;
-    if (settings.startDate && settings.endDate && (!settings.startDate.startsWith(elements.month.value) || !settings.endDate.startsWith(elements.month.value))) {
-      message = "活動日期須落在本次分析月份；跨月活動請依月份分開設定。";
-      warning = true;
-    } else if (settings.method === "revenue" && settings.targetRevenue > 0 && baseline > 0) {
-      const requestedFactor = settings.targetRevenue / baseline;
-      const factor = Math.max(1, Math.min(3, requestedFactor));
-      if (requestedFactor < 1) {
-        message = `活動目標${formatCurrency(settings.targetRevenue)}低於一般情況${formatCurrency(baseline)}；大活動不會降低原採購需求，系統將以1.00倍執行，產生建議前會再次請您確認。`;
-        warning = true;
-      } else {
-        message = `一般情況約${formatCurrency(baseline)}；活動目標${formatCurrency(settings.targetRevenue)}，本次將以${factor.toFixed(2)}倍試算活動期間需求。`;
-      }
-    } else if (settings.method === "multiplier" && settings.multiplier >= 1 && settings.multiplier <= 3) {
-      message = `本次將以${settings.multiplier.toFixed(2)}倍試算活動期間需求；一般期間仍維持原日需求。`;
-    } else if (settings.method === "multiplier" && Number.isFinite(settings.multiplier) && settings.multiplier < 1) {
-      message = `填入倍率${settings.multiplier.toFixed(2)}低於1.00；大活動不會降低原採購需求，系統將以1.00倍執行，產生建議前會再次請您確認。`;
-      warning = true;
-    } else if (settings.method === "revenue") {
-      message = "請先完成本月通路營收、活動日期及活動期間預計營業額。";
-      warning = true;
-    } else {
-      message = "需求加乘倍數須介於1.0至3.0倍。";
-      warning = true;
-    }
-    elements.activityPreview.textContent = message;
-    elements.activityPreview.classList.toggle("is-warning", warning);
+    elements.activityFields.hidden = !elements.activityEnabled.checked;
+    if (monthEndMode || !elements.activityEnabled.checked) return;
+    renderActivityTargets();
+    let warning = false, message = "設定隨主工具「產生採購建議」一起套用；活動月份可不同於本次分析月份。";
+    if (state.legacyActivity) { message = "這是舊批次活動設定，原結果與報表保持原快照；重新計算前請重新填寫新版活動月份目標。"; warning = true; }
+    else { try { globalThis.ProcurementActivityPlanning.normalize(activitySettings(), elements.salesDate.value || today()); } catch (error) { message = error.message; warning = true; } }
+    elements.activityPreview.textContent = message; elements.activityPreview.classList.toggle("is-warning", warning);
   }
-  function confirmActivityDemandFloor() {
-    const settings = activitySettings();
-    if (!settings.enabled) return true;
-    const baseline = activityBaselineRevenue(settings);
-    const requestedFactor = settings.method === "revenue"
-      ? (baseline > 0 && settings.targetRevenue > 0 ? settings.targetRevenue / baseline : 1)
-      : settings.multiplier;
-    if (!(Number.isFinite(requestedFactor) && requestedFactor < 1)) return true;
-    return window.confirm("大活動需求設定低於1.00倍。\n\n為避免誤減一般採購需求，系統會以1.00倍執行，不會降低原本的建議採購量。\n\n是否確認繼續產生採購建議？");
+  function renderActivityStock(analysis) {
+    const rows = (analysis?.rows || []).filter(row => row.activityPlanning);
+    if (!rows.length) { elements.activityStockSummary.textContent = "產生採購建議後顯示供貨、寄庫與缺口。"; elements.activityStockRows.replaceChildren(); elements.activityModelSummary.replaceChildren(); return; }
+    const summary = analysis.activitySummary || {};
+    const notes = analysis.appliedRules?.activityDemand?.notes || [];
+    elements.activityStockSummary.textContent = `現有供貨可備妥 ${summary.ready || 0}項・需要採購／寄庫拉貨 ${summary.action || 0}項・活動前仍缺或待確認 ${summary.shortage || 0}項。${notes.join("；")}`;
+    const modelFragment = document.createDocumentFragment();
+    for (const month of analysis.appliedRules?.activityDemand?.monthlyForecasts || []) {
+      const paragraph = document.createElement("p");
+      paragraph.textContent = `${month.month}：資料推估 ${formatCurrency(month.forecast)}；本次整月目標 ${formatCurrency(month.target)}。${month.channels.map(c => `${c.channel}：${c.model}，${c.samples >= 3 ? `${c.samples}個月回測，營收加權誤差${Math.round(c.wape * 100)}%` : "回測樣本不足，採可用基準"}；${c.distribution}`).join("。")}`;
+      modelFragment.appendChild(paragraph);
+    }
+    elements.activityModelSummary.replaceChildren(modelFragment);
+    const fragment = document.createDocumentFragment();
+    for (const row of [...rows].sort((a, b) => Number(b.activityPlanning.shortage || 0) - Number(a.activityPlanning.shortage || 0))) {
+      const plan = row.activityPlanning, tr = document.createElement("tr");
+      [row.name, formatNumber(plan.grossNeed), formatNumber(plan.pendingTimelyQty), plan.pullQty == null ? "未驗證" : formatNumber(plan.pullQty), plan.shortage == null ? "未驗證" : formatNumber(plan.shortage), `${plan.status}；總部需用${plan.hqDeadline}；最晚下單${plan.lastOrderDate}；預計到貨${plan.expectedArrival}`].forEach(value => appendCell(tr, value));
+      fragment.appendChild(tr);
+    }
+    elements.activityStockRows.replaceChildren(fragment);
+  }
+  async function sourceSha256(data) { const bytes = await crypto.subtle.digest("SHA-256", data); return [...new Uint8Array(bytes)].map(n => n.toString(16).padStart(2, "0")).join(""); }
+  async function loadActivityHistory(recentReports) {
+    if (!state.googleAuthorized) throw new Error("活動跨月備貨須先完成公司Google授權，以核對歷史來源與版本。");
+    const folderId = state.config?.fixedSources?.seasonalSalesFolderId;
+    if (!folderId) throw new Error("尚未設定歷史銷售固定來源，不能估算活動備貨。");
+    const files = await googleSources.listDriveExcelFiles(folderId);
+    if (!files.length || files.some(file => Number(file.size || 0) > MAX_SEASONAL_SOURCE_BYTES)) throw new Error("活動歷史來源缺少有效Excel，或單檔超過45 MB，請確認固定資料夾。");
+    const recentHashes = [];
+    for (const file of state.salesFiles) recentHashes.push(await sourceSha256(await file.arrayBuffer()));
+    const manifest = JSON.stringify({ version: APP_VERSION, files: files.map(f => [f.id, f.modifiedTime, f.md5Checksum, f.size]), recentHashes });
+    const cacheKey = `activity-history:${await sourceSha256(new TextEncoder().encode(manifest))}`;
+    const database = await openModelCache();
+    try {
+      const cached = await new Promise((resolve, reject) => { const request = database.transaction(MODEL_CACHE.store, "readonly").objectStore(MODEL_CACHE.store).get(cacheKey); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      if (cached?.version === 1) return cached;
+    } finally { database.close(); }
+    const worker = new Worker(`activity-history-worker.js?v=${APP_VERSION}`);
+    try {
+      await workerRequest(worker, { type: "initialize" });
+      for (let i = 0; i < files.length; i += 1) {
+        setStatus(`活動備貨：正在背景處理歷史銷售 ${i + 1}/${files.length}；只在本機彙總，不上傳原檔…`);
+        const file = files[i], downloaded = await googleSources.downloadDriveFile(file.id, file.name), buffer = await downloaded.arrayBuffer();
+        await workerRequest(worker, { type: "ingest", file, buffer }, [buffer]);
+      }
+      await workerRequest(worker, { type: "recent", reports: recentReports });
+      const response = await workerRequest(worker, { type: "finalize" });
+      const db = await openModelCache();
+      try { await new Promise((resolve, reject) => { const request = db.transaction(MODEL_CACHE.store, "readwrite").objectStore(MODEL_CACHE.store).put(response.history, cacheKey); request.onsuccess = resolve; request.onerror = () => reject(request.error); }); } finally { db.close(); }
+      return response.history;
+    } finally { worker.terminate(); }
   }
   function updateAutomaticForecastCost() {
     if (state.sharedCostSnapshot?.forecastCost >= 0) {
@@ -2544,10 +2577,11 @@
     const activityRule = analysis.appliedRules?.activityDemand;
     const activityNote = activityRule?.enabled === false || !activityRule
       ? "本次未啟用大活動需求。"
-      : `大活動「${activityRule.name}」採${activityRule.methodLabel}、${Number(activityRule.multiplier || 1).toFixed(2)}倍，影響${formatNumber(analysis.totals.activityDemandSkuCount || 0)}個SKU、增加建議${formatNumber(analysis.totals.activityDemandAdditionalSuggestedQty || 0)}件。`;
+      : `大活動「${activityRule.name}」採${activityRule.methodLabel}${activityRule.method === "monthly-target" ? "（不另加乘）" : `、${Number(activityRule.multiplier || 1).toFixed(2)}倍`}，影響${formatNumber(analysis.totals.activityDemandSkuCount || 0)}個SKU、增加建議${formatNumber(analysis.totals.activityDemandAdditionalSuggestedQty || 0)}件。`;
     elements.resultAlert.textContent = `${analysis.validation.dateCheck.message} ${styleNote} ${activityNote} 上林採28天檢視；普優瑪與力榮採購／寄庫分頁處理。`;
     elements.resultAlert.className = `result-alert ${analysis.validation.dateCheck.status === "PASS" && consignmentSource.styleAudit.pinkDetected ? "" : "warn"}`.trim();
     renderSupplierFilters(analysis);
+    renderActivityStock(analysis);
     renderWorkUnitDashboard();
   }
 
@@ -2651,7 +2685,7 @@
       if (item.shopeeProtectionApplied) row.classList.add("shopee-protection-row");
       [item.supplier, item.sku, item.name, `${item.tier}・${item.abcClass}${item.xyzClass}`, item.supplyProfileLabel,
         item.supplierLeadDays, item.targetCoverageDays, item.recent6Qty, item.recent12Qty, item.forecastDailyQty,
-        item.activityDemandApplied ? item.activityDemandName : "—", item.activityDemandApplied ? `${Number(item.activityDemandMultiplier || 1).toFixed(2)}倍` : "—", item.activityDemandAdditionalSuggestedQty || 0,
+        item.activityDemandApplied ? item.activityDemandName : "—", item.activityPlanning ? "整月目標分配" : item.activityDemandApplied ? `${Number(item.activityDemandMultiplier || 1).toFixed(2)}倍` : "—", item.activityDemandAdditionalSuggestedQty || 0,
         item.inventoryQty, item.pendingQty, item.transferSubmittedQty, item.transferInTransitQty, item.suggestedPurchaseQty, formatCurrency(item.suggestedPurchaseAmount),
         item.recommendationSource || "一般需求", item.shopeeProtectionAdditionalQty || 0, item.holidayProtectionAdditionalQty || 0,
         item.springFestivalExtraSuggestedQty, formatCurrency(item.springFestivalExtraAmount),
@@ -2664,10 +2698,8 @@
   async function analyze() {
     if (!(await checkRuntimeVersion())) return;
     if (!requirementsReady()) return;
-    if (!confirmActivityDemandFloor()) {
-      setStatus("已取消產生採購建議；請重新確認大活動需求倍率。", "warning");
-      return;
-    }
+    if (elements.activityEnabled.checked && state.legacyActivity) { setStatus("請重新設定新版活動月份目標，再產生新的母批次；舊批次可直接續作與下載。", "warning"); return; }
+    if (elements.activityEnabled.checked && elements.checkpoint.value !== "month-end") { try { globalThis.ProcurementActivityPlanning.normalize(activitySettings(), elements.salesDate.value); } catch (error) { setStatus(error.message, "error"); return; } }
     elements.analyze.disabled = true; elements.download.disabled = true; setStatus("正在以大型檔專用模式預檢庫存；門市店倉會完整保留…");
     try {
       const monthEndMode = elements.checkpoint.value === "month-end";
@@ -2717,9 +2749,12 @@
       }
       const selectedStoreShortageNeeds = state.storeShortageNeeds.filter((row) => row.handling_mode === state.shortageRunMode);
       const uncoveredStoreShortageNeeds = selectedStoreShortageNeeds.map((row) => ({ ...row, unfilledQuantity: Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.covered_quantity || 0)) }));
+      const activity = activitySettings();
+      const activityHistory = activity.enabled ? await loadActivityHistory(salesReports) : null;
+      const reservedConsignmentBySku = activity.enabled ? await activeConsignmentReservations() : new Map();
       const analysis = core.buildProcurementRecommendations({ master, inventory, pendingReports, transferReports: [transferReport], inventoryDate: elements.inventoryDate.value, consignment, lirongConsignment, salesReports, model,
         blacklist: blacklistEntries(), asOfDate: elements.salesDate.value, checkpoint: elements.checkpoint.value,
-        analysisMonth: elements.month.value, activityDemand: activitySettings(),
+        analysisMonth: elements.month.value, orderDate: elements.orderDate.value, activityDemand: activity, activityHistory, reservedConsignmentBySku,
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
         springFestivalRule: state.procurementRules?.springFestival,
         purchaseUnitRules: state.procurementRules?.purchaseUnits,
@@ -3215,6 +3250,8 @@
     if (currentBudget().remainingBudget - state.review.totals.approvedAmount < 0) warningParts.push("本批核准後超出中性情境尚可承諾額度");
     const purchaseUnitExceptionCount = state.review.rows.filter((row) => row.finalQty > 0 && row.purchaseUnitException && row.purchaseUnitExceptionConfirmed).length;
     if (purchaseUnitExceptionCount) warningParts.push(`箱數例外${purchaseUnitExceptionCount}項（已確認仍採用人工量）`);
+    const activityRiskCount = state.review.rows.filter(row => row.activityPlanning && (row.activityPlanning.approvedShortage == null || row.activityPlanning.approvedShortage > 0)).length;
+    if (activityRiskCount) warningParts.push(`活動前供貨仍缺或未驗證${activityRiskCount}項，請核對活動備貨明細`);
     return {
       batchId: state.batchId, analysisMonth: elements.month.value, checkpoint: elements.checkpoint.value,
       parentBatchId: state.parentBatchId, workUnitIds: core.procurementWorkUnitIdsForReview(state.review.rows, analysisBaselineRows()),
@@ -3401,23 +3438,13 @@
     applyHistoryMode();
     Promise.all([loadLedger(), loadMonthPlan(), loadSharedWorkflowDrafts(), loadHistory()]).then(loadCostSnapshot);
   });
-  const activityControls = [elements.activityEnabled, elements.activityName, elements.activityStartDate, elements.activityEndDate, elements.activityScope, elements.activityMultiplier, ...document.querySelectorAll('input[name="activity-method"]')];
-  activityControls.forEach((element) => element.addEventListener(element === elements.activityName || element === elements.activityMultiplier ? "input" : "change", () => {
+  const activityControls = [elements.activityEnabled, elements.activityName, elements.activityStartDate, elements.activityEndDate, elements.activityScope];
+  activityControls.forEach(element => element.addEventListener(element === elements.activityName ? "input" : "change", () => {
+    state.legacyActivity = null;
     if (state.analysis) invalidateAnalysis();
     renderActivityControls();
+    if (elements.activityEnabled.checked && element !== elements.activityName) loadActivityMonthTargets();
   }));
-  elements.activityTargetRevenue.addEventListener("focus", () => { elements.activityTargetRevenue.value = elements.activityTargetRevenue.value.replace(/[^\d]/g, ""); });
-  elements.activityTargetRevenue.addEventListener("input", () => {
-    const digits = elements.activityTargetRevenue.value.replace(/[^\d]/g, "");
-    if (elements.activityTargetRevenue.value !== digits) elements.activityTargetRevenue.value = digits;
-    if (state.analysis) invalidateAnalysis();
-    renderActivityControls();
-  });
-  elements.activityTargetRevenue.addEventListener("blur", () => {
-    const value = Number(elements.activityTargetRevenue.value.replace(/[^\d]/g, "") || 0);
-    elements.activityTargetRevenue.value = value > 0 ? formatIntegerAmount(value) : "";
-    renderActivityControls();
-  });
   elements.forecastRevenue.addEventListener("input", () => { updateAutomaticForecastCost(); markBudgetDirty(); });
   elements.releasedBudget.addEventListener("input", markBudgetDirty);
   elements.budgetSourceNote.addEventListener("input", () => { elements.budgetPlanStatus.textContent = "額度來源註記尚未儲存。"; });

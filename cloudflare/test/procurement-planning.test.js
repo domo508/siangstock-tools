@@ -2729,11 +2729,12 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).toContain("資料截止");
     expect(toolHtml).toContain(`app.js?v=${procurementVersion}`);
     expect(toolHtml).toContain('id="activity-demand-card"');
-    expect(toolHtml).toContain("活動期間預計營業額");
-    expect(toolHtml).toContain("需求加乘倍數");
-    expect(toolAppSource).toContain("大活動不會降低原採購需求，系統將以1.00倍執行");
-    expect(toolAppSource).toContain("是否確認繼續產生採購建議？");
-    expect(toolAppSource).toContain("if (!confirmActivityDemandFloor())");
+    expect(toolHtml).toContain("大活動備貨調整");
+    expect(toolHtml).toContain("activity-monthly-targets");
+    expect(toolHtml).not.toContain('id="activity-multiplier"');
+    expect(toolHtml).not.toContain('name="activity-method"');
+    expect(toolAppSource).toContain('method: "monthly-target"');
+    expect(toolAppSource).toContain("loadActivityHistory");
     expect(toolApp).toContain("function detachChildSharedIdentity");
     expect(toolApp).toContain("state.sharedDraftId = \"\"; state.sharedDraftRevision = 0;");
     expect(toolApp).toContain("function repairOverwrittenParentDraft");

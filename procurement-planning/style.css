@@ -1101,3 +1101,18 @@ body.history-readonly .stage-two, body.history-readonly .stage-three, body.histo
 .procurement-table tbody tr.shopee-protection-row td {
   background: #fff7d6;
 }
+
+/* Activity planning extends the existing procurement card. */
+.activity-monthly-targets { display: grid; gap: 14px; }
+.activity-target-field { display: grid; gap: 7px; color: var(--navy); font-weight: 800; }
+.activity-target-field input { width: 100%; min-width: 0; padding: 12px; border: 1px solid #b9d2da; border-radius: 12px; background: #fff; font: inherit; font-size: 1.15rem; color: var(--navy); }
+.activity-target-field small { color: var(--muted); font-size: .83rem; font-weight: 400; }
+.activity-explanation { margin: 12px 0; color: var(--muted); line-height: 1.6; }
+.activity-explanation summary, .activity-stock-results > summary { color: var(--blue); font-weight: 700; cursor: pointer; padding: 8px 0; }
+.activity-stock-results { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+#activity-stock-summary { padding: 12px 0; line-height: 1.6; color: var(--navy); }
+.activity-stock-results .table-scroll { overflow-x: auto; max-width: 100%; }
+.activity-stock-results table { min-width: 680px; }
+.activity-stock-results td { white-space: normal; }
+.activity-target-panel > * { min-width: 0; }
+[hidden] { display: none !important; }

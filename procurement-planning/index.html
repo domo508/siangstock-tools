@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20261022-procurement-rules-r1">
+  <link rel="stylesheet" href="style.css?v=20261023-activity-stock-r1">
 </head>
 <body>
   <section id="version-warning" class="version-warning" role="alert" hidden>
@@ -108,10 +108,10 @@
         <div class="activity-demand-heading">
           <div>
             <p class="eyebrow">選填・本次母批次</p>
-            <h3 id="activity-demand-title">大活動需求調整</h3>
-            <p>有短期大檔時，可用活動期間營業額或需求加乘倍數擇一試算；未啟用就完全沿用一般採購邏輯。</p>
+            <h3 id="activity-demand-title">大活動備貨調整</h3>
+            <p>填主要活動日期與活動月份整月目標，納入本次採購及寄庫備貨；未啟用沿用一般採購。</p>
           </div>
-          <label class="activity-enable"><input id="activity-enabled" type="checkbox"><span>本次納入大活動需求</span></label>
+          <label class="activity-enable"><input id="activity-enabled" type="checkbox"><span>本次納入活動備貨</span></label>
         </div>
         <div id="activity-demand-fields" class="activity-demand-fields" hidden>
           <div class="activity-grid activity-grid-three">
@@ -119,20 +119,17 @@
             <label><span>活動開始日＊</span><input id="activity-start-date" type="date"></label>
             <label><span>活動結束日＊</span><input id="activity-end-date" type="date"></label>
           </div>
-          <div class="activity-grid activity-grid-two">
+          <div class="activity-grid">
             <label><span>適用品項範圍＊</span><select id="activity-scope"><option value="all">全部一般採購品項</option><option value="puyouma-tencel">普優瑪－天絲／天絲棉</option><option value="puyouma-long-staple">普優瑪－長絨棉</option><option value="puyouma-no-size">普優瑪－無尺寸</option><option value="supplier-lirong">力榮</option><option value="supplier-shanglin">上林</option><option value="supplier-runtai">潤泰羽絨</option><option value="supplier-taineng">泰能脊康</option></select></label>
-            <fieldset class="activity-methods"><legend>估算方式＊</legend><label><input type="radio" name="activity-method" value="revenue" checked><span>活動營業額換算</span></label><label><input type="radio" name="activity-method" value="multiplier"><span>需求加乘倍數</span></label></fieldset>
           </div>
-          <div id="activity-revenue-fields" class="activity-method-panel">
-            <label><span>活動期間預計營業額＊</span><input id="activity-target-revenue" type="text" inputmode="numeric" placeholder="例如：2,400,000"></label>
-            <div class="activity-readonly"><span>一般情況預估營業額</span><strong id="activity-baseline-revenue">待完成本月營收與活動日期</strong><small>依本月全部通路預估營收，按活動天數換算</small></div>
+          <div class="activity-method-panel activity-target-panel">
+            <div id="activity-monthly-targets" class="activity-monthly-targets"></div>
+            <div class="activity-readonly"><strong>整月目標已包含本次活動</strong><span>不用再填活動營業額或需求倍數；系統分配活動前、中、後的需求。</span><small>提前為未來月份備貨，不改寫本月營收與額度。</small></div>
           </div>
-          <div id="activity-multiplier-fields" class="activity-method-panel" hidden>
-            <label><span>希望需求加乘倍數＊</span><input id="activity-multiplier" type="number" min="1" max="3" step="0.1" value="1.3"></label>
-            <div class="activity-readonly"><span>套用原則</span><strong>只增加活動期間需求</strong><small>不重複增加已包含在保障期間內的連假需求</small></div>
-          </div>
-          <div id="activity-demand-preview" class="activity-demand-preview" aria-live="polite">完成日期與估算方式後，這裡會先顯示活動倍率；實際影響SKU與增加採購量會在產生建議後列出。</div>
-          <p class="activity-demand-note">同一活動只能正式套用一種估算方式。活動設定只影響這次重新產生的母批次；既有母批次、已下載報表與正式台帳不會被改寫。</p>
+          <details class="activity-explanation"><summary>系統如何判斷備貨需求？</summary><p>參考歷史同月、近6週與近12週，以符合提前採購距離的歷史回測選擇模型；線上參考活動週期，不把ERP入帳高峰當成下單日。各SKU分別估算件數，並用近12週實收單價校正；未來促銷折扣、商品組合仍須人工覆核。再依有效庫存、未到貨、寄庫及現行門市到店排程判斷供貨；既有調撥缺到店日會標示待確認。</p></details>
+          <div id="activity-demand-preview" class="activity-demand-preview" aria-live="polite">填寫活動日期後，設定各活動月份的整月營收目標。</div>
+          <p class="activity-demand-note">沿用主工具的分析月份、使用時點與來源資料；設定隨「產生採購建議」一起套用。既有批次與正式台帳不回溯改寫。</p>
+          <details id="activity-stock-results" class="activity-stock-results"><summary>活動前備貨提醒</summary><div id="activity-stock-summary" aria-live="polite">產生採購建議後顯示供貨、寄庫與缺口。</div><details class="activity-explanation"><summary>查看各月資料推估與回測依據</summary><div id="activity-model-summary"></div></details><div class="table-scroll"><table><thead><tr><th>品項</th><th>備貨需求</th><th>及時未到貨</th><th>寄庫可拉</th><th>活動前仍缺</th><th>處理提醒</th></tr></thead><tbody id="activity-stock-rows"></tbody></table></div></details>
         </div>
       </section>
       <p id="ledger-status" class="budget-note">正式核准會建立採購承諾；完整ERP採購檔依每次新增到貨量與實際收貨日，分次更新付款及國外餘款認列。</p>
@@ -470,7 +467,7 @@
       </details>
       <div class="result-table-wrap">
         <table class="procurement-table">
-          <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>狀態</th><th>供應交期類型</th><th>到貨天數</th><th>目標覆蓋天數</th><th>近6週</th><th>近12週</th><th>日需求</th><th>大活動</th><th>活動倍率</th><th>活動增加建議量</th><th>調撥後可用庫存</th><th>未到貨</th><th>調撥提交中</th><th>發貨在途</th><th>建議採購量</th><th>建議金額</th><th>建議來源</th><th>蝦皮3件保護增加量</th><th>連假保障增加量</th><th>春節加量</th><th>春節增加金額</th><th>寄倉現貨</th><th>建議寄庫</th><th>供貨狀態</th></tr></thead>
+          <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>狀態</th><th>供應交期類型</th><th>到貨天數</th><th>目標覆蓋天數</th><th>近6週</th><th>近12週</th><th>日需求</th><th>大活動</th><th>活動估算方式</th><th>活動增加建議量</th><th>調撥後可用庫存</th><th>未到貨</th><th>調撥提交中</th><th>發貨在途</th><th>建議採購量</th><th>建議金額</th><th>建議來源</th><th>蝦皮3件保護增加量</th><th>連假保障增加量</th><th>春節加量</th><th>春節增加金額</th><th>寄倉現貨</th><th>建議寄庫</th><th>供貨狀態</th></tr></thead>
           <tbody id="result-rows"></tbody>
         </table>
       </div>
@@ -578,9 +575,11 @@
   <script src="xlsx-style-runtime.js?v=20260930-month-end-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20261022-procurement-rules-r1"></script>
+  <script src="core.js?v=20261023-activity-stock-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
-  <script src="google-sources.js?v=20261022-procurement-rules-r1"></script>
-  <script src="app.js?v=20261022-procurement-rules-r1"></script>
+  <script src="google-sources.js?v=20261023-activity-stock-r1"></script>
+  <script src="../store-transfer/core.js?v=20261023-activity-stock-r1"></script>
+  <script src="activity-planning.js?v=20261023-activity-stock-r1"></script>
+  <script src="app.js?v=20261023-activity-stock-r1"></script>
 </body>
 </html>

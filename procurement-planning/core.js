@@ -2803,6 +2803,10 @@
   }
 
   function buildProcurementRecommendations(input) {
+    if (input.activityDemand?.enabled && input.activityDemand.method === "monthly-target") {
+      if (!global.ProcurementActivityPlanning) throw new Error("活動備貨模組未載入，請重新載入最新版。");
+      return global.ProcurementActivityPlanning.buildRecommendations(input, (ordinaryInput) => buildProcurementRecommendations(ordinaryInput));
+    }
     const puyoumaRules = input.consignmentRules?.puyouma || {};
     const lirongRules = input.consignmentRules?.lirong || {};
     const puyoumaProductionDays = Math.max(0, Number(puyoumaRules.productionDays ?? PROCUREMENT_POLICY.puyoumaFactoryLeadDays));
@@ -2967,6 +2971,7 @@
       if (sale.fileName) demand.sourceFiles.add(sale.fileName);
     }
     for (const [sku, purchase] of pending.bySku) ensureDemand(sku, purchase.name);
+    for (const sku of input.activityCandidateSkus || []) ensureDemand(sku, input.master.bySku.get(sku)?.name || "");
     for (const need of storeTransferNeeds) ensureDemand(normalizeSku(need.sku), String(need.productName || need.product_name || ""));
 
     const candidates = [];
@@ -2993,7 +2998,7 @@
       const purchase = pending.bySku.get(demand.sku);
       const hasStoreTransferNeed = [...storeTransferNeedBySkuStore.keys()].some((key) => key.startsWith(`${demand.sku}\t`));
       if (input.onlyStoreTransferNeedSkus && !hasStoreTransferNeed) continue;
-      if (Math.max(0, demand.recent12Qty) <= 0 && !purchase && !hasStoreTransferNeed) continue;
+      if (Math.max(0, demand.recent12Qty) <= 0 && !purchase && !hasStoreTransferNeed && !input.activityCandidateSkus?.has(demand.sku)) continue;
       const effectiveName = masterRecord?.name || demand.name;
       if (isAutomaticProcurementExcludedItem(demand.sku, effectiveName)) {
         if (!customSalesSkus.has(demand.sku)) productExclusions.push({
@@ -4571,6 +4576,21 @@
       "大活動涵蓋天數": row.activityDemandCoverageDays || 0,
       "大活動原始增加需求": row.activityDemandAdditionalRawQty || 0,
       "大活動增加建議量": row.activityDemandAdditionalSuggestedQty || 0,
+      ...(row.activityPlanning ? {
+        "活動月份目標（已含活動）": "依採購摘要活動月份明細，不另加乘",
+        "活動備貨總需求": row.activityPlanning.grossNeed,
+        "活動前及時未到貨": row.activityPlanning.pendingTimelyQty,
+        "活動前不能抵扣未到貨": row.activityPlanning.pendingExcludedQty,
+        "活動寄庫可拉量": row.activityPlanning.pullQty ?? "未驗證",
+        "活動寄庫製作缺口": row.activityPlanning.productionNeed ?? "未驗證",
+        "活動前仍缺量": row.activityPlanning.shortage ?? "未驗證",
+        "活動銷售位置備妥日": row.activityPlanning.readyBy,
+        "活動總部需用日": row.activityPlanning.hqDeadline,
+        "活動最晚下單日": row.activityPlanning.lastOrderDate,
+        "活動預計到貨日": row.activityPlanning.expectedArrival,
+        "活動最早製作補足日": row.activityPlanning.expectedProductionArrival,
+        "活動供貨提醒": row.activityPlanning.status
+      } : {}),
       "供應交期類型": row.supplyProfileLabel,
       "到貨交期天數": row.supplierLeadDays,
       "連假調整後到貨天數": row.effectiveSupplierLeadDays ?? row.supplierLeadDays,
@@ -4910,7 +4930,11 @@
       ["春節停工備貨影響SKU", selectedTotals.springFestivalSkuCount],
       ["春節額外建議量", selectedTotals.springFestivalExtraQty],
       ["春節額外採購金額", selectedTotals.springFestivalExtraAmount, "已包含在建議採購金額與額度影響內"],
-      ["大活動需求設定", recommendations.appliedRules?.activityDemand?.enabled === false ? "未啟用" : `${recommendations.appliedRules?.activityDemand?.name || "未命名活動"}・${recommendations.appliedRules?.activityDemand?.methodLabel || ""}・${recommendations.appliedRules?.activityDemand?.multiplier || 1}倍`],
+      ["大活動需求設定", recommendations.appliedRules?.activityDemand?.enabled === false ? "未啟用" : recommendations.appliedRules?.activityDemand?.method === "monthly-target" ? `${recommendations.appliedRules.activityDemand.name}・整月目標已含活動，不另加乘` : `${recommendations.appliedRules?.activityDemand?.name || "未命名活動"}・${recommendations.appliedRules?.activityDemand?.methodLabel || ""}・${recommendations.appliedRules?.activityDemand?.multiplier || 1}倍`],
+      ...(recommendations.appliedRules?.activityDemand?.method === "monthly-target" ? [
+        ...recommendations.appliedRules.activityDemand.monthlyForecasts.map(month => ["活動月份目標／資料推估", month.month, month.target, month.forecast]),
+        ...(recommendations.appliedRules.activityDemand.notes || []).map(note => ["活動備貨提醒", note])
+      ] : []),
       ["大活動適用期間／範圍", recommendations.appliedRules?.activityDemand?.enabled === false ? "—" : `${recommendations.appliedRules?.activityDemand?.startDate || ""}～${recommendations.appliedRules?.activityDemand?.endDate || ""}・${recommendations.appliedRules?.activityDemand?.scopeLabel || ""}`],
       ["大活動影響SKU", selectedTotals.activityDemandSkuCount],
       ["大活動增加建議量", selectedTotals.activityDemandAdditionalSuggestedQty],
@@ -5134,8 +5158,34 @@
     setColumnWidths(ruleSheet, [24, 90, 18]);
     applyTableCis(ruleSheet, XLSX);
     XLSX.utils.book_append_sheet(workbook, ruleSheet, "08_核心規則");
+    if (recommendations.appliedRules?.activityDemand?.method === "monthly-target") {
+      const activitySheet = XLSX.utils.json_to_sheet(selectedRows.filter(row => row.activityPlanning).map(row => ({
+        "ERP品號": row.sku, "商品名稱": row.name, "供應商": row.supplier,
+        "活動備貨需求": row.activityPlanning.grossNeed, "活動前可抵未到貨": row.activityPlanning.pendingTimelyQty,
+        "不能抵扣未到貨": row.activityPlanning.pendingExcludedQty,
+        "本次建議採購量（不與寄庫拉貨相加）": row.suggestedPurchaseQty,
+        "寄庫拉貨量（已含在採購建議內）": row.activityPlanning.pullQty ?? "未驗證",
+        "寄庫待製作需求": row.activityPlanning.productionNeed ?? "未驗證",
+        "活動前仍缺": row.activityPlanning.shortage ?? "未驗證",
+        "總部需用日": row.activityPlanning.hqDeadline, "銷售位置備妥日": row.activityPlanning.readyBy,
+        "門市需用／預計到店": Object.entries(row.activityPlanning.storeDeadlines).map(([store, value]) => `${store}：${value || "來不及"}／${row.activityPlanning.storeReadyDates[store] || "待確認"}`).join("；"),
+        "最晚下單日": row.activityPlanning.lastOrderDate, "預計到貨日": row.activityPlanning.expectedArrival,
+        "最早製作補足日": row.activityPlanning.expectedProductionArrival, "提醒": row.activityPlanning.status,
+        "模型與分布依據": row.activityPlanning.monthlyDetails.map(item => `${item.month} ${item.channel}：${item.model}／${item.samples}次回測／${item.distribution}`).join("；")
+      })));
+      setColumnWidths(activitySheet, [16, 42, 22, 16, 18, 18, 24, 26, 18, 16, 16, 18, 50, 16, 16, 18, 30, 85]);
+      applyTableCis(activitySheet, XLSX);
+      XLSX.utils.book_append_sheet(workbook, activitySheet, "10_活動備貨檢查");
+    }
     appendManualReasonSheet(workbook, XLSX);
     return workbook;
+  }
+
+  function activityReviewFields(baseline, finalQty) {
+    const plan = baseline?.activityPlanning;
+    if (!plan) return {};
+    const approvedShortage = plan.shortage == null ? null : Math.max(Number(plan.shortage || 0), Number(plan.netNeed || 0) - Math.min(Math.max(0, Number(finalQty || 0)), Number(plan.onTimePurchaseCapacity || 0)), 0);
+    return { activityPlanning: { ...plan, approvedQty: Math.max(0, Number(finalQty || 0)), approvedShortage } };
   }
 
   function reviewReturnedWorkbook(workbook, XLSX, options = {}) {
@@ -5267,6 +5317,7 @@
           sheetName, sourceRow: index + 2, supplier, supplierCountry: supplierRule?.country || "待確認", sku,
           supplierSku: manuallyAdded ? String(baseline?.supplierSku || "").trim() : String(source["供應商貨號"] || "").trim(), name, suggestedQty: Math.max(0, Number(suggestedQty || 0)),
           confirmedQty: Math.max(0, Number(confirmedQty || 0)), finalQty, unitCost: Math.max(0, Number(unitCost || 0)), reason,
+          ...activityReviewFields(baseline, finalQty),
           reasonCategory: reasonInput.category, reasonDetail: reasonInput.detail,
           blockedReason, suggestedAmount: Math.max(0, Number(suggestedQty || 0)) * Math.max(0, Number(unitCost || 0)),
           manualAmount: Math.max(0, Number(confirmedQty || 0)) * Math.max(0, Number(unitCost || 0)),
@@ -5330,6 +5381,7 @@
       "人工確認要求": row.sellThroughRestartException ? "S品已用人工例外原因放寬本批；仍須完成正式核准" : (row.productStatusPendingReview ? "貨品狀態空白，已明確人工確認" : "一般回匯"), "規則阻擋原因": row.blockedReason,
       "進貨價": row.unitCost, "人工回匯金額": row.manualAmount, "規則阻擋金額": row.blockedAmount,
       "最終可核准金額": row.approvedAmount, "全公司人工確認後可售至": row.availableTo, "AI判斷": row.aiJudgment,
+      ...(row.activityPlanning ? { "活動前仍缺（覆核後）": row.activityPlanning.approvedShortage ?? "未驗證", "活動總部需用日": row.activityPlanning.hqDeadline, "活動備貨提醒": row.activityPlanning.status } : {}),
       "預估日需求": row.forecastDaily, "可用公司庫存": row.inventoryQty, "門市可售庫存": row.storeInventoryQty, "已採購未到貨": row.pendingQty,
       "本次人工新增": row.manuallyAdded ? "是；資料已由本次計算批次補回" : "否", "需求摘要": row.demandSummary || "",
       "寄倉現貨": row.consignmentCurrentQty || 0, "粉紅排程": row.consignmentScheduledQty || 0,
@@ -5441,6 +5493,7 @@
         sheetName, sourceRow: index + 2, supplier,
         supplierCountry: String(source["供應商分類"] || "待確認"), sku, supplierSku: String(source["供應商貨號"] || "").trim(), name,
         suggestedQty, confirmedQty: firstConfirmedQty, finalQty: Math.max(0, Number(finalQty || 0)), unitCost: Math.max(0, Number(unitCost || 0)), reason,
+        ...activityReviewFields(baseline, finalQty),
         blockedReason, productStatusPendingReview: Boolean(baseline?.productStatusPendingReview), sellThroughRestartException: Boolean(baseline?.sellThroughRestartException),
         reasonCategory: secondReasonInput.category || firstReasonInput.category, reasonDetail: secondReasonInput.detail || firstReasonInput.detail,
         suggestedAmount: suggestedQty * Math.max(0, Number(unitCost || 0)), manualAmount: firstConfirmedQty * Math.max(0, Number(unitCost || 0)),
@@ -5501,6 +5554,7 @@
     CUSTOM_SKU_PREFIXES,
     CONFIRMED_COMBINATION_SKUS,
     NEW_PRODUCT_WORKBOOK_READ_OPTIONS,
+    ACTIVITY_HISTORY_READ_OPTIONS: Object.freeze({ type: "array", cellDates: true, cellStyles: true, nodim: true, WTF: true }),
     PROCUREMENT_POLICY,
     SUPPLIER_RULES,
     DEFAULT_SPRING_FESTIVAL_RULE,
@@ -5559,6 +5613,12 @@
     classifyPuyoumaPurchaseTab,
     puyoumaConsignmentGroup,
     applyDemandModel,
+    activityDemandScopeLabel,
+    salesChannelKey,
+    plannedChannelKey,
+    storeTargetQty,
+    holidayCoverageAdjustment,
+    deduplicateSalesReports,
     classifyXyz,
     demandTier,
     resolveSupplyProfile,
