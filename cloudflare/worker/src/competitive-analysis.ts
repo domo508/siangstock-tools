@@ -242,11 +242,14 @@ export function sanitizeCompetitiveSearchOutput(response: unknown): SearchOutput
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid_structured_output");
   const data = parsed as Record<string, unknown>;
   const candidates: SearchCandidate[] = [];
-  for (const value of Array.isArray(data.candidates) ? data.candidates.slice(0, MAX_CANDIDATES) : []) {
+  const rawCandidates = Array.isArray(data.candidates) ? data.candidates.slice(0, MAX_CANDIDATES) : [];
+  let safeCandidateUrls = 0;
+  for (const value of rawCandidates) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const candidate = value as Record<string, unknown>;
     const url = safeSourceUrl(candidate.sourceUrl);
     const price = Number(candidate.priceTwd);
+    if (url) safeCandidateUrls += 1;
     if (!url || !citedSource(url, cited) || !Number.isFinite(price) || price <= 0 || price > 1000000) continue;
     const original = candidate.originalPriceTwd === null ? null : Number(candidate.originalPriceTwd);
     candidates.push({
@@ -268,7 +271,7 @@ export function sanitizeCompetitiveSearchOutput(response: unknown): SearchOutput
       priceEvidence: outputValue(candidate.priceEvidence, "price_evidence", 300)
     });
   }
-  if (!candidates.length) throw new Error("no_cited_candidates");
+  if (!candidates.length) throw new Error(`no_cited_candidates:${cited.size}:${rawCandidates.length}:${safeCandidateUrls}`);
   return {
     summary: outputValue(data.summary, "summary", 900, true),
     searchNotes: safeStringList(data.searchNotes, 6),
