@@ -135,7 +135,15 @@ describe("前台導覽", () => {
     expect(html).not.toContain("小波");
     expect(html).not.toContain("安全測試版");
     expect(html).toContain("AI 搜尋候選競品");
-    expect(html).toContain("工單檔案、檔名、成本與其他欄位不會送出");
+    expect(html).toContain("不傳原始檔、檔名或成本");
+    expect(html).toContain('id="prefill-consent"');
+    expect(html).toContain('id="prefill-button"');
+    expect(app).toContain('import("./document-reader.mjs?v=');
+    expect(app).toContain('fetch("/api/competitive-analysis/prefill"');
+    expect(app).toContain("extractedText: extraction.text");
+    expect(app).not.toContain("extractedText: state.file");
+    expect(app).toContain("未覆蓋已人工修改欄位");
+    expect(headers).toContain("/competitive-analysis/vendor/*\n  Cache-Control: public, max-age=31536000, immutable");
     expect(app).toContain("AI 候選・待人工確認");
     expect(app).toContain('fetch("/api/competitive-analysis/search"');
     expect(app).toContain("JSON.stringify({ consent: true, product: item })");

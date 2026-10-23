@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="翔仔居家商控競品分析工具">
   <meta name="robots" content="noindex,nofollow">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; object-src 'self' blob:; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; object-src 'self' blob:; base-uri 'none'; form-action 'none'">
   <title>商控競品分析工具｜翔仔居家公司工具</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=20261023-competitive-analysis-r3">
+  <link rel="stylesheet" href="style.css?v=20261023-competitive-analysis-r4">
 </head>
 <body>
   <dialog id="version-warning" class="version-dialog">
@@ -31,12 +31,12 @@
         <h1>從工單到定價，<br>把判斷依據攤開來。</h1>
         <p class="hero-description">上傳 PDF 或圖片，整理規格、材質與工法，再用有來源的市售商品比較價格、相似度、毛利與行銷情境。</p>
       </div>
-      <aside class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>工單檔案只在目前分頁讀取</strong><p>PDF／圖片不會上傳；啟用 AI 搜尋時，只傳送同仁已覆核的文字規格摘要。</p></div></aside>
+      <aside class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>工單檔案只在目前分頁讀取</strong><p>PDF／圖片不會上傳；AI 預填只在同仁同意後傳送本機擷取文字，競品搜尋只傳送已覆核規格。</p></div></aside>
     </section>
 
     <section class="notice-card" role="note">
       <strong>正式使用說明</strong>
-      <p>上傳全新工單後，請依預覽內容人工填寫並覆核規格，再加入實際競品來源。需要操作參考時，可載入「拉拉手持鏡填寫範例」查看完整欄位與報告格式。</p>
+      <p>上傳全新工單後，可在本機擷取 PDF／圖片文字並交由 AI 預填第二步；請逐欄查看信心與文字證據，人工覆核後再搜尋競品。需要操作參考時，可載入「拉拉手持鏡填寫範例」。</p>
     </section>
 
     <section class="manual-card" aria-labelledby="manual-title">
@@ -47,7 +47,7 @@
       <ol class="quick-steps"><li>選擇工單</li><li>覆核規格</li><li>搜尋並確認競品</li><li>輸入成本條件</li><li>產生並匯出報告</li></ol>
       <details open><summary>分析前要準備什麼？</summary><p>準備商品細部工單 PDF 或清晰圖片、單件含稅或未稅成本、包材／物流等固定費、通路抽成與目標毛利。工單中的材質、尺寸、工法仍要由商品或採購同事覆核。</p></details>
       <details><summary>相似度與價格建議怎麼看？</summary><p>相似度依品類、材質、工法、尺寸與市場定位加權，只用於縮小比較範圍，不代表消費者願付價格。定價情境同時考慮市售價格與目標毛利底線。</p></details>
-      <details><summary>AI 搜尋會傳送什麼？</summary><p>只有步驟 2 中同仁已覆核的商品名稱、品類、尺寸、材質、工法、設計差異與包裝文字會送往 AI 服務；工單檔案、檔名、成本與其他欄位不會送出。每次最多進行 3 次網路搜尋並回傳 8 筆候選。</p></details>
+      <details><summary>AI 預填與搜尋會傳送什麼？</summary><p>AI 預填只在勾選同意後傳送瀏覽器本機擷取的工單文字與辨識方式，不傳原始檔、檔名或成本。競品搜尋只傳送步驟 2 已覆核的文字規格；每次最多進行 3 次網路搜尋並回傳 8 筆候選。</p></details>
       <details><summary>哪些結果不能直接當成結論？</summary><p>AI 摘要與候選競品可能不完整或判斷錯誤，來源價格也可能因促銷、缺貨或規格差異而改變。請開啟原始來源並勾選確認後再納入報告；報告不取代授權、產品安全、成本、稅務與實際市場測試。</p></details>
     </section>
 
@@ -58,6 +58,12 @@
           <label class="drop-zone" for="work-order"><span class="drop-icon">圖</span><strong>選擇 PDF 或圖片</strong><span>支援 PDF、PNG、JPG、WEBP；單檔上限 40 MB</span></label>
           <input id="work-order" type="file" accept="application/pdf,image/png,image/jpeg,image/webp">
           <p id="file-status" class="status-text" aria-live="polite">尚未選擇檔案。第一次使用可先查看填寫範例。</p>
+          <div class="prefill-card">
+            <div><strong>自動預填第二步</strong><p>先在目前瀏覽器擷取文字；掃描 PDF／圖片會使用本機 OCR。原始檔案與檔名不會送出。</p></div>
+            <label class="consent-check"><input id="prefill-consent" type="checkbox">我同意將本機擷取出的工單文字傳送給 AI 整理欄位。</label>
+            <div class="button-row"><button id="prefill-button" class="primary-button" type="button" disabled>辨識並預填第二步</button></div>
+            <p id="prefill-status" class="status-text" aria-live="polite">選擇工單後即可辨識。</p>
+          </div>
           <div class="button-row"><button class="secondary-button" type="button" data-example="lala">載入拉拉手持鏡填寫範例</button></div>
         </div>
         <div id="preview-panel" class="preview-panel"><p>選檔後會在這裡顯示預覽。PDF 預覽由瀏覽器直接開啟，不會送出分頁。</p></div>
@@ -111,7 +117,7 @@
 
     <footer><a href="/">← 回公司工具首頁</a><p>商控競品分析工具・正式版</p></footer>
   </main>
-  <script src="core.js?v=20261023-competitive-analysis-r3"></script>
-  <script src="app.js?v=20261023-competitive-analysis-r3"></script>
+  <script src="core.js?v=20261023-competitive-analysis-r4"></script>
+  <script src="app.js?v=20261023-competitive-analysis-r4"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 allowBuilds:
   esbuild: true
+  tesseract.js: false
   workerd: true
 minimumReleaseAgeExclude:
   - '@cloudflare/workers-types@5.20260813.1'

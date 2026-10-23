@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeCompetitiveSearchOutput, validateCompetitiveSearchBody } from "../src/competitive-analysis";
+import {
+  sanitizeCompetitivePrefillOutput, sanitizeCompetitiveSearchOutput, validateCompetitivePrefillBody, validateCompetitiveSearchBody
+} from "../src/competitive-analysis";
 
 const product = {
   name: "新商品手持鏡",
@@ -77,5 +79,30 @@ describe("商控競品 AI 搜尋邊界", () => {
   it("拒絕 localhost、私人位址及沒有可驗證來源的結果", () => {
     expect(() => sanitizeCompetitiveSearchOutput(upstream([candidate("https://127.0.0.1/item")], ["https://127.0.0.1/item"]))).toThrow(/no_cited_candidates/);
     expect(() => sanitizeCompetitiveSearchOutput(upstream([candidate()], []))).toThrow(/no_cited_candidates/);
+  });
+});
+
+describe("商控競品工單預填邊界", () => {
+  const fields = Object.fromEntries([
+    ["name", "角色絨毛手持鏡"], ["category", "毛絨手持鏡"], ["dimensions", "23 × 13.7 cm"],
+    ["materials", "QQ 毛 1209 黃、玻璃鏡面"], ["techniques", "刺繡、立體車縫"],
+    ["designHighlights", "角色立體輪廓"], ["packaging", "待確認"]
+  ].map(([field, value]) => [field, { value, confidence: field === "packaging" ? 30 : 88, evidence: field === "packaging" ? "未找到明確證據" : "第 1 頁" }]));
+
+  it("只接受明確同意、文字與安全的本機辨識摘要，不接受檔名或檔案內容欄位", () => {
+    const extractedText = "=== 第 1 頁 ===\n品名：角色絨毛手持鏡\n材質：QQ 毛 1209 黃、玻璃鏡面\n工法：刺繡、立體車縫";
+    expect(validateCompetitivePrefillBody({ consent: true, extractedText, extraction: { method: "pdf-text", pageCount: 1 } }).extraction.method).toBe("pdf-text");
+    expect(() => validateCompetitivePrefillBody({ consent: false, extractedText, extraction: { method: "pdf-text", pageCount: 1 } })).toThrow(/先同意/);
+    expect(() => validateCompetitivePrefillBody({ consent: true, extractedText, extraction: { method: "cloud-file", pageCount: 1 } })).toThrow(/不支援/);
+    expect(() => validateCompetitivePrefillBody({ consent: true, extractedText, extraction: { method: "pdf-text", pageCount: 1 }, fileName: "secret.pdf" })).toThrow(/欄位不符/);
+  });
+
+  it("整理 AI 預填欄位、信心與證據，並安全截斷過長內容", () => {
+    const response = { output_text: JSON.stringify({ fields: { ...fields, techniques: { value: "刺繡".repeat(700), confidence: 91, evidence: "第 2 頁工法欄" } }, notices: ["包裝資訊仍需確認"] }) };
+    const result = sanitizeCompetitivePrefillOutput(response);
+    expect(result.profile.name).toBe("角色絨毛手持鏡");
+    expect(result.profile.techniques).toHaveLength(1200);
+    expect(result.evidence.techniques.confidence).toBe(91);
+    expect(result.notices).toEqual(["包裝資訊仍需確認"]);
   });
 });

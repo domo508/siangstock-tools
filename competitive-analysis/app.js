@@ -1,9 +1,14 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261023-competitive-analysis-r3";
+  const APP_VERSION = "20261023-competitive-analysis-r4";
   const core = globalThis.CompetitiveAnalysisCore;
   const $ = (id) => document.getElementById(id);
-  const state = { competitors: [], profile: null, file: null, previewUrl: "", result: null, aiSummary: "", aiSearchNotes: [], runtimeOutdated: false, latestRuntimeVersion: "" };
+  const state = { competitors: [], profile: null, file: null, previewUrl: "", result: null, aiSummary: "", aiSearchNotes: [], dirtyFields: new Set(), runtimeOutdated: false, latestRuntimeVersion: "" };
+  const profileFields = {
+    name: ["product-name", "商品名稱"], category: ["product-category", "商品品類"], dimensions: ["product-dimensions", "外觀尺寸"],
+    materials: ["product-materials", "材質"], techniques: ["product-techniques", "工法"],
+    designHighlights: ["product-highlights", "設計價值與差異"], packaging: ["product-packaging", "包裝資訊"]
+  };
   const currency = (value) => new Intl.NumberFormat("zh-TW", { style: "currency", currency: "TWD", maximumFractionDigits: 0 }).format(Number(value || 0));
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 
@@ -58,6 +63,7 @@
     state.competitors = [];
     state.aiSummary = "";
     state.aiSearchNotes = [];
+    state.dirtyFields.clear();
     for (const id of ["product-name", "product-category", "product-dimensions", "product-materials", "product-techniques", "product-highlights", "product-packaging"]) $(id).value = "";
     $("confidence-badge").textContent = "新工單・請人工填寫並覆核";
     $("review-notices").hidden = false;
@@ -68,6 +74,8 @@
     $("ai-search-summary").hidden = true;
     $("ai-search-summary").innerHTML = "";
     $("report").hidden = true;
+    $("prefill-consent").checked = false;
+    $("prefill-status").textContent = "請勾選同意後辨識；原始檔案與檔名不會送出。";
     renderCompetitors();
   }
 
@@ -88,6 +96,7 @@
     state.file = file;
     renderFile(file);
     resetNewProduct();
+    $("prefill-button").disabled = false;
     $("file-status").textContent = `已在本機讀取：${file.name}（${(file.size / 1024 / 1024).toFixed(1)} MB）`;
     $("analysis-status").textContent = "新工單已載入；請先填寫規格，再加入實際競品來源。";
   }
@@ -98,6 +107,10 @@
     state.result = null;
     state.aiSummary = "";
     state.aiSearchNotes = [];
+    state.dirtyFields.clear();
+    $("prefill-consent").checked = false;
+    $("prefill-button").disabled = true;
+    $("prefill-status").textContent = "填寫範例不需要再次辨識。";
     $("ai-search-consent").checked = false;
     $("ai-search-status").textContent = "範例已載入；可直接查看既有來源，或覆核文字後重新執行 AI 搜尋。";
     $("ai-search-summary").hidden = true;
@@ -107,6 +120,67 @@
     $("file-status").textContent = "已載入拉拉手持鏡填寫範例；這是操作參考，不代表新的工單內容。";
     $("source-date").textContent = "範例來源檢查日 2026-10-22";
     showPlaceholder("填寫範例模式：上傳新工單後，範例資料會清空並改由同仁依工單填寫。");
+  }
+
+  function prefillProgress(update) {
+    if (update.stage === "pdf-text") $("prefill-status").textContent = `正在本機讀取 PDF 第 ${update.page}/${update.pageCount} 頁……`;
+    else if (update.stage === "ocr-page") $("prefill-status").textContent = `正在本機準備第 ${update.page}/${update.pageCount} 頁 OCR……`;
+    else if (update.stage === "ocr") $("prefill-status").textContent = `正在本機辨識文字……${update.progress}%`;
+    else $("prefill-status").textContent = "正在本機準備工單辨識……";
+  }
+
+  function applyPrefill(data, extraction) {
+    const applied = [];
+    const skipped = [];
+    const evidenceItems = [];
+    const confidenceValues = [];
+    for (const [field, [id, label]] of Object.entries(profileFields)) {
+      const input = $(id);
+      const value = String(data.profile?.[field] || "").trim();
+      const detail = data.evidence?.[field] || {};
+      const confidence = Math.max(0, Math.min(100, Math.round(Number(detail.confidence) || 0)));
+      confidenceValues.push(confidence);
+      if (!state.dirtyFields.has(id) && value) { input.value = value; applied.push(label); }
+      else if (state.dirtyFields.has(id)) skipped.push(label);
+      evidenceItems.push(`<li><strong>${escapeHtml(label)} ${confidence}%：</strong>${escapeHtml(detail.evidence || "未找到明確證據")}</li>`);
+    }
+    const average = confidenceValues.length ? Math.round(confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length) : 0;
+    $("confidence-badge").textContent = `AI 預填信心 ${average}%・待人工覆核`;
+    const notices = Array.isArray(data.notices) ? data.notices.map((item) => `<li>${escapeHtml(item)}</li>`).join("") : "";
+    const truncated = extraction.truncatedPages ? `<p><strong>注意：</strong>檔案共 ${extraction.totalPages} 頁，本次只辨識前 ${extraction.pageCount} 頁。</p>` : "";
+    $("review-notices").hidden = false;
+    $("review-notices").innerHTML = `<strong>AI 預填・仍需逐欄覆核</strong><ul class="prefill-evidence">${evidenceItems.join("")}${notices}</ul>${skipped.length ? `<p>未覆蓋已人工修改欄位：${escapeHtml(skipped.join("、"))}。</p>` : ""}${truncated}`;
+    $("analysis-status").textContent = `已預填 ${applied.length} 個欄位；請依工單逐欄覆核，不確定內容保留「待確認」。`;
+    $("ai-search-consent").checked = false;
+    renderCompetitors();
+  }
+
+  async function prefillFromFile() {
+    if (!(await checkRuntimeVersion())) return;
+    if (!state.file) { $("prefill-status").textContent = "請先選擇 PDF 或圖片工單。"; return; }
+    if (!$("prefill-consent").checked) { $("prefill-status").textContent = "請先勾選同意傳送本機擷取文字。"; return; }
+    const button = $("prefill-button");
+    button.disabled = true;
+    try {
+      const { extractTextLocally } = await import("./document-reader.mjs?v=20261023-competitive-analysis-r4");
+      const extraction = await extractTextLocally(state.file, prefillProgress);
+      $("prefill-status").textContent = "文字已在本機擷取，正在交由 AI 整理欄位……";
+      const response = await fetch("/api/competitive-analysis/prefill", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ consent: true, extractedText: extraction.text, extraction: { method: extraction.method, pageCount: extraction.pageCount } })
+      });
+      const responseText = await response.text();
+      let data = {};
+      try { data = JSON.parse(responseText); } catch (_) { data = {}; }
+      const plainMessage = responseText.length <= 200 && !/[<>]/.test(responseText) ? responseText : "";
+      if (!response.ok) throw new Error(data.error || plainMessage || "AI 工單整理失敗，請稍後再試。");
+      applyPrefill(data, extraction);
+      $("prefill-status").textContent = `預填完成；使用${extraction.method === "pdf-text" ? " PDF 文字" : "本機 OCR"}辨識 ${extraction.pageCount} 頁，請逐欄覆核。`;
+    } catch (error) {
+      $("prefill-status").textContent = error instanceof Error ? error.message : "工單辨識失敗，請改用更清晰的檔案或人工填寫。";
+    } finally { button.disabled = false; }
   }
 
   function renderCompetitors() {
@@ -231,8 +305,9 @@
   async function printReport() { if (state.result && await checkRuntimeVersion()) window.print(); }
 
   $("work-order").addEventListener("change", handleFile);
+  $("prefill-button").addEventListener("click", prefillFromFile);
   document.querySelectorAll("[data-example]").forEach((button) => button.addEventListener("click", () => loadExample(button.dataset.example)));
-  $("product-form").addEventListener("input", () => { state.result = null; renderCompetitors(); });
+  $("product-form").addEventListener("input", (event) => { if (event.target?.id) state.dirtyFields.add(event.target.id); state.result = null; renderCompetitors(); });
   $("source-form").addEventListener("submit", addSource);
   $("ai-search-button").addEventListener("click", searchWithAi);
   $("competitor-rows").addEventListener("change", (event) => {
