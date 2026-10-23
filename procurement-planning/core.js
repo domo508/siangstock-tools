@@ -4504,7 +4504,7 @@
     return workbook;
   }
 
-  function recommendationSheetRows(rows, asOfDate) {
+  function recommendationSheetRows(rows, asOfDate, { compactActivity = false } = {}) {
     const reportRows = rows.map((row) => {
       const storeInventoryQty = Object.values(row.storeInventoryByCode || {})
         .reduce((sum, quantity) => sum + Math.max(0, Number(quantity || 0)), 0);
@@ -4569,6 +4569,7 @@
       "季節需求基準": row.seasonalDemandBasis || "近期速度",
       "同季歷史日均需求": row.seasonalHistoricalDailyQty ?? "",
       "預估日需求": row.forecastDailyQty,
+      ...(compactActivity ? {} : {
       "大活動名稱": row.activityDemandName || "",
       "大活動估算方式": row.activityDemandMethod || "",
       "大活動適用範圍": row.activityDemandScope || "",
@@ -4576,21 +4577,7 @@
       "大活動涵蓋天數": row.activityDemandCoverageDays || 0,
       "大活動原始增加需求": row.activityDemandAdditionalRawQty || 0,
       "大活動增加建議量": row.activityDemandAdditionalSuggestedQty || 0,
-      ...(row.activityPlanning ? {
-        "活動月份目標（已含活動）": "依採購摘要活動月份明細，不另加乘",
-        "活動備貨總需求": row.activityPlanning.grossNeed,
-        "活動前及時未到貨": row.activityPlanning.pendingTimelyQty,
-        "活動前不能抵扣未到貨": row.activityPlanning.pendingExcludedQty,
-        "活動寄庫可拉量": row.activityPlanning.pullQty ?? "未驗證",
-        "活動寄庫製作缺口": row.activityPlanning.productionNeed ?? "未驗證",
-        "活動前仍缺量": row.activityPlanning.shortage ?? "未驗證",
-        "活動銷售位置備妥日": row.activityPlanning.readyBy,
-        "活動總部需用日": row.activityPlanning.hqDeadline,
-        "活動最晚下單日": row.activityPlanning.lastOrderDate,
-        "活動預計到貨日": row.activityPlanning.expectedArrival,
-        "活動最早製作補足日": row.activityPlanning.expectedProductionArrival,
-        "活動供貨提醒": row.activityPlanning.status
-      } : {}),
+      }),
       "供應交期類型": row.supplyProfileLabel,
       "到貨交期天數": row.supplierLeadDays,
       "連假調整後到貨天數": row.effectiveSupplierLeadDays ?? row.supplierLeadDays,
@@ -4932,6 +4919,7 @@
       ["春節額外採購金額", selectedTotals.springFestivalExtraAmount, "已包含在建議採購金額與額度影響內"],
       ["大活動需求設定", recommendations.appliedRules?.activityDemand?.enabled === false ? "未啟用" : recommendations.appliedRules?.activityDemand?.method === "monthly-target" ? `${recommendations.appliedRules.activityDemand.name}・整月目標已含活動，不另加乘` : `${recommendations.appliedRules?.activityDemand?.name || "未命名活動"}・${recommendations.appliedRules?.activityDemand?.methodLabel || ""}・${recommendations.appliedRules?.activityDemand?.multiplier || 1}倍`],
       ...(recommendations.appliedRules?.activityDemand?.method === "monthly-target" ? [
+        ["活動採購明細說明", "供應商明細的建議採購量已含活動備貨，無須再加量；交期、未到貨、寄庫與缺口集中於10_活動備貨檢查。"],
         ...recommendations.appliedRules.activityDemand.monthlyForecasts.map(month => ["活動月份目標／資料推估", month.month, month.target, month.forecast]),
         ...(recommendations.appliedRules.activityDemand.notes || []).map(note => ["活動備貨提醒", note])
       ] : []),
@@ -4973,6 +4961,8 @@
     applySummaryCis(summarySheet, XLSX);
     XLSX.utils.book_append_sheet(workbook, summarySheet, "01_採購摘要");
 
+    const compactActivity = recommendations.appliedRules?.activityDemand?.method === "monthly-target";
+    const purchaseReportRows = (rows) => recommendationSheetRows(rows, recommendations.asOfDate, { compactActivity });
     const recommendationWidths = [20, 18, 26, 16, 16, 16, 28, 48, 12, 8, 8, 16, 16, 16, 24, 24, 16, 16, 20, 16, 16, 16, 16, 22, 18, 16, 18, 18, 18, 20, 16, 18, 28, 14, 18, 12, 16, 36];
 
     const puyoumaRows = selectedSuggestedRows.filter((row) => /普優[瑪碼]/.test(row.supplier));
@@ -4981,12 +4971,12 @@
     const dedicated = (row) => /普優[瑪碼]|力榮|上林/.test(row.supplier);
     const appendIfRows = (sheetName, rows, widths) => { if (!requestedSet || rows.length) appendJsonSheet(workbook, XLSX, sheetName, rows, widths); };
     if (!isNewProductWorkflow) {
-      appendIfRows("03A_力榮採購", recommendationSheetRows(lirongRows, recommendations.asOfDate), recommendationWidths);
-      appendIfRows("03B1_普優瑪_天絲", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "天絲＋天絲棉"), recommendations.asOfDate), recommendationWidths);
-      appendIfRows("03B2_普優瑪_長絨棉", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "長絨棉"), recommendations.asOfDate), recommendationWidths);
-      appendIfRows("03B3_普優瑪_無尺寸", recommendationSheetRows(puyoumaRows.filter((row) => row.purchaseTab === "無尺寸品項"), recommendations.asOfDate), recommendationWidths);
-      appendIfRows("03C_上林採購", recommendationSheetRows(shanglinRows, recommendations.asOfDate), recommendationWidths);
-      appendIfRows("03D_其它供應商", recommendationSheetRows(selectedSuggestedRows.filter((row) => !dedicated(row)), recommendations.asOfDate), recommendationWidths);
+      appendIfRows("03A_力榮採購", purchaseReportRows(lirongRows), recommendationWidths);
+      appendIfRows("03B1_普優瑪_天絲", purchaseReportRows(puyoumaRows.filter((row) => row.purchaseTab === "天絲＋天絲棉")), recommendationWidths);
+      appendIfRows("03B2_普優瑪_長絨棉", purchaseReportRows(puyoumaRows.filter((row) => row.purchaseTab === "長絨棉")), recommendationWidths);
+      appendIfRows("03B3_普優瑪_無尺寸", purchaseReportRows(puyoumaRows.filter((row) => row.purchaseTab === "無尺寸品項")), recommendationWidths);
+      appendIfRows("03C_上林採購", purchaseReportRows(shanglinRows), recommendationWidths);
+      appendIfRows("03D_其它供應商", purchaseReportRows(selectedSuggestedRows.filter((row) => !dedicated(row))), recommendationWidths);
     }
 
     const sourceBySku = new Map(recommendations.rows.map((row) => [row.sku, row]));
@@ -5381,7 +5371,7 @@
       "人工確認要求": row.sellThroughRestartException ? "S品已用人工例外原因放寬本批；仍須完成正式核准" : (row.productStatusPendingReview ? "貨品狀態空白，已明確人工確認" : "一般回匯"), "規則阻擋原因": row.blockedReason,
       "進貨價": row.unitCost, "人工回匯金額": row.manualAmount, "規則阻擋金額": row.blockedAmount,
       "最終可核准金額": row.approvedAmount, "全公司人工確認後可售至": row.availableTo, "AI判斷": row.aiJudgment,
-      ...(row.activityPlanning ? { "活動前仍缺（覆核後）": row.activityPlanning.approvedShortage ?? "未驗證", "活動總部需用日": row.activityPlanning.hqDeadline, "活動備貨提醒": row.activityPlanning.status } : {}),
+      ...(row.activityPlanning ? { "活動前仍缺（覆核後）": row.activityPlanning.approvedShortage ?? "未驗證" } : {}),
       "預估日需求": row.forecastDaily, "可用公司庫存": row.inventoryQty, "門市可售庫存": row.storeInventoryQty, "已採購未到貨": row.pendingQty,
       "本次人工新增": row.manuallyAdded ? "是；資料已由本次計算批次補回" : "否", "需求摘要": row.demandSummary || "",
       "寄倉現貨": row.consignmentCurrentQty || 0, "粉紅排程": row.consignmentScheduledQty || 0,

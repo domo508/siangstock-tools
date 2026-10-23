@@ -167,6 +167,10 @@ describe("跨月活動備貨與供貨", () => {
     expect(first.rows.find(r => r.sku === "A1").activityPlanning.approvedShortage).toBe(original.activityPlanning.netNeed);
     const second = core.reviewSecondApprovalWorkbook(roundtrip(core.buildSecondReviewWorkbook(first, writer)), XLSX, { baselineBySku: new Map(first.rows.map(r => [r.sku, r])) });
     expect(second.errors).toEqual([]);
+    const reviewHeaders = XLSX.utils.sheet_to_json(roundtrip(core.buildSecondReviewWorkbook(first, writer)).Sheets["02_覆核與異動確認"], { header: 1 })[0];
+    expect(reviewHeaders).toContain("活動前仍缺（覆核後）");
+    expect(reviewHeaders).not.toContain("活動總部需用日");
+    expect(reviewHeaders).not.toContain("活動備貨提醒");
     expect(second.rows.find(r => r.sku === "A1").activityPlanning.approvedShortage).toBe(original.activityPlanning.netNeed);
   });
   it("歷史重疊保留同列出現次數且去重，矛盾版本阻擋，不保存個資", () => {
@@ -178,6 +182,29 @@ describe("跨月活動備貨與供貨", () => {
     expect(builder.finalize().duplicateRows).toBe(2);
     expect(JSON.stringify(builder.finalize())).not.toMatch(/PRIVATE/);
     expect(() => builder.ingest({ ...report, records: [{ ...row, quantity: 9 }] })).toThrow("相同交易");
+  });
+  it("新版主明細只看含活動的建議量，細節集中附表，範圍外品項也不帶回空白活動欄", () => {
+    const result = run({ activityDemand: { ...fixture.activityDemand, scope: "supplier-runtai" } });
+    const snapshot = JSON.stringify(result.rows);
+    const book = roundtrip(core.buildRecommendationWorkbook(result, writer));
+    for (const name of book.SheetNames.filter(name => /^03/.test(name))) {
+      const data = XLSX.utils.sheet_to_json(book.Sheets[name], { header: 1, defval: "" });
+      if (!data[0].includes("ERP品號")) continue;
+      expect(data[0].filter(h => /^(大)?活動/.test(h))).toEqual([]);
+      expect(data[0]).toEqual(expect.arrayContaining(["建議採購量", "人工確認採購量", "建議來源"]));
+      for (const row of data.slice(1)) {
+        const sku = row[data[0].indexOf("ERP品號")], baseline = result.rows.find(r => r.sku === sku);
+        if (!baseline) continue;
+        expect(row[data[0].indexOf("建議採購量")]).toBe(baseline.suggestedPurchaseQty);
+      }
+    }
+    const detail = XLSX.utils.sheet_to_json(book.Sheets["10_活動備貨檢查"], { defval: "" });
+    expect(detail).toHaveLength(result.rows.filter(r => r.activityPlanning).length);
+    expect(detail[0]).toMatchObject({ "ERP品號": "A2", "活動備貨需求": result.rows.find(r => r.sku === "A2").activityPlanning.grossNeed });
+    expect(Object.keys(detail[0])).toEqual(expect.arrayContaining(["活動前可抵未到貨", "不能抵扣未到貨", "寄庫拉貨量（已含在採購建議內）", "銷售位置備妥日", "總部需用日", "最早製作補足日", "提醒"]));
+    const summary = XLSX.utils.sheet_to_json(book.Sheets["01_採購摘要"], { header: 1, defval: "" });
+    expect(summary.find(r => r[0] === "活動採購明細說明")[1]).toContain("建議採購量已含活動備貨");
+    expect(JSON.stringify(result.rows)).toBe(snapshot);
   });
   it("真實xlsx往返：未改量、人工改量、歸零、二次覆核與ERP固定八欄", () => {
     const result = run({ activityDemand: { ...fixture.activityDemand, scope: "supplier-runtai" } });

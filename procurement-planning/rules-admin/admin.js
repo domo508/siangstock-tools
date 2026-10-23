@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const APP_VERSION = "20261023-procurement-admin-r10";
+  const APP_VERSION = "20261023-procurement-admin-r11";
   const state = { config: null, version: 0, rules: null, dirty: false, googleTokenClient: null, googleAccessToken: "", masterBySku: null, runtimeOutdated: false, latestRuntimeVersion: "" };
   const GOOGLE_READ_SCOPE = "openid email https://www.googleapis.com/auth/drive.readonly";
   const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
