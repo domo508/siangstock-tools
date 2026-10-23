@@ -172,16 +172,27 @@ function citedSource(url: URL, cited: Set<string>): boolean {
 
 function sourceUrls(response: Record<string, unknown>): Set<string> {
   const urls = new Set<string>();
+  const addUrl = (value: unknown) => {
+    const parsed = safeSourceUrl(value);
+    if (parsed) urls.add(canonicalUrl(parsed));
+  };
   const output = Array.isArray(response.output) ? response.output : [];
   for (const item of output) {
     if (!item || typeof item !== "object") continue;
     const object = item as Record<string, unknown>;
     const action = object.action && typeof object.action === "object" ? object.action as Record<string, unknown> : null;
+    if (action) addUrl(action.url);
     const sources = action && Array.isArray(action.sources) ? action.sources : [];
     for (const source of sources) {
       if (!source || typeof source !== "object") continue;
-      const parsed = safeSourceUrl((source as Record<string, unknown>).url);
-      if (parsed) urls.add(canonicalUrl(parsed));
+      addUrl((source as Record<string, unknown>).url);
+    }
+    const results = Array.isArray(object.results) ? object.results : [];
+    for (const result of results) {
+      if (!result || typeof result !== "object") continue;
+      const resultObject = result as Record<string, unknown>;
+      addUrl(resultObject.url);
+      addUrl(resultObject.source_website_url);
     }
     const content = Array.isArray(object.content) ? object.content : [];
     for (const part of content) {
@@ -189,8 +200,7 @@ function sourceUrls(response: Record<string, unknown>): Set<string> {
       const annotations = Array.isArray((part as Record<string, unknown>).annotations) ? (part as Record<string, unknown>).annotations as unknown[] : [];
       for (const annotation of annotations) {
         if (!annotation || typeof annotation !== "object") continue;
-        const parsed = safeSourceUrl((annotation as Record<string, unknown>).url);
-        if (parsed) urls.add(canonicalUrl(parsed));
+        addUrl((annotation as Record<string, unknown>).url);
       }
     }
   }
@@ -273,7 +283,7 @@ function buildRequest(product: ProductSummary): Record<string, unknown> {
     tool_choice: "auto",
     max_tool_calls: 3,
     max_output_tokens: 6000,
-    include: ["web_search_call.action.sources"],
+    include: ["web_search_call.action.sources", "web_search_call.results"],
     input: [
       {
         role: "system",

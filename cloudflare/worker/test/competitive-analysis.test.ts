@@ -11,7 +11,7 @@ const product = {
   packaging: "待確認"
 };
 
-function upstream(candidates: unknown[], sources: string[]) {
+function upstream(candidates: unknown[], sources: string[]): { output: Record<string, unknown>[] } {
   return {
     output: [
       { type: "web_search_call", action: { sources: sources.map((url) => ({ url })) } },
@@ -51,6 +51,20 @@ describe("商控競品 AI 搜尋邊界", () => {
       ["https://shop.example.com/search?q=mirror&utm_source=openai"]
     ));
     expect(result.candidates).toHaveLength(1);
+  });
+
+  it("接受 OpenAI 開啟商品頁動作所提供的來源網址", () => {
+    const accepted = candidate();
+    const response = upstream([accepted], []);
+    response.output[0] = { type: "web_search_call", action: { type: "open_page", url: accepted.sourceUrl } };
+    expect(sanitizeCompetitiveSearchOutput(response).candidates).toHaveLength(1);
+  });
+
+  it("接受 OpenAI 網頁搜尋結果清單所提供的來源網址", () => {
+    const accepted = candidate();
+    const response = upstream([accepted], []);
+    response.output[0] = { type: "web_search_call", results: [{ url: accepted.sourceUrl }] };
+    expect(sanitizeCompetitiveSearchOutput(response).candidates).toHaveLength(1);
   });
 
   it("拒絕 localhost、私人位址及沒有可驗證來源的結果", () => {
