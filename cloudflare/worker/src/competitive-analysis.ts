@@ -281,7 +281,7 @@ function buildRequest(product: ProductSummary): Record<string, unknown> {
   return {
     model: OPENAI_MODEL,
     store: false,
-    reasoning: { effort: "medium" },
+    reasoning: { effort: "low" },
     tools: [{
       type: "web_search",
       search_context_size: "high",
