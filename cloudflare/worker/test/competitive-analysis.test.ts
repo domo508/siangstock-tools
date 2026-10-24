@@ -10,7 +10,12 @@ const product = {
   materials: "毛絨、玻璃",
   techniques: "刺繡、立體車縫",
   designHighlights: "角色立體輪廓",
-  packaging: "待確認"
+  packaging: "待確認",
+  searchName: "角色立體絨毛手持鏡",
+  primaryUse: "手持照鏡",
+  secondaryCategories: "角色化妝鏡",
+  mustMatch: "毛絨包覆、立體造型、刺繡",
+  exclusions: "純塑膠平面鏡"
 };
 
 function upstream(candidates: unknown[], sources: string[]): { output: Record<string, unknown>[] } {
@@ -34,9 +39,24 @@ function candidate(sourceUrl = "https://shop.example.com/products/mirror") {
 
 describe("商控競品 AI 搜尋邊界", () => {
   it("只接受完整文字規格與明確同意，不接受檔案或檔名欄位", () => {
-    expect(validateCompetitiveSearchBody({ consent: true, product }).product.name).toBe("新商品手持鏡");
-    expect(() => validateCompetitiveSearchBody({ consent: true, product, fileName: "secret.pdf" })).toThrow(/欄位不符/);
-    expect(() => validateCompetitiveSearchBody({ consent: false, product })).toThrow(/先確認/);
+    expect(validateCompetitiveSearchBody({ consent: true, visualConsent: false, product, visualReference: null }).product.name).toBe("新商品手持鏡");
+    expect(() => validateCompetitiveSearchBody({ consent: true, visualConsent: false, product, visualReference: null, fileName: "secret.pdf" })).toThrow(/欄位不符/);
+    expect(() => validateCompetitiveSearchBody({ consent: false, visualConsent: false, product, visualReference: null })).toThrow(/先確認/);
+  });
+
+  it("發布切換期間仍接受舊版純文字請求，但不放寬額外欄位", () => {
+    const legacyProduct = Object.fromEntries(Object.entries(product).filter(([key]) => !["searchName", "primaryUse", "secondaryCategories", "mustMatch", "exclusions"].includes(key)));
+    const result = validateCompetitiveSearchBody({ consent: true, product: legacyProduct });
+    expect(result.visualReference).toBeNull();
+    expect(result.product.searchName).toBe("");
+    expect(() => validateCompetitiveSearchBody({ consent: true, product: { ...legacyProduct, secret: "x" } })).toThrow(/欄位不符/);
+  });
+
+  it("外觀參考圖只能是受限大小的圖片 data URL", () => {
+    const jpeg = `data:image/jpeg;base64,${btoa("small image")}`;
+    expect(validateCompetitiveSearchBody({ consent: true, visualConsent: true, product, visualReference: jpeg }).visualReference).toBe(jpeg);
+    expect(() => validateCompetitiveSearchBody({ consent: true, visualConsent: false, product, visualReference: jpeg })).toThrow(/先同意/);
+    expect(() => validateCompetitiveSearchBody({ consent: true, visualConsent: true, product, visualReference: "https://example.com/image.jpg" })).toThrow(/只接受/);
   });
 
   it("只保留 OpenAI 搜尋來源中可交叉驗證的 HTTPS 商品頁", () => {
@@ -106,6 +126,12 @@ describe("商控競品 AI 搜尋邊界", () => {
     const request = buildCompetitiveSearchRequest(product);
     expect(request.reasoning).toEqual({ effort: "medium" });
     expect(request.max_tool_calls).toBe(6);
+    expect((request.input as Array<{ content: unknown }>)[1].content).toEqual(expect.arrayContaining([expect.objectContaining({ type: "input_text" })]));
+  });
+
+  it("提供外觀參考圖時才加入低細節圖片輸入", () => {
+    const request = buildCompetitiveSearchRequest(product, "data:image/jpeg;base64,c21hbGw=");
+    expect((request.input as Array<{ content: unknown[] }>)[1].content).toEqual(expect.arrayContaining([expect.objectContaining({ type: "input_image", detail: "low" })]));
   });
 
   it("拒絕 localhost、私人位址及沒有可驗證來源的結果", () => {

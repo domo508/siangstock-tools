@@ -149,7 +149,10 @@ describe("前台導覽", () => {
     expect(headers).toContain("/competitive-analysis/vendor/*\n  Cache-Control: public, max-age=31536000, immutable");
     expect(app).toContain("AI ${comparisonLabel}・待人工確認");
     expect(app).toContain('fetch("/api/competitive-analysis/search"');
-    expect(app).toContain("JSON.stringify({ consent: true, product: item })");
+    expect(app).toContain("JSON.stringify({ consent: true, visualConsent: Boolean(visualReference), product: item, visualReference })");
+    expect(html).toContain('id="product-must-match"');
+    expect(html).toContain('id="visual-consent"');
+    expect(app).toContain("core.COMPETITOR_MIN_SIMILARITY");
     expect(html).toContain('id="report-ai-section"');
     expect(app).toContain("摘要涵蓋本次搜尋候選");
     expect(app).not.toContain("body: JSON.stringify({ consent: true, product: item, file");

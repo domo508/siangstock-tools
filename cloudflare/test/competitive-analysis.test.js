@@ -46,12 +46,32 @@ describe("商控競品分析核心", () => {
 
   it("AI 候選預設未確認時不會進入定價樣本", () => {
     const candidates = [
-      { id: "manual", price: 399, included: true },
-      { id: "ai", price: 199, included: false }
+      { id: "manual", price: 399, similarity: 75, included: true },
+      { id: "ai", price: 199, similarity: 88, included: false },
+      { id: "low", price: 99, similarity: 59, included: true }
     ];
     const included = core.includedCompetitors(candidates);
     expect(included.map((item) => item.id)).toEqual(["manual"]);
     expect(core.priceScenarios({ competitors: included, unitCost: 100, fixedCost: 20, channelRate: 10, targetMargin: 50 }).market.median).toBe(399);
+  });
+
+  it("搜尋規格卡達 60 分才可搜尋，並列出缺漏欄位", () => {
+    const weak = core.searchProfileCompleteness({ name: "除塵刷", category: "除塵刷", materials: "超細纖維", techniques: "車縫" });
+    expect(weak.score).toBe(55);
+    expect(weak.ready).toBe(false);
+    expect(weak.missing).toContain("主要用途");
+    const ready = core.searchProfileCompleteness({ ...core.EXAMPLE_PROFILES.lala });
+    expect(ready.score).toBe(100);
+    expect(ready.ready).toBe(true);
+  });
+
+  it("只有最終相似度 60 分以上且人工勾選的來源可進入定價", () => {
+    const included = core.includedCompetitors([
+      { id: "edge", similarity: 60, included: true },
+      { id: "low", similarity: 59, included: true },
+      { id: "unchecked", similarity: 90, included: false }
+    ]);
+    expect(included.map((item) => item.id)).toEqual(["edge"]);
   });
 
   it("低信心 AI 預填不會自動寫入，60 分以上才可帶入", () => {

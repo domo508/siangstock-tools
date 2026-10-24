@@ -1,9 +1,9 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261023-competitive-analysis-r6";
+  const APP_VERSION = "20261024-competitive-analysis-r7";
   const core = globalThis.CompetitiveAnalysisCore;
   const $ = (id) => document.getElementById(id);
-  const state = { competitors: [], profile: null, file: null, previewUrl: "", result: null, aiSummary: "", aiSearchNotes: [], dirtyFields: new Set(), runtimeOutdated: false, latestRuntimeVersion: "" };
+  const state = { competitors: [], excludedCompetitors: [], profile: null, file: null, previewUrl: "", visualFile: null, visualPreviewUrl: "", result: null, aiSummary: "", aiSearchNotes: [], dirtyFields: new Set(), runtimeOutdated: false, latestRuntimeVersion: "" };
   const profileFields = {
     name: ["product-name", "商品名稱"], category: ["product-category", "商品品類"], dimensions: ["product-dimensions", "外觀尺寸"],
     materials: ["product-materials", "材質"], techniques: ["product-techniques", "工法"],
@@ -16,7 +16,10 @@
     return {
       name: $("product-name").value.trim(), category: $("product-category").value.trim(), dimensions: $("product-dimensions").value.trim(),
       materials: $("product-materials").value.trim(), techniques: $("product-techniques").value.trim(),
-      designHighlights: $("product-highlights").value.trim(), packaging: $("product-packaging").value.trim()
+      designHighlights: $("product-highlights").value.trim(), packaging: $("product-packaging").value.trim(),
+      searchName: $("product-search-name").value.trim(), primaryUse: $("product-primary-use").value.trim(),
+      secondaryCategories: $("product-secondary-categories").value.trim(), mustMatch: $("product-must-match").value.trim(),
+      exclusions: $("product-exclusions").value.trim()
     };
   }
 
@@ -50,10 +53,16 @@
     $("product-techniques").value = profile.techniques;
     $("product-highlights").value = profile.designHighlights;
     $("product-packaging").value = profile.packaging;
+    $("product-search-name").value = profile.searchName || profile.name;
+    $("product-primary-use").value = profile.primaryUse || "";
+    $("product-secondary-categories").value = profile.secondaryCategories || "";
+    $("product-must-match").value = profile.mustMatch || "";
+    $("product-exclusions").value = profile.exclusions || "";
     $("confidence-badge").textContent = "填寫範例・請依實際工單覆核";
     $("review-notices").hidden = false;
     $("review-notices").innerHTML = `<strong>仍需確認</strong><ul>${profile.notices.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
     $("analysis-status").textContent = `${label}候選規格已帶入；請先覆核內容，再產生分析。`;
+    renderSearchCompleteness();
     renderCompetitors();
   }
 
@@ -61,15 +70,17 @@
     state.profile = null;
     state.result = null;
     state.competitors = [];
+    state.excludedCompetitors = [];
     state.aiSummary = "";
     state.aiSearchNotes = [];
     state.dirtyFields.clear();
-    for (const id of ["product-name", "product-category", "product-dimensions", "product-materials", "product-techniques", "product-highlights", "product-packaging"]) $(id).value = "";
+    for (const id of ["product-name", "product-category", "product-dimensions", "product-materials", "product-techniques", "product-highlights", "product-packaging", "product-search-name", "product-primary-use", "product-secondary-categories", "product-must-match", "product-exclusions"]) $(id).value = "";
     $("confidence-badge").textContent = "新工單・請人工填寫並覆核";
     $("review-notices").hidden = false;
     $("review-notices").innerHTML = "<strong>填寫原則</strong><p>請依工單填寫規格；不確定的內容保留「待確認」，不要推定成已確認資訊。本工具不會把檔案送往雲端辨識。</p>";
     $("source-date").textContent = "請加入實際競品來源";
     $("ai-search-consent").checked = false;
+    clearVisualReference();
     $("ai-search-status").textContent = "尚未執行 AI 搜尋；也可直接人工新增來源。";
     $("ai-search-summary").hidden = true;
     $("ai-search-summary").innerHTML = "";
@@ -77,6 +88,7 @@
     $("prefill-consent").checked = false;
     $("prefill-status").textContent = "請勾選同意後辨識；原始檔案與檔名不會送出。";
     renderCompetitors();
+    renderSearchCompleteness();
   }
 
   function showPlaceholder(text) { $("preview-panel").innerHTML = `<p>${escapeHtml(text)}</p>`; }
@@ -86,6 +98,67 @@
     state.previewUrl = URL.createObjectURL(file);
     if (file.type === "application/pdf") $("preview-panel").innerHTML = `<object data="${state.previewUrl}" type="application/pdf" aria-label="工單 PDF 預覽"><p>瀏覽器無法預覽 PDF，但仍可繼續填寫規格。</p></object>`;
     else $("preview-panel").innerHTML = `<img src="${state.previewUrl}" alt="已選工單預覽">`;
+  }
+
+  function renderSearchCompleteness() {
+    const completeness = core.searchProfileCompleteness(product());
+    $("search-completeness-score").textContent = `搜尋資料完整度 ${completeness.score}%`;
+    $("search-completeness-bar").style.width = `${completeness.score}%`;
+    $("search-completeness-bar").classList.toggle("ready", completeness.score >= 80);
+    $("search-completeness-help").textContent = completeness.score >= 80
+      ? "資料充足，可開始搜尋；仍請確認必要相似條件與排除項目。"
+      : completeness.ready ? `可以搜尋，但建議補充：${completeness.missing.join("、")}。` : `至少需達 ${core.SEARCH_PROFILE_MIN_SCORE}%；尚缺：${completeness.missing.join("、")}。`;
+    return completeness;
+  }
+
+  function clearVisualReference() {
+    if (state.visualPreviewUrl) URL.revokeObjectURL(state.visualPreviewUrl);
+    state.visualPreviewUrl = "";
+    state.visualFile = null;
+    const input = $("visual-reference");
+    if (input) input.value = "";
+    const preview = $("visual-reference-preview");
+    if (preview) { preview.hidden = true; preview.innerHTML = ""; }
+    if ($("visual-consent")) $("visual-consent").checked = false;
+  }
+
+  function handleVisualReference(event) {
+    const file = event.target.files[0];
+    if (!file) { clearVisualReference(); return; }
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type) || file.size > 8 * 1024 * 1024) {
+      clearVisualReference();
+      $("ai-search-status").textContent = "外觀參考圖須為 JPG、PNG 或 WEBP，且不得超過 8 MB。";
+      return;
+    }
+    state.visualFile = file;
+    state.visualPreviewUrl = URL.createObjectURL(file);
+    $("visual-reference-preview").hidden = false;
+    $("visual-reference-preview").innerHTML = `<img src="${state.visualPreviewUrl}" alt="外觀參考圖預覽"><span>已選擇外觀圖；搜尋前仍須另外勾選圖片同意。</span>`;
+  }
+
+  function imageElement(file) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      const url = URL.createObjectURL(file);
+      image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+      image.onerror = () => { URL.revokeObjectURL(url); reject(new Error("無法讀取外觀參考圖，請改用其他圖片。")); };
+      image.src = url;
+    });
+  }
+
+  async function visualReferenceDataUrl() {
+    if (!state.visualFile) return null;
+    if (!$("visual-consent").checked) throw new Error("已選擇外觀參考圖，請先勾選圖片傳送同意，或移除圖片。" );
+    const image = await imageElement(state.visualFile);
+    const scale = Math.min(1, 1024 / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext("2d", { alpha: false });
+    context.fillStyle = "#fff"; context.fillRect(0, 0, canvas.width, canvas.height); context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+    if (dataUrl.length > 1.8 * 1024 * 1024) throw new Error("外觀參考圖壓縮後仍過大，請先裁切商品主體再重試。" );
+    return dataUrl;
   }
 
   function handleFile(event) {
@@ -107,11 +180,13 @@
     state.result = null;
     state.aiSummary = "";
     state.aiSearchNotes = [];
+    state.excludedCompetitors = [];
     state.dirtyFields.clear();
     $("prefill-consent").checked = false;
     $("prefill-button").disabled = true;
     $("prefill-status").textContent = "填寫範例不需要再次辨識。";
     $("ai-search-consent").checked = false;
+    clearVisualReference();
     $("ai-search-status").textContent = "範例已載入；可直接查看既有來源，或覆核文字後重新執行 AI 搜尋。";
     $("ai-search-summary").hidden = true;
     $("ai-search-summary").innerHTML = "";
@@ -163,7 +238,7 @@
     const button = $("prefill-button");
     button.disabled = true;
     try {
-      const { extractTextLocally } = await import("./document-reader.mjs?v=20261023-competitive-analysis-r6");
+      const { extractTextLocally } = await import("./document-reader.mjs?v=20261024-competitive-analysis-r7");
       const extraction = await extractTextLocally(state.file, prefillProgress);
       $("prefill-status").textContent = "文字已在本機擷取，正在交由 AI 整理欄位……";
       const response = await fetch("/api/competitive-analysis/prefill", {
@@ -178,6 +253,7 @@
       const plainMessage = responseText.length <= 200 && !/[<>]/.test(responseText) ? responseText : "";
       if (!response.ok) throw new Error(data.error || plainMessage || "AI 工單整理失敗，請稍後再試。");
       applyPrefill(data, extraction);
+      renderSearchCompleteness();
       $("prefill-status").textContent = `預填完成；使用${extraction.method === "pdf-text" ? " PDF 文字" : "本機 OCR"}辨識 ${extraction.pageCount} 頁，請逐欄覆核。`;
     } catch (error) {
       $("prefill-status").textContent = error instanceof Error ? error.message : "工單辨識失敗，請改用更清晰的檔案或人工填寫。";
@@ -186,13 +262,27 @@
 
   function renderCompetitors() {
     const ranked = core.rankCompetitors(product(), state.competitors);
+    for (const rankedItem of ranked) {
+      const original = state.competitors.find((item) => item.id === rankedItem.id);
+      if (original) { original.similarity = rankedItem.similarity; if (rankedItem.similarity < core.COMPETITOR_MIN_SIMILARITY) original.included = false; }
+    }
     $("competitor-rows").innerHTML = ranked.length ? ranked.map((item) => {
       const isAi = item.origin === "ai";
+      const eligible = item.similarity >= core.COMPETITOR_MIN_SIMILARITY;
       const comparisonLabel = ({ direct: "直接競品", similar: "相似商品", functional: "功能替代" })[item.comparisonLevel] || "待分類";
       const details = isAi ? `<details class="ai-detail"><summary>查看此商品差異</summary><p><strong>相似：</strong>${escapeHtml((item.similarityReasons || []).join("；") || "待人工確認")}</p><p><strong>差異：</strong>${escapeHtml((item.differences || []).join("；") || "待人工確認")}</p><p><strong>價格證據：</strong>${escapeHtml(item.priceEvidence || "待人工確認")}・來源信心 ${escapeHtml(item.aiConfidence)}%</p></details>` : "";
-      return `<tr><td><input class="include-check" type="checkbox" data-include-id="${escapeHtml(item.id)}" aria-label="納入 ${escapeHtml(item.name)}" ${item.included !== false ? "checked" : ""}></td><td><span class="score">${item.similarity}%</span></td><td><strong>${escapeHtml(item.name)}</strong><span class="table-note">${escapeHtml(item.brand)}・${escapeHtml(item.positioning)}</span><span class="candidate-badge ${item.included !== false ? "confirmed" : ""}">${isAi && item.included === false ? `AI ${comparisonLabel}・待人工確認` : "已納入比較"}</span>${details}</td><td><strong>${currency(item.salePrice || item.price)}</strong>${item.salePrice ? `<span class="table-note">標示原價 ${currency(item.price)}</span>` : ""}</td><td><a class="source-link" href="${escapeHtml(item.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.sourceLabel)} ↗</a><span class="table-note">檢查日 ${escapeHtml(item.checkedAt)}</span></td></tr>`;
+      const badge = !eligible ? `低於 ${core.COMPETITOR_MIN_SIMILARITY}%・不納入定價` : (isAi && item.included === false ? `AI ${comparisonLabel}・待人工確認` : item.included !== false ? "已納入比較" : "待人工確認");
+      return `<tr class="${eligible ? "" : "low-similarity"}"><td><input class="include-check" type="checkbox" data-include-id="${escapeHtml(item.id)}" aria-label="納入 ${escapeHtml(item.name)}" ${item.included !== false && eligible ? "checked" : ""} ${eligible ? "" : "disabled"}></td><td><span class="score">${item.similarity}%</span></td><td><strong>${escapeHtml(item.name)}</strong><span class="table-note">${escapeHtml(item.brand)}・${escapeHtml(item.positioning)}</span><span class="candidate-badge ${item.included !== false && eligible ? "confirmed" : ""}">${badge}</span>${details}</td><td><strong>${currency(item.salePrice || item.price)}</strong>${item.salePrice ? `<span class="table-note">標示原價 ${currency(item.price)}</span>` : ""}</td><td><a class="source-link" href="${escapeHtml(item.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.sourceLabel)} ↗</a><span class="table-note">檢查日 ${escapeHtml(item.checkedAt)}</span></td></tr>`;
     }).join("") : '<tr><td colspan="5"><span class="table-note">尚未加入競品來源。建議至少加入 3 筆規格接近且仍在販售的商品。</span></td></tr>';
+    renderExcludedCompetitors();
     return ranked;
+  }
+
+  function renderExcludedCompetitors() {
+    const panel = $("excluded-candidates");
+    panel.hidden = !state.excludedCompetitors.length;
+    $("excluded-candidates-title").textContent = `查看 ${state.excludedCompetitors.length} 筆未達 ${core.COMPETITOR_MIN_SIMILARITY}% 的搜尋參考`;
+    $("excluded-candidates-list").innerHTML = state.excludedCompetitors.map((item) => `<article><div><strong>${escapeHtml(item.name)}</strong><span>${item.similarity}%・${escapeHtml(item.category)}</span></div><p>${escapeHtml((item.differences || []).join("；") || "與目標商品的材質、工法、尺寸或定位差異較大。")}</p><a href="${escapeHtml(item.sourceUrl)}" target="_blank" rel="noopener noreferrer">查看來源 ↗</a></article>`).join("");
   }
 
   function renderAiSummary() {
@@ -208,6 +298,11 @@
       $("ai-search-status").textContent = "請先完成並覆核商品名稱、品類、材質與工法。";
       return;
     }
+    const completeness = renderSearchCompleteness();
+    if (!completeness.ready) {
+      $("ai-search-status").textContent = `搜尋資料完整度需達 ${core.SEARCH_PROFILE_MIN_SCORE}%；請補充：${completeness.missing.join("、")}。`;
+      return;
+    }
     if (!$("ai-search-consent").checked) {
       $("ai-search-status").textContent = "請先勾選確認文字規格已覆核。";
       return;
@@ -216,11 +311,12 @@
     button.disabled = true;
     $("ai-search-status").textContent = "AI 正在搜尋並核對公開商品來源，通常需要數十秒……";
     try {
+      const visualReference = await visualReferenceDataUrl();
       const response = await fetch("/api/competitive-analysis/search", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ consent: true, product: item })
+        body: JSON.stringify({ consent: true, visualConsent: Boolean(visualReference), product: item, visualReference })
       });
       const responseText = await response.text();
       let data = {};
@@ -229,8 +325,7 @@
       if (!response.ok) throw new Error(data.error || plainMessage || "AI 搜尋失敗，請稍後再試。");
       state.competitors = state.competitors.filter((candidate) => candidate.origin !== "ai");
       const stamp = Date.now();
-      for (const [index, candidate] of (data.candidates || []).entries()) {
-        state.competitors.push({
+      const aiItems = (data.candidates || []).map((candidate, index) => ({
           id: `ai-${stamp}-${index}`, name: candidate.name, brand: candidate.brand || "待確認", price: candidate.originalPriceTwd || candidate.priceTwd,
           salePrice: candidate.originalPriceTwd ? candidate.priceTwd : undefined, category: candidate.category, materials: candidate.materials || [],
           techniques: candidate.techniques || [], size: candidate.size || "待確認", positioning: candidate.positioning || "待確認",
@@ -238,14 +333,19 @@
           aiConfidence: candidate.confidence, aiSimilarity: candidate.similarityScore, comparisonLevel: candidate.comparisonLevel,
           similarityReasons: candidate.similarityReasons || [], differences: candidate.differences || [],
           priceEvidence: candidate.priceEvidence || "", origin: "ai", included: false
-        });
-      }
+        }));
+      const rankedAi = core.rankCompetitors(item, aiItems);
+      const eligibleAi = rankedAi.filter((candidate) => candidate.similarity >= core.COMPETITOR_MIN_SIMILARITY);
+      state.excludedCompetitors = rankedAi.filter((candidate) => candidate.similarity < core.COMPETITOR_MIN_SIMILARITY);
+      state.competitors.push(...eligibleAi);
       state.aiSummary = data.summary || "";
       state.aiSearchNotes = Array.isArray(data.searchNotes) ? data.searchNotes : [];
       renderAiSummary();
       renderCompetitors();
       $("source-date").textContent = `AI 搜尋日 ${String(data.generatedAt || "").slice(0, 10)}`;
-      $("ai-search-status").textContent = `找到 ${(data.candidates || []).length} 筆有來源的候選；請逐筆開啟來源，確認後勾選納入。`;
+      $("ai-search-status").textContent = eligibleAi.length
+        ? `找到 ${rankedAi.length} 筆有來源商品，其中 ${eligibleAi.length} 筆達 ${core.COMPETITOR_MIN_SIMILARITY}% 進入待選；請開啟來源確認後勾選納入。`
+        : `找到 ${rankedAi.length} 筆有來源商品，但沒有結果達 ${core.COMPETITOR_MIN_SIMILARITY}%；低分結果只列為搜尋參考，不納入定價。`;
     } catch (error) {
       $("ai-search-status").textContent = error instanceof Error ? error.message : "AI 搜尋失敗，請稍後再試。";
     } finally { button.disabled = false; }
@@ -274,9 +374,10 @@
     if (!(await checkRuntimeVersion())) return;
     const item = product();
     if (!item.name || !item.category || !item.materials || !item.techniques) { $("analysis-status").textContent = "請先完成商品名稱、品類、材質與工法。"; return; }
-    const included = core.includedCompetitors(state.competitors);
+    const ranked = core.rankCompetitors(item, state.competitors);
+    const included = core.includedCompetitors(ranked);
     if (!included.length) { $("analysis-status").textContent = "請至少勾選納入 1 筆已人工確認的競品來源；建議確認 3 筆以上再做價格判斷。"; return; }
-    const competitors = core.rankCompetitors(item, included);
+    const competitors = included;
     const pricing = core.priceScenarios({
       competitors, unitCost: Number($("unit-cost").value), fixedCost: Number($("fixed-cost").value),
       channelRate: Number($("channel-rate").value), targetMargin: Number($("target-margin").value)
@@ -308,9 +409,10 @@
   async function printReport() { if (state.result && await checkRuntimeVersion()) window.print(); }
 
   $("work-order").addEventListener("change", handleFile);
+  $("visual-reference").addEventListener("change", handleVisualReference);
   $("prefill-button").addEventListener("click", prefillFromFile);
   document.querySelectorAll("[data-example]").forEach((button) => button.addEventListener("click", () => loadExample(button.dataset.example)));
-  $("product-form").addEventListener("input", (event) => { if (event.target?.id) state.dirtyFields.add(event.target.id); state.result = null; renderCompetitors(); });
+  $("product-form").addEventListener("input", (event) => { if (event.target?.id) state.dirtyFields.add(event.target.id); state.result = null; renderSearchCompleteness(); renderCompetitors(); });
   $("source-form").addEventListener("submit", addSource);
   $("ai-search-button").addEventListener("click", searchWithAi);
   $("competitor-rows").addEventListener("change", (event) => {
@@ -324,8 +426,9 @@
   $("print-report").addEventListener("click", printReport);
   $("reload-version").addEventListener("click", () => { const url = new URL(location.href); url.searchParams.set("deploy", state.latestRuntimeVersion || Date.now()); location.replace(url); });
   window.addEventListener("focus", checkRuntimeVersion);
-  window.addEventListener("beforeunload", () => { if (state.previewUrl) URL.revokeObjectURL(state.previewUrl); });
+  window.addEventListener("beforeunload", () => { if (state.previewUrl) URL.revokeObjectURL(state.previewUrl); if (state.visualPreviewUrl) URL.revokeObjectURL(state.visualPreviewUrl); });
   setInterval(checkRuntimeVersion, 5 * 60 * 1000);
   renderCompetitors();
+  renderSearchCompleteness();
   void checkRuntimeVersion();
 })();

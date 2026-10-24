@@ -37,6 +37,9 @@
       materials: "QQ 毛 1209 黃、水晶絨、玻璃鏡面",
       techniques: "角色五官刺繡、握柄文字刺繡、耳朵內凹、圓弧包邊、天線捲起並以鐵絲增加支撐",
       designHighlights: "正面完整拉拉角色，背面圓鏡；立體頭型、耳朵與天線形成高辨識輪廓", packaging: "工單未標示，需補充", confidence: 92,
+      searchName: "角色立體絨毛手持鏡", primaryUse: "手持照鏡、角色生活雜貨收藏",
+      secondaryCategories: "毛絨隨身鏡、角色化妝鏡", mustMatch: "手持鏡、毛絨包覆、立體角色造型、刺繡",
+      exclusions: "純塑膠平面印刷鏡、桌鏡、無鏡面玩偶",
       notices: ["鏡面材質與直徑需向工廠確認", "鐵絲端點與縫線需做安全檢查", "包裝、授權標示與洗標尚未提供"]
     }
   };
@@ -44,6 +47,8 @@
   const normalized = (value) => String(value || "").trim().toLocaleLowerCase("zh-TW");
   const tokens = (value) => normalized(value).split(/[\s,，、/×x()（）・]+/).filter(Boolean);
   const PREFILL_AUTO_APPLY_CONFIDENCE = 60;
+  const COMPETITOR_MIN_SIMILARITY = 60;
+  const SEARCH_PROFILE_MIN_SCORE = 60;
 
   function shouldAutoApplyPrefill(value, confidence) {
     const score = Number(confidence);
@@ -81,8 +86,18 @@
       .sort((a, b) => b.similarity - a.similarity || a.price - b.price);
   }
 
+  function searchProfileCompleteness(product) {
+    const checks = [
+      ["搜尋品名", product.searchName || product.name, 15], ["主要品類", product.category, 15], ["主要用途", product.primaryUse, 15],
+      ["材質", product.materials, 15], ["工法", product.techniques, 10], ["尺寸", product.dimensions, 10],
+      ["設計差異", product.designHighlights, 10], ["必要相似條件", product.mustMatch, 10]
+    ];
+    const score = checks.reduce((sum, [, value, weight]) => sum + (String(value || "").trim() ? weight : 0), 0);
+    return { score, missing: checks.filter(([, value]) => !String(value || "").trim()).map(([label]) => label), ready: score >= SEARCH_PROFILE_MIN_SCORE };
+  }
+
   function includedCompetitors(competitors) {
-    return (competitors || []).filter((item) => item.included !== false);
+    return (competitors || []).filter((item) => item.included !== false && Number(item.similarity) >= COMPETITOR_MIN_SIMILARITY);
   }
 
   function percentile(values, ratio) {
@@ -139,5 +154,5 @@
     ];
   }
 
-  root.CompetitiveAnalysisCore = { EXAMPLE_COMPETITORS, EXAMPLE_PROFILES, PREFILL_AUTO_APPLY_CONFIDENCE, shouldAutoApplyPrefill, similarity, rankCompetitors, includedCompetitors, priceScenarios, marketingAdvice, margin };
+  root.CompetitiveAnalysisCore = { EXAMPLE_COMPETITORS, EXAMPLE_PROFILES, PREFILL_AUTO_APPLY_CONFIDENCE, COMPETITOR_MIN_SIMILARITY, SEARCH_PROFILE_MIN_SCORE, shouldAutoApplyPrefill, searchProfileCompleteness, similarity, rankCompetitors, includedCompetitors, priceScenarios, marketingAdvice, margin };
 })(typeof globalThis !== "undefined" ? globalThis : window);

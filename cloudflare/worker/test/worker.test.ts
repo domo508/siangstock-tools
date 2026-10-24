@@ -59,7 +59,7 @@ describe("規則 Worker 路由與 fail closed", () => {
     const response = await worker.fetch(new Request("https://siangstock.com/api/competitive-analysis/search", {
       method: "POST",
       headers: { Origin: "https://siangstock.com", "Content-Type": "application/json" },
-      body: JSON.stringify({ consent: true, product: { name: "商品", category: "手持鏡", dimensions: "", materials: "玻璃", techniques: "印刷", designHighlights: "", packaging: "" } })
+      body: JSON.stringify({ consent: true, visualConsent: false, visualReference: null, product: { name: "商品", category: "手持鏡", dimensions: "", materials: "玻璃", techniques: "印刷", designHighlights: "", packaging: "", searchName: "商品手持鏡", primaryUse: "照鏡", secondaryCategories: "", mustMatch: "手持、鏡面", exclusions: "" } })
     }), env());
     expect(response.status).toBe(503);
     expect(await response.text()).toContain("公司登入尚未啟用");
