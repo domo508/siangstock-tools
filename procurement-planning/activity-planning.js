@@ -351,7 +351,7 @@
         if (!saved?.channels?.length || Math.abs(saved.channels.reduce((s,c)=>s+Number(c.target),0)-Number(settings.monthlyTargets[month].amount)) > 0.02) throw new Error(`${month}缺少原通路分配依據，請恢復完整活動母批次。`);
         for (const channel of saved.channels) {
           const projection=context.monthly.get(`${month}\t${channel.channel}`);
-          if (!projection || !Number.isFinite(channel.target) || channel.target < 0) throw new Error(`${month}原通路歷史無法完整配對，不能補建草稿。`);
+          if (!projection || !Number.isFinite(channel.target) || channel.target < 0) throw new Error(`${month}原通路歷史無法完整配對，不能重建草稿。`);
           projection.target=channel.target;
         }
       }
@@ -368,7 +368,7 @@
       for (const row of source.rows) if (row.quantities[month.month]!=null) row.quantities[month.month]*=factor;
       month.retailTarget=target;month.onlineAndOtherTarget=total-target;
     }
-    if (!source.rows.length) throw new Error("原分析缺少可用的門市現場需求，無法補建分配草稿。");
+    if (!source.rows.length) throw new Error("原分析缺少可用的門市現場需求，無法重建分配草稿。");
     return source;
   }
   global.ProcurementActivityPlanning = { MODELS, date, add, months, normalize, createHistoryBuilder, buildIndex, forecast, distribution, latestOrderDate, prepare, buildRecommendations, transferDraftFromAnalysis };

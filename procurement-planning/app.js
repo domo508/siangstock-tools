@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261027-activity-transfer-r5";
+  const APP_VERSION = "20261027-activity-transfer-r6";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -307,7 +307,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261027-activity-transfer-r5");
+        const worker = new Worker("inventory-reader-worker.js?v=20261027-activity-transfer-r6");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1070,7 +1070,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261027-activity-transfer-r5");
+      const worker = new Worker("seasonal-model-worker.js?v=20261027-activity-transfer-r6");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -1812,8 +1812,23 @@
   }
   async function sourceSha256(data) { const bytes = await crypto.subtle.digest("SHA-256", data); return [...new Uint8Array(bytes)].map(n => n.toString(16).padStart(2, "0")).join(""); }
   function transferAnalysis() { return state.baseAnalysis || state.analysis; }
+  function transferInputSignature() {
+    return JSON.stringify([
+      [...get("#activity-backfill-targets").querySelectorAll("[data-backfill-month]")].map(f=>[f.dataset.backfillMonth,f.value===""?null:Number(f.value)]),
+      get("#activity-correction-start").value,get("#activity-correction-end").value,get("#activity-correction-reason").value.trim()
+    ]);
+  }
+  function updateTransferDraftActions() {
+    const signature=transferInputSignature(),available=state.transferSourceAnalysis===transferAnalysis() && !!state.analysis;
+    state.transferDraftDirty=!!state.transferDraft && signature!==state.transferBuiltSignature;
+    const blocked=state.runtimeOutdated || state.transferActionBusy || !available;
+    get("#build-transfer-activity-draft").disabled=blocked || (!!state.transferDraft && !state.transferDraftDirty);
+    get("#save-transfer-activity-draft").disabled=blocked || !state.transferDraft || state.transferDraftDirty || signature===state.transferSavedSignature;
+    get("#publish-transfer-activity").disabled=blocked || !state.transferDraft || state.transferDraftDirty;
+    if(state.transferDraftDirty){get("#read-transfer-activity-feedback").disabled=true;get("#activity-transfer-badge").textContent="設定已變更，需重建草稿";}
+  }
   function transferActivitySource() {
-    if (!state.analysis || state.transferSourceAnalysis!==transferAnalysis() || state.transferDraftDirty || !state.transferDraft) throw new Error("草稿尚未建立或目標已變更，請重新補建門市草稿；原採購結果不變。");
+    if (!state.analysis || state.transferSourceAnalysis!==transferAnalysis() || state.transferDraftDirty || !state.transferDraft) throw new Error("草稿尚未建立或目標已變更，請重新重建門市草稿；原採購結果不變。");
     return state.transferDraft;
   }
   function renderTransferActivity(analysis) {
@@ -1829,14 +1844,16 @@
       get("#activity-backfill-targets").replaceChildren(...(rule.months || Object.keys(rule.monthlyTargets || {})).map(month=>{
         const label=document.createElement("label"),title=document.createElement("span"),field=document.createElement("input");
         title.textContent=`${month}六店整月目標（原全通路${formatCurrency(rule.monthlyTargets[month]?.amount)}）`;field.type="number";field.min="0";field.step="0.01";field.dataset.backfillMonth=month;field.value=state.transferDraft?.months.find(m=>m.month===month)?.retailTarget??rule.monthlyTargets[month]?.retailAmount??"";field.placeholder="例如3500000";
-        field.addEventListener("input",()=>{state.transferDraftDirty=true;get("#publish-transfer-activity").disabled=true;get("#save-transfer-activity-draft").disabled=true;get("#read-transfer-activity-feedback").disabled=true;get("#activity-transfer-badge").textContent="門市目標已改，需補建草稿";});label.append(title,field);return label;
+        field.addEventListener("input",updateTransferDraftActions);label.append(title,field);return label;
       }));get("#activity-transfer-backfill").open=!state.transferDraft;
+      state.transferBuiltSignature=transferInputSignature();state.transferSavedSignature=state.transferDraft?state.transferBuiltSignature:null;
+      state.transferActionBusy=false;
     }
     const source=state.transferDraft;
-    get("#activity-transfer-summary").textContent=`${rule.name}・${source?.startDate || rule.startDate}～${source?.endDate || rule.endDate}・來源截止${original.asOfDate}。${source?source.months.map(m=>`${m.month}實體六店${formatCurrency(m.retailTarget)}、線上／其他${formatCurrency(m.onlineAndOtherTarget)}`).join("；"):"等待補建門市分配草稿。"}${state.transferCorrection?`日期已更正，原採購計算快照${rule.startDate}～${rule.endDate}仍保留；未自動補改採購量。`:""}本區為需求規劃，不代表調撥件數或總倉已有貨。`;
-    get("#activity-transfer-badge").textContent=state.transferDraftDirty?"需補建草稿":"尚未發布";
+    get("#activity-transfer-summary").textContent=`${rule.name}・${source?.startDate || rule.startDate}～${source?.endDate || rule.endDate}・來源截止${original.asOfDate}。${source?source.months.map(m=>`${m.month}實體六店${formatCurrency(m.retailTarget)}、線上／其他${formatCurrency(m.onlineAndOtherTarget)}`).join("；"):"等待重建門市分配草稿。"}${state.transferCorrection?`日期已更正，原採購計算快照${rule.startDate}～${rule.endDate}仍保留；未自動補改採購量。`:""}本區為需求規劃，不代表調撥件數或總倉已有貨。`;
+    get("#activity-transfer-badge").textContent=state.transferDraftDirty?"需重建草稿":"尚未發布";
     get("#publish-transfer-activity").disabled=!source || state.transferDraftDirty;
-    get("#save-transfer-activity-draft").disabled=!source || state.transferDraftDirty;
+    updateTransferDraftActions();
     const names={R00:"台北中山",R01:"台中北屯",R03:"新竹東區",R06:"文心秀泰",R07:"誠品480",R10:"新莊"};
     get("#activity-retail-targets").replaceChildren(...(source?.months || []).map(month=>{
       const block=document.createElement("div");block.className="activity-allocation-month";const heading=document.createElement("h4");heading.textContent=month.month;block.append(heading);
@@ -1845,7 +1862,8 @@
   }
   get("#build-transfer-activity-draft").addEventListener("click",async()=>{
     const button=get("#build-transfer-activity-draft"),status=get("#transfer-activity-status"),original=transferAnalysis();
-    button.disabled=true;
+    updateTransferDraftActions();if(button.disabled)return;
+    state.transferActionBusy=true;updateTransferDraftActions();
     try{
       if(!(await checkRuntimeVersion()))return;
       const fields=()=>Object.fromEntries([...get("#activity-backfill-targets").querySelectorAll("[data-backfill-month]")].map(f=>[f.dataset.backfillMonth,f.value===""?NaN:Number(f.value)]));
@@ -1855,23 +1873,27 @@
       if(changed && !reason)throw new Error("日期變更須填更正原因，原採購快照會保留。");
       const targets=fields(),signature=JSON.stringify([targets,p,reason]);
       for(const [m,v] of Object.entries(targets))if(!Number.isFinite(v)||v<=0||v>original?.appliedRules?.activityDemand?.monthlyTargets?.[m]?.amount)throw new Error(`${m}門市目標須大於0且不超過原全通路目標。`);
-      status.textContent="正在補建門市草稿；原採購量、金額、覆核與核准狀態保持不變…";
+      status.textContent="正在重建門市草稿；原採購量、金額、覆核與核准狀態保持不變…";
       const history=original?.activityTransferSource && !changed?null:await loadActivityHistory([]);
-      if(!state.analysis || original!==transferAnalysis() || signature!==JSON.stringify([fields(),period(),get("#activity-correction-reason").value.trim()]))throw new Error("來源或門市目標已變更，請重新補建草稿。");
+      if(!state.analysis || original!==transferAnalysis() || signature!==JSON.stringify([fields(),period(),get("#activity-correction-reason").value.trim()]))throw new Error("來源或門市目標已變更，請重新重建草稿。");
       const source=globalThis.ProcurementActivityPlanning.transferDraftFromAnalysis(original,targets,history,p);
       globalThis.StoreTransferActivity.validateSource(source);
       state.transferDraft=source;state.transferSourceAnalysis=original;state.transferDraftDirty=false;state.transferCorrection=changed?{...p,reason,originalStartDate:rule.startDate,originalEndDate:rule.endDate,correctedAt:new Date().toISOString(),correctedBy:state.config?.email}:null;
+      state.transferBuiltSignature=transferInputSignature();
       elements.activityStartDate.value=p.startDate;elements.activityEndDate.value=p.endDate;renderActivityControls();renderTransferActivity(original);
-      status.textContent="門市草稿已補建，請展開核對六店分配後發布。原採購結果與核准狀態未變；新的門市分配如與原採購配置不同，須另行覆核供貨。";
-    }catch(error){status.textContent=error.message;}finally{button.disabled=false;}
+      status.textContent="門市草稿已重建，請展開核對六店分配後發布。原採購結果與核准狀態未變；新的門市分配如與原採購配置不同，須另行覆核供貨。";
+    }catch(error){status.textContent=error.message;}finally{state.transferActionBusy=false;updateTransferDraftActions();}
   });
-  ["activity-correction-start","activity-correction-end","activity-correction-reason"].forEach(id=>get(`#${id}`).addEventListener("input",()=>{state.transferDraftDirty=true;get("#publish-transfer-activity").disabled=true;get("#save-transfer-activity-draft").disabled=true;get("#read-transfer-activity-feedback").disabled=true;get("#activity-transfer-badge").textContent="更正尚未重新補建";}));
+  ["activity-correction-start","activity-correction-end","activity-correction-reason"].forEach(id=>get(`#${id}`).addEventListener("input",updateTransferDraftActions));
   get("#save-transfer-activity-draft").addEventListener("click",async()=>{
-    const button=get("#save-transfer-activity-draft"),status=get("#transfer-activity-status");button.disabled=true;
+    const button=get("#save-transfer-activity-draft"),status=get("#transfer-activity-status");updateTransferDraftActions();if(button.disabled)return;
+    const savingSignature=state.transferBuiltSignature,savingAnalysis=transferAnalysis();
+    state.transferActionBusy=true;updateTransferDraftActions();
     try{if(!(await checkRuntimeVersion()))return;transferActivitySource();if(!state.sharedDraftId || state.activeWorkUnit || (state.parentBatchId && state.parentBatchId!==state.sharedDraftId))throw new Error("請先開啟原公司共用完整母批次，不能儲存至供應商子批次。");
       const snapshot=workflowSnapshot();const saved=await saveSharedWorkflowDraft(snapshot,state.sharedDraftRevision);await updateSharedMetadata(snapshot,saved);
+      if(savingAnalysis===transferAnalysis())state.transferSavedSignature=savingSignature;
       status.textContent=`已儲存至原母批次第${saved.revision}版；門市草稿與日期更正可供同仁接續確認，尚未發布至週調撥。原採購量、金額與核准狀態不變。`;
-    }catch(error){status.textContent=error.message;}finally{button.disabled=state.runtimeOutdated || state.transferDraftDirty;}
+    }catch(error){status.textContent=error.message;}finally{state.transferActionBusy=false;updateTransferDraftActions();}
   });
   get("#publish-transfer-activity").addEventListener("click", async () => {
     const button = get("#publish-transfer-activity"), status = get("#transfer-activity-status");

@@ -43,6 +43,16 @@ const fixture = source();
 const run = extra => core.buildProcurementRecommendations({ ...fixture, ...extra });
 
 describe("跨月活動備貨與供貨", () => {
+  it("重建與保存分開呈現且各自關聯操作說明", () => {
+    const html = readFileSync("../procurement-planning/index.html", "utf8");
+    const css = readFileSync("../procurement-planning/style.css", "utf8");
+    expect(html).toContain('aria-describedby="build-transfer-activity-help"');
+    expect(html).toContain('aria-describedby="save-transfer-activity-help"');
+    expect(html).toContain("已完成且未修改時不需重按");
+    expect(html).toContain("儲存不等於發布");
+    expect(html).toContain('class="activity-draft-step activity-draft-step-save"');
+    expect(css).toContain(".activity-draft-steps { grid-template-columns: 1fr; gap: 16px; }");
+  });
   it("原單日活動可更正為五日，重建每日分布但不改原採購快照",()=>{
     const original=run({activityDemand:{...fixture.activityDemand,endDate:"2026-11-11",monthlyTargets:{"2026-11":{amount:10000000}}}}),saved=JSON.stringify(original);
     expect(()=>activity.transferDraftFromAnalysis(original,{"2026-11":3500000},null,{startDate:"2026-11-11",endDate:"2026-11-15"})).toThrow(/歷史銷售/);
@@ -52,7 +62,7 @@ describe("跨月活動備貨與供貨", () => {
     expect(()=>context.StoreTransferActivity.validateSource(corrected)).not.toThrow();expect(JSON.stringify(original)).toBe(saved);
     expect(()=>activity.transferDraftFromAnalysis(original,{"2026-11":3500000},fixture.activityHistory,{startDate:"2026-11-11",endDate:"2026-12-01"})).toThrow();
   });
-  it("已採購一千萬元可單獨補建門市350萬草稿；舊分析與ERP輸出逐位不變",()=>{
+  it("已採購一千萬元可單獨重建門市350萬草稿；舊分析與ERP輸出逐位不變",()=>{
     const result=run({activityDemand:{...fixture.activityDemand,monthlyTargets:{"2026-11":{amount:10000000}}}});
     const saved=JSON.stringify(result),before=XLSX.utils.sheet_to_json(core.buildRecommendationWorkbook(result,writer).Sheets["01_採購摘要"],{header:1});
     const draft=activity.transferDraftFromAnalysis(result,{"2026-11":3500000});

@@ -1,0 +1,126 @@
+
+#siang-departments { --sh-card-radius:16px; --sh-card-space:18px; --sh-ink:#172f43; --sh-navy:#153f63; --sh-teal:#176b87; --sh-muted:#5f7382; --sh-line:#d8e4e8; --sh-paper:#fbf8f1; --sh-white:#fff; color-scheme:light; color:var(--sh-ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans TC",sans-serif; font-size:14px; line-height:1.6; }
+#siang-departments * {box-sizing:border-box}
+#siang-departments button,#siang-departments input {font:inherit}
+#siang-departments button {color:inherit}
+#siang-departments button:focus-visible,#siang-departments input:focus-visible {outline:3px solid #176b87;outline-offset:3px}
+#siang-departments [hidden]{display:none!important}
+#siang-departments .sh-page { background:radial-gradient(ellipse at 4% 0%,#e2efed,transparent 45%),var(--sh-paper);  padding:24px 32px 26px; }
+#siang-departments .sh-top {display:flex;justify-content:space-between;align-items:center;gap:16px;padding-bottom:24px;border-bottom:1px solid #cddcd9;padding-right:76px}
+#siang-departments .sh-brand {display:flex;align-items:center;gap:12px;font-weight:750;font-size:17px;letter-spacing:.02em}
+#siang-departments .sh-logo {width:42px;height:42px;display:grid;place-items:center;background:linear-gradient(145deg,#153f63,#176b87);border-radius:13px;color:#fff;font-size:22px;box-shadow:0 6px 12px #153f6318}
+#siang-departments .sh-brand small {display:block;font-size:11px;letter-spacing:.15em;font-weight:600;color:var(--sh-muted)}
+#siang-departments .sh-top-note {color:var(--sh-muted);font-size:12px;white-space:nowrap}
+#siang-departments .sh-hero {padding:32px 0 26px;display:flex;justify-content:space-between;align-items:center;gap:24px}
+#siang-departments .sh-eyebrow {font-size:11px;letter-spacing:.16em;color:var(--sh-teal);font-weight:750;margin:0 0 10px}
+#siang-departments h1 {font-size:36px;font-weight:750;letter-spacing:-.04em;line-height:1.3;margin:0 0 12px;color:var(--sh-navy)}
+#siang-departments .sh-intro {margin:0;color:var(--sh-muted);font-size:14px}
+#siang-departments .sh-hero-aside {font-size:12px;color:var(--sh-muted);border-left:1px solid #b9cecb;padding:4px 0 4px 20px;max-width:210px;flex-shrink:0}
+#siang-departments .sh-hero-aside strong {display:block;color:var(--sh-navy);font-weight:650;margin-bottom:5px}
+#siang-departments .sh-depts {display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:9px;margin-bottom:28px}
+#siang-departments .sh-dept {display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:16px 14px;border:1px solid var(--sh-line);border-radius:16px;background:var(--sh-white);text-align:left;min-height:101px;transition:transform .15s,border-color .15s}
+#siang-departments .sh-dept:hover {transform:translateY(-2px);border-color:var(--sh-teal)}
+#siang-departments .sh-dept[aria-pressed=true] {background:var(--sh-navy);border-color:var(--sh-navy);color:#fff;box-shadow:0 8px 18px #153f631e}
+#siang-departments .sh-dept-top {display:flex;justify-content:space-between;align-items:center;width:100%;gap:8px}
+#siang-departments .sh-glyph {font-size:13px;width:27px;height:27px;border-radius:8px;display:grid;place-items:center;background:#edf3f6;color:var(--sh-navy);font-weight:750}
+#siang-departments [data-dept=admin] .sh-glyph {background:#edf1f6;color:#153f63}
+#siang-departments [data-dept=merch] .sh-glyph {background:#e4f1f3;color:#176b87}
+#siang-departments [data-dept=ops] .sh-glyph {background:#eaf3ed;color:#35644e}
+#siang-departments [data-dept=design] .sh-glyph {background:#f2eaf0;color:#775b76}
+#siang-departments [data-dept=store] .sh-glyph {background:#f8eede;color:#855d28}
+#siang-departments .sh-count {font-size:11px;opacity:.75;font-variant-numeric:tabular-nums}
+#siang-departments .sh-dept-name {font-size:14px;font-weight:700}
+#siang-departments .sh-workspace {background:var(--sh-white);border:1px solid var(--sh-line);border-radius:24px;padding:24px;box-shadow:0 12px 36px #153f6308}
+#siang-departments .sh-section-top {display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:18px}
+#siang-departments h2 {font-size:21px;letter-spacing:-.02em;margin:0;font-weight:750;color:var(--sh-navy)}
+#siang-departments .sh-caption {font-size:12px;color:var(--sh-muted);margin:5px 0 0}
+#siang-departments .sh-search {display:flex;align-items:center;gap:10px;padding:9px 12px;background:#f6f8f8;border:1px solid var(--sh-line);border-radius:10px;max-width:245px;flex:1}
+#siang-departments .sh-search input {min-width:0;width:100%;border:0;background:transparent;outline-offset:5px;color:var(--sh-ink);font-size:13px}
+#siang-departments .sh-search input::placeholder {color:#697e8b}
+#siang-departments .sh-grid {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+#siang-departments .sh-tool {padding:var(--sh-card-space);border:1px solid var(--sh-line);border-radius:var(--sh-card-radius);display:flex;flex-direction:column;background:#fff;min-height:222px;transition:box-shadow .15s,border-color .15s}
+#siang-departments .sh-tool:hover {border-color:#8cb8c1;box-shadow:0 8px 20px #153f630b}
+#siang-departments .sh-tool-head {display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:13px}
+#siang-departments .sh-owner {font-size:11px;font-weight:650;color:var(--sh-teal);display:flex;gap:6px;align-items:center}
+#siang-departments .sh-owner::before {content:'';width:5px;height:5px;background:currentColor;border-radius:2px}
+#siang-departments .sh-status {font-size:11px;font-weight:650;color:#32694f;background:#edf5ef;padding:3px 7px;border-radius:5px;white-space:nowrap}
+#siang-departments .sh-status.sh-testing {color:#7a5d1d;background:#fff2d5}
+#siang-departments h3 {font-size:16px;line-height:1.5;font-weight:700;margin:0 0 9px;letter-spacing:-.02em}
+#siang-departments .sh-desc {font-size:12px;line-height:1.8;color:var(--sh-muted);margin:0 0 14px}
+#siang-departments .sh-tool-bottom {display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:auto;padding-top:12px;border-top:1px solid #edf1f1}
+#siang-departments .sh-data {font-size:11px;color:var(--sh-muted)}
+#siang-departments .sh-open {padding:5px 0;border:0;background:transparent;color:var(--sh-teal);font-size:12px;font-weight:750;white-space:nowrap}
+#siang-departments .sh-empty {padding:28px 0;margin:0;color:var(--sh-muted)}
+#siang-departments .sh-safe {display:flex;gap:10px;align-items:flex-start;font-size:11px;color:#426a59;background:#edf4ee;border:1px solid #d9e7dd;border-radius:12px;padding:12px 14px;margin-top:18px}
+#siang-departments .sh-safe b {font-size:14px}
+#siang-departments .sh-footer {margin-top:20px;display:flex;justify-content:space-between;gap:16px;color:var(--sh-muted);font-size:11px;letter-spacing:.02em}
+#siang-departments .sh-detail {max-width:460px;width:calc(100% - 32px);border:1px solid var(--sh-line);border-radius:22px;padding:28px;color:var(--sh-ink);background:#fff;box-shadow:0 20px 80px #153f6333}
+#siang-departments .sh-detail::backdrop {background:#153f6366}
+#siang-departments .sh-detail p {color:var(--sh-muted);font-size:13px;line-height:1.8}
+#siang-departments .sh-detail code {display:block;background:#f3f6f6;padding:12px;border-radius:10px;font-size:12px;overflow-wrap:anywhere}
+#siang-departments .sh-close {border:0;border-radius:9px;background:var(--sh-navy);color:#fff;padding:10px 18px;margin-top:12px}
+#siang-departments .sh-classification {border:0;border-top:1px solid var(--sh-line);padding:18px 0 0;margin:20px 0 0;min-width:0}
+#siang-departments .sh-classification legend {font-weight:700;font-size:14px;padding:0 8px 0 0}
+#siang-departments .sh-primary-label {display:grid;gap:6px;font-size:13px;margin:12px 0}
+#siang-departments .sh-primary {font:inherit;color:var(--sh-ink);background:#fff;border:1px solid var(--sh-line);border-radius:9px;padding:10px;width:100%;min-height:44px}
+#siang-departments .sh-collaborators {display:flex;flex-wrap:wrap;gap:4px 15px}
+#siang-departments .sh-collaborators label {display:flex;align-items:center;gap:7px;font-size:13px;min-height:44px}
+#siang-departments .sh-collaborators input {accent-color:var(--sh-teal);width:17px;height:17px}
+#siang-departments .sh-dialog-actions {display:flex;flex-wrap:wrap;gap:10px}
+#siang-departments .sh-cancel {border:1px solid var(--sh-line);border-radius:9px;background:#fff;color:var(--sh-navy);padding:10px 18px;margin-top:12px}
+#siang-departments .sh-change-note {color:#32694f;font-size:12px;margin:12px 0 0}
+@media(max-width:760px){
+#siang-departments .sh-page {padding:20px;}
+#siang-departments .sh-top{padding-right:60px}
+#siang-departments .sh-top-note{display:none}
+#siang-departments h1{font-size:29px}
+#siang-departments .sh-hero-aside{display:none}
+#siang-departments .sh-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+#siang-departments .sh-depts{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+#siang-departments .sh-dept{min-height:76px;padding:10px 12px;gap:6px}
+#siang-departments .sh-workspace{padding:18px}
+}
+@media(max-width:520px){
+#siang-departments .sh-page{padding:16px;}
+#siang-departments .sh-brand{font-size:15px}
+#siang-departments .sh-brand small{font-size:11px}
+#siang-departments .sh-hero{padding:25px 0}
+#siang-departments h1{font-size:27px}
+#siang-departments .sh-intro{font-size:13px}
+#siang-departments .sh-section-top{flex-direction:column;align-items:stretch;gap:12px}
+#siang-departments .sh-search{max-width:none;min-height:44px}
+#siang-departments .sh-search input{font-size:16px}
+#siang-departments .sh-grid{grid-template-columns:1fr}
+#siang-departments .sh-tool{min-height:210px}
+#siang-departments .sh-dept-name{font-size:13px}
+#siang-departments .sh-open{min-height:44px}
+#siang-departments .sh-footer{flex-direction:column;gap:5px}
+}
+@media(prefers-reduced-motion:reduce){#siang-departments *{transition:none!important}}
+body {margin:0;background:#fbf8f1}
+#siang-departments {width:100%;max-width:none;margin:0}
+#siang-departments .sh-page {padding-left:clamp(16px,3vw,48px);padding-right:clamp(16px,3vw,48px)}
+@media(min-width:1440px){#siang-departments .sh-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+#siang-departments .sh-page {padding-top:30px}
+#siang-departments .sh-brand {text-decoration:none;color:inherit}
+#siang-departments .sh-top {padding-right:0}
+#siang-departments .sh-open {text-decoration:none;display:inline-block}
+#siang-departments a:focus-visible {outline:3px solid #176b87;outline-offset:3px}
+#siang-departments [aria-disabled=true] {color:#64778a;text-decoration:line-through}
+#siang-departments .sh-version {padding:18px;border:1px solid #d5b66a;background:#fff2d5;color:#614b1b;border-radius:12px;margin-top:20px}
+#siang-departments .sh-version p {margin:6px 0}
+#siang-departments .sh-version a {color:#153f63;font-weight:700}
+#siang-departments button {cursor:pointer}
+
+#siang-departments .sh-card-actions {display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-top:12px}
+#siang-departments .sh-edit {border:1px solid var(--sh-line);background:#f5f8f8;border-radius:8px;padding:8px 10px;font:inherit;font-size:12px;min-height:40px;color:var(--sh-navy)}
+#siang-departments .sh-tool-bottom {margin-top:auto;display:block}
+#siang-departments .sh-classification select {font:inherit}
+#siang-departments .sh-detail {max-height:calc(100dvh - 32px);overflow:auto}
+#siang-departments .sh-detail button:disabled {opacity:.55;cursor:default}
+#siang-departments .sh-dialog-error {color:#9c3535!important}
+
+#siang-departments .sh-name {display:block;width:100%;box-sizing:border-box;margin-top:8px;padding:11px 12px;border:1px solid var(--sh-line);border-radius:10px;font:inherit;font-size:16px;color:var(--sh-navy);background:#fff}
+#siang-departments .sh-name:focus-visible {outline:3px solid #176b87;outline-offset:2px}
+#siang-departments .sh-name-help {font-size:12px;margin-top:6px}
+#siang-departments .sh-tool h3, #siang-departments .sh-detail h2 {overflow-wrap:anywhere}
