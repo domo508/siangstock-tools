@@ -3,6 +3,7 @@
 
   const core = globalThis.ProcurementPlanningCore;
   const googleSources = globalThis.ProcurementGoogleSources;
+  const shortageBatch = globalThis.ProcurementShortageBatch;
   const outputXlsx = globalThis.ProcurementXlsxWriter || globalThis.XLSX;
   const MODEL_CACHE = Object.freeze({ database: "siangstock-procurement-local", store: "files", key: "seasonal-model", refreshMonths: 6 });
   const WORKFLOW_CACHE = Object.freeze({ key: "procurement-workflow-drafts", version: 1, maxRecords: 30 });
@@ -13,9 +14,9 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261027-activity-transfer-r5";
+  const APP_VERSION = "20261027-shortage-bulk-r1";
   const state = {
-    config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
+    shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
     salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, reviewWorkbook: null, manualReasonCandidates: [], firstReview: null,
     secondReviewFile: null, review: null, ledger: null, monthPlan: null, procurementRules: null, revenueChannels: [], budgetDirty: false, sourceMetadata: null, modelMetadata: null, batchId: "", approved: false, erpDownloaded: false,
@@ -307,7 +308,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261027-activity-transfer-r5");
+        const worker = new Worker("inventory-reader-worker.js?v=20261027-shortage-bulk-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1070,7 +1071,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261027-activity-transfer-r5");
+      const worker = new Worker("seasonal-model-worker.js?v=20261027-shortage-bulk-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -2107,7 +2108,7 @@
     return ({ pending_decision: "待決定", merge_next: "等待併入下一張採購單", new_order: "建立門市不足補採新單" })[row.handling_mode] || row.status || "待決定";
   }
   function selectedStoreShortageKeys() {
-    return [...elements.storeShortageRows.querySelectorAll("[data-shortage-select]:checked")].map((input) => ({ storeCode: input.dataset.store, sku: input.dataset.sku }));
+    return [...elements.storeShortageRows.querySelectorAll("[data-shortage-select]:checked")].map((input) => ({ storeCode: input.dataset.store, sku: input.dataset.sku, sourceBatchId: state.storeShortageNeeds.find(row => row.store_code === input.dataset.store && row.sku === input.dataset.sku)?.source_batch_id }));
   }
   function updateStoreShortageSelection() {
     const checkboxes = [...elements.storeShortageRows.querySelectorAll("[data-shortage-select]")];
@@ -2115,12 +2116,12 @@
     elements.storeShortageSelectedCount.textContent = `${selected}項`;
     elements.storeShortageSelectAll.checked = checkboxes.length > 0 && selected === checkboxes.length;
     elements.storeShortageSelectAll.indeterminate = selected > 0 && selected < checkboxes.length;
-    elements.storeShortageBatchBar.querySelectorAll("[data-shortage-bulk-mode], [data-shortage-bulk-close]").forEach((button) => { button.disabled = selected === 0 || !state.storeShortagePermissions?.canDecide; });
+    elements.storeShortageBatchBar.querySelectorAll("[data-shortage-bulk-mode], [data-shortage-bulk-close]").forEach((button) => { button.disabled = state.shortageBulkBusy || selected === 0 || !state.storeShortagePermissions?.canDecide; });
   }
   function renderStoreShortageNeeds() {
     const rows = state.storeShortageNeeds || [];
     const total = rows.reduce((sum, row) => sum + Number(row.unfilled_quantity || 0), 0);
-    const canDecide = Boolean(state.storeShortagePermissions?.canDecide);
+    const canDecide = Boolean(state.storeShortagePermissions?.canDecide && !state.shortageBulkBusy);
     const countLabel = rows.length ? `${rows.length}項・${formatNumber(total)}件` : "目前無待辦";
     elements.storeShortageCount.textContent = countLabel;
     elements.storeShortageTopCount.textContent = rows.length ? `門市不足 ${countLabel}` : "門市不足目前無待辦";
@@ -2156,6 +2157,7 @@
     }
   }
   async function decideStoreShortage(event) {
+    if (state.shortageBulkBusy) return;
     const closeButton = event.target.closest("[data-shortage-close]");
     if (closeButton) {
       const actionLabel = closeButton.dataset.shortageClose === "resolved" ? "已補配結案" : "取消需求";
@@ -2187,38 +2189,91 @@
     }
   }
 
+  function confirmStoreShortageBulk(actionLabel, count, needsReason, previousReason = "", notice = "") {
+    const dialog = get("#shortage-bulk-confirm");
+    if (dialog.open) return Promise.resolve(null);
+    get("#shortage-bulk-confirm-title").textContent = `${actionLabel}・${count}項`;
+    get("#shortage-bulk-confirm-notice").textContent = notice || "僅處理本次勾選的門市與品號；保留逐筆處理紀錄。";
+    const input = get("#shortage-bulk-reason"); input.value = previousReason; input.required = needsReason;
+    get("#shortage-bulk-reason-label").hidden = !needsReason;
+    dialog.returnValue = "";
+    return new Promise(resolve => {
+      dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm" ? { reason: input.value.trim() } : null), { once: true });
+      dialog.showModal();
+    });
+  }
+  function renderShortageBulkBusy(busy) {
+    state.shortageBulkBusy = busy;
+    elements.storeShortageBatchBar.querySelectorAll("button, input").forEach(item => { item.disabled = busy; });
+    elements.storeShortageRows.querySelectorAll("button, input").forEach(item => { item.disabled = busy || !state.storeShortagePermissions?.canDecide; });
+    updateStoreShortageSelection();
+    get("#shortage-batch-retry").disabled = busy || !state.shortageBulkRetry || !state.storeShortagePermissions?.canDecide;
+  }
+  async function runStoreShortageBatch(operation) {
+    if (state.shortageBulkBusy || !state.storeShortagePermissions?.canDecide) return;
+    renderShortageBulkBusy(true);
+    if (!await checkRuntimeVersion()) { renderShortageBulkBusy(false); return; }
+    get("#shortage-batch-retry").hidden = true;
+    state.shortageBulkRetry = null;
+    let results = [];
+    try {
+      results = await shortageBatch.run({
+        items: operation.items,
+        shouldContinue: () => !state.runtimeOutdated,
+        onProgress: p => { elements.storeShortageStatus.textContent = `「${operation.actionLabel}」已處理${p.completed}／${p.total}項：成功${p.success}、失敗${p.failed}、結果待確認${p.uncertain}；執行中${p.active}、尚未送出${p.remaining}。請保留本分頁。`; },
+        execute: item => shortageBatch.requestJson(`/api/procurement/store-shortages/${encodeURIComponent(item.storeCode)}/${encodeURIComponent(item.sku)}${operation.resolutionType ? "/close" : ""}`, operation.resolutionType ? { resolutionType: operation.resolutionType, reason: operation.reason } : { handlingMode: operation.mode }, operation.resolutionType ? "POST" : "PUT")
+      });
+      const unsuccessful = results.filter(result => result.status !== "success");
+      state.shortageBulkRetry = unsuccessful.length ? { ...operation, results: unsuccessful } : null;
+      // 刷新失敗時保留失敗項與訊息，不把同步失敗當作全部完成。
+      const latest = await shortageBatch.requestJson("/api/procurement/store-shortages", null, "GET");
+      if (!Array.isArray(latest.rows)) throw new Error("待辦回應格式錯誤，尚未確認最新結果");
+      state.storeShortageNeeds = latest.rows; state.storeShortagePermissions = latest.permissions || { canDecide: false };
+      renderStoreShortageNeeds();
+      const uncertain = unsuccessful.filter(r => r.status === "uncertain").length;
+      elements.storeShortageStatus.textContent = `「${operation.actionLabel}」成功${results.length - unsuccessful.length}項；失敗或未送出${unsuccessful.length - uncertain}項；結果待確認${uncertain}項。${unsuccessful.length ? unsuccessful.slice(0, 3).map(r => `${r.item.storeCode}／${r.item.sku}：${r.error}`).join("；") : "已同步最新待辦並保留逐筆稽核紀錄。"}`;
+    } catch (error) {
+      elements.storeShortageStatus.textContent = `批次結果／待辦同步未完成：${error.message}。已完成項目不會回滾；請重新確認待辦後處理剩餘項。`;
+    } finally {
+      if (results.some(r => r.status === "success" || r.status === "uncertain") && (state.analysis || state.monthEndWorkbook)) invalidateAnalysis();
+      renderShortageBulkBusy(false);
+      get("#shortage-batch-retry").hidden = !state.shortageBulkRetry;
+    }
+  }
+  async function retryStoreShortageBatch() {
+    if (state.shortageBulkBusy || !state.shortageBulkRetry || !state.storeShortagePermissions?.canDecide) return;
+    renderShortageBulkBusy(true);
+    if (!await checkRuntimeVersion()) { renderShortageBulkBusy(false); return; }
+    const operation = state.shortageBulkRetry;
+    try {
+      const latest = await shortageBatch.requestJson("/api/procurement/store-shortages", null, "GET");
+      if (!Array.isArray(latest.rows)) throw new Error("待辦回應格式錯誤，尚未重送");
+      const plan = shortageBatch.retryPlan(operation.results, latest.rows, Boolean(operation.resolutionType));
+      if (!Array.isArray(latest.rows)) throw new Error("待辦回應格式錯誤，尚未確認最新結果");
+      state.storeShortageNeeds = latest.rows; state.storeShortagePermissions = latest.permissions || { canDecide: false };
+      renderStoreShortageNeeds();
+      if (!plan.items.length) {
+        elements.storeShortageStatus.textContent = `重新確認：${plan.alreadyClosed}項已不在待辦，不再重送；${plan.changed.length}項來源已變更，請重新勾選確認；${plan.uncertain.length}項先前結果待確認，未自動重送。`;
+        state.shortageBulkRetry = null; get("#shortage-batch-retry").hidden = true;
+        return;
+      }
+      const confirmation = await confirmStoreShortageBulk(`重試${operation.actionLabel}`, plan.items.length, Boolean(operation.resolutionType), operation.reason, `已不在待辦${plan.alreadyClosed}項、來源變更${plan.changed.length}項、結果待確認${plan.uncertain.length}項都不會重送。只處理仍有效的失敗／未送出項。`);
+      if (!confirmation) return;
+      renderShortageBulkBusy(false);
+      await runStoreShortageBatch({ ...operation, items: plan.items, reason: confirmation.reason });
+    } catch (error) { elements.storeShortageStatus.textContent = `重試前同步失敗：${error.message}；尚未重送。`; }
+    finally { renderShortageBulkBusy(false); }
+  }
   async function batchDecideStoreShortages(button) {
+    if (state.shortageBulkBusy) return;
     const selected = selectedStoreShortageKeys();
     if (!selected.length) return;
     const mode = button.dataset.shortageBulkMode;
     const resolutionType = button.dataset.shortageBulkClose;
     const actionLabel = mode === "merge_next" ? "併入下一張採購" : mode === "new_order" ? "建立補採新單" : resolutionType === "resolved" ? "已補配結案" : "取消需求";
-    let reason = "";
-    if (resolutionType) {
-      reason = globalThis.prompt(`請輸入這${selected.length}項批次「${actionLabel}」的共同原因：`, "")?.trim() || "";
-      if (!reason) return;
-    } else if (!globalThis.confirm(`確定將已勾選的${selected.length}項批次設為「${actionLabel}」？`)) return;
-    elements.storeShortageBatchBar.querySelectorAll("button").forEach((item) => { item.disabled = true; });
-    elements.storeShortageStatus.textContent = `正在批次處理${selected.length}項「${actionLabel}」…`;
-    const failures = [];
-    for (const item of selected) {
-      try {
-        if (resolutionType) {
-          await postJson(`/api/procurement/store-shortages/${encodeURIComponent(item.storeCode)}/${encodeURIComponent(item.sku)}/close`, { resolutionType, reason });
-        } else {
-          await postJson(`/api/procurement/store-shortages/${encodeURIComponent(item.storeCode)}/${encodeURIComponent(item.sku)}`, { handlingMode: mode }, {}, "PUT");
-        }
-      } catch (error) {
-        failures.push(`${item.storeCode}／${item.sku}：${error.message}`);
-      }
-    }
-    await loadStoreShortageNeeds();
-    if (state.analysis || state.monthEndWorkbook) invalidateAnalysis();
-    if (failures.length) {
-      elements.storeShortageStatus.textContent = `已完成${selected.length - failures.length}項；另有${failures.length}項失敗：${failures.slice(0, 3).join("；")}`;
-    } else {
-      elements.storeShortageStatus.textContent = `已完成${selected.length}項「${actionLabel}」；系統保留逐筆處理與稽核紀錄。`;
-    }
+    const confirmation = await confirmStoreShortageBulk(actionLabel, selected.length, Boolean(resolutionType));
+    if (!confirmation || (resolutionType && !confirmation.reason)) return;
+    await runStoreShortageBatch({ items: selected, mode, resolutionType, actionLabel, reason: confirmation.reason });
   }
 
   async function savePendingSnapshot(pendingReports) {
@@ -3577,6 +3632,7 @@
     elements.storeShortageRows.querySelectorAll("[data-shortage-select]").forEach((input) => { input.checked = elements.storeShortageSelectAll.checked; });
     updateStoreShortageSelection();
   });
+  get("#shortage-batch-retry").addEventListener("click", retryStoreShortageBatch);
   elements.storeShortageBatchBar.addEventListener("click", (event) => {
     const button = event.target.closest("[data-shortage-bulk-mode], [data-shortage-bulk-close]");
     if (button) batchDecideStoreShortages(button);

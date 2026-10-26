@@ -1124,3 +1124,13 @@ body.history-readonly .stage-two, body.history-readonly .stage-three, body.histo
 .activity-allocation-month p { margin: 8px 0; }
 @media(max-width:600px) { .activity-transfer-publish { padding: 16px; } .activity-transfer-actions button { width: 100%; } }
 [hidden] { display: none !important; }
+
+#shortage-batch-retry[hidden] { display: none; }
+
+#shortage-bulk-confirm { max-width: min(540px, calc(100vw - 32px)); border: 1px solid var(--line); border-radius: 22px; padding: 24px; color: var(--ink); }
+#shortage-bulk-confirm::backdrop { background: rgba(23, 47, 67, .35); }
+#shortage-bulk-confirm p { overflow-wrap: anywhere; }
+#shortage-bulk-reason-label { display: grid; gap: 8px; }
+#shortage-bulk-reason-label[hidden] { display: none; }
+#shortage-bulk-reason { width: 100%; box-sizing: border-box; font: inherit; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.shortage-bulk-confirm-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
