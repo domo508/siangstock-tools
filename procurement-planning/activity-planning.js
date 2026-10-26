@@ -335,15 +335,17 @@
     result.activitySummary = { ready: affected.filter(r => r.activityPlanning.status === "現有供貨可備妥").length, action: affected.filter(r => r.activityPlanning.status === "需要採購／寄庫拉貨").length, shortage: affected.filter(r => !["現有供貨可備妥", "需要採購／寄庫拉貨"].includes(r.activityPlanning.status)).length };
     return attachTransferSource(result, settings, monthly, index, input, affected);
   }
-  function transferDraftFromAnalysis(analysis, retailTargets, history) {
+  function transferDraftFromAnalysis(analysis, retailTargets, history, period = {}) {
     const rule = analysis?.appliedRules?.activityDemand;
     if (!rule || rule.enabled === false || rule.method !== "monthly-target") throw new Error("此分析缺少新版活動依據，請恢復原活動完整母批次，不能只用金額猜測品號需求。");
-    const settings = normalize(rule, analysis.asOfDate);
+    const settings = normalize({...rule,startDate:period.startDate || rule.startDate,endDate:period.endDate || rule.endDate}, analysis.asOfDate);
+    const changedPeriod=settings.startDate!==rule.startDate || settings.endDate!==rule.endDate;
+    if(changedPeriod && (settings.months.join()!==months(rule.startDate,rule.endDate).join() || settings.months.some(m=>m<=analysis.asOfDate.slice(0,7)))) throw new Error("保留採購結果的日期更正僅限原有未來月份；跨月或當月請另行重新分析。");
     let source;
-    if (analysis.activityTransferSource) source = JSON.parse(JSON.stringify(analysis.activityTransferSource));
+    if (analysis.activityTransferSource && !changedPeriod) source = JSON.parse(JSON.stringify(analysis.activityTransferSource));
     else {
       if (!history) throw new Error("舊分析尚無逐日門市草稿，須先授權讀取歷史銷售；不會重新計算採購量。");
-      const context = prepare({activityDemand:rule,asOfDate:analysis.asOfDate,activityHistory:history,salesReports:[]});
+      const context = prepare({activityDemand:settings,asOfDate:analysis.asOfDate,activityHistory:history,salesReports:[]});
       for (const month of settings.months) {
         const saved = rule.monthlyForecasts?.find(m => m.month === month);
         if (!saved?.channels?.length || Math.abs(saved.channels.reduce((s,c)=>s+Number(c.target),0)-Number(settings.monthlyTargets[month].amount)) > 0.02) throw new Error(`${month}缺少原通路分配依據，請恢復完整活動母批次。`);

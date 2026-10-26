@@ -43,6 +43,15 @@ const fixture = source();
 const run = extra => core.buildProcurementRecommendations({ ...fixture, ...extra });
 
 describe("跨月活動備貨與供貨", () => {
+  it("原單日活動可更正為五日，重建每日分布但不改原採購快照",()=>{
+    const original=run({activityDemand:{...fixture.activityDemand,endDate:"2026-11-11",monthlyTargets:{"2026-11":{amount:10000000}}}}),saved=JSON.stringify(original);
+    expect(()=>activity.transferDraftFromAnalysis(original,{"2026-11":3500000},null,{startDate:"2026-11-11",endDate:"2026-11-15"})).toThrow(/歷史銷售/);
+    const corrected=activity.transferDraftFromAnalysis(original,{"2026-11":3500000},fixture.activityHistory,{startDate:"2026-11-11",endDate:"2026-11-15"});
+    expect(corrected.startDate).toBe("2026-11-11");expect(corrected.endDate).toBe("2026-11-15");expect(corrected.months[0].retailTarget).toBe(3500000);
+    expect(corrected.months[0].weights.R00).not.toEqual(original.activityTransferSource.months[0].weights.R00);
+    expect(()=>context.StoreTransferActivity.validateSource(corrected)).not.toThrow();expect(JSON.stringify(original)).toBe(saved);
+    expect(()=>activity.transferDraftFromAnalysis(original,{"2026-11":3500000},fixture.activityHistory,{startDate:"2026-11-11",endDate:"2026-12-01"})).toThrow();
+  });
   it("已採購一千萬元可單獨補建門市350萬草稿；舊分析與ERP輸出逐位不變",()=>{
     const result=run({activityDemand:{...fixture.activityDemand,monthlyTargets:{"2026-11":{amount:10000000}}}});
     const saved=JSON.stringify(result),before=XLSX.utils.sheet_to_json(core.buildRecommendationWorkbook(result,writer).Sheets["01_採購摘要"],{header:1});

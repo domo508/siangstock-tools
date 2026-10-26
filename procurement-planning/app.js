@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261027-activity-transfer-r4";
+  const APP_VERSION = "20261027-activity-transfer-r5";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -307,7 +307,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261027-activity-transfer-r4");
+        const worker = new Worker("inventory-reader-worker.js?v=20261027-activity-transfer-r5");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -491,6 +491,8 @@
     return {
       version: WORKFLOW_CACHE.version, id: state.draftId, stage, updatedAt: new Date().toISOString(), sharedDraftId: state.sharedDraftId, sharedDraftRevision: state.sharedDraftRevision, parentBatchId: state.parentBatchId, activeWorkUnit: state.activeWorkUnit, batchId: state.batchId,
       analysis: state.analysis, baseAnalysis: state.baseAnalysis === state.analysis ? null : state.baseAnalysis, workflowType: state.workflowType,
+      transferActivityDraft: state.transferSourceAnalysis === transferAnalysis() && !state.transferDraftDirty ? state.transferDraft || null : null,
+      transferActivityCorrection: state.transferCorrection || null,
       selectedSuppliers: [...state.selectedSuppliers], returnScope: state.returnScope ? [...state.returnScope] : null,
       firstReview: state.firstReview, review: state.review, purchaseStatusSummary: state.purchaseStatusSummary, costSummary: state.costSummary,
       consignmentStyleAudit: state.consignmentSource?.styleAudit || { pinkDetected: false, pinkCells: 0 },
@@ -584,6 +586,7 @@
     }
     renderActivityControls();
     state.analysis = draft.analysis; state.baseAnalysis = draft.baseAnalysis || draft.analysis; state.workflowType = draft.workflowType || "system_recommendation";
+    state.transferRestoredDraft=draft.transferActivityDraft || null;state.transferCorrection=draft.transferActivityCorrection || null;state.transferSourceAnalysis=null;
     state.parentBatchId = draft.parentBatchId || draft.id; state.activeWorkUnit = draft.activeWorkUnit || null; state.sharedDraftId = draft.sharedDraftId || ""; state.sharedDraftRevision = Number(draft.sharedDraftRevision || 0);
     state.selectedWorkUnitIds = new Set();
     const restoredSuppliers = new Set(draft.selectedSuppliers || []); state.returnScope = draft.returnScope ? new Set(draft.returnScope) : null;
@@ -1067,7 +1070,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261027-activity-transfer-r4");
+      const worker = new Worker("seasonal-model-worker.js?v=20261027-activity-transfer-r5");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -1196,6 +1199,7 @@
     setWorkflowStatus(message);
   }
   function invalidateAnalysis() {
+    state.transferDraft=null;state.transferSourceAnalysis=null;state.transferRestoredDraft=null;state.transferCorrection=null;state.transferDraftDirty=false;
     state.analysis = null; state.baseAnalysis = null; state.parsedSources = null; state.workflowType = "system_recommendation"; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null; state.purchaseStatusSummary = null; state.costSummary = null; state.monthEndWorkbook = null; state.monthEndReportBytes = null; state.monthEndSummary = null; state.draftId = ""; state.draftStage = ""; state.sharedDraftId = ""; state.sharedDraftRevision = 0; state.parentBatchId = ""; state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set();
     elements.download.disabled = true; elements.resultPanel.hidden = true; elements.supplierFilterList.replaceChildren();
     elements.monthEndPanel.hidden = true; elements.monthEndSummary.replaceChildren(); elements.monthEndDownload.disabled = true; elements.monthEndConfirm.disabled = true; elements.monthEndRetryEmail.disabled = true;
@@ -1817,19 +1821,22 @@
     panel.hidden=!rule || rule.enabled===false || rule.method!=="monthly-target";
     if(panel.hidden)return;
     if(state.transferSourceAnalysis!==original){
-      state.transferSourceAnalysis=original;state.transferDraft=original.activityTransferSource?structuredClone(original.activityTransferSource):null;state.transferDraftDirty=false;
+      if(state.transferSourceAnalysis && !state.transferRestoredDraft)state.transferCorrection=null;
+      state.transferSourceAnalysis=original;state.transferDraft=state.transferRestoredDraft?structuredClone(state.transferRestoredDraft):original.activityTransferSource?structuredClone(original.activityTransferSource):null;state.transferRestoredDraft=null;state.transferDraftDirty=false;
+      get("#activity-correction-start").value=state.transferDraft?.startDate || rule.startDate;get("#activity-correction-end").value=state.transferDraft?.endDate || rule.endDate;get("#activity-correction-reason").value=state.transferCorrection?.reason || "";
       get("#transfer-activity-status").textContent=state.transferDraft?"尚未發布；可直接在此核對發布，不需等待採購回匯。":"原採購結果已保留，請補填門市目標並建立分配草稿。";
       get("#transfer-activity-feedback").replaceChildren();get("#read-transfer-activity-feedback").disabled=true;
       get("#activity-backfill-targets").replaceChildren(...(rule.months || Object.keys(rule.monthlyTargets || {})).map(month=>{
         const label=document.createElement("label"),title=document.createElement("span"),field=document.createElement("input");
-        title.textContent=`${month}六店整月目標（原全通路${formatCurrency(rule.monthlyTargets[month]?.amount)}）`;field.type="number";field.min="0";field.step="0.01";field.dataset.backfillMonth=month;field.value=rule.monthlyTargets[month]?.retailAmount??"";field.placeholder="例如3500000";
-        field.addEventListener("input",()=>{state.transferDraftDirty=true;get("#publish-transfer-activity").disabled=true;get("#read-transfer-activity-feedback").disabled=true;get("#activity-transfer-badge").textContent="門市目標已改，需補建草稿";});label.append(title,field);return label;
+        title.textContent=`${month}六店整月目標（原全通路${formatCurrency(rule.monthlyTargets[month]?.amount)}）`;field.type="number";field.min="0";field.step="0.01";field.dataset.backfillMonth=month;field.value=state.transferDraft?.months.find(m=>m.month===month)?.retailTarget??rule.monthlyTargets[month]?.retailAmount??"";field.placeholder="例如3500000";
+        field.addEventListener("input",()=>{state.transferDraftDirty=true;get("#publish-transfer-activity").disabled=true;get("#save-transfer-activity-draft").disabled=true;get("#read-transfer-activity-feedback").disabled=true;get("#activity-transfer-badge").textContent="門市目標已改，需補建草稿";});label.append(title,field);return label;
       }));get("#activity-transfer-backfill").open=!state.transferDraft;
     }
     const source=state.transferDraft;
-    get("#activity-transfer-summary").textContent=`${rule.name}・${rule.startDate}～${rule.endDate}・來源截止${original.asOfDate}。${source?source.months.map(m=>`${m.month}實體六店${formatCurrency(m.retailTarget)}、線上／其他${formatCurrency(m.onlineAndOtherTarget)}`).join("；"):"等待補建門市分配草稿。"}本區為需求規劃，不代表調撥件數或總倉已有貨。`;
+    get("#activity-transfer-summary").textContent=`${rule.name}・${source?.startDate || rule.startDate}～${source?.endDate || rule.endDate}・來源截止${original.asOfDate}。${source?source.months.map(m=>`${m.month}實體六店${formatCurrency(m.retailTarget)}、線上／其他${formatCurrency(m.onlineAndOtherTarget)}`).join("；"):"等待補建門市分配草稿。"}${state.transferCorrection?`日期已更正，原採購計算快照${rule.startDate}～${rule.endDate}仍保留；未自動補改採購量。`:""}本區為需求規劃，不代表調撥件數或總倉已有貨。`;
     get("#activity-transfer-badge").textContent=state.transferDraftDirty?"需補建草稿":"尚未發布";
     get("#publish-transfer-activity").disabled=!source || state.transferDraftDirty;
+    get("#save-transfer-activity-draft").disabled=!source || state.transferDraftDirty;
     const names={R00:"台北中山",R01:"台中北屯",R03:"新竹東區",R06:"文心秀泰",R07:"誠品480",R10:"新莊"};
     get("#activity-retail-targets").replaceChildren(...(source?.months || []).map(month=>{
       const block=document.createElement("div");block.className="activity-allocation-month";const heading=document.createElement("h4");heading.textContent=month.month;block.append(heading);
@@ -1842,16 +1849,29 @@
     try{
       if(!(await checkRuntimeVersion()))return;
       const fields=()=>Object.fromEntries([...get("#activity-backfill-targets").querySelectorAll("[data-backfill-month]")].map(f=>[f.dataset.backfillMonth,f.value===""?NaN:Number(f.value)]));
-      const targets=fields(),signature=JSON.stringify(targets);
+      const period=()=>({startDate:get("#activity-correction-start").value,endDate:get("#activity-correction-end").value}),p=period(),rule=original?.appliedRules?.activityDemand;
+      if(!p.startDate || !p.endDate)throw new Error("請填寫完整活動期間。");
+      const changed=p.startDate!==rule.startDate || p.endDate!==rule.endDate,reason=get("#activity-correction-reason").value.trim();
+      if(changed && !reason)throw new Error("日期變更須填更正原因，原採購快照會保留。");
+      const targets=fields(),signature=JSON.stringify([targets,p,reason]);
       for(const [m,v] of Object.entries(targets))if(!Number.isFinite(v)||v<=0||v>original?.appliedRules?.activityDemand?.monthlyTargets?.[m]?.amount)throw new Error(`${m}門市目標須大於0且不超過原全通路目標。`);
       status.textContent="正在補建門市草稿；原採購量、金額、覆核與核准狀態保持不變…";
-      const history=original?.activityTransferSource?null:await loadActivityHistory([]);
-      if(!state.analysis || original!==transferAnalysis() || signature!==JSON.stringify(fields()))throw new Error("來源或門市目標已變更，請重新補建草稿。");
-      const source=globalThis.ProcurementActivityPlanning.transferDraftFromAnalysis(original,targets,history);
+      const history=original?.activityTransferSource && !changed?null:await loadActivityHistory([]);
+      if(!state.analysis || original!==transferAnalysis() || signature!==JSON.stringify([fields(),period(),get("#activity-correction-reason").value.trim()]))throw new Error("來源或門市目標已變更，請重新補建草稿。");
+      const source=globalThis.ProcurementActivityPlanning.transferDraftFromAnalysis(original,targets,history,p);
       globalThis.StoreTransferActivity.validateSource(source);
-      state.transferDraft=source;state.transferSourceAnalysis=original;state.transferDraftDirty=false;renderTransferActivity(original);
+      state.transferDraft=source;state.transferSourceAnalysis=original;state.transferDraftDirty=false;state.transferCorrection=changed?{...p,reason,originalStartDate:rule.startDate,originalEndDate:rule.endDate,correctedAt:new Date().toISOString(),correctedBy:state.config?.email}:null;
+      elements.activityStartDate.value=p.startDate;elements.activityEndDate.value=p.endDate;renderActivityControls();renderTransferActivity(original);
       status.textContent="門市草稿已補建，請展開核對六店分配後發布。原採購結果與核准狀態未變；新的門市分配如與原採購配置不同，須另行覆核供貨。";
     }catch(error){status.textContent=error.message;}finally{button.disabled=false;}
+  });
+  ["activity-correction-start","activity-correction-end","activity-correction-reason"].forEach(id=>get(`#${id}`).addEventListener("input",()=>{state.transferDraftDirty=true;get("#publish-transfer-activity").disabled=true;get("#save-transfer-activity-draft").disabled=true;get("#read-transfer-activity-feedback").disabled=true;get("#activity-transfer-badge").textContent="更正尚未重新補建";}));
+  get("#save-transfer-activity-draft").addEventListener("click",async()=>{
+    const button=get("#save-transfer-activity-draft"),status=get("#transfer-activity-status");button.disabled=true;
+    try{if(!(await checkRuntimeVersion()))return;transferActivitySource();if(!state.sharedDraftId || state.activeWorkUnit || (state.parentBatchId && state.parentBatchId!==state.sharedDraftId))throw new Error("請先開啟原公司共用完整母批次，不能儲存至供應商子批次。");
+      const snapshot=workflowSnapshot();const saved=await saveSharedWorkflowDraft(snapshot,state.sharedDraftRevision);await updateSharedMetadata(snapshot,saved);
+      status.textContent=`已儲存至原母批次第${saved.revision}版；門市草稿與日期更正可供同仁接續確認，尚未發布至週調撥。原採購量、金額與核准狀態不變。`;
+    }catch(error){status.textContent=error.message;}finally{button.disabled=state.runtimeOutdated || state.transferDraftDirty;}
   });
   get("#publish-transfer-activity").addEventListener("click", async () => {
     const button = get("#publish-transfer-activity"), status = get("#transfer-activity-status");

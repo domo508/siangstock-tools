@@ -4,7 +4,7 @@ import { RequestValidationError } from "./schema";
 type DirectoryEnv = AccessConfig & { DB: D1Database; ALLOWED_ORIGINS: string; PROCUREMENT_ACCESS_AUD?: string };
 export type DepartmentAssignment = { toolId: string; primary: string; collaborators: string[]; displayName?: string };
 type Row = { version: number; payload: string; updated_at: string };
-export const HOMEPAGE_RUNTIME_VERSION = "20261027-activity-entry-r4";
+export const HOMEPAGE_RUNTIME_VERSION = "20261027-activity-entry-r5";
 const DEPARTMENTS = new Set(["admin", "merch", "ops", "design", "store"]);
 const API_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store, max-age=0, must-revalidate", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" };
 function json(data: unknown, status = 200): Response { return new Response(JSON.stringify(data), { status, headers: API_HEADERS }); }
