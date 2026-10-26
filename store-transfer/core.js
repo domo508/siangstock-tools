@@ -678,6 +678,20 @@
     const proposalDate = input.proposalDate || input.sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "");
     const scheduleByStore = Object.fromEntries(stores.map((store) => [store, storeSchedule(proposalDate, store, input.storeInventory || {}, input.approvalDate || "")]));
     const masterBySku = input.master.bySku;
+    const activity = input.activityPlan ? (() => {
+      if (!globalThis.StoreTransferActivity) throw new Error("活動調撥模組未載入，請重新載入最新版。");
+      if (input.calculationMode === "comparison") throw new Error("活動備貨僅適用正式補貨；A/B測試請先取消活動。");
+      const ctx = globalThis.StoreTransferActivity.prepare(input.activityPlan, proposalDate, input.approvalDate, input.storeInventory || {});
+      if (!globalThis.StoreTransferActivity.validDate(input.activityInventoryDate) || input.activityInventoryDate > proposalDate || input.activityInventoryDate < input.activityPlan.source.asOfDate) throw new Error("請填寫不早於活動基準且不晚於開單日的最新庫存快照日期。");
+      return ctx;
+    })() : null;
+    if (activity?.active) for (const store of stores) Object.assign(scheduleByStore[store], {
+      currentArrivalDate: activity.timing.arrivalDate,
+      nextArrivalDate: globalThis.StoreTransferActivity.add(activity.timing.nextUsableDate, -2),
+      activityPlanId: activity.planId, activityPlanRevision: activity.revision,
+      activityUsableDate: activity.timing.usableDate, activityProtectionEnd: activity.timing.protectionEnd,
+      activityBufferDays: 2, activityName: activity.name, activityApprovalDate: activity.timing.approvalDate
+    });
     const transferExclusions = transferExclusionSkus(input.storeInventory);
     const applicabilityRules = normalizedApplicabilityRules(input.storeInventory);
     const isTransferExcluded = (sku, storeCode = "") => {
@@ -806,7 +820,19 @@
         const tier = performance >= 12 && weeks >= 4 ? "熱銷" : performance >= 4 && weeks >= 2 ? "穩定" : "低銷";
         const daily = local42 / 42;
         const schedule = scheduleByStore[store];
-        const target = daily * schedule.coverageDays;
+        let target = daily * schedule.coverageDays;
+        const activityApplies = activity?.active && activity.has(store, sku);
+        let activityEvidence = "", activityPreUse = null;
+        if (activityApplies) {
+          const from = globalThis.StoreTransferActivity.add(input.activityInventoryDate, 1);
+          // Each date appears exactly once: normal demand outside the event,
+          // the shared daily forecast inside it. Cover until the next usable batch.
+          const through = activity.timing.protectionEnd;
+          const planned = activity.demand(store, sku, from, through, daily);
+          target = Math.max(target, planned);
+          activityPreUse = activity.demand(store, sku, from, globalThis.StoreTransferActivity.add(activity.timing.usableDate,-1), daily);
+          activityEvidence = `${activity.name}；活動基準v${activity.revision}；預計${activity.timing.arrivalDate}到店＋固定2日緩衝至${activity.timing.usableDate}；保障至${through}；逐日含週末需求${planned.toFixed(1)}件`;
+        }
         const rule = storeDisplayException(store, sku, input.storeDisplayExceptions) || stockRule(master, input.storeInventory);
         if (rule?.role === "排除規則") continue;
         const ruleApplies = appliesToStore(rule, store, local42);
@@ -822,10 +848,22 @@
         const physicalInventory = Math.max(0, inventory.get(key) || 0);
         const pendingSubmittedQuantity = Math.max(0, submittedInbound.get(key) || 0);
         const inTransitQuantity = Math.max(0, inTransitInbound.get(key) || 0);
-        const current = Math.max(0, physicalInventory + includedInbound(key));
+        let current = Math.max(0, physicalInventory + includedInbound(key)), activityTimeline = null;
+        if (activityApplies) {
+          let timely = 0; const inbound=[];
+          for (const t of input.transfer.records.filter(t => t.destinationWarehouseCode === store && t.sku === sku && ["提交","發貨審核"].includes(t.status))) {
+            const d = input.activityInboundDates?.[t.documentCode];
+            if (!t.documentCode || !globalThis.StoreTransferActivity.validDate(d)) throw new Error(`${store}／${sku}既有調撥到店日待確認，請在活動卡片填寫各調撥單到店日。`);
+            inbound.push({date:d,quantity:Number(t.quantity || 0)});
+            // Only confirmed stock usable before this batch can support opening.
+            if (globalThis.StoreTransferActivity.add(d, 2) <= activity.timing.usableDate) timely += Number(t.quantity || 0);
+          }
+          current = Math.max(0, physicalInventory + timely);
+          activityTimeline = activity.timeline(store,sku,globalThis.StoreTransferActivity.add(input.activityInventoryDate,1),physicalInventory,display,inbound,daily);
+        }
         const displayGap = Math.max(0, display - current);
         const sellable = Math.max(0, current - display);
-        const sellableNeed = Math.max(0, Math.ceil(Math.max(target, minimum) - sellable - 1e-9));
+        const sellableNeed = activityTimeline ? Math.max(activityTimeline.need - displayGap, Math.ceil(minimum-sellable), 0) : Math.max(0, Math.ceil(Math.max(target, minimum) - sellable - 1e-9));
         const normalNeed = displayGap + sellableNeed;
         const specialNeed = specialTopTwo.has(key) ? Math.max(0, Number(specialTopTwo.get(key)) - sellable) : 0;
         const itemType = specialNeed > 0 && normalNeed <= specialNeed ? "special_stock" : "regular";
@@ -836,12 +874,13 @@
           currentInventory: current, physicalInventory, pendingSubmittedQuantity, inTransitQuantity,
           tier, targetQuantity: Math.max(target, minimum, specialNeed), displayQuantity: display,
           displayGap, sellableNeed, rawNeed: need, itemType,
-          baseSellableQuantity: Math.max(0, sellable - daily * schedule.preArrivalDays), dailySales: daily, calculationDate: schedule.currentArrivalDate,
+          baseSellableQuantity: activityTimeline?.atArrival ?? Math.max(0, sellable - (activityPreUse ?? daily * schedule.preArrivalDays)), dailySales: daily, calculationDate: schedule.currentArrivalDate,
           currentArrivalDate: schedule.currentArrivalDate, nextArrivalDate: schedule.nextArrivalDate, coverageDays: schedule.coverageDays,
-          preArrivalStockoutRisk: daily > 0 && sellable < daily * schedule.preArrivalDays,
+          preArrivalStockoutRisk: activityTimeline ? activityTimeline.openingRisk : sellable < (activityPreUse ?? daily * schedule.preArrivalDays),
+          ...(activityApplies ? {activityPlanId:activity.planId,activityPlanRevision:activity.revision,activityEvidence,activityDemandIncrease:Math.max(0,target-daily*schedule.coverageDays),activityDemandSchedule:Array.from({length:Math.max(0,daysBetween(activity.timing.usableDate,activity.timing.protectionEnd)+1)},(_,i)=>{const d=globalThis.StoreTransferActivity.add(activity.timing.usableDate,i);return [d,activity.demand(store,sku,d,d,daily),i===0?0:activityTimeline.inbound.filter(t=>globalThis.StoreTransferActivity.add(t.date,2)===d).reduce((s,t)=>s+t.quantity,0)];})} : {}),
           systemSellThroughDate: projectedSellThroughDate(schedule.currentArrivalDate, Math.max(0, sellable - daily * schedule.preArrivalDays), Math.max(0, need - displayGap), daily),
           isSellThroughStop: Boolean(master.sellThroughStop),
-          ruleSummary: [itemType === "special_stock" ? `${singleDuvetType(master)}／${materialName(master)}前2名花色；建議維持1件，非必要調撥` : `${tier}；保護${schedule.coverageDays}天至${schedule.nextArrivalDate}`, displayGap ? `展示缺口${displayGap}件另補` : "", rule?.note, displaySuppressedReason, pendingSubmittedQuantity ? `${calculationMode === "comparison" ? "A/B測試排除待發貨" : "待發貨"}${pendingSubmittedQuantity}件` : "", inTransitQuantity ? `發貨在途${inTransitQuantity}件` : "", daily > 0 && sellable < daily * schedule.preArrivalDays ? `本批${schedule.currentArrivalDate}到店前有缺貨風險` : ""].filter(Boolean).join("；")
+          ruleSummary: [activityEvidence, itemType === "special_stock" ? `${singleDuvetType(master)}／${materialName(master)}前2名花色；建議維持1件，非必要調撥` : `${tier}；保護${schedule.coverageDays}天至${schedule.nextArrivalDate}`, displayGap ? `展示缺口${displayGap}件另補` : "", rule?.note, displaySuppressedReason, pendingSubmittedQuantity ? `${calculationMode === "comparison" ? "A/B測試排除待發貨" : "待發貨"}${pendingSubmittedQuantity}件` : "", inTransitQuantity ? `發貨在途${inTransitQuantity}件` : "", daily > 0 && sellable < daily * schedule.preArrivalDays ? `本批${schedule.currentArrivalDate}到店前有缺貨風險` : ""].filter(Boolean).join("；")
         };
         if (!needsBySku.has(sku)) needsBySku.set(sku, []); needsBySku.get(sku).push(row);
       }
@@ -889,6 +928,10 @@
           if (type === "regular" && unfilled > 0) shortageRows.push({ storeCode: row.storeCode, sku, productName: row.productName, demandQuantity: row.rawNeed, allocatedQuantity: suggested, unfilledQuantity: unfilled, itemType: "regular", currentArrivalDate: row.currentArrivalDate, nextArrivalDate: row.nextArrivalDate, followUpStatus: "待回拋主採購", systemDecisionReason, reason: isS ? `S品僅可釋出${protection.releasable}件；${protection.reason}` : protection.reserve > 0 ? `總部安全庫存保留${protection.reserve}件；總倉可釋出${protection.releasable}件` : `總倉可用${hqAvailable}件，不足全部門市需求` });
         }
       }
+    }
+    for (const row of [...regularRows,...specialStockRows]) if(row.activityPlanId) {
+      row.systemSellThroughDate = globalThis.StoreTransferActivity.projection(row.activityDemandSchedule,row.baseSellableQuantity,row.displayGap,row.suggestedQuantity);
+      row.systemDecisionReason = `${row.activityEvidence}；${row.systemDecisionReason}`;
     }
     regularRows.sort((a, b) => STORE_ORDER.indexOf(a.storeCode) - STORE_ORDER.indexOf(b.storeCode) || a.sku.localeCompare(b.sku));
     specialStockRows.sort((a, b) => STORE_ORDER.indexOf(a.storeCode) - STORE_ORDER.indexOf(b.storeCode) || a.sku.localeCompare(b.sku));
@@ -1065,6 +1108,18 @@
 
     const actionableActivityRows = activityRows.filter((row) => Number(row.suggestedQuantity) > 0);
     const rows = [...regularRows, ...specialStockRows, ...actionableActivityRows, ...consumableRows];
+    if(activity?.active) {
+      const ordinary=buildSuggestions({...input,activityPlan:null});
+      const baseline=new Map(ordinary.rows.map(r=>[`${r.storeCode}|${r.sku}|${r.itemType}`,r.suggestedQuantity]));
+      for(const row of rows.filter(r=>r.activityPlanId)) {
+        row.activityAdditionalQuantity=Math.max(0,row.suggestedQuantity-(baseline.get(`${row.storeCode}|${row.sku}|${row.itemType}`)||0));
+        row.ruleSummary=`${row.ruleSummary}；相較一般週補貨增加${row.activityAdditionalQuantity}件（已含本次建議內）`;
+      }
+      for(const row of shortageRows) {
+        const need=needsBySku.get(row.sku)?.find(r=>r.storeCode===row.storeCode && r.activityPlanId);
+        if(need) row.reason=`${need.activityEvidence}；${row.reason}`;
+      }
+    }
     const submittedRows = pendingTransferRows.filter((row) => row.status === "提交");
     const inTransitRows = pendingTransferRows.filter((row) => row.status === "發貨審核");
     const comparisonKeys = new Set([
@@ -1154,16 +1209,18 @@
       const exclusionDecision = transferApplicabilityDecision(input.storeInventory || {}, { ...master, sku }, storeCode, proposalDate);
       const exclusionReason = transferExclusionReason(exclusionDecision);
       if (exclusionReason) systemReason = exclusionReason;
+      const activityNeed = activity?.active ? needsBySku.get(sku)?.find(row=>row.storeCode===storeCode && row.activityPlanId) : null;
+      if(activityNeed && !exclusionReason) systemReason=`${activityNeed.activityEvidence}；${systemReason || "依活動逐日需求計算"}`;
       return {
         storeCode, sku, productName: master.name || "", calculationDate: schedule?.currentArrivalDate || latest,
-        baseQuantity, displayGap, dailyUsage,
+        baseQuantity:activityNeed?.baseSellableQuantity ?? baseQuantity, displayGap, dailyUsage,
         physicalInventory, pendingSubmittedQuantity: pending, inTransitQuantity: inTransit,
         currentQuantity: current, localSales42, b3Sales42: Math.max(0, b3.get(compoundKey) || 0),
-        targetQuantity: Math.max(target, minimum), displayQuantity,
+        targetQuantity: activityNeed?.targetQuantity ?? Math.max(target, minimum), displayQuantity,
         currentArrivalDate: schedule?.currentArrivalDate || latest,
         nextArrivalDate: schedule?.nextArrivalDate || latest,
         preArrivalStockoutRisk: dailyUsage > 0 && Math.max(0, current - displayQuantity) < dailyUsage * (schedule?.preArrivalDays || 0),
-        systemProjection: projectedSellThroughDate(schedule?.currentArrivalDate || latest, baseQuantity, 0, dailyUsage),
+        systemProjection: activityNeed ? `活動逐日估算至${activity.timing.protectionEnd}，請查看保障缺口` : projectedSellThroughDate(schedule?.currentArrivalDate || latest, baseQuantity, 0, dailyUsage),
         systemReason, hqAvailable, hqReserve: hqProtection.reserve, hqReleasable: hqProtection.releasable,
         autoExcluded: exclusionDecision.excluded, exclusionReason
       };

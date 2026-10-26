@@ -678,7 +678,12 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
     validateConsumablePack(type, suggested, "系統建議量");
     const rawSnapshot = item.decisionSnapshot && typeof item.decisionSnapshot === "object" && !Array.isArray(item.decisionSnapshot)
       ? item.decisionSnapshot as Record<string, unknown> : {};
+    if(Array.isArray(rawSnapshot.activityDemandSchedule) && rawSnapshot.activityDemandSchedule.length>60) throw new RequestValidationError("活動逐日需求過長。");
     const decisionSnapshot = JSON.stringify({
+      ...(Array.isArray(rawSnapshot.activityDemandSchedule) ? {activityAdditionalQuantity:quantity(rawSnapshot.activityAdditionalQuantity || 0,"活動增加量"),activityDemandSchedule:rawSnapshot.activityDemandSchedule.map((raw:unknown)=>{
+        if(!Array.isArray(raw) || ![2,3].includes(raw.length)) throw new RequestValidationError("活動逐日需求格式錯誤。");
+        return [dateText(raw[0],"活動需求日"),nonnegativeNumber(raw[1],"活動日需求"),...(raw.length===3 ? [nonnegativeNumber(raw[2],"後續及時到貨")]:[])];
+      })} : {}),
       inventoryEvidenceVersion: 1,
       localSales42: nonnegativeNumber(rawSnapshot.localSales42 || 0, "近42天現場銷售"),
       b3Sales42: nonnegativeNumber(rawSnapshot.b3Sales42 || 0, "近42天B3銷售"),
@@ -777,6 +782,15 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   });
   const arrivalSchedule = input.arrivalSchedule && typeof input.arrivalSchedule === "object" && !Array.isArray(input.arrivalSchedule) ? JSON.stringify(input.arrivalSchedule) : "{}";
   if (arrivalSchedule.length > 5000) throw new RequestValidationError("到店日快照內容過長。");
+  for(const raw of Object.values(JSON.parse(arrivalSchedule))) {
+    const s=activityObject(raw);
+    if(!s.activityPlanId) continue;
+    const plan=await env.DB.prepare("SELECT revision,status FROM store_transfer_activity_plans WHERE id=?").bind(s.activityPlanId).first<Record<string,unknown>>();
+    if(!plan || plan.status!=="confirmed" || Number(plan.revision)!==Number(s.activityPlanRevision) || s.activityBufferDays!==2) throw new RequestValidationError("活動版本已變更或未確認，請重新計算。",409);
+    const prior=await activityCommitments(env,String(s.activityPlanId),weekKey);
+    if(prior.some(b=>Number(b.all_exported)!==1)) throw new RequestValidationError("前週活動批次尚未完成ERP產檔，請先完成並更新調撥資料。",409);
+    if(prior.length && input.activityReconciled!==true) throw new RequestValidationError("請確認前批活動調撥已反映在最新庫存及期間調撥單，再建立批次。",409);
+  }
   const now = new Date().toISOString();
   const itemInsertSql = `INSERT INTO store_transfer_items (batch_id, store_code, sku, product_name, suggested_quantity, rule_summary, item_type, calculation_date, base_quantity, display_gap, daily_usage, system_projection, system_reason, decision_snapshot, updated_at, updated_by)
     SELECT ?1, json_extract(value, '$.storeCode'), json_extract(value, '$.sku'), json_extract(value, '$.productName'), json_extract(value, '$.suggested'), json_extract(value, '$.ruleSummary'), json_extract(value, '$.itemType'), json_extract(value, '$.calculationDate'), json_extract(value, '$.baseQuantity'), json_extract(value, '$.displayGap'), json_extract(value, '$.dailyUsage'), json_extract(value, '$.systemProjection'), json_extract(value, '$.systemReason'), json_extract(value, '$.decisionSnapshot'), ?3, ?4 FROM json_each(?2)`;
@@ -1101,6 +1115,14 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   const manualCatalog = new Map(catalogResult.results.map((row) => [String(row.sku), row]));
   const schedule = parseJson(batch.arrival_schedule);
   if (input.items.length < existing.results.length) throw new RequestValidationError("總部核准明細不完整；移除品項請使用移除按鈕，系統會保留稽核紀錄。", 409);
+  if(!saveOnly) for(const value of Object.values(schedule)) {
+    const s=value as Record<string,unknown>;
+    if(s.activityPlanId && s.activityApprovalDate!==taipeiDate(new Date())) throw new RequestValidationError("活動批次實際核准日已與預估不同；為保護到店＋2日緩衝，請以最新日期及庫存重算批次。",409);
+    if(s.activityPlanId) {
+      const plan=await env.DB.prepare("SELECT revision,status FROM store_transfer_activity_plans WHERE id=?").bind(s.activityPlanId).first<Record<string,unknown>>();
+      if(!plan || plan.status!=="confirmed" || Number(plan.revision)!==Number(s.activityPlanRevision)) throw new RequestValidationError("活動分配已修改或取消，請核對新版並重算。",409);
+    }
+  }
   const now = new Date().toISOString();
   const approvedSchedule = arrivalScheduleAfterApproval(schedule, now);
   const approvedScheduleText = JSON.stringify(approvedSchedule);
@@ -1290,9 +1312,135 @@ async function saveConsumableSnapshots(request: Request, env: StoreTransferEnv):
   return json({ saved: rows.length, snapshotDate: rows[0].snapshotDate }, 201);
 }
 
+function activityObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new RequestValidationError("活動資料格式錯誤。");
+  return value as Record<string, unknown>;
+}
+
+function activityDate(value: unknown): string {
+  const d = dateText(value, "活動日期");
+  if (new Date(`${d}T00:00:00Z`).toISOString().slice(0,10) !== d) throw new RequestValidationError("活動日期不存在。");
+  return d;
+}
+
+function activitySource(raw: unknown): Record<string, unknown> {
+  const source = activityObject(raw);
+  const startDate = activityDate(source.startDate), endDate = activityDate(source.endDate), asOfDate = activityDate(source.asOfDate);
+  if (source.version !== 1 || endDate < startDate || endDate <= asOfDate || (Date.parse(endDate)-Date.parse(asOfDate))/86400000 > 366) throw new RequestValidationError("活動期間或版本錯誤。");
+  if (!Array.isArray(source.months) || !source.months.length || source.months.length > 13 || !Array.isArray(source.rows) || !source.rows.length || source.rows.length > 20000) throw new RequestValidationError("活動來源月份或品項數無效。");
+  const monthsSeen = new Set<string>();
+  const months = source.months.map(rawMonth => {
+    const m = activityObject(rawMonth), month = text(m.month, "活動月份", 7);
+    activityDate(`${month}-01`);
+    if (monthsSeen.has(month)) throw new RequestValidationError("活動月份重複。");
+    monthsSeen.add(month);
+    const days = new Date(Date.UTC(Number(month.slice(0,4)), Number(month.slice(5)), 0)).getUTCDate();
+    const targetsRaw = activityObject(m.targets), weightsRaw = activityObject(m.weights), targets: Record<string, number> = {}, weights: Record<string, number[]> = {}, weekdayBasis: Record<string,string> = {};
+    for (const store of Object.keys(STORES)) {
+      targets[store] = nonnegativeNumber(targetsRaw[store], "門市目標", 1e12);
+      const w = weightsRaw[store];
+      if (!Array.isArray(w) || w.length !== days) throw new RequestValidationError("活動每日分布天數不符。");
+      weights[store] = w.map(v => nonnegativeNumber(v, "每日權重", 1));
+      if (Math.abs(weights[store].reduce((a,b) => a+b,0)-1)>1e-6) throw new RequestValidationError("活動每日分布不守恆。");
+      weekdayBasis[store] = String((m.weekdayBasis as Record<string,unknown> | undefined)?.[store] || "資料不足；總部須確認").slice(0,100);
+    }
+    const retailTarget = nonnegativeNumber(m.retailTarget,"實體門市目標",1e12);
+    if (!(retailTarget > 0) || Math.abs(Object.values(targets).reduce((a,b)=>a+b,0)-retailTarget) > 0.01) throw new RequestValidationError("活動門市目標不守恆。");
+    return { month, retailTarget, onlineAndOtherTarget: nonnegativeNumber(m.onlineAndOtherTarget || 0,"線上及其他目標",1e12), targets, weights, weekdayBasis };
+  });
+  const seen = new Set<string>();
+  const rows = source.rows.map(rawRow => {
+    const row = activityObject(rawRow), storeCode = String(row.storeCode), sku = text(row.sku,"ERP品號",80);
+    const key = `${storeCode}|${sku}`;
+    if (!(storeCode in STORES) || seen.has(key)) throw new RequestValidationError("活動門市或品號重複／無效。");
+    seen.add(key);
+    const quantitiesRaw = activityObject(row.quantities), quantities: Record<string,number> = {};
+    if(!Object.keys(quantitiesRaw).length) throw new RequestValidationError("活動品項缺少預估量。");
+    for (const [m,q] of Object.entries(quantitiesRaw)) {
+      if (!monthsSeen.has(m)) throw new RequestValidationError("活動品項月份不在目標內。");
+      quantities[m] = nonnegativeNumber(q,"活動品項預估",1e8);
+    }
+    return { storeCode, sku, quantities };
+  });
+  for(let d=startDate;d<=endDate;d=addCalendarDays(d,1)) if(!monthsSeen.has(d.slice(0,7))) throw new RequestValidationError("活動跨月目標不完整。");
+  return { version:1, name:text(source.name,"活動名稱",80), scope:text(source.scope || "all","活動範圍",80), startDate,endDate,asOfDate,months,rows };
+}
+
+function activityRecord(row: Record<string,unknown>) {
+  return { id:row.id, revision:row.revision, status:row.status, source:JSON.parse(String(row.source)), config:JSON.parse(String(row.config)), updatedAt:row.updated_at, updatedBy:row.updated_by };
+}
+
+async function activityCommitments(env:StoreTransferEnv,planId:string,week:string):Promise<Record<string,unknown>[]> {
+  const rows=await env.DB.prepare(`SELECT b.id,b.week_key,b.status,MIN(CASE WHEN s.erp_created_at IS NULL THEN 0 ELSE 1 END) all_exported
+    FROM store_transfer_batches b JOIN store_transfer_store_status s ON s.batch_id=b.id
+    WHERE b.deleted_at IS NULL AND b.status!='cancelled' AND b.week_key < ?
+    AND EXISTS(SELECT 1 FROM json_each(b.arrival_schedule) j WHERE json_extract(j.value,'$.activityPlanId')=?)
+    GROUP BY b.id,b.week_key,b.status ORDER BY b.week_key`).bind(week,planId).all<Record<string,unknown>>();
+  return rows.results;
+}
+
+async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): Promise<Response> {
+  const who = await actor(request,env); assertHq(who.role);
+  if (request.method === "GET") {
+    if (id) {
+      const row = await env.DB.prepare("SELECT * FROM store_transfer_activity_plans WHERE id = ?").bind(id).first<Record<string,unknown>>();
+      if (!row) throw new RequestValidationError("找不到活動。",404);
+      return json({ plan:activityRecord(row) });
+    }
+    const rows = await env.DB.prepare("SELECT id,revision,status,json_extract(source,'$.name') name,json_extract(source,'$.startDate') startDate,json_extract(source,'$.endDate') endDate,updated_at,updated_by FROM store_transfer_activity_plans ORDER BY updated_at DESC LIMIT 100").all();
+    return json({ plans:rows.results });
+  }
+  requireSameOrigin(request,env);
+  if(request.headers.get("X-Store-Transfer-Version") !== "20261027-transfer-activity-r2") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
+  const body = await readBody(request,3_000_000), now = new Date().toISOString();
+  if (request.method === "POST" && !id) {
+    const source = activitySource(body.source), planId = crypto.randomUUID();
+    const existing=await env.DB.prepare("SELECT id,revision,status,source FROM store_transfer_activity_plans WHERE json_extract(source,'$.name')=? AND json_extract(source,'$.startDate')=? AND json_extract(source,'$.endDate')=? AND json_extract(source,'$.scope')=?").bind(source.name,source.startDate,source.endDate,source.scope).first<Record<string,unknown>>();
+    if(existing) {
+      if(String(existing.source)===JSON.stringify(source) && existing.status!=="cancelled") return json({id:existing.id,revision:existing.revision,reused:true});
+      if(body.expectedRevision!==existing.revision) return json({error:"已有同名同期間活動；更新來源會清除分配確認，要求總部重新確認，既有批次保留原快照。",existingId:existing.id,existingRevision:existing.revision},409);
+      const updated=await env.DB.prepare("UPDATE store_transfer_activity_plans SET source=?,config='{}',status='draft',revision=revision+1,updated_at=?,updated_by=? WHERE id=? AND revision=?").bind(JSON.stringify(source),now,who.email,existing.id,existing.revision).run();
+      if(Number(updated.meta.changes)!==1) throw new RequestValidationError("活動已由其他同仁更新，請重新讀取。",409);
+      return json({id:existing.id,revision:Number(existing.revision)+1});
+    }
+    await env.DB.prepare("INSERT INTO store_transfer_activity_plans(id,status,source,created_at,created_by,updated_at,updated_by) VALUES (?,'draft',?,?,?,?,?)").bind(planId,JSON.stringify(source),now,who.email,now,who.email).run();
+    return json({ id:planId, revision:1 },201);
+  }
+  const row = await env.DB.prepare("SELECT * FROM store_transfer_activity_plans WHERE id = ?").bind(id).first<Record<string,unknown>>();
+  if (!row) throw new RequestValidationError("找不到活動。",404);
+  const revision = quantity(body.expectedRevision,"活動版本");
+  if (Number(row.revision)!==revision) throw new RequestValidationError("活動已由其他同仁更新，請重新讀取後確認。",409);
+  const source = activitySource(JSON.parse(String(row.source))), configRaw = activityObject(body.config);
+  const startProposalDate = activityDate(configRaw.startProposalDate), reason = text(configRaw.reason,"確認／修改原因",300);
+  if (new Date(`${startProposalDate}T00:00:00Z`).getUTCDay()!==1 || startProposalDate > String(source.endDate)) throw new RequestValidationError("開始備貨日須為活動結束前的星期一。");
+  const targetsRaw = activityObject(configRaw.targets), targets: Record<string,Record<string,number>> = {};
+  for (const rawMonth of source.months as Record<string,unknown>[]) {
+    const m = String(rawMonth.month), sourceTargets = rawMonth.targets as Record<string,number>, month = activityObject(targetsRaw[m]);
+    targets[m] = {};
+    for (const store of Object.keys(STORES)) {
+      targets[m][store] = nonnegativeNumber(month[store],"門市目標",1e12);
+      if (targets[m][store]>0 && !(sourceTargets[store]>0)) throw new RequestValidationError(`${store}缺可用歷史，不能直接分配業績。`);
+    }
+    if (Math.abs(Object.values(targets[m]).reduce((a,b)=>a+b,0)-Number(rawMonth.retailTarget))>0.01) throw new RequestValidationError(`${m}門市目標加總不守恆。`);
+  }
+  if (!["confirmed","cancelled"].includes(String(body.status))) throw new RequestValidationError("活動狀態無效。");
+  const result = await env.DB.prepare("UPDATE store_transfer_activity_plans SET status=?,config=?,revision=revision+1,updated_at=?,updated_by=? WHERE id=? AND revision=?").bind(body.status,JSON.stringify({startProposalDate,targets,reason}),now,who.email,id,revision).run();
+  if (Number(result.meta.changes)!==1) throw new RequestValidationError("活動版本衝突，請重新讀取。",409);
+  return json({ id, revision:revision+1 });
+}
+
 export async function storeTransferRoute(request: Request, env: StoreTransferEnv): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/store-transfer")) return null;
+  const commitmentsMatch=url.pathname.match(/^\/api\/store-transfer\/activity-plans\/([a-zA-Z0-9-]+)\/commitments$/);
+  if(commitmentsMatch && request.method==="GET") {
+    const who=await actor(request,env);assertHq(who.role);
+    const rows=await activityCommitments(env,commitmentsMatch[1],url.searchParams.get("week") || "");
+    return json({batches:rows});
+  }
+  if (url.pathname === "/api/store-transfer/activity-plans" && ["GET","POST"].includes(request.method)) return activityPlans(request,env);
+  const activityMatch = url.pathname.match(/^\/api\/store-transfer\/activity-plans\/([a-zA-Z0-9-]+)$/);
+  if (activityMatch && ["GET","PUT"].includes(request.method)) return activityPlans(request,env,activityMatch[1]);
   if (url.pathname === "/api/store-transfer/config" && request.method === "GET") return config(request, env);
   if (url.pathname === "/api/store-transfer/applicability-rules" && request.method === "GET") return transferApplicabilityRules(request, env);
   if (url.pathname === "/api/store-transfer/applicability-rules" && request.method === "PUT") return saveTransferApplicabilityRules(request, env);
@@ -1349,6 +1497,8 @@ export async function cleanupStoreTransfers(env: StoreTransferEnv): Promise<void
     env.DB.prepare(`DELETE FROM store_transfer_batches WHERE id IN (${expired})`),
     env.DB.prepare("DELETE FROM store_transfer_collaboration_drafts WHERE created_at < datetime('now', '-12 months')"),
     env.DB.prepare("DELETE FROM store_transfer_consumable_snapshots WHERE snapshot_date < date('now', '-12 months')"),
-    env.DB.prepare("DELETE FROM store_transfer_display_exception_events WHERE created_at < datetime('now', '-12 months')")
+    env.DB.prepare("DELETE FROM store_transfer_display_exception_events WHERE created_at < datetime('now', '-12 months')"),
+    env.DB.prepare("DELETE FROM store_transfer_activity_plan_history WHERE updated_at < datetime('now', '-12 months')"),
+    env.DB.prepare("DELETE FROM store_transfer_activity_plans WHERE updated_at < datetime('now', '-12 months')")
   ]);
 }

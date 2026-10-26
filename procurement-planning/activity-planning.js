@@ -20,6 +20,44 @@
     for (let m = start.slice(0, 7); m <= end.slice(0, 7); m = shiftMonth(m, 1)) result.push(m);
     return result;
   }
+  function attachTransferSource(result, settings, monthly, index, input, affected) {
+    // Only derived forecast quantities and store-level date weights cross tools;
+    // no transactions, workbook names, or customer identifiers are included.
+    const transferMonths = settings.months.map(month => {
+      const targets = {}, weights = {}, weekdayBasis = {};
+      for (const store of global.StoreTransferActivity?.STORES || ["R00", "R01", "R03", "R10", "R07", "R06"]) {
+        const projection = monthly.get(`${month}\t${store}`);
+        targets[store] = projection?.target || 0;
+        const weekdayTotals = Array(7).fill(0), weekdayDays = Array(7).fill(0);
+        for (let d = add(input.asOfDate, -83); d <= input.asOfDate; d = add(d, 1)) {
+          const day = new Date(`${d}T00:00:00Z`).getUTCDay();
+          weekdayDays[day] += 1;
+          weekdayTotals[day] += positive(index.channel.get(store)?.get(d)?.[1]);
+        }
+        const averages = weekdayTotals.map((v,i) => v / Math.max(1, weekdayDays[i]));
+        const verified = index.covered(add(input.asOfDate, -83), input.asOfDate) && averages.reduce((a,b) => a+b,0) > 0;
+        weekdayBasis[store] = verified ? "近12週各星期實收營收分布" : "資料不足，採均勻分布；總部須確認";
+        const raw = Array.from({ length: between(`${month}-01`, monthEnd(month)) }, (_,i) => (projection?.shape.weights[i] || 1) * (verified ? averages[new Date(`${month}-${String(i+1).padStart(2,"0")}T00:00:00Z`).getUTCDay()] : 1));
+        const total = raw.reduce((a,b) => a+b,0);
+        weights[store] = raw.map(v => total > 0 ? v / total : 1/raw.length);
+      }
+      const retailTarget = Object.values(targets).reduce((a,b) => a+b,0);
+      return { month, retailTarget, onlineAndOtherTarget: Math.max(0, settings.monthlyTargets[month].amount - retailTarget), targets, weights, weekdayBasis };
+    });
+    const transferRows = [];
+    for (const row of affected) {
+      if (row.externalPurchaseBlocked || row.manualSupplierReview || row.sellThroughStop) continue;
+      for (const store of Object.keys(transferMonths[0]?.targets || {})) {
+        const local = positive(row.storeDailyByCode?.[store]), direct = positive(row.storeDirectDailyByCode?.[store]);
+        // B3 remains a headquarters shipment; it must not become store stock.
+        const localShare = local + direct > 0 ? local / (local + direct) : 0;
+        const quantities = Object.fromEntries(row.activityPlanning.monthlyDetails.filter(d => d.channel === store && settings.months.includes(d.month)).map(d => [d.month, d.monthlyQty * localShare]));
+        if (Object.values(quantities).some(q => q > 0)) transferRows.push({ storeCode: store, sku: row.sku, quantities });
+      }
+    }
+    result.activityTransferSource = { version: 1, name: settings.name, startDate: settings.startDate, endDate: settings.endDate, asOfDate: input.asOfDate, scope: settings.scope, months: transferMonths, rows: transferRows };
+    return result;
+  }
   function normalize(settings, asOfDate) {
     if (!date(asOfDate)) throw new Error("活動備貨缺少有效資料截止日。");
     const startDate = date(settings.startDate), endDate = date(settings.endDate);
@@ -34,7 +72,9 @@
       const source = supplied[month];
       const amount = Number(typeof source === "object" ? source?.amount : source);
       if (!Number.isFinite(amount) || amount <= 0 || amount > 1e12) throw new Error(`${month}請填寫大於0且不超過一兆元的整月營收目標（已含活動）。`);
-      monthlyTargets[month] = { amount, source: String(source?.source || "本次活動草稿"), updatedAt: String(source?.updatedAt || "") };
+      const retailAmount = source?.retailAmount == null || source?.retailAmount === "" ? null : Number(source.retailAmount);
+      if(retailAmount!=null && (!Number.isFinite(retailAmount) || retailAmount<0 || retailAmount>amount)) throw new Error(`${month}實體六店目標不可超過全通路目標。`);
+      monthlyTargets[month] = { amount, retailAmount, source: String(source?.source || "本次活動草稿"), updatedAt: String(source?.updatedAt || "") };
     }
     return { enabled: true, name: String(settings.name).trim(), method: "monthly-target", methodLabel: "整月目標分配（已含活動）", startDate, endDate, scope: settings.scope || "all", monthlyTargets, months: list };
   }
@@ -176,12 +216,16 @@
       const baseline = projections.reduce((s, p) => s + p.value, 0);
       if (!(baseline > 0)) throw new Error(`${month}缺少可用的通路營收基準，無法分配整月目標。`);
       const target = settings.monthlyTargets[month]?.amount ?? baseline;
+      const retailAmount=settings.monthlyTargets[month]?.retailAmount;
+      const retailStores=new Set(["R00","R01","R03","R10","R07","R06"]);
+      const retailBaseline=projections.filter(p=>retailStores.has(p.channel)).reduce((s,p)=>s+p.value,0),otherBaseline=baseline-retailBaseline;
+      if(retailAmount!=null && ((retailAmount>0 && retailBaseline<=0) || (target-retailAmount>0 && otherBaseline<=0))) throw new Error(`${month}缺少實體或其他通路歷史，無法依指定目標分配。`);
       for (const p of projections) {
         const shape = distribution(index.channel.get(p.channel), month, settings, !/^R\d{2}$/.test(p.channel), input.asOfDate, index.covered);
-        const factor = target / baseline;
+        const factor = retailAmount==null ? target/baseline : retailStores.has(p.channel) ? (retailBaseline>0?retailAmount/retailBaseline:0) : (otherBaseline>0?(target-retailAmount)/otherBaseline:0);
         if (factor > 1.5 || factor < 0.5) notes.add(`${month}整月目標為資料推估的${factor.toFixed(2)}倍，請核對目標與供貨風險。`);
         if (shape.source.includes("未驗證")) notes.add(`${p.channel}：${shape.source}`);
-        monthly.set(`${month}\t${p.channel}`, { ...p, target: target * p.value / baseline, factor, shape, baseline });
+        monthly.set(`${month}\t${p.channel}`, { ...p, target: p.value*factor, factor, shape, baseline });
       }
     }
     return { settings, index, monthly, planningMonths, notes };
@@ -289,7 +333,41 @@
     Object.assign(result.totals, { suggestedSkuCount: result.suggestedRows.length, suggestedPurchaseQty: result.suggestedRows.reduce((s, r) => s + r.suggestedPurchaseQty, 0), suggestedPurchaseAmount: result.suggestedRows.reduce((s, r) => s + r.suggestedPurchaseAmount, 0), immediateShortageSkuCount: result.consignmentRows.filter(r => r.immediateConsignmentGap > 0).length, consignmentSuggestionSkuCount: result.consignmentRows.length, activityDemandSkuCount: affected.length, activityDemandAdditionalRawQty: affected.reduce((s, r) => s + r.activityDemandAdditionalRawQty, 0), activityDemandAdditionalSuggestedQty: affected.reduce((s, r) => s + r.activityDemandAdditionalSuggestedQty, 0), activityDemandAdditionalAmount: affected.reduce((s, r) => s + r.activityDemandAdditionalSuggestedQty * r.unitCost, 0) });
     result.appliedRules.activityDemand = { ...settings, scopeLabel: core().activityDemandScopeLabel(settings.scope), policy: "整月目標已含活動；SKU各自回測件數並依近12週實收單價校正，促銷價與未來商品組合仍須人工覆核；跨月需求統一扣抵，不另加乘，原始來源僅於瀏覽器處理", sources: input.activityHistory.sources, notes: [...context.notes], monthlyForecasts: settings.months.map(month => { const values = [...monthly.values()].filter(v => monthly.get(`${month}\t${v.channel}`) === v); return { month, target: settings.monthlyTargets[month].amount, forecast: values.reduce((s, r) => s + r.value, 0), channels: values.map(v => ({ channel: v.channel, forecast: v.value, target: v.target, model: v.model, samples: v.samples, wape: v.wape, distribution: v.shape.source })) }; }) };
     result.activitySummary = { ready: affected.filter(r => r.activityPlanning.status === "現有供貨可備妥").length, action: affected.filter(r => r.activityPlanning.status === "需要採購／寄庫拉貨").length, shortage: affected.filter(r => !["現有供貨可備妥", "需要採購／寄庫拉貨"].includes(r.activityPlanning.status)).length };
-    return result;
+    return attachTransferSource(result, settings, monthly, index, input, affected);
   }
-  global.ProcurementActivityPlanning = { MODELS, date, add, months, normalize, createHistoryBuilder, buildIndex, forecast, distribution, latestOrderDate, prepare, buildRecommendations };
+  function transferDraftFromAnalysis(analysis, retailTargets, history) {
+    const rule = analysis?.appliedRules?.activityDemand;
+    if (!rule || rule.enabled === false || rule.method !== "monthly-target") throw new Error("此分析缺少新版活動依據，請恢復原活動完整母批次，不能只用金額猜測品號需求。");
+    const settings = normalize(rule, analysis.asOfDate);
+    let source;
+    if (analysis.activityTransferSource) source = JSON.parse(JSON.stringify(analysis.activityTransferSource));
+    else {
+      if (!history) throw new Error("舊分析尚無逐日門市草稿，須先授權讀取歷史銷售；不會重新計算採購量。");
+      const context = prepare({activityDemand:rule,asOfDate:analysis.asOfDate,activityHistory:history,salesReports:[]});
+      for (const month of settings.months) {
+        const saved = rule.monthlyForecasts?.find(m => m.month === month);
+        if (!saved?.channels?.length || Math.abs(saved.channels.reduce((s,c)=>s+Number(c.target),0)-Number(settings.monthlyTargets[month].amount)) > 0.02) throw new Error(`${month}缺少原通路分配依據，請恢復完整活動母批次。`);
+        for (const channel of saved.channels) {
+          const projection=context.monthly.get(`${month}\t${channel.channel}`);
+          if (!projection || !Number.isFinite(channel.target) || channel.target < 0) throw new Error(`${month}原通路歷史無法完整配對，不能補建草稿。`);
+          projection.target=channel.target;
+        }
+      }
+      const rows=analysis.rows || [];
+      if (!rows.some(r=>r.activityPlanning?.monthlyDetails?.length)) throw new Error("此分析沒有逐品號活動依據，請恢復完整母批次，不能使用供應商篩選後的報表代替。");
+      source=attachTransferSource({},settings,context.monthly,context.index,{asOfDate:analysis.asOfDate},rows).activityTransferSource;
+    }
+    for (const month of source.months) {
+      const target=Number(retailTargets[month.month]),total=settings.monthlyTargets[month.month]?.amount;
+      if (!Number.isFinite(target) || target <= 0 || target > total) throw new Error(`${month.month}門市目標須大於0且不可超過原全通路整月目標。`);
+      if (!(month.retailTarget > 0)) throw new Error(`${month.month}原分析沒有可用門市分配基準，不能將零歷史直接放大。`);
+      const factor=target/month.retailTarget;
+      for (const store of Object.keys(month.targets)) month.targets[store]*=factor;
+      for (const row of source.rows) if (row.quantities[month.month]!=null) row.quantities[month.month]*=factor;
+      month.retailTarget=target;month.onlineAndOtherTarget=total-target;
+    }
+    if (!source.rows.length) throw new Error("原分析缺少可用的門市現場需求，無法補建分配草稿。");
+    return source;
+  }
+  global.ProcurementActivityPlanning = { MODELS, date, add, months, normalize, createHistoryBuilder, buildIndex, forecast, distribution, latestOrderDate, prepare, buildRecommendations, transferDraftFromAnalysis };
 })(typeof globalThis !== "undefined" ? globalThis : window);

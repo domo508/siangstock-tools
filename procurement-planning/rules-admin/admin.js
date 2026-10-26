@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const APP_VERSION = "20261023-procurement-admin-r11";
+  const APP_VERSION = "20261027-procurement-admin-r13";
   const state = { config: null, version: 0, rules: null, dirty: false, googleTokenClient: null, googleAccessToken: "", masterBySku: null, runtimeOutdated: false, latestRuntimeVersion: "" };
   const GOOGLE_READ_SCOPE = "openid email https://www.googleapis.com/auth/drive.readonly";
   const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -52,7 +52,7 @@
 
   function configureReturnPath() {
     if (new URLSearchParams(location.search).get("from") !== "store-transfer") return;
-    const target = "../../store-transfer/?deploy=20261020-store-transfer-r21";
+    const target = "../../store-transfer/?deploy=20261027-transfer-activity-r2";
     const source = get("#source-tool-link"); const back = get("#source-back-link"); const brand = get("#tool-brand-link");
     source.href = target; source.textContent = "門市週補貨與調撥";
     back.href = target; back.textContent = "← 返回週調撥工具";

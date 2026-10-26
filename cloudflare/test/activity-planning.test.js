@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const context = { console, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, Blob, URL, setTimeout, clearTimeout };
 context.globalThis = context;
 vm.createContext(context);
-for (const path of ["../procurement-planning/assets/xlsx-js-style.bundle.js", "../procurement-planning/xlsx-style-runtime.js", "../inventory/assets/xlsx.full.min.js", "../procurement-planning/core.js", "../store-transfer/core.js", "../procurement-planning/activity-planning.js"]) vm.runInContext(readFileSync(path, "utf8"), context, { filename: path });
+for (const path of ["../procurement-planning/assets/xlsx-js-style.bundle.js", "../procurement-planning/xlsx-style-runtime.js", "../inventory/assets/xlsx.full.min.js", "../procurement-planning/core.js", "../store-transfer/core.js", "../store-transfer/activity.js", "../procurement-planning/activity-planning.js"]) vm.runInContext(readFileSync(path, "utf8"), context, { filename: path });
 const { XLSX, ProcurementXlsxWriter: writer, ProcurementPlanningCore: core, ProcurementActivityPlanning: activity } = context;
 function workbook(rows, name = "工作表1") { const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(rows), name); return book; }
 function roundtrip(book) { return XLSX.read(writer.write(book, { type: "array", bookType: "xlsx", compression: true }), core.ACTIVITY_HISTORY_READ_OPTIONS); }
@@ -43,6 +43,43 @@ const fixture = source();
 const run = extra => core.buildProcurementRecommendations({ ...fixture, ...extra });
 
 describe("跨月活動備貨與供貨", () => {
+  it("已採購一千萬元可單獨補建門市350萬草稿；舊分析與ERP輸出逐位不變",()=>{
+    const result=run({activityDemand:{...fixture.activityDemand,monthlyTargets:{"2026-11":{amount:10000000}}}});
+    const saved=JSON.stringify(result),before=XLSX.utils.sheet_to_json(core.buildRecommendationWorkbook(result,writer).Sheets["01_採購摘要"],{header:1});
+    const draft=activity.transferDraftFromAnalysis(result,{"2026-11":3500000});
+    expect(draft.months[0].retailTarget).toBe(3500000);expect(draft.months[0].onlineAndOtherTarget).toBe(6500000);
+    expect(Object.values(draft.months[0].targets).reduce((s,v)=>s+v,0)).toBeCloseTo(3500000);
+    expect(()=>context.StoreTransferActivity.validateSource(draft)).not.toThrow();
+    expect(JSON.stringify(result)).toBe(saved);
+    expect(XLSX.utils.sheet_to_json(core.buildRecommendationWorkbook(result,writer).Sheets["01_採購摘要"],{header:1})).toEqual(before);
+    const legacy=JSON.parse(saved);delete legacy.activityTransferSource;const legacySaved=JSON.stringify(legacy);
+    expect(()=>activity.transferDraftFromAnalysis(legacy,{"2026-11":3500000})).toThrow(/歷史銷售/);
+    const rebuilt=activity.transferDraftFromAnalysis(legacy,{"2026-11":3500000},fixture.activityHistory);
+    expect(()=>context.StoreTransferActivity.validateSource(rebuilt)).not.toThrow();expect(rebuilt.rows).toEqual(draft.rows);
+    expect(JSON.stringify(legacy)).toBe(legacySaved);
+    expect(()=>activity.transferDraftFromAnalysis(result,{"2026-11":10000001})).toThrow(/不可超過/);
+    expect(()=>activity.transferDraftFromAnalysis(result,{"2026-11":0})).toThrow(/大於0/);
+    legacy.appliedRules.activityDemand.monthlyForecasts=[];expect(()=>activity.transferDraftFromAnalysis(legacy,{"2026-11":3500000},fixture.activityHistory)).toThrow(/通路分配/);
+  });
+  it("主採購先分實體與線上目標，兩組各自分配且公司總額不變",()=>{
+    const demand={...fixture.activityDemand,monthlyTargets:{"2026-11":{amount:40000,retailAmount:12000}}};
+    const result=run({activityDemand:demand}),month=result.activityTransferSource.months[0];
+    expect(month.retailTarget).toBeCloseTo(12000);expect(month.onlineAndOtherTarget).toBeCloseTo(28000);
+    expect(Object.values(month.targets).reduce((s,v)=>s+v,0)).toBeCloseTo(12000);
+    expect(()=>run({activityDemand:{...demand,monthlyTargets:{"2026-11":{amount:40000,retailAmount:50000}}}})).toThrow(/不可超過/);
+  });
+  it("提供週調撥的衍生來源可通過正式驗證，門市目標／每日權重守恆且不含交易",()=>{
+    const result=run(),source=result.activityTransferSource;
+    expect(()=>context.StoreTransferActivity.validateSource(source)).not.toThrow();
+    for(const month of source.months) {
+      expect(Object.values(month.targets).reduce((s,v)=>s+v,0)).toBeCloseTo(month.retailTarget);
+      for(const weights of Object.values(month.weights)) expect(weights.reduce((s,v)=>s+v,0)).toBeCloseTo(1);
+    }
+    expect(JSON.stringify(source)).not.toMatch(/posOrder|sourceOrder|fileName|customer/);
+    const book=core.buildRecommendationWorkbook(result,writer);
+    const reread=roundtrip(book);
+    expect(reread.SheetNames).toContain("10_活動備貨檢查");
+  });
   it("未啟用活動時完全沿用既有計算，歷史缺漏不影響一般流程", () => {
     const ordinary = run({ activityDemand: { enabled: false }, activityHistory: null });
     const unchanged = run({ activityDemand: { ...fixture.activityDemand, enabled: false }, activityHistory: null });

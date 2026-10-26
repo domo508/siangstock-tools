@@ -1115,4 +1115,12 @@ body.history-readonly .stage-two, body.history-readonly .stage-three, body.histo
 .activity-stock-results table { min-width: 680px; }
 .activity-stock-results td { white-space: normal; }
 .activity-target-panel > * { min-width: 0; }
+.activity-transfer-publish { padding: 20px; margin: 0 0 24px; border: 1px solid var(--line); border-radius: 20px; background: #f2f8fa; overflow-wrap: anywhere; }
+.activity-transfer-publish input { width: 100%; min-width: 0; }
+.activity-transfer-publish details { padding: 12px 0; }
+.activity-transfer-publish summary { padding: 8px 0; color: var(--blue); cursor: pointer; }
+.activity-transfer-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+#activity-retail-targets { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,240px),1fr)); gap: 16px; }
+.activity-allocation-month p { margin: 8px 0; }
+@media(max-width:600px) { .activity-transfer-publish { padding: 16px; } .activity-transfer-actions button { width: 100%; } }
 [hidden] { display: none !important; }

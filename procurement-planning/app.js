@@ -13,7 +13,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261023-activity-stock-r2";
+  const APP_VERSION = "20261027-activity-transfer-r4";
   const state = {
     config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -307,7 +307,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261023-activity-stock-r2");
+        const worker = new Worker("inventory-reader-worker.js?v=20261027-activity-transfer-r4");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1067,7 +1067,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261023-activity-stock-r2");
+      const worker = new Worker("seasonal-model-worker.js?v=20261027-activity-transfer-r4");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -1737,9 +1737,15 @@
       const title = document.createElement("span"); title.textContent = `${month}整月營收目標（元，已含活動）＊`;
       const input = document.createElement("input"); input.type = "text"; input.inputMode = "numeric"; input.maxLength = 16; input.placeholder = "請填整月終端通路營收目標"; input.value = current.amount > 0 ? formatIntegerAmount(current.amount) : ""; input.setAttribute("aria-label", `${month}整月營收目標`);
       const source = document.createElement("small"); source.textContent = current.source || "本次活動草稿；不改寫正式月份計畫";
-      input.addEventListener("input", () => { input.value = input.value.replace(/[^\d]/g, ""); state.legacyActivity = null; state.activityTargets[month] = { amount: input.value === "" ? null : Number(input.value), source: "本次活動草稿" }; source.textContent = "本次活動草稿；不改寫正式月份計畫"; if (state.analysis) invalidateAnalysis(); renderActivityControls(); });
+      input.addEventListener("input", () => { input.value = input.value.replace(/[^\d]/g, ""); state.legacyActivity = null; state.activityTargets[month] = { ...state.activityTargets[month], amount: input.value === "" ? null : Number(input.value), source: "本次活動草稿" }; source.textContent = "本次活動草稿；不改寫正式月份計畫"; if (state.analysis) invalidateAnalysis(); renderActivityControls(); });
       input.addEventListener("blur", () => { const value = state.activityTargets[month]?.amount; input.value = value > 0 ? formatIntegerAmount(value) : ""; });
       label.append(title, input, source); fragment.appendChild(label);
+      const retailLabel=document.createElement("label"),retailTitle=document.createElement("span"),retailInput=document.createElement("input"),retailHint=document.createElement("small");
+      retailLabel.className="activity-target-field";retailTitle.textContent=`${month}其中實體六店目標（元，已含活動）`;
+      retailInput.type="number";retailInput.min="0";retailInput.step="0.01";retailInput.value=current.retailAmount==null?"":String(current.retailAmount);retailInput.placeholder="留白由歷史分配，提供草稿前核對";
+      retailHint.textContent="其餘為線上／其他；此設定同時納入主採購計算及門市活動草稿。";
+      retailInput.addEventListener("input",()=>{state.legacyActivity=null;state.activityTargets[month]={...state.activityTargets[month],source:"本次活動草稿",retailAmount:retailInput.value===""?null:Number(retailInput.value)};if(state.analysis)invalidateAnalysis();});
+      retailLabel.append(retailTitle,retailInput,retailHint);fragment.appendChild(retailLabel);
     }
     elements.activityMonthlyTargets.replaceChildren(fragment);
   }
@@ -1767,6 +1773,8 @@
   function renderActivityControls() {
     if (!elements.activityCard) return;
     const monthEndMode = elements.checkpoint.value === "month-end";
+    const context=get("#activity-analysis-context");context.hidden=monthEndMode || !elements.activityEnabled.checked;
+    context.textContent=`本次將納入活動「${elements.activityName.value.trim() || "未命名"}」：${Object.entries(state.activityTargets).filter(([m])=>activityMonthList().includes(m)).map(([m,v])=>`${m}全通路${formatCurrency(v.amount)}，實體六店${v.retailAmount==null?"依歷史分配":formatCurrency(v.retailAmount)}`).join("；")}。門市草稿將顯示於分析結果區。`;
     elements.activityCard.hidden = monthEndMode;
     elements.activityFields.hidden = !elements.activityEnabled.checked;
     if (monthEndMode || !elements.activityEnabled.checked) return;
@@ -1777,6 +1785,7 @@
     elements.activityPreview.textContent = message; elements.activityPreview.classList.toggle("is-warning", warning);
   }
   function renderActivityStock(analysis) {
+    renderTransferActivity(analysis);
     const rows = (analysis?.rows || []).filter(row => row.activityPlanning);
     if (!rows.length) { elements.activityStockSummary.textContent = "產生採購建議後顯示供貨、寄庫與缺口。"; elements.activityStockRows.replaceChildren(); elements.activityModelSummary.replaceChildren(); return; }
     const summary = analysis.activitySummary || {};
@@ -1798,6 +1807,97 @@
     elements.activityStockRows.replaceChildren(fragment);
   }
   async function sourceSha256(data) { const bytes = await crypto.subtle.digest("SHA-256", data); return [...new Uint8Array(bytes)].map(n => n.toString(16).padStart(2, "0")).join(""); }
+  function transferAnalysis() { return state.baseAnalysis || state.analysis; }
+  function transferActivitySource() {
+    if (!state.analysis || state.transferSourceAnalysis!==transferAnalysis() || state.transferDraftDirty || !state.transferDraft) throw new Error("草稿尚未建立或目標已變更，請重新補建門市草稿；原採購結果不變。");
+    return state.transferDraft;
+  }
+  function renderTransferActivity(analysis) {
+    const original=transferAnalysis() || analysis,rule=original?.appliedRules?.activityDemand,panel=get("#activity-transfer-result");
+    panel.hidden=!rule || rule.enabled===false || rule.method!=="monthly-target";
+    if(panel.hidden)return;
+    if(state.transferSourceAnalysis!==original){
+      state.transferSourceAnalysis=original;state.transferDraft=original.activityTransferSource?structuredClone(original.activityTransferSource):null;state.transferDraftDirty=false;
+      get("#transfer-activity-status").textContent=state.transferDraft?"尚未發布；可直接在此核對發布，不需等待採購回匯。":"原採購結果已保留，請補填門市目標並建立分配草稿。";
+      get("#transfer-activity-feedback").replaceChildren();get("#read-transfer-activity-feedback").disabled=true;
+      get("#activity-backfill-targets").replaceChildren(...(rule.months || Object.keys(rule.monthlyTargets || {})).map(month=>{
+        const label=document.createElement("label"),title=document.createElement("span"),field=document.createElement("input");
+        title.textContent=`${month}六店整月目標（原全通路${formatCurrency(rule.monthlyTargets[month]?.amount)}）`;field.type="number";field.min="0";field.step="0.01";field.dataset.backfillMonth=month;field.value=rule.monthlyTargets[month]?.retailAmount??"";field.placeholder="例如3500000";
+        field.addEventListener("input",()=>{state.transferDraftDirty=true;get("#publish-transfer-activity").disabled=true;get("#read-transfer-activity-feedback").disabled=true;get("#activity-transfer-badge").textContent="門市目標已改，需補建草稿";});label.append(title,field);return label;
+      }));get("#activity-transfer-backfill").open=!state.transferDraft;
+    }
+    const source=state.transferDraft;
+    get("#activity-transfer-summary").textContent=`${rule.name}・${rule.startDate}～${rule.endDate}・來源截止${original.asOfDate}。${source?source.months.map(m=>`${m.month}實體六店${formatCurrency(m.retailTarget)}、線上／其他${formatCurrency(m.onlineAndOtherTarget)}`).join("；"):"等待補建門市分配草稿。"}本區為需求規劃，不代表調撥件數或總倉已有貨。`;
+    get("#activity-transfer-badge").textContent=state.transferDraftDirty?"需補建草稿":"尚未發布";
+    get("#publish-transfer-activity").disabled=!source || state.transferDraftDirty;
+    const names={R00:"台北中山",R01:"台中北屯",R03:"新竹東區",R06:"文心秀泰",R07:"誠品480",R10:"新莊"};
+    get("#activity-retail-targets").replaceChildren(...(source?.months || []).map(month=>{
+      const block=document.createElement("div");block.className="activity-allocation-month";const heading=document.createElement("h4");heading.textContent=month.month;block.append(heading);
+      for(const [store,target] of Object.entries(month.targets)){const p=document.createElement("p");p.textContent=`${store} ${names[store] || store}：${formatCurrency(target)}（${month.retailTarget>0?(target/month.retailTarget*100).toFixed(1):0}%）`;block.append(p);}return block;
+    }));
+  }
+  get("#build-transfer-activity-draft").addEventListener("click",async()=>{
+    const button=get("#build-transfer-activity-draft"),status=get("#transfer-activity-status"),original=transferAnalysis();
+    button.disabled=true;
+    try{
+      if(!(await checkRuntimeVersion()))return;
+      const fields=()=>Object.fromEntries([...get("#activity-backfill-targets").querySelectorAll("[data-backfill-month]")].map(f=>[f.dataset.backfillMonth,f.value===""?NaN:Number(f.value)]));
+      const targets=fields(),signature=JSON.stringify(targets);
+      for(const [m,v] of Object.entries(targets))if(!Number.isFinite(v)||v<=0||v>original?.appliedRules?.activityDemand?.monthlyTargets?.[m]?.amount)throw new Error(`${m}門市目標須大於0且不超過原全通路目標。`);
+      status.textContent="正在補建門市草稿；原採購量、金額、覆核與核准狀態保持不變…";
+      const history=original?.activityTransferSource?null:await loadActivityHistory([]);
+      if(!state.analysis || original!==transferAnalysis() || signature!==JSON.stringify(fields()))throw new Error("來源或門市目標已變更，請重新補建草稿。");
+      const source=globalThis.ProcurementActivityPlanning.transferDraftFromAnalysis(original,targets,history);
+      globalThis.StoreTransferActivity.validateSource(source);
+      state.transferDraft=source;state.transferSourceAnalysis=original;state.transferDraftDirty=false;renderTransferActivity(original);
+      status.textContent="門市草稿已補建，請展開核對六店分配後發布。原採購結果與核准狀態未變；新的門市分配如與原採購配置不同，須另行覆核供貨。";
+    }catch(error){status.textContent=error.message;}finally{button.disabled=false;}
+  });
+  get("#publish-transfer-activity").addEventListener("click", async () => {
+    const button = get("#publish-transfer-activity"), status = get("#transfer-activity-status");
+    button.disabled = true;
+    try {
+      if (!(await checkRuntimeVersion())) return;
+      const source = structuredClone(transferActivitySource());
+      for (const month of source.months) if(!(month.retailTarget>0)) throw new Error(`${month.month}沒有可提供的實體門市需求，請先確認目標及歷史資料。`);
+      const send=async body=>fetch("/api/store-transfer/activity-plans", { method:"POST", cache:"no-store", headers:{Accept:"application/json","Content-Type":"application/json","X-Store-Transfer-Version":"20261027-transfer-activity-r2"},body:JSON.stringify(body) });
+      let response=await send({source}), result=await response.json();
+      if(response.status===409 && result.existingId && confirm(`${result.error}\n\n確認更新此活動來源？`)) {response=await send({source,expectedRevision:result.existingRevision});result=await response.json();}
+      if (!response.ok) throw new Error(result.error || "提供活動草稿失敗；須具備週調撥總部權限。");
+      get("#activity-transfer-badge").textContent="已發布・待週調撥總部確認";get("#read-transfer-activity-feedback").disabled=false;
+      status.textContent = `已發布活動草稿 ${result.id}；請至週調撥總部端確認逐店分配及週次。未建立調撥單、未通知門市。`;
+    } catch(error) { status.textContent=error.message; } finally { button.disabled=state.runtimeOutdated || state.transferDraftDirty || !state.analysis; }
+  });
+  get("#read-transfer-activity-feedback").addEventListener("click",async()=>{
+    const status=get("#transfer-activity-status"),output=get("#transfer-activity-feedback");output.replaceChildren();
+    try {
+      if(!(await checkRuntimeVersion()))return;
+      const source=transferActivitySource();
+      if(!source) throw new Error("請先產生本次活動採購建議。");
+      const read=async path=>{const r=await fetch(`/api/store-transfer/activity-plans${path}`,{cache:"no-store",headers:{Accept:"application/json"}});const p=await r.json();if(!r.ok)throw new Error(p.error || "讀取失敗");return p;};
+      const matched=(await read("")).plans.find(p=>p.name===source.name && p.startDate===source.startDate && p.endDate===source.endDate);
+      if(!matched) throw new Error("尚未提供此活動草稿。");
+      const {plan}=await read(`/${matched.id}`);
+      if(plan.status!=="confirmed") throw new Error("週調撥總部尚未確認最新分配。");
+      const differences=new Map();
+      if(plan.source.asOfDate!==source.asOfDate) throw new Error("門市分配與本次採購的來源截止日不同，請先更新共用活動來源再核對。");
+      for(const row of source.rows) for(const month of source.months) {
+        const weight=month.weights[row.storeCode].reduce((s,w,i)=>{const d=`${month.month}-${String(i+1).padStart(2,"0")}`;return s+(d>=source.startDate && d<=source.endDate && d>source.asOfDate?w:0);},0);
+        differences.set(row.sku,(differences.get(row.sku)||0)-(row.quantities[month.month] || 0)*weight);
+      }
+      for(const row of plan.source.rows) for(const month of plan.source.months) {
+        const base=month.targets[row.storeCode],target=plan.config.targets[month.month][row.storeCode];
+        if(!(base>0)) continue;
+        const activeWeight=month.weights[row.storeCode].reduce((s,w,i)=>{const d=`${month.month}-${String(i+1).padStart(2,"0")}`;return s+(d>=plan.source.startDate && d<=plan.source.endDate && d>plan.source.asOfDate?w:0);},0);
+        const delta=(row.quantities[month.month] || 0)*target/base*activeWeight;
+        differences.set(row.sku,(differences.get(row.sku)||0)+delta);
+      }
+      const changed=[...differences].filter(([,q])=>Math.abs(q)>0.01);
+      status.textContent=`週調撥已確認v${plan.revision}；開始備貨${plan.config.startProposalDate}。${changed.length}個品號活動需求較原門市分配改變；僅供採購覆核，未自動改寫採購單。`;
+      const details=document.createElement("details"),summary=document.createElement("summary");summary.textContent="查看逐品號預估差額（四捨五入前）";details.append(summary);
+      for(const [sku,q] of changed) {const p=document.createElement("p");p.textContent=`${sku}：${q>0?"＋":""}${q.toFixed(2)}件`;details.append(p);}output.append(details);
+    }catch(error){status.textContent=error.message;}
+  });
   async function loadActivityHistory(recentReports) {
     if (!state.googleAuthorized) throw new Error("活動跨月備貨須先完成公司Google授權，以核對歷史來源與版本。");
     const folderId = state.config?.fixedSources?.seasonalSalesFolderId;

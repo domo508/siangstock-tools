@@ -9,7 +9,7 @@
   <title>門市週補貨與調撥｜翔仔居家</title>
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="../cost-analysis/style.css">
-  <link rel="stylesheet" href="style.css?v=20261020-store-transfer-r21">
+  <link rel="stylesheet" href="style.css?v=20261027-transfer-activity-r2">
 </head>
 <body>
   <dialog id="version-warning" class="version-warning" role="alertdialog" aria-labelledby="version-warning-title" aria-describedby="version-warning-description">
@@ -42,7 +42,7 @@
     </section>
 
     <section id="hq-panel" class="panel" data-weekly-view hidden aria-labelledby="hq-title">
-      <div class="section-heading"><div><p class="eyebrow">總部工作台</p><h2 id="hq-title">建立本週調撥建議</h2></div><div class="heading-actions"><p>依實際建立日排下一個工作日回覆；遇公司不作業日自動順延，總部核准後第2天預計到店。</p><div class="heading-rule-links"><a id="transfer-rules-link" class="secondary-button compact" href="rules/?deploy=20261015-transfer-applicability-r2" hidden>周調撥適用／排除規則</a><a id="rules-link" class="secondary-button compact" href="../procurement-planning/rules-admin/?from=store-transfer&amp;deploy=20261023-procurement-admin-r11#store-inventory" hidden>展示／最低庫存規則</a></div></div></div>
+      <div class="section-heading"><div><p class="eyebrow">總部工作台</p><h2 id="hq-title">建立本週調撥建議</h2></div><div class="heading-actions"><p>依實際建立日排下一個工作日回覆；遇公司不作業日自動順延，總部核准後第2天預計到店。</p><div class="heading-rule-links"><a id="transfer-rules-link" class="secondary-button compact" href="rules/?deploy=20261015-transfer-applicability-r2" hidden>周調撥適用／排除規則</a><a id="rules-link" class="secondary-button compact" href="../procurement-planning/rules-admin/?from=store-transfer&amp;deploy=20261027-procurement-admin-r13#store-inventory" hidden>展示／最低庫存規則</a></div></div></div>
       <div class="period-grid">
         <label><span>本週週次</span><input id="week-key" type="week" required></label>
         <label><span>建議產生日</span><input id="proposal-date" type="date" required></label>
@@ -55,6 +55,16 @@
         <label><input type="radio" name="calculation-mode" value="comparison"><span><strong>A/B 測試比對</strong><small>忽略「提交」調撥對門市與總倉的影響，只供比較人工與系統獨立建議。</small></span></label>
         <p id="calculation-mode-help">A/B模式只能預覽，不能建立門市確認批次；發貨審核仍會列為在途量。</p>
       </fieldset>
+      <section class="result-section" id="activity-plan-panel" aria-labelledby="activity-plan-title">
+        <h3 id="activity-plan-title">大活動提前備貨</h3><p>由主採購提供活動及線上／門市目標基準，總部共同確認各店分配與開始備貨週次。到貨固定加2日緩衝，並依各店平日／週末分布計算。</p>
+        <div class="period-grid"><label><span>共用活動草稿</span><select id="activity-plan-select"><option value="">未選擇活動</option></select></label><button id="refresh-activity-plans" class="secondary-button" type="button">重新讀取活動</button></div>
+        <p id="activity-plan-status" class="status-line" role="status"></p>
+        <div id="activity-plan-editor" hidden></div>
+        <label><input id="use-activity-plan" type="checkbox">本次正式補貨納入已確認活動</label>
+        <label><span>活動計算使用的庫存快照日期</span><input id="activity-inventory-date" type="date"></label>
+        <div id="activity-inbound-dates"></div>
+        <p id="activity-prior-batches" class="status-line"></p><label><input id="activity-prior-reconciled" type="checkbox">已核對前週活動批次，先前配量均已反映在本次最新庫存或期間調撥單；未反映者先更新ERP來源。</label>
+      </section>
       <section class="fixed-source-panel" aria-labelledby="fixed-source-title">
         <div><p class="eyebrow">沿用主採購工具設定</p><h3 id="fixed-source-title">固定 Google 資料</h3><p>先以公司帳號授權，再一次唯讀取得最新商品主檔與整體行銷策略；授權只留在目前分頁。</p></div>
         <div class="fixed-source-actions">
@@ -136,6 +146,7 @@
 
     <section class="panel operation-guide" data-weekly-view aria-labelledby="guide-title">
       <div class="section-heading"><div><p class="eyebrow">操作說明</p><h2 id="guide-title">每週流程怎麼走</h2></div></div>
+      <details><summary>大活動如何提前、分週備貨？（總部）</summary><p>主採購先建立含活動的整月目標並發布門市分配草稿；總部在上方「活動提前備貨」讀取、核對各店目標與開始備貨週，填原因並儲存確認，再勾選納入正式補貨。活動額外固定加2個日曆日緩衝，不需設定。</p><p>每週使用最新庫存與調撥來源，確認快照日、相關在途單到店日。前週活動批次完成ERP產檔後，仍須核對已實際匯入且反映在最新來源，才勾選接續計算；不得重複加整場活動量。晚到開場風險須另外處理，估計到貨不代表物流保證。活動目前不適用A/B模式。</p></details>
       <p class="result-alert info"><strong>建立批次後通知：</strong>正式批次建立成功後，系統會以建立者完成授權的公司 Gmail，寄信通知本批實際包含的門市；寄送失敗可在批次清單重試，已寄成功的門市不會重複收到。</p>
       <div class="guide-grid"><article><strong>建立、回覆與到店日期</strong><p>依實際建立日排下一個工作日09:00前回覆；遇公司不作業日自動順延。系統以總部核准後第2天作為門市預計到貨日。</p></article><article><strong>登入失敗怎麼辦</strong><p>按右上角「重新登入／切換帳號」，先清除公司工具登入狀態，再以本店被指派的公司 Google 帳號重新開啟週調撥。</p></article><article><strong>正式與A/B模式</strong><p>正式模式會以待發貨及在途量防止重複補貨；A/B模式忽略提交單，可依門市下載差異表或發布公司共用協作批次。</p></article><article><strong>總部查某品號分到哪裡</strong><p>總部可在建議預覽或批次明細輸入完整或部分ERP品號，直接查看分配門市、筆數與合計件數。</p></article><article><strong>下載正式補貨報表</strong><p>完成正式計算後，可勾選需要的門市分別下載；每份檔案包含本次建議、缺貨未配與待發貨／在途三個頁籤，不會改寫原始Excel。</p></article><article><strong>本店展示例外</strong><p>門市可用單一ERP貨號設定自己的不可售展示最低量；下次總部重算生效，不會改寫已建立批次。</p></article><article><strong>展示與42天銷售</strong><p>可售最低庫存仍要求近42天有現場銷售；不可售展示不受零銷售影響。S品總倉無可釋出量時取消展示需求。</p></article><article><strong>A/B協作怎麼走</strong><p>四位總部帳號皆可接續查看、調整決議量及備註；只有siang01與service1能轉成正式批次。尚未轉正式的A/B協作批次可由總部刪除。</p></article><article><strong>同週批次版本</strong><p>同一週重新建立時，新批次會成為目前作業版本；舊的未完成批次保留紀錄，但不能再修改或送出。</p></article><article><strong>門市批次怎麼顯示</strong><p>上方只列尚未處理、已暫存或已送出等待總部的批次；其它狀態放在預設收合的近一個月歷史區，完整稽核資料仍保留12個月。</p></article><article><strong>刪除批次</strong><p>總部可刪除尚未轉正式的A/B協作批次，以及仍在等待門市且尚無任何門市核准的正式批次；已進總部覆核、已核准或已完成批次不能刪除。已取代／已取消批次仍可移出前台，稽核資料均保留12個月。</p></article><article><strong>核准後需要修改</strong><p>尚未產生ERP時，只有總部可選「開啟總部更正」或「退回門市修改」；原核准內容保留版本，重新核准後才可產生ERP。已產生ERP須改走作廢、補調或沖銷。</p></article><article><strong>門市可撤回</strong><p>送出後、門市回覆鎖定前可不限次數撤回；鎖定後只能由總部更正。</p></article><article><strong>人工增減品項</strong><p>門市與總部皆可新增品項；移除時以本階段數量歸零處理，原因與原始建議仍會保留。</p></article><article><strong>人工調整原因</strong><p>新增、移除或數量不同於上一階段時，必須填原因才可送出。</p></article><article><strong>B3判斷</strong><p>只有來源單號＋ERP品號成功配對的總倉代出才認列；無法配對會列待人工確認。</p></article><article><strong>批次狀態</strong><p>等待門市→總部覆核→已核准→ERP皆完成→本週完成，每店進度會分開顯示。</p></article></div>
     </section>
@@ -168,8 +179,9 @@
   <script src="../procurement-planning/core.js?v=20260917-company-cost-r1"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="../procurement-planning/google-sources.js?v=20260915-google-sources-r1"></script>
-  <script src="core.js?v=20261020-store-transfer-r21"></script>
+  <script src="activity.js?v=20261027-transfer-activity-r2"></script>
+  <script src="core.js?v=20261027-transfer-activity-r2"></script>
   <script src="xlsx-preflight.js?v=20260916-xlsx-reader-r1"></script>
-  <script src="app.js?v=20261020-store-transfer-r21"></script>
+  <script src="app.js?v=20261027-transfer-activity-r2"></script>
 </body>
 </html>

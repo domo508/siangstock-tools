@@ -6,7 +6,10 @@ html, body { max-width: 100%; overflow-x: clip; }
 .panel { margin-top: 1.5rem; }
 .period-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 1.5rem 0; }
 .period-grid label { display: grid; gap: .5rem; font-weight: 700; color: #233d52; }
-.period-grid input { min-height: 46px; padding: .7rem .85rem; border: 1px solid #c9d8e2; border-radius: 10px; font: inherit; }
+.period-grid input, #activity-plan-panel select, #activity-plan-panel textarea { width:100%; min-width:0; min-height: 46px; padding: .7rem .85rem; border: 1px solid #c9d8e2; border-radius: 10px; background:#fff; font: inherit; }
+#activity-plan-panel fieldset { min-width:0; border:1px solid #d8e4e8; border-radius:12px; margin:1rem 0; }
+#activity-plan-panel textarea { white-space:pre-wrap; overflow-wrap:anywhere; resize:vertical; }
+#activity-plan-panel small, #activity-week-preview p { overflow-wrap:anywhere; }
 .store-picker { padding: 1rem 1.1rem; border-radius: 14px; background: #f8f4e9; border: 1px solid #e7d9b3; }
 .store-picker h3 { margin: 0 0 .8rem; }
 .store-options { display: flex; flex-wrap: wrap; gap: .65rem 1.1rem; }
