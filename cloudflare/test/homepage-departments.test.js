@@ -2,7 +2,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import * as access from '../worker/src/access';
-import { homepageDepartmentsRoute, validateDepartmentUpdate, HOMEPAGE_RUNTIME_VERSION } from '../worker/src/homepage-departments';
+import { homepageDepartmentsRoute, validateDepartmentUpdate, validateAssignments, HOMEPAGE_RUNTIME_VERSION } from '../worker/src/homepage-departments';
 
 const initial = [{toolId:'inventory',primary:'admin',collaborators:[]},{toolId:'store-transfer',primary:'merch',collaborators:['store']}];
 function environment() {
@@ -42,6 +42,28 @@ describe('全公司工具部門設定',()=>{
     expect(data.assignments).toEqual([{toolId:'inventory',primary:'ops',collaborators:['merch']},initial[1]]);
     expect(e.writes[0][2]).toBe('siang01@siangapato.com.tw');
   });
+  it('名稱可與部門一起儲存，後續只改部門仍保留名稱及其他工具',async()=>{
+    vi.spyOn(access,'verifyAdmin').mockResolvedValue('siang01@siangapato.com.tw');
+    const e=environment();
+    const named=await homepageDepartmentsRoute(request({displayName:'  新庫存工具  '}),e.env);
+    expect(named.status).toBe(200);
+    expect((await named.json()).assignments).toEqual([{toolId:'inventory',primary:'ops',collaborators:['merch'],displayName:'新庫存工具'},initial[1]]);
+    const moved=await homepageDepartmentsRoute(request({expectedVersion:2,primary:'admin'}),e.env);
+    expect((await moved.json()).assignments[0]).toEqual({toolId:'inventory',primary:'admin',collaborators:['merch'],displayName:'新庫存工具'});
+    expect(e.writes).toHaveLength(2);
+  });
+  it('名稱驗證含舊資料相容、中文與Unicode長度、空白與控制字元',()=>{
+    expect(validateAssignments(initial)).toEqual(initial);
+    for(const displayName of ['', '   ', '字'.repeat(81), '名稱\\n第二行', null, 1]) {
+      const value=typeof displayName==='string' ? displayName.replace('\\n','\n') : displayName;
+      expect(()=>validateDepartmentUpdate({expectedVersion:1,...initial[0],displayName:value})).toThrow();
+    }
+    expect(validateDepartmentUpdate({expectedVersion:1,...initial[0],displayName:'翔'.repeat(80)}).displayName).toHaveLength(80);
+    expect([...validateDepartmentUpdate({expectedVersion:1,...initial[0],displayName:'🛏'.repeat(80)}).displayName]).toHaveLength(80);
+    // Markup is inert display text; the browser must use textContent, never HTML.
+    expect(validateDepartmentUpdate({expectedVersion:1,...initial[0],displayName:'<img src=x onerror=alert(1)>'}).displayName).toContain('<img');
+    expect(()=>validateAssignments([{...initial[0],displayName:''}])).toThrow();
+  });
   it('同版本先到先存，後到回409，不覆蓋第一位管理者的結果',async()=>{
     vi.spyOn(access,'verifyAdmin').mockResolvedValue('siang01@siangapato.com.tw');
     const e=environment();
@@ -68,7 +90,7 @@ describe('全公司工具部門設定',()=>{
   });
   it('實際SQLite migration可往返，歷史與CAS寫入原子一致，可恢復舊設定',()=>{
     const sql=readFileSync('worker/migrations/0043_homepage_departments.sql','utf8');
-    const code=`import sqlite3,json,sys\ndb=sqlite3.connect(':memory:')\ndb.executescript(sys.stdin.read())\nold=db.execute('SELECT payload FROM homepage_departments WHERE id=1').fetchone()[0]\nrows=json.loads(old)\nassert len(rows)==7\nrows[0]['primary']='ops'\nnew=json.dumps(rows)\nr=db.execute('UPDATE homepage_departments SET version=version+1,payload=?,updated_at=?,updated_by=? WHERE id=1 AND version=? RETURNING version',(new,'now','admin',1)).fetchone()\nassert r[0]==2\nassert db.execute('SELECT payload FROM homepage_department_history WHERE version=2').fetchone()[0]==new\nassert db.execute('UPDATE homepage_departments SET version=version+1 WHERE id=1 AND version=1 RETURNING version').fetchone() is None\ndb.execute('UPDATE homepage_departments SET version=3,payload=? WHERE id=1',(old,))\nassert db.execute('SELECT payload FROM homepage_department_history WHERE version=3').fetchone()[0]==old\nassert db.execute('SELECT COUNT(*) FROM homepage_department_history').fetchone()[0]==3\nprint('ok')`;
+    const code=`import sqlite3,json,sys\ndb=sqlite3.connect(':memory:')\ndb.executescript(sys.stdin.read())\nold=db.execute('SELECT payload FROM homepage_departments WHERE id=1').fetchone()[0]\nrows=json.loads(old)\nassert len(rows)==7\nrows[0]['primary']='ops'\nrows[0]['displayName']='庫存新名稱'\nnew=json.dumps(rows)\nr=db.execute('UPDATE homepage_departments SET version=version+1,payload=?,updated_at=?,updated_by=? WHERE id=1 AND version=? RETURNING version',(new,'now','admin',1)).fetchone()\nassert r[0]==2\nassert db.execute('SELECT payload FROM homepage_department_history WHERE version=2').fetchone()[0]==new\nassert db.execute('UPDATE homepage_departments SET version=version+1 WHERE id=1 AND version=1 RETURNING version').fetchone() is None\ndb.execute('UPDATE homepage_departments SET version=3,payload=? WHERE id=1',(old,))\nassert db.execute('SELECT payload FROM homepage_department_history WHERE version=3').fetchone()[0]==old\nassert db.execute('SELECT COUNT(*) FROM homepage_department_history').fetchone()[0]==3\nprint('ok')`;
     expect(execFileSync('python3',['-c',code],{input:sql,encoding:'utf8'}).trim()).toBe('ok');
   });
 });

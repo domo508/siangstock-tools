@@ -2,24 +2,25 @@ import { verifyAdmin, verifyCompanyUser, type AccessConfig } from "./access";
 import { RequestValidationError } from "./schema";
 
 type DirectoryEnv = AccessConfig & { DB: D1Database; ALLOWED_ORIGINS: string; PROCUREMENT_ACCESS_AUD?: string };
-export type DepartmentAssignment = { toolId: string; primary: string; collaborators: string[] };
+export type DepartmentAssignment = { toolId: string; primary: string; collaborators: string[]; displayName?: string };
 type Row = { version: number; payload: string; updated_at: string };
-export const HOMEPAGE_RUNTIME_VERSION = "20261026-departments-r2";
+export const HOMEPAGE_RUNTIME_VERSION = "20261026-departments-r3";
 const DEPARTMENTS = new Set(["admin", "merch", "ops", "design", "store"]);
 const API_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store, max-age=0, must-revalidate", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" };
 function json(data: unknown, status = 200): Response { return new Response(JSON.stringify(data), { status, headers: API_HEADERS }); }
-function exact(value: unknown, keys: string[]): Record<string, unknown> {
+function exact(value: unknown, keys: string[], optional: string[] = []): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new RequestValidationError("部門設定格式不正確。");
   const object = value as Record<string, unknown>;
-  if (Object.keys(object).length !== keys.length || keys.some(key => !Object.hasOwn(object, key))) throw new RequestValidationError("部門設定欄位不符。");
+  if (Object.keys(object).some(key => !keys.includes(key) && !optional.includes(key)) || keys.some(key => !Object.hasOwn(object, key))) throw new RequestValidationError("部門設定欄位不符。");
   return object;
 }
 function assignment(value: unknown): DepartmentAssignment {
-  const row = exact(value, ["toolId", "primary", "collaborators"]);
+  const row = exact(value, ["toolId", "primary", "collaborators"], ["displayName"]);
+  if (Object.hasOwn(row, "displayName") && (typeof row.displayName !== "string" || !row.displayName.trim() || [...row.displayName.trim()].length > 80 || /[\u0000-\u001f\u007f-\u009f]/u.test(row.displayName))) throw new RequestValidationError("工具名稱請填入1至80個字，且不可含換行或控制字元。");
   if (typeof row.toolId !== "string" || !/^[a-z][a-z0-9-]{0,79}$/.test(row.toolId)) throw new RequestValidationError("工具識別碼不正確。");
   if (typeof row.primary !== "string" || !DEPARTMENTS.has(row.primary)) throw new RequestValidationError("請選擇有效的主責部門。");
   if (!Array.isArray(row.collaborators) || row.collaborators.length > 4 || row.collaborators.some(id => typeof id !== "string" || !DEPARTMENTS.has(id) || id === row.primary) || new Set(row.collaborators).size !== row.collaborators.length) throw new RequestValidationError("協作部門重複、無效或與主責部門相同。");
-  return { toolId: row.toolId, primary: row.primary, collaborators: [...row.collaborators] as string[] };
+  return { toolId: row.toolId, primary: row.primary, collaborators: [...row.collaborators] as string[], ...(typeof row.displayName === "string" ? { displayName: row.displayName.trim() } : {}) };
 }
 export function validateAssignments(value: unknown): DepartmentAssignment[] {
   if (!Array.isArray(value) || value.length > 200) throw new RequestValidationError("工具部門清單格式不正確。");
@@ -28,9 +29,9 @@ export function validateAssignments(value: unknown): DepartmentAssignment[] {
   return result;
 }
 export function validateDepartmentUpdate(value: unknown): DepartmentAssignment & { expectedVersion: number } {
-  const body = exact(value, ["expectedVersion", "toolId", "primary", "collaborators"]);
+  const body = exact(value, ["expectedVersion", "toolId", "primary", "collaborators"], ["displayName"]);
   if (!Number.isSafeInteger(body.expectedVersion) || Number(body.expectedVersion) < 1) throw new RequestValidationError("設定版本不正確，請重新讀取。");
-  return { ...assignment({ toolId: body.toolId, primary: body.primary, collaborators: body.collaborators }), expectedVersion: Number(body.expectedVersion) };
+  return { ...assignment({ toolId: body.toolId, primary: body.primary, collaborators: body.collaborators, ...(Object.hasOwn(body, "displayName") ? { displayName: body.displayName } : {}) }), expectedVersion: Number(body.expectedVersion) };
 }
 async function readBody(request: Request): Promise<unknown> {
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get("Content-Type") || "")) throw new RequestValidationError("Content-Type 必須是 application/json。", 415);
@@ -71,8 +72,9 @@ export async function homepageDepartmentsRoute(request: Request, env: DirectoryE
       const before = await current(env);
       if (before.version !== body.expectedVersion) return json({ error: "部門設定已被其他管理者更新，本次未儲存；請重新開啟並核對最新版。" }, 409);
       const assignments = validateAssignments(JSON.parse(before.payload));
-      const changed: DepartmentAssignment = { toolId: body.toolId, primary: body.primary, collaborators: body.collaborators };
       const index = assignments.findIndex(row => row.toolId === body.toolId);
+      // Department-only updates preserve any existing shared display name. Legacy rows remain readable.
+      const changed: DepartmentAssignment = { ...assignments[index], toolId: body.toolId, primary: body.primary, collaborators: body.collaborators, ...(body.displayName !== undefined ? { displayName: body.displayName } : {}) };
       if (index < 0) { if (assignments.length >= 200) throw new RequestValidationError("工具數量已達上限。"); assignments.push(changed); } else assignments[index] = changed;
       const payload = JSON.stringify(assignments);
       if (new TextEncoder().encode(payload).byteLength > 32768) throw new RequestValidationError("設定內容超過上限。", 413);

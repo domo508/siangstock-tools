@@ -10,6 +10,8 @@
   const reload = document.getElementById('reload-latest');
   const editor = document.getElementById('department-editor');
   const primary = document.getElementById('editor-primary');
+  const nameInput = document.getElementById('editor-name');
+  const validName = value => typeof value === 'string' && value.trim().length > 0 && [...value.trim()].length <= 80 && !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
   const collaboratorList = document.getElementById('editor-collaborators');
   const fields = document.getElementById('editor-fields');
   const saveButton = document.getElementById('editor-save');
@@ -100,7 +102,7 @@
     if (!Number.isSafeInteger(data.version) || data.version < 1 || typeof data.canManage !== 'boolean' || !Array.isArray(data.assignments)) throw new Error('部門設定格式不正確，停止套用。');
     const ids = new Set();
     for (const row of data.assignments) {
-      if (!row || typeof row.toolId !== 'string' || ids.has(row.toolId) || !deptLabels.has(row.primary) || !Array.isArray(row.collaborators) || row.collaborators.some(id => !deptLabels.has(id) || id === row.primary) || new Set(row.collaborators).size !== row.collaborators.length) throw new Error('部門設定格式不正確，停止套用。');
+      if (!row || typeof row.toolId !== 'string' || ids.has(row.toolId) || (Object.hasOwn(row,'displayName') && !validName(row.displayName)) || !deptLabels.has(row.primary) || !Array.isArray(row.collaborators) || row.collaborators.some(id => !deptLabels.has(id) || id === row.primary) || new Set(row.collaborators).size !== row.collaborators.length) throw new Error('部門設定格式不正確，停止套用。');
       ids.add(row.toolId);
     }
     return data;
@@ -110,6 +112,10 @@
     sharedSettings = data;
     cards.forEach(card => {
       const setting = data.assignments.find(row => row.toolId === card.dataset.tool);
+      const name = setting?.displayName || card.dataset.originalName;
+      card.querySelector('h3').textContent = name;
+      card.querySelector('[data-edit-tool]').setAttribute('aria-label', `設定${name}名稱與部門`);
+      card.querySelector('a.sh-open')?.setAttribute('aria-label', `開啟${name}`);
       if (!setting) return; // Newly deployed tools keep their explicitly configured default assignment.
       const groups = [setting.primary, ...setting.collaborators];
       card.dataset.primary = setting.primary;
@@ -147,20 +153,21 @@
   async function openEditor(card) {
     editingCard = card;
     document.getElementById('editor-title').textContent = card.querySelector('h3').textContent;
-    document.getElementById('editor-scope').textContent = '管理者儲存後全公司共用；只調整工具分類，不改動工具網址、業務資料或操作權限。';
+    document.getElementById('editor-scope').textContent = '管理者儲存後全公司共用；只調整首頁顯示名稱與部門，不改動工具網址、業務資料或操作權限。';
+    nameInput.value = card.querySelector('h3').textContent;
     primary.value = card.dataset.primary;
     draftCollaborators = card.dataset.collaborators.split(' ').filter(Boolean);
     drawCollaborators(); setError(''); fields.disabled=true; saveButton.disabled=true;
-    const status = document.getElementById('editor-status'); status.textContent='正在核對公司登入與最新分類…';
+    const status = document.getElementById('editor-status'); status.textContent='正在核對公司登入與最新工具設定…';
     editor.showModal();
     try {
       if (!await checkRuntimeVersion()) throw new Error('請先重新載入最新版首頁。');
       const data = await loadSettings();
       if (!editor.open || editingCard !== card) return;
-      primary.value=card.dataset.primary; draftCollaborators=card.dataset.collaborators.split(' ').filter(Boolean); drawCollaborators();
+      document.getElementById('editor-title').textContent=card.querySelector('h3').textContent; nameInput.value=card.querySelector('h3').textContent; primary.value=card.dataset.primary; draftCollaborators=card.dataset.collaborators.split(' ').filter(Boolean); drawCollaborators();
       fields.disabled=!data.canManage; saveButton.disabled=!data.canManage;
-      status.textContent=data.canManage ? '管理者可調整一個主責部門及多個協作部門。' : '目前帳號可查看分類；只有既有公司管理者可以修改。';
-    } catch (error) { status.textContent='無法確認最新分類，已停止編輯與儲存。'; setError(error.message || '設定無法載入，請稍後再試。'); }
+      status.textContent=data.canManage ? '管理者可修改首頁名稱、一個主責部門及多個協作部門。' : '目前帳號可查看工具設定；只有既有公司管理者可以修改。';
+    } catch (error) { status.textContent='無法確認最新工具設定，已停止編輯與儲存。'; setError(error.message || '設定無法載入，請稍後再試。'); }
   }
 
   root.querySelectorAll('[data-edit-tool]').forEach(button => button.addEventListener('click',()=>openEditor(button.closest('[data-tool]'))));
@@ -169,18 +176,19 @@
   editor.addEventListener('close',()=>{fields.disabled=true;saveButton.disabled=true;});
   saveButton.addEventListener('click',async()=>{
     if(saving || !sharedSettings?.canManage || !editingCard || fields.disabled) return;
+    if (!validName(nameInput.value)) { setError('工具名稱請填入1至80個字，且不可含換行或控制字元。'); nameInput.focus(); return; }
     saving=true; fields.disabled=true; saveButton.disabled=true; document.getElementById('editor-cancel').disabled=true; setError('');
     try {
       if(!await checkRuntimeVersion()) throw new Error('請先重新載入最新版首頁。');
-      const payload={expectedVersion:sharedSettings.version,toolId:editingCard.dataset.tool,primary:primary.value,collaborators:[...draftCollaborators]};
+      const payload={expectedVersion:sharedSettings.version,toolId:editingCard.dataset.tool,displayName:nameInput.value.trim(),primary:primary.value,collaborators:[...draftCollaborators]};
       const response=await fetch('/api/rules/homepage',{method:'PUT',cache:'no-store',credentials:'same-origin',redirect:'error',headers:{'Content-Type':'application/json','X-Homepage-Version':APP_VERSION},body:JSON.stringify(payload)});
       const data=await readResponse(response); applySettings(data);
-      document.getElementById('department-result').textContent=`${editingCard.querySelector('h3').textContent}的部門設定已儲存，全公司共用。`;
+      document.getElementById('department-result').textContent=`${editingCard.querySelector('h3').textContent}的工具設定已儲存，全公司共用。`;
       editor.close();
       const next=editingCard.hidden ? buttons.find(b=>b.dataset.dept===department) : editingCard.querySelector('[data-edit-tool]'); next?.focus();
     } catch(error) {
       // Keep the unsaved draft visible; conflict and network failures never claim success.
-      setError((error.message || '儲存失敗。')+' 請關閉後重新開啟，核對最新分類再試。');
+      setError((error.message || '儲存失敗。')+' 請關閉後重新開啟，核對最新工具設定再試。');
       document.getElementById('editor-status').textContent='尚未確認儲存結果，請關閉後重新開啟核對。';
     } finally {
       saving=false;document.getElementById('editor-cancel').disabled=false;
@@ -192,7 +200,7 @@
   async function refreshSettings() {
     if(editor.open) return;
     try {await loadSettings();document.getElementById('department-result').textContent='';}
-    catch {document.getElementById('department-result').textContent='共用部門設定暫時無法載入，目前顯示最近已載入或首頁預設分類；無法編輯或儲存。';}
+    catch {document.getElementById('department-result').textContent='共用工具設定暫時無法載入，目前顯示最近已載入或首頁預設名稱與分類；無法編輯或儲存。';}
   }
   buttons.forEach(button => button.addEventListener('click', () => { department = button.dataset.dept; render(); }));
   search.addEventListener('input', render);

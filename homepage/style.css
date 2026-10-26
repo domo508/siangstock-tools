@@ -119,3 +119,8 @@ body {margin:0;background:#fbf8f1}
 #siang-departments .sh-detail {max-height:calc(100dvh - 32px);overflow:auto}
 #siang-departments .sh-detail button:disabled {opacity:.55;cursor:default}
 #siang-departments .sh-dialog-error {color:#9c3535!important}
+
+#siang-departments .sh-name {display:block;width:100%;box-sizing:border-box;margin-top:8px;padding:11px 12px;border:1px solid var(--sh-line);border-radius:10px;font:inherit;font-size:16px;color:var(--sh-navy);background:#fff}
+#siang-departments .sh-name:focus-visible {outline:3px solid #176b87;outline-offset:2px}
+#siang-departments .sh-name-help {font-size:12px;margin-top:6px}
+#siang-departments .sh-tool h3, #siang-departments .sh-detail h2 {overflow-wrap:anywhere}
