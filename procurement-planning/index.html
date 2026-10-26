@@ -387,6 +387,7 @@
                 <button type="button" class="primary-button" data-shortage-bulk-mode="new_order" disabled>批次建立補採新單</button>
                 <button type="button" class="secondary-button" data-shortage-bulk-close="resolved" disabled>批次結案</button>
                 <button type="button" class="secondary-button" data-shortage-bulk-close="cancelled" disabled>批次取消</button>
+                <button id="shortage-batch-retry" class="secondary-button" type="button" hidden>確認最新待辦並重試失敗項</button>
               </div>
             </div>
             <div id="store-shortage-table-wrap" class="result-table-wrap" hidden>
@@ -396,7 +397,7 @@
               </table>
             </div>
             <div class="source-control-actions shortage-run-actions"><button id="run-shortage-order-button" class="primary-button" type="button" disabled>產生門市不足補採新單</button></div>
-            <p id="store-shortage-status" class="budget-note" aria-live="polite">暫估未配不會占用額度；只有總部核准後的最新版需求才會顯示在這裡。</p>
+            <p id="store-shortage-status" role="status" aria-live="polite" class="budget-note">暫估未配不會占用額度；只有總部核准後的最新版需求才會顯示在這裡。</p>
           </div>
         </details>
       </section>
@@ -428,7 +429,28 @@
         <div class="section-heading compact"><div><p class="eyebrow">活動分析結果 · 門市交接</p><h3 id="activity-transfer-result-title">門市活動分配草稿</h3></div><span id="activity-transfer-badge">尚未發布</span></div>
         <p id="activity-transfer-summary"></p>
         <details><summary>展開六店建議分配（唯讀）</summary><div id="activity-retail-targets"></div></details>
-<details id="activity-transfer-backfill"><summary>已完成採購？補填門市目標，單獨建立草稿</summary><p>請先恢復原活動完整母批次。本區保留原全通路目標與採購結果，只重建門市規劃；與原採購分配可能有差額，須總部核對。</p><div class="activity-grid"><label>更正後活動開始日<input id="activity-correction-start" type="date"></label><label>更正後活動結束日<input id="activity-correction-end" type="date"></label><label>日期更正原因（變更日期時必填）<input id="activity-correction-reason" maxlength="300" placeholder="未變更日期可留白"></label></div><div id="activity-backfill-targets" class="activity-grid"></div><div class="activity-draft-steps"><div class="activity-draft-step"><span class="activity-step-label">步驟1・建立／重新計算</span><button aria-describedby="build-transfer-activity-help" id="build-transfer-activity-draft" class="secondary-button" type="button">重建門市分配草稿（不重算採購）</button><p id="build-transfer-activity-help">原批次尚無門市草稿，或修改活動日期／門市目標後才需按此重建。只更新門市分配，不重算原採購，也不儲存或發布；已完成且未修改時不需重按。</p></div><div class="activity-draft-step activity-draft-step-save"><span class="activity-step-label">步驟2・保存供同仁接續</span><button aria-describedby="save-transfer-activity-help" id="save-transfer-activity-draft" class="secondary-button" type="button" disabled>儲存至原母批次（尚不發布週調撥）</button><p id="save-transfer-activity-help">核對草稿後，將門市分配與日期更正儲存至公司共用原母批次，供同仁接續。不改原採購量、金額與核准狀態；儲存不等於發布，確認後仍須按下方「發布至週調撥總部」。</p></div></div></details>
+        <details id="activity-transfer-backfill">
+          <summary>已完成採購？重建門市分配草稿</summary>
+          <p>請先接續原活動完整母批次。本區保留原全通路目標與採購結果，只重建門市規劃；與原採購分配可能有差額，須總部核對。</p>
+          <div class="activity-grid">
+            <label>更正後活動開始日<input id="activity-correction-start" type="date"></label>
+            <label>更正後活動結束日<input id="activity-correction-end" type="date"></label>
+            <label>日期更正原因（變更日期時必填）<input id="activity-correction-reason" maxlength="300" placeholder="未變更日期可留白"></label>
+          </div>
+          <div id="activity-backfill-targets" class="activity-grid"></div>
+          <div class="activity-draft-steps">
+            <div class="activity-draft-step">
+              <span class="activity-step-label">步驟1・建立／重新計算</span>
+              <button aria-describedby="build-transfer-activity-help" id="build-transfer-activity-draft" class="secondary-button" type="button" disabled>重建門市分配草稿（不重算採購）</button>
+              <p id="build-transfer-activity-help">原批次尚無門市草稿，或修改本區活動日期／門市目標後才需按此重建。只更新門市分配，不重算原採購，也不儲存或發布；已完成且未修改時不需重按。</p>
+            </div>
+            <div class="activity-draft-step activity-draft-step-save">
+              <span class="activity-step-label">步驟2・保存供同仁接續</span>
+              <button aria-describedby="save-transfer-activity-help" id="save-transfer-activity-draft" class="secondary-button" type="button" disabled>儲存至原母批次（尚不發布週調撥）</button>
+              <p id="save-transfer-activity-help">核對重建草稿後，將門市分配與日期更正儲存至公司共用原母批次，供同仁接續。成功儲存後按鈕停用，不改原採購量、金額與核准狀態；儲存不等於發布，確認後仍須按下方「發布至週調撥總部」。</p>
+            </div>
+          </div>
+        </details>
         <div class="activity-transfer-actions"><button id="publish-transfer-activity" class="primary-button" type="button" disabled>發布至週調撥總部</button><button id="read-transfer-activity-feedback" class="secondary-button" type="button" disabled>核對門市分配回饋</button></div><p id="transfer-activity-status" role="status"></p><div id="transfer-activity-feedback"></div>
       </section>
       <div class="section-heading">
@@ -579,6 +601,14 @@
     <footer><p>翔仔居家・庫存採購規劃</p><p>原始Excel不上傳；只有使用者主動發布的協作草稿，才會把計算後的採購品項、人工審核內容與流程狀態保存到公司共用資料庫。</p></footer>
   </main>
 
+  <dialog id="shortage-bulk-confirm" aria-labelledby="shortage-bulk-confirm-title">
+    <form method="dialog">
+      <h2 id="shortage-bulk-confirm-title">確認批次處理</h2>
+      <p id="shortage-bulk-confirm-notice"></p>
+      <label id="shortage-bulk-reason-label">共同原因＊<textarea id="shortage-bulk-reason" maxlength="500" rows="3" required></textarea></label>
+      <div class="shortage-bulk-confirm-actions"><button class="primary-button" value="confirm">確認執行</button><button class="secondary-button" value="cancel" formnovalidate>返回</button></div>
+    </form>
+  </dialog>
   <script src="assets/xlsx-js-style.bundle.js"></script>
   <script src="../cost-analysis/assets/jszip.min.js"></script>
   <script src="xlsx-style-runtime.js?v=20260930-month-end-r1"></script>
@@ -590,6 +620,7 @@
   <script src="../store-transfer/core.js?v=20261027-activity-transfer-r6"></script>
   <script src="../store-transfer/activity.js?v=20261027-activity-transfer-r6"></script>
   <script src="activity-planning.js?v=20261027-activity-transfer-r6"></script>
+  <script src="shortage-batch.js?v=20261027-activity-transfer-r6"></script>
   <script src="app.js?v=20261027-activity-transfer-r6"></script>
 </body>
 </html>
