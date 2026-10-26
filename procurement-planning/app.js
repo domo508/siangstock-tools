@@ -14,7 +14,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261027-activity-transfer-r6";
+  const APP_VERSION = "20261027-erp-cards-r1";
   const state = {
     shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -308,7 +308,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261027-activity-transfer-r6");
+        const worker = new Worker("inventory-reader-worker.js?v=20261027-erp-cards-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1071,7 +1071,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261027-activity-transfer-r6");
+      const worker = new Worker("seasonal-model-worker.js?v=20261027-erp-cards-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -1501,16 +1501,29 @@
       const card = document.createElement("article"); card.className = "erp-reconciliation-card";
       const heading = document.createElement("h5"); heading.textContent = `${record.erp_reference}・${(record.supplier_summary || []).join("、") || "未提供供應商"}`;
       const summary = document.createElement("p"); summary.textContent = `原承諾${formatCurrencyPrecise(record.amount_before)}，ERP目前${formatCurrencyPrecise(record.amount_after)}，差額${formatCurrencyPrecise(record.amount_delta)}；共${record.difference_count}項需確認。`;
-      const wrap = document.createElement("div"); wrap.className = "result-table-wrap";
-      const table = document.createElement("table"); table.className = "procurement-table compact-table";
-      table.innerHTML = "<thead><tr><th>ERP品號</th><th>品名</th><th>差異</th><th>核准數量</th><th>ERP數量</th><th>原單價</th><th>ERP單價</th><th>金額差異</th></tr></thead>";
-      const tbody = document.createElement("tbody");
+      const items = document.createElement("ul"); items.className = "erp-difference-items";
+      items.setAttribute("aria-label", `ERP差異明細・${record.erp_reference}`);
       (record.items || []).forEach((item) => {
-        const tr = document.createElement("tr");
-        [item.sku, item.name || "", reconciliationTypeLabel(item.difference_type), formatNumber(item.approved_quantity), formatNumber(item.erp_quantity), formatCurrencyPrecise(item.unit_cost_before), formatCurrencyPrecise(item.unit_cost_after), formatCurrencyPrecise(item.amount_delta)].forEach((value) => appendCell(tr, value));
-        tbody.appendChild(tr);
+        const entry = document.createElement("li"); entry.className = "erp-difference-item";
+        const identity = document.createElement("div"); identity.className = "erp-difference-identity";
+        const product = document.createElement("div"); product.className = "erp-difference-product";
+        const sku = document.createElement("span"); sku.className = "erp-difference-sku"; sku.textContent = `ERP品號 ${item.sku}`;
+        const name = document.createElement("strong"); name.textContent = item.name || "未提供品名";
+        const type = document.createElement("span"); type.className = "erp-difference-type"; type.textContent = reconciliationTypeLabel(item.difference_type);
+        product.append(sku, name); identity.append(product, type);
+        const values = document.createElement("dl"); values.className = "erp-difference-values";
+        [
+          ["核准數量", formatNumber(item.approved_quantity)], ["ERP數量", formatNumber(item.erp_quantity)],
+          ["原單價", formatCurrencyPrecise(item.unit_cost_before)], ["ERP單價", formatCurrencyPrecise(item.unit_cost_after)],
+          ["金額差異", formatCurrencyPrecise(item.amount_delta)]
+        ].forEach(([label, value]) => {
+          const metric = document.createElement("div");
+          const term = document.createElement("dt"); term.textContent = label;
+          const amount = document.createElement("dd"); amount.textContent = value;
+          metric.append(term, amount); values.appendChild(metric);
+        });
+        entry.append(identity, values); items.appendChild(entry);
       });
-      table.appendChild(tbody); wrap.appendChild(table);
       const actions = document.createElement("div"); actions.className = "erp-reconciliation-actions";
       const label = document.createElement("label"); label.textContent = "差異原因";
       const reason = document.createElement("textarea"); reason.rows = 2; reason.maxLength = 500; reason.placeholder = "例如：臨時追加贈品抱枕套，已向主管確認"; label.appendChild(reason);
@@ -1519,7 +1532,7 @@
       const status = document.createElement("p"); status.className = "erp-reconciliation-status main-status"; status.setAttribute("role", "status");
       confirm.addEventListener("click", () => resolveErpReconciliation(record, reason, confirm, status, "confirm"));
       sourceError.addEventListener("click", () => resolveErpReconciliation(record, reason, sourceError, status, "source-error"));
-      actions.append(label, confirm, sourceError, status); card.append(heading, summary, wrap, actions); fragment.appendChild(card);
+      actions.append(label, confirm, sourceError, status); card.append(heading, summary, items, actions); fragment.appendChild(card);
     });
     elements.erpReconciliationList.replaceChildren(fragment);
   }

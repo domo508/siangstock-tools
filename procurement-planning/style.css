@@ -554,16 +554,41 @@
 .ledger-closure-grid { display: grid; grid-template-columns: minmax(105px, 1fr) auto; gap: 5px 12px; min-width: 255px; margin: 9px 0 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #f8fbfc; font-size: .82rem; }
 .ledger-closure-grid dt { color: var(--muted); }
 .ledger-closure-grid dd { margin: 0; color: var(--navy); font-weight: 800; text-align: right; }
-.erp-reconciliation-panel { margin-top: 22px; padding: 18px; border: 1px solid #e2c47d; border-radius: 18px; background: var(--soft-yellow); }
-.erp-reconciliation-list { display: grid; gap: 14px; }
-.erp-reconciliation-card { padding: 17px; border: 1px solid #dbc27d; border-radius: 15px; background: #fff; }
-.erp-reconciliation-card h5 { margin: 0; color: var(--navy); font-size: 1.05rem; }
-.erp-reconciliation-card > p { margin: 7px 0 12px; color: var(--muted); line-height: 1.55; }
-.erp-reconciliation-card .result-table-wrap { margin: 10px 0 12px; }
-.erp-reconciliation-card table { min-width: 820px; }
-.erp-reconciliation-actions { display: grid; grid-template-columns: minmax(240px, 1fr) auto auto; gap: 10px; align-items: end; }
-.erp-reconciliation-actions label { display: grid; gap: 6px; color: var(--navy); font-weight: 800; }
-.erp-reconciliation-status { grid-column: 1 / -1; margin: 0; }
+.erp-reconciliation-panel { min-width: 0; max-width: 100%; margin-top: 22px; padding: 18px; border: 1px solid #e2c47d; border-radius: 18px; background: var(--soft-yellow); }
+.erp-reconciliation-list { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 14px; }
+.erp-reconciliation-card { width: 100%; min-width: 0; max-width: 100%; padding: 17px; border: 1px solid #dbc27d; border-radius: 15px; background: #fff; }
+.erp-reconciliation-card h5 { overflow-wrap: anywhere; margin: 0; color: var(--navy); font-size: 1.05rem; }
+.erp-reconciliation-card > p { overflow-wrap: anywhere; margin: 7px 0 12px; color: var(--muted); line-height: 1.55; }
+.erp-difference-items { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin: 16px 0; padding: 0; list-style: none; }
+.erp-difference-item { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: #f8fbfc; }
+.erp-difference-identity { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.erp-difference-product { display: grid; min-width: 0; gap: 5px; overflow-wrap: anywhere; }
+.erp-difference-sku { color: var(--muted); font-size: .8rem; }
+.erp-difference-product strong { color: var(--navy); line-height: 1.5; }
+.erp-difference-type { flex: 0 0 auto; max-width: 100%; padding: 5px 9px; border: 1px solid #e2c47d; border-radius: 9px; color: #755f19; background: var(--soft-yellow); font-size: .78rem; font-weight: 800; overflow-wrap: anywhere; }
+.erp-difference-values { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.erp-difference-values > div { min-width: 0; }
+.erp-difference-values dt { margin-bottom: 6px; color: var(--muted); font-size: .78rem; }
+.erp-difference-values dd { margin: 0; color: var(--navy); font-weight: 800; line-height: 1.5; overflow-wrap: anywhere; }
+.erp-difference-values > div:last-child dd { color: var(--blue); }
+@media (max-width: 900px) {
+  .erp-difference-values { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .erp-difference-values > div:last-child { grid-column: 1 / -1; }
+}
+@media (max-width: 540px) {
+  .erp-reconciliation-panel { padding: 12px; }
+  .erp-reconciliation-card, .erp-difference-item { padding: 12px; }
+  .erp-difference-identity { flex-direction: column; gap: 8px; }
+  .erp-difference-values { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+  .erp-difference-values > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 8px; align-items: baseline; }
+  .erp-difference-values dt { margin: 0; }
+  .erp-difference-values dd { text-align: right; font-size: .88rem; }
+}
+.erp-reconciliation-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: end; }
+.erp-reconciliation-actions label { min-width: 0; display: grid; gap: 6px; color: var(--navy); font-weight: 800; }
+.erp-reconciliation-actions textarea { min-width: 0; max-width: 100%; resize: vertical; }
+.erp-reconciliation-actions button { min-width: 0; max-width: 100%; white-space: normal; }
+.erp-reconciliation-status { min-width: 0; overflow-wrap: anywhere; grid-column: 1 / -1; margin: 0; }
 
 @media (max-width: 760px) {
   .erp-reconciliation-actions { grid-template-columns: 1fr; }

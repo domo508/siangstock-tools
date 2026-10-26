@@ -1,5 +1,5 @@
 "use strict";
-importScripts("../inventory/assets/xlsx.full.min.js", "core.js?v=20261027-activity-transfer-r6", "activity-planning.js?v=20261027-activity-transfer-r6");
+importScripts("../inventory/assets/xlsx.full.min.js", "core.js?v=20261027-erp-cards-r1", "activity-planning.js?v=20261027-erp-cards-r1");
 let builder = null;
 self.onmessage = (event) => {
   const message = event.data || {};
