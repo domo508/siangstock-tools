@@ -53,6 +53,7 @@ def build():
     app_hash = 'sha256-' + base64.b64encode(hashlib.sha256(app).digest()).decode()
     # Immutable, separately named assets keep old tabs tied to the code they opened.
     (ROOT / f'homepage/{version}.js').write_bytes(app)
+    (ROOT / f'homepage/{version}.css').write_bytes((ROOT / 'homepage/style.css').read_bytes())
     source = f'''<!doctype html>
 <html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

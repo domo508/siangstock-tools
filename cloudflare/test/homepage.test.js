@@ -35,6 +35,7 @@ describe('首頁部門工作台發布保護', () => {
     expect(html).toContain(`script-src '${hash}'`);
     expect(html).toContain(`integrity="${hash}"`);
     expect(html).toContain(`/homepage/${version}.css`);
+    expect(readFileSync(`../homepage/${version}.css`, 'utf8')).toBe(readFileSync('../homepage/style.css', 'utf8'));
     expect(script.toString()).toBe(readFileSync('../homepage/app.js','utf8'));
     const headers=readFileSync('../_headers','utf8');
     for(const path of ['/', '/index.html', '/homepage/version.json']) expect(headers).toContain(`${path}\n  Cache-Control: no-store, max-age=0, must-revalidate`);
