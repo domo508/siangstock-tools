@@ -30,6 +30,7 @@ describe('首頁部門工作台發布保護', () => {
   it('版本、不可變資產與精確CSP雜湊同步，首頁及版本資訊不快取', () => {
     const version=JSON.parse(readFileSync('../homepage/version.json','utf8')).version;
     expect(version).toBe(catalog.version);
+    expect(readFileSync('../cloudflare/worker/src/homepage-departments.ts','utf8')).toContain(`HOMEPAGE_RUNTIME_VERSION = "${version}"`);
     const script=readFileSync(`../homepage/${version}.js`);
     const hash='sha256-'+createHash('sha256').update(script).digest('base64');
     expect(html).toContain(`script-src '${hash}'`);

@@ -1,3 +1,4 @@
+import { homepageDepartmentsRoute } from "./homepage-departments";
 import { verifyAdmin } from "./access";
 import { RequestValidationError, validateRules, validateUpdateBody } from "./schema";
 import { cleanupNotifications, procurementRoute } from "./procurement";
@@ -98,6 +99,8 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     try {
+      const homepageResponse = await homepageDepartmentsRoute(request, env);
+      if (homepageResponse) return homepageResponse;
       const procurementResponse = await procurementRoute(request, env);
       if (procurementResponse) return procurementResponse;
       const storeTransferResponse = await storeTransferRoute(request, env);

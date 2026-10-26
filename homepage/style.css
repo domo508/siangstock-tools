@@ -98,7 +98,9 @@
 }
 @media(prefers-reduced-motion:reduce){#siang-departments *{transition:none!important}}
 body {margin:0;background:#fbf8f1}
-#siang-departments {max-width:1100px;margin:0 auto}
+#siang-departments {width:100%;max-width:none;margin:0}
+#siang-departments .sh-page {padding-left:clamp(16px,3vw,48px);padding-right:clamp(16px,3vw,48px)}
+@media(min-width:1440px){#siang-departments .sh-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
 #siang-departments .sh-page {padding-top:30px}
 #siang-departments .sh-brand {text-decoration:none;color:inherit}
 #siang-departments .sh-top {padding-right:0}
@@ -109,3 +111,11 @@ body {margin:0;background:#fbf8f1}
 #siang-departments .sh-version p {margin:6px 0}
 #siang-departments .sh-version a {color:#153f63;font-weight:700}
 #siang-departments button {cursor:pointer}
+
+#siang-departments .sh-card-actions {display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-top:12px}
+#siang-departments .sh-edit {border:1px solid var(--sh-line);background:#f5f8f8;border-radius:8px;padding:8px 10px;font:inherit;font-size:12px;min-height:40px;color:var(--sh-navy)}
+#siang-departments .sh-tool-bottom {margin-top:auto;display:block}
+#siang-departments .sh-classification select {font:inherit}
+#siang-departments .sh-detail {max-height:calc(100dvh - 32px);overflow:auto}
+#siang-departments .sh-detail button:disabled {opacity:.55;cursor:default}
+#siang-departments .sh-dialog-error {color:#9c3535!important}
