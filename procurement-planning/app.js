@@ -14,14 +14,14 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261027-erp-cards-r1";
+  const APP_VERSION = "20261027-summary-authorization-r1";
   const state = {
     shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
     salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, reviewWorkbook: null, manualReasonCandidates: [], firstReview: null,
     secondReviewFile: null, review: null, ledger: null, monthPlan: null, procurementRules: null, revenueChannels: [], budgetDirty: false, sourceMetadata: null, modelMetadata: null, batchId: "", approved: false, erpDownloaded: false,
     selectedSuppliers: new Set(), returnScope: null, consignmentSource: null,
-    googleAuthorized: false, modelWorker: null, modelDraft: null,
+    pendingSummaryAction: null, googleConnecting: false, summaryActionBusy: false, googleAuthorized: false, modelWorker: null, modelDraft: null,
     baseAnalysis: null, parsedSources: null, workflowType: "system_recommendation",
     newProductFile: null, manualDraftFiles: [], postedOrderFiles: [], storeShortageNeeds: [], storeShortagePermissions: { canDecide: false }, storeShortageRendered: false, shortageRunMode: "merge_next",
     monthEndWorkbook: null, monthEndReportBytes: null, monthEndSummary: null,
@@ -32,6 +32,7 @@
   const get = (selector) => document.querySelector(selector);
   const elements = {
     versionWarning: get("#version-warning"), reloadLatest: get("#reload-latest-button"),
+    summaryAuth: get("#summary-auth"), summaryAuthMessage: get("#summary-auth-message"), summaryAuthConnect: get("#summary-auth-connect"),
     accountBadge: get("#account-badge"), googleAuthPriority: get("#google-auth-priority"), googleAuthStatus: get("#google-auth-status"), googleConnect: get("#google-connect-button"), autoSource: get("#auto-source-button"), autoSourceLabel: get("#auto-source-label"),
     autoSourceProgress: get("#auto-source-progress"), sourceStatus: get("#source-status"),
     month: get("#analysis-month"), checkpoint: get("#checkpoint"), orderDate: get("#order-date"), inventoryDate: get("#inventory-date"),
@@ -308,7 +309,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261027-erp-cards-r1");
+        const worker = new Worker("inventory-reader-worker.js?v=20261027-summary-authorization-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1071,7 +1072,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261027-erp-cards-r1");
+      const worker = new Worker("seasonal-model-worker.js?v=20261027-summary-authorization-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -1200,6 +1201,7 @@
     setWorkflowStatus(message);
   }
   function invalidateAnalysis() {
+    state.pendingSummaryAction = null;
     state.transferDraft=null;state.transferSourceAnalysis=null;state.transferRestoredDraft=null;state.transferCorrection=null;state.transferDraftDirty=false;
     state.analysis = null; state.baseAnalysis = null; state.parsedSources = null; state.workflowType = "system_recommendation"; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null; state.purchaseStatusSummary = null; state.costSummary = null; state.monthEndWorkbook = null; state.monthEndReportBytes = null; state.monthEndSummary = null; state.draftId = ""; state.draftStage = ""; state.sharedDraftId = ""; state.sharedDraftRevision = 0; state.parentBatchId = ""; state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set();
     elements.download.disabled = true; elements.resultPanel.hidden = true; elements.supplierFilterList.replaceChildren();
@@ -1553,25 +1555,59 @@
     await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/notify`, {}, { "X-Google-Access-Token": token });
     return true;
   }
-  async function retryLedgerNotification(batchId, button) {
-    if (!googleSources.token()) { setWorkflowStatus("請先完成公司 Google 授權，再重送這筆額度摘要。", "error"); return; }
-    button.disabled = true;
+  function clearSummaryAuthorization() {
+    googleSources.clearAuthorization();
+    state.googleAuthorized = false;
+    elements.googleConnect.disabled = false;
+    elements.autoSource.disabled = true;
+    renderGoogleAuthorizationStatus();
+  }
+  function requestSummaryAuthorization(message, action = null) {
+    state.pendingSummaryAction = action;
+    elements.summaryAuth.hidden = false;
+    elements.summaryAuthMessage.textContent = message;
+    elements.summaryAuthConnect.textContent = action ? "重新授權並接續完成" : "完成公司 Google 授權";
+    if (action) { elements.summaryAuth.scrollIntoView({ block: "center" }); elements.summaryAuthConnect.focus({ preventScroll: true }); }
+  }
+  async function checkSummaryAuthorization(action = null) {
     try {
+      if (!googleSources.canSendSummary()) throw Object.assign(new Error("Google 授權未完成、已到期或未允許寄送摘要。"), { status: 401 });
+      const identity = await googleSources.verifyCompanyIdentity();
+      if (identity.email !== state.config.email) throw Object.assign(new Error("請使用目前公司登入的相同帳號授權。"), { status: 403 });
+      state.googleAuthorized = true;
+      renderGoogleAuthorizationStatus();
+      elements.summaryAuth.hidden = true;
+      return true;
+    } catch (error) {
+      if ([401, 403].includes(Number(error.status)) || !googleSources.token()) clearSummaryAuthorization();
+      requestSummaryAuthorization(`${error.message} 回匯結果已保留；${action ? "請補登入授權，成功後會接續剛才的操作並寄送摘要。" : "請補登入授權。正式核准前不寄信。"}`, action);
+      return false;
+    }
+  }
+  function currentSummaryAction(run) {
+    const batchId = state.batchId;
+    const review = state.review;
+    return { run, isCurrent: () => state.batchId === batchId && state.review === review };
+  }
+  function handleSummarySendFailure(error, action) {
+    if (![401, 403].includes(Number(error.status))) return;
+    clearSummaryAuthorization();
+    requestSummaryAuthorization("採購核准與台帳已完成；寄送時授權失效。請補登入授權，成功後只接續寄送摘要，不會重新核准。", action);
+  }
+  async function retryLedgerNotification(batchId, button) {
+    if (state.summaryActionBusy) return;
+    state.summaryActionBusy = true; button.disabled = true;
+    const action = { run: () => retryLedgerNotification(batchId, button), isCurrent: () => true };
+    try {
+      if (!await checkRuntimeVersion() || !await checkSummaryAuthorization(action)) return;
       const result = await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() });
       setWorkflowStatus(result.status === "sent" ? `批次${batchId}摘要已寄送。` : `批次${batchId}目前沒有待寄摘要。`, "success");
       await loadLedger();
     } catch (error) {
-      if ([401, 403].includes(Number(error.status || 0))) {
-        googleSources.clearAuthorization?.();
-        state.googleAuthorized = false;
-        elements.googleConnect.disabled = false;
-        elements.autoSource.disabled = true;
-        renderGoogleAuthorizationStatus();
-      }
+      handleSummarySendFailure(error, action);
       await loadLedger().catch(() => false);
-      button.disabled = false;
       setWorkflowStatus(`摘要重送失敗：${error.message}`, "error");
-    }
+    } finally { state.summaryActionBusy = false; button.disabled = false; }
   }
   async function revokeLedgerBatch(item, button) {
     const reason = globalThis.prompt(`請輸入撤銷批次${item.id}的原因（撤銷後會沖回${formatCurrency(item.approved_amount)}）：`, "");
@@ -1622,15 +1658,20 @@
     } catch (error) { button.disabled = false; setWorkflowStatus(`更正失敗：${error.message}`, "error"); }
   }
   async function approveQueuedBatch(batchId, button) {
-    const token = googleSources.token();
-    if (!token) { setWorkflowStatus("請先按上方「公司 Google 授權」，再核准共用待核准批次；核准後系統才能立即寄送摘要。", "error"); return; }
-    button.disabled = true; setWorkflowStatus(`正在核准批次${batchId}…`);
+    if (state.summaryActionBusy) return;
+    state.summaryActionBusy = true; button.disabled = true;
+    let approved = false;
     try {
+      if (!await checkRuntimeVersion() || !await checkSummaryAuthorization({ run: () => approveQueuedBatch(batchId, button), isCurrent: () => true })) return;
+      setWorkflowStatus(`正在核准批次${batchId}…`);
       await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/approve`, { idempotencyKey: `${batchId}:approve` });
-      await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/notify`, {}, { "X-Google-Access-Token": token });
+      approved = true;
+      await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() });
       setWorkflowStatus(`批次${batchId}已核准，摘要已寄送給siang01。`, "success");
-      await loadLedger();
-    } catch (error) { button.disabled = false; setWorkflowStatus(`核准失敗：${error.message}`, "error"); }
+    } catch (error) {
+      if (approved) handleSummarySendFailure(error, { run: () => retryLedgerNotification(batchId, button), isCurrent: () => true });
+      setWorkflowStatus(`${approved ? "核准與台帳已完成；摘要待重送" : "核准失敗"}：${error.message}`, "error");
+    } finally { state.summaryActionBusy = false; button.disabled = false; await loadLedger().catch(() => false); }
   }
 
   async function loadProcurementRules() {
@@ -2355,24 +2396,38 @@
     return { pendingCount, missing };
   }
   async function connectGoogle() {
-    elements.googleConnect.disabled = true; elements.googleAuthStatus.textContent = "正在等待公司 Google 授權…"; elements.sourceStatus.textContent = "正在等待公司 Google 授權…";
+    if (state.googleConnecting) return;
+    state.googleConnecting = true;
+    elements.googleConnect.disabled = true; elements.summaryAuthConnect.disabled = true;
+    elements.googleAuthStatus.textContent = "正在等待公司 Google 授權…"; elements.sourceStatus.textContent = "正在等待公司 Google 授權…";
+    let authorized = false;
     try {
       googleSources.initialize(state.config.googleOAuthClientId);
-      await googleSources.authorize(); const identity = await googleSources.verifyCompanyIdentity();
-      if (identity.email !== state.config.email) throw new Error("Google 授權帳號與公司登入帳號不一致。");
-      state.googleAuthorized = true;
+      await googleSources.authorize();
+      authorized = await checkSummaryAuthorization(state.pendingSummaryAction);
+      if (!authorized) return;
       elements.autoSource.disabled = false;
-      elements.sourceStatus.textContent = "授權完成；正在確認公司共用的最新季節模型。access token只保存在目前分頁記憶體。";
+      elements.sourceStatus.textContent = "授權完成；授權只保存在目前分頁。";
       elements.sourceStatus.className = "result-alert";
-      updateModelControls();
-      renderGoogleAuthorizationStatus();
-      await loadApprovedSeasonalModel();
     } catch (error) {
-      state.googleAuthorized = false;
-      elements.sourceStatus.textContent = error.message; elements.sourceStatus.className = "result-alert error"; elements.googleConnect.disabled = false;
-      renderGoogleAuthorizationStatus();
-      updateModelControls();
+      clearSummaryAuthorization();
+      elements.sourceStatus.textContent = error.message; elements.sourceStatus.className = "result-alert error";
+      requestSummaryAuthorization(`Google 授權未完成：${error.message}。回匯與已完成的核准仍保留，可再次授權後接續。`, state.pendingSummaryAction);
+    } finally {
+      state.googleConnecting = false; elements.googleConnect.disabled = false; elements.summaryAuthConnect.disabled = false;
+      renderGoogleAuthorizationStatus(); updateModelControls();
     }
+    if (!authorized) return;
+    const action = state.pendingSummaryAction;
+    state.pendingSummaryAction = null;
+    if (action) {
+      if (!action.isCurrent()) { setWorkflowStatus("授權已完成，但操作批次或回匯內容已變更；請確認目前資料後重新按核准或重送。", "warning"); return; }
+      if (!await checkRuntimeVersion()) return;
+      await action.run();
+      return;
+    }
+    // 補授權本身不代表核准，也不自動重送其他批次。
+    await loadApprovedSeasonalModel().catch((error) => { elements.sourceStatus.textContent = `Google 已授權；季節模型讀取失敗：${error.message}`; });
   }
   async function loadAutomaticSources() {
     resetSourceProgress();
@@ -2747,6 +2802,7 @@
     renderExcludedRows();
   }
   function resetScopeForNewExport() {
+    state.pendingSummaryAction = null;
     state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set(); state.returnScope = null; state.draftId = ""; state.draftStage = "";
     resetReviewWorkflow("查看範圍已變更；請在「分批審核與開單」勾選一個或多個單位後直接下載Excel。");
     renderSelectedAnalysis();
@@ -3357,6 +3413,7 @@
   }
 
   async function reviewReturn() {
+    state.pendingSummaryAction = null;
     if (!state.reviewFile || !state.analysis || !state.returnScope) return;
     elements.reviewButton.disabled = true; setWorkflowStatus("正在重新檢查人工數量、力榮10件規則、可售至、付款月份與額度…");
     try {
@@ -3401,7 +3458,7 @@
       setWorkflowStep(elements.workflowStepSecond, state.firstReview.errors.length ? "locked" : "active", state.firstReview.errors.length ? "修正第一次回匯後重跑" : "無異動直接送出；有異動只填變更列");
       setWorkflowStep(elements.workflowStepApproval, state.firstReview.errors.length ? "locked" : "active", state.firstReview.errors.length ? "覆核通過後開放" : "可全部沿用並送出待核准");
       setWorkflowStatus(state.firstReview.errors.length ? `覆核完成但有${state.firstReview.errors.length}項阻擋；請修正第一次回匯後重跑。` : "第一次覆核通過且已下載確認表；沒有異動可直接送出，有異動只需填寫變更品項後回匯同一份檔案。", state.firstReview.errors.length ? "error" : "success");
-      if (!state.firstReview.errors.length) await persistWorkflowDraft("first_reviewed");
+      if (!state.firstReview.errors.length) { await persistWorkflowDraft("first_reviewed"); await checkSummaryAuthorization(); }
       renderBudget();
     } catch (error) {
       state.firstReview = null; state.review = null;
@@ -3413,6 +3470,7 @@
     finally { elements.reviewButton.disabled = !state.reviewFile; }
   }
   async function confirmSecondReview() {
+    state.pendingSummaryAction = null;
     if (!state.secondReviewFile) return;
     elements.confirmReview.disabled = true; setWorkflowStatus("正在檢查第二次異動量、原因、付款月份與核准金額…");
     try {
@@ -3435,7 +3493,7 @@
       setWorkflowStep(elements.workflowStepSecond, state.review.errors.length ? "blocked" : "done", state.review.errors.length ? `仍有${state.review.errors.length}項阻擋` : "異動確認已通過");
       setWorkflowStep(elements.workflowStepApproval, state.review.errors.length ? "locked" : "active", state.review.errors.length ? "修正異動確認表後重跑" : "可送出待核准台帳");
       setWorkflowStatus(state.review.errors.length ? `覆核與異動確認表仍有${state.review.errors.length}項阻擋，禁止送出。` : "異動確認通過；可送出待核准台帳，此步驟不寄信。", state.review.errors.length ? "error" : "success");
-      if (!state.review.errors.length) await persistWorkflowDraft("second_reviewed");
+      if (!state.review.errors.length) { await persistWorkflowDraft("second_reviewed"); await checkSummaryAuthorization(); }
       renderBudget();
     } catch (error) {
       state.review = null; elements.submitApproval.disabled = true;
@@ -3507,29 +3565,51 @@
     } catch (error) { elements.submitApproval.disabled = false; setWorkflowStatus(`台帳寫入失敗：${error.message}`, "error"); }
   }
   async function approveBatch() {
-    if (!state.batchId || !state.config.permissions?.canApprove) return;
-    elements.approve.disabled = true; setWorkflowStatus("正在正式核准並建立通知工作…");
+    if (!state.batchId || !state.config.permissions?.canApprove || state.summaryActionBusy) return;
+    if (state.approved) return retryNotification();
+    state.summaryActionBusy = true; elements.approve.disabled = true;
+    const action = currentSummaryAction(approveBatch);
     try {
+      if (!await checkRuntimeVersion() || !await checkSummaryAuthorization(action)) return;
+      if (!action.isCurrent()) { setWorkflowStatus("批次或回匯內容已變更，請確認後重新核准。", "warning"); return; }
+      setWorkflowStatus("正在正式核准並建立通知工作…");
       await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/approve`, { idempotencyKey: `${state.batchId}:approve` });
-      state.approved = true; elements.erp.disabled = false; await loadLedger(); await persistWorkflowDraft("approved"); const token = googleSources.token();
-      await saveCostSnapshot();
+      state.approved = true; elements.erp.disabled = false;
       setWorkflowStep(elements.workflowStepApproval, "done", "正式核准完成，可下載ERP採購檔");
-      if (!token) { elements.retryNotification.disabled = false; setWorkflowStatus("已正式核准且額度台帳已寫入；郵件待目前核准帳號完成 Google 授權後重送。", "error"); return; }
+      // 核准後的其他工作失敗不得讓同仁重新核准，摘要失敗只接續寄送。
+      const followUpWarnings = [];
+      for (const operation of [() => loadLedger(), () => persistWorkflowDraft("approved"), () => saveCostSnapshot()]) {
+        try { await operation(); } catch (error) { followUpWarnings.push(error.message); }
+      }
       try {
-        await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/notify`, {}, { "X-Google-Access-Token": token });
-        elements.retryNotification.disabled = true; await loadLedger(); setWorkflowStatus("正式核准完成，額度摘要郵件已寄送；現在可下載ERP採購檔。", "success");
-      } catch (notifyError) { elements.retryNotification.disabled = false; setWorkflowStatus(`正式核准與台帳已完成；郵件待重送：${notifyError.message}。ERP檔仍可下載。`, "error"); }
-    } catch (error) { elements.approve.disabled = false; setWorkflowStatus(`核准失敗：${error.message}`, "error"); }
+        await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() });
+        elements.retryNotification.disabled = true; await loadLedger().catch(() => false);
+        setWorkflowStatus(`正式核准完成，額度摘要郵件已寄送；現在可下載ERP採購檔。${followUpWarnings.length ? ` 附帶同步待處理：${followUpWarnings.join("；")}` : ""}`, followUpWarnings.length ? "warning" : "success");
+      } catch (error) {
+        elements.retryNotification.disabled = false;
+        handleSummarySendFailure(error, currentSummaryAction(retryNotification));
+        setWorkflowStatus(`正式核准與台帳已完成；郵件待重送：${error.message}。ERP檔仍可下載。`, "error");
+      }
+    } catch (error) { setWorkflowStatus(`核准失敗：${error.message}`, "error"); }
+    finally { state.summaryActionBusy = false; elements.approve.disabled = state.approved; }
   }
   async function retryNotification() {
-    if (!state.batchId || !state.config?.permissions?.canApprove) return;
-    const token = googleSources.token();
-    if (!token) { setWorkflowStatus("請先以目前公司登入帳號完成 Google 授權，再重送摘要。", "error"); return; }
-    elements.retryNotification.disabled = true; setWorkflowStatus("正在重送核准摘要郵件…");
+    if (!state.batchId || !state.config?.permissions?.canApprove || state.summaryActionBusy) return;
+    state.summaryActionBusy = true; elements.retryNotification.disabled = true;
+    let sent = false;
+    const action = currentSummaryAction(retryNotification);
     try {
-      const result = await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/notify`, {}, { "X-Google-Access-Token": token });
+      if (!await checkRuntimeVersion() || !await checkSummaryAuthorization(action)) return;
+      if (!action.isCurrent()) { setWorkflowStatus("批次或回匯內容已變更，請確認後重新選擇摘要。", "warning"); return; }
+      setWorkflowStatus("正在重送核准摘要郵件…");
+      const result = await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() });
+      sent = true;
+      await loadLedger().catch(() => false);
       setWorkflowStatus(result.status === "sent" ? "摘要郵件已重送完成。" : "此批次沒有待寄送的摘要。", "success");
-    } catch (error) { elements.retryNotification.disabled = false; setWorkflowStatus(`郵件仍待重送：${error.message}`, "error"); }
+    } catch (error) {
+      handleSummarySendFailure(error, currentSummaryAction(retryNotification));
+      setWorkflowStatus(`郵件仍待重送：${error.message}`, "error");
+    } finally { state.summaryActionBusy = false; elements.retryNotification.disabled = sent; }
   }
   function downloadErp() {
     if (!state.review || !state.approved) return;
@@ -3661,7 +3741,7 @@
   elements.budgetSourceNote.addEventListener("input", () => { elements.budgetPlanStatus.textContent = "額度來源註記尚未儲存。"; });
   elements.purchasedToDate.addEventListener("input", renderBudget); elements.saveBudget.addEventListener("click", saveMonthPlan);
   elements.addChannel.addEventListener("click", addRevenueChannel); elements.refreshQueue.addEventListener("click", loadLedger); elements.refreshSharedDrafts.addEventListener("click", loadSharedWorkflowDrafts);
-  elements.googleConnect.addEventListener("click", connectGoogle); elements.autoSource.addEventListener("click", loadAutomaticSources);
+  elements.googleConnect.addEventListener("click", connectGoogle); elements.summaryAuthConnect.addEventListener("click", connectGoogle); elements.autoSource.addEventListener("click", loadAutomaticSources);
   elements.storeShortageRows.addEventListener("click", decideStoreShortage);
   elements.storeShortageRows.addEventListener("change", (event) => { if (event.target.matches("[data-shortage-select]")) updateStoreShortageSelection(); });
   elements.storeShortageSelectAll.addEventListener("change", () => {

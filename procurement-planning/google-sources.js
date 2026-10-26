@@ -2,7 +2,10 @@
   "use strict";
 
   let accessToken = "";
+  let expiresAt = 0;
+  let grantedScopes = "";
   let tokenClient = null;
+  let authorizationErrorHandler = null;
   const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   const TRANSIENT_GOOGLE_STATUSES = new Set([429, 500, 502, 503, 504]);
   const GOOGLE_READ_RETRY_DELAYS = [350, 900];
@@ -17,20 +20,31 @@
   function initialize(clientId) {
     if (!clientId) throw new Error("正式環境尚未設定 Google OAuth 用戶端。");
     if (!global.google?.accounts?.oauth2) throw new Error("Google 授權程式仍在載入，請稍後再試。");
-    tokenClient = global.google.accounts.oauth2.initTokenClient({ client_id: clientId, scope: SCOPES, callback: () => {} });
+    tokenClient = global.google.accounts.oauth2.initTokenClient({ client_id: clientId, scope: SCOPES, callback: () => {}, error_callback: (error) => authorizationErrorHandler?.(error) });
   }
 
   function authorize() {
     if (!tokenClient) throw new Error("Google OAuth 尚未初始化。");
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("Google 授權逾時，請重試。")), 120000);
+      let settled = false;
+      const fail = (message) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); authorizationErrorHandler = null;
+        reject(new Error(message));
+      };
+      const timer = setTimeout(() => fail("Google 授權逾時，請重試。"), 120000);
+      authorizationErrorHandler = (error) => fail(error?.type === "popup_closed" ? "已取消 Google 授權，可再次登入後接續。" : "Google 授權視窗無法開啟，請允許此網站的登入視窗後再試。");
       tokenClient.callback = (response) => {
-        clearTimeout(timer);
+        if (settled) return;
+        settled = true; clearTimeout(timer); authorizationErrorHandler = null;
         if (response.error || !response.access_token) return reject(new Error(response.error_description || response.error || "Google 授權失敗。"));
         accessToken = response.access_token;
+        expiresAt = Number(response.expires_in) > 0 ? Date.now() + Number(response.expires_in) * 1000 : 0;
+        grantedScopes = response.scope || "";
         resolve(accessToken);
       };
-      tokenClient.requestAccessToken({ prompt: accessToken ? "" : "consent", hd: "siangapato.com.tw" });
+      try { tokenClient.requestAccessToken({ prompt: accessToken ? "" : "consent", hd: "siangapato.com.tw" }); }
+      catch (error) { fail(error.message || "Google 授權無法開始，請重試。"); }
     });
   }
 
@@ -48,7 +62,7 @@
   }
 
   async function googleFetch(url, options = {}) {
-    if (!accessToken) throw new Error("請先完成公司 Google 授權。");
+    if (!token()) throw Object.assign(new Error("請先完成公司 Google 授權，或重新授權已到期的登入。"), { status: 401 });
     const method = String(options.method || "GET").toUpperCase();
     const retryDelays = method === "GET" || method === "HEAD" ? GOOGLE_READ_RETRY_DELAYS : [];
     for (let attempt = 0; ; attempt += 1) {
@@ -63,15 +77,15 @@
         throw new Error(`與 Google Drive／試算表的連線暫時中斷，系統已自動重試仍未成功：${error?.message || "網路連線失敗"}`);
       }
       if (response.status === 401) {
-        accessToken = "";
-        throw new Error("Google 授權已過期，請重新登入。");
+        clearAuthorization();
+        throw Object.assign(new Error("Google 授權已過期，請重新登入。"), { status: 401 });
       }
       if (response.ok) return response;
       if (TRANSIENT_GOOGLE_STATUSES.has(response.status) && attempt < retryDelays.length) {
         await wait(retryDelays[attempt]);
         continue;
       }
-      throw new Error(await googleErrorMessage(response));
+      throw Object.assign(new Error(await googleErrorMessage(response)), { status: response.status });
     }
   }
 
@@ -365,11 +379,15 @@
     };
   }
 
-  function token() { return accessToken; }
-  function clearAuthorization() { accessToken = ""; }
+  function token() {
+    if (expiresAt && Date.now() >= expiresAt - 60000) clearAuthorization();
+    return accessToken;
+  }
+  function canSendSummary() { return Boolean(token() && grantedScopes.split(/\s+/).includes("https://www.googleapis.com/auth/gmail.send")); }
+  function clearAuthorization() { accessToken = ""; expiresAt = 0; grantedScopes = ""; }
 
   global.ProcurementGoogleSources = {
-    initialize, authorize, verifyCompanyIdentity, loadAll, token, clearAuthorization,
+    initialize, authorize, verifyCompanyIdentity, loadAll, token, canSendSummary, clearAuthorization,
     downloadDriveFile, listDriveExcelFiles, loadLatestMaster, loadLatestApprovedModel, uploadDriveExcel, sendSeasonalModelSummary, sendMonthEndReport,
     selectSpreadsheetSheetTitle
   };

@@ -1167,3 +1167,7 @@ body.history-readonly .stage-two, body.history-readonly .stage-three, body.histo
 #shortage-bulk-reason-label[hidden] { display: none; }
 #shortage-bulk-reason { width: 100%; box-sizing: border-box; font: inherit; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
 .shortage-bulk-confirm-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+
+#summary-auth[hidden] { display: none; }
+#summary-auth p { margin-top: 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) { #summary-auth .primary-button { width: 100%; } }

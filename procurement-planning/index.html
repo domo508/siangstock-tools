@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20261027-erp-cards-r1">
+  <link rel="stylesheet" href="style.css?v=20261027-summary-authorization-r1">
 </head>
 <body>
   <section id="version-warning" class="version-warning" role="alert" hidden>
@@ -527,6 +527,10 @@
         <li id="workflow-step-second" data-status="locked"><span>3</span><strong>需要時再異動</strong><small>只填變更品項的數量與原因</small></li>
         <li id="workflow-step-approval" data-status="locked"><span>4</span><strong>核准與ERP</strong><small>正式核准才寄摘要並占用額度</small></li>
       </ol>
+      <aside id="summary-auth" class="result-alert warning" role="status" hidden>
+        <p id="summary-auth-message">回匯結果已保留；請完成公司 Google 授權，正式核准後寄送摘要。</p>
+        <button id="summary-auth-connect" class="primary-button" type="button">完成公司 Google 授權</button>
+      </aside>
       <div class="workflow-grid">
         <label id="review-file-label" class="file-button is-disabled">選擇第一次人工回匯<input id="review-file" type="file" accept=".xlsx" disabled></label>
         <button id="review-button" class="secondary-button" type="button" disabled>產生並下載覆核與異動確認表</button>
@@ -614,13 +618,13 @@
   <script src="xlsx-style-runtime.js?v=20260930-month-end-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20261027-erp-cards-r1"></script>
+  <script src="core.js?v=20261027-summary-authorization-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
-  <script src="google-sources.js?v=20261027-erp-cards-r1"></script>
+  <script src="google-sources.js?v=20261027-summary-authorization-r1"></script>
   <script src="../store-transfer/core.js?v=20261027-activity-transfer-r6"></script>
   <script src="../store-transfer/activity.js?v=20261027-activity-transfer-r6"></script>
-  <script src="activity-planning.js?v=20261027-erp-cards-r1"></script>
-  <script src="shortage-batch.js?v=20261027-erp-cards-r1"></script>
-  <script src="app.js?v=20261027-erp-cards-r1"></script>
+  <script src="activity-planning.js?v=20261027-summary-authorization-r1"></script>
+  <script src="shortage-batch.js?v=20261027-summary-authorization-r1"></script>
+  <script src="app.js?v=20261027-summary-authorization-r1"></script>
 </body>
 </html>
