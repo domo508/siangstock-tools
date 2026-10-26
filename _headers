@@ -7,8 +7,23 @@
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Resource-Policy: same-origin
 
+/
+  Cache-Control: no-store, max-age=0, must-revalidate
+
 /index.html
-  Cache-Control: no-cache
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/homepage/version.json
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/homepage/catalog.json
+  Cache-Control: no-store, max-age=0, must-revalidate
+
+/homepage/20261026-departments-r1.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/homepage/20261026-departments-r1.css
+  Cache-Control: public, max-age=31536000, immutable
 
 /inventory/index.html
   Cache-Control: no-cache

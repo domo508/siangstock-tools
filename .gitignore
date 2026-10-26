@@ -4,6 +4,8 @@
 *.csv
 *.tsv
 *.json
+!homepage/catalog.json
+!homepage/version.json
 !package.json
 !tsconfig.json
 !procurement-planning/version.json

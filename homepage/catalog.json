@@ -1,0 +1,19 @@
+{
+  "version": "20261026-departments-r1",
+  "departments": [
+    {"id":"admin","label":"總管理處","glyph":"總"},
+    {"id":"merch","label":"商控","glyph":"商"},
+    {"id":"ops","label":"營運","glyph":"營"},
+    {"id":"design","label":"設計","glyph":"設"},
+    {"id":"store","label":"門市","glyph":"店"}
+  ],
+  "tools": [
+    {"id":"cost-analysis","name":"A、B庫存成本稽核分析","primary":"admin","collaborators":[],"href":"/cost-analysis/","status":"立即使用","description":"整合庫存、進貨與銷售，核對商品數量、成本及門市配對差異。","data":"Excel 本機分析"},
+    {"id":"supplier-reconciliation","name":"財務供應商對帳比對","primary":"admin","collaborators":[],"href":"/supplier-reconciliation/","status":"立即使用","description":"按月核對 ERP 收貨與供應商報表，追蹤跨月與單價差異。","data":"Excel 本機比對"},
+    {"id":"inventory","name":"期初期末庫存資料整理","primary":"admin","collaborators":[],"href":"/inventory/","status":"立即使用","description":"整理庫存 Excel、套用集中分類規則，保留原始資料並另存新檔。","data":"Excel 本機整理"},
+    {"id":"procurement-planning","name":"庫存採購規劃","primary":"merch","collaborators":[],"href":"/procurement-planning/?deploy=20261023-activity-stock-r2","status":"立即使用","description":"從需求試算、分批覆核到採購核准，銜接公司額度與 ERP。","data":"本機運算・共用批次"},
+    {"id":"competitive-analysis","name":"商控競品分析工具","primary":"merch","collaborators":["design"],"href":"/competitive-analysis/?deploy=20261024-competitive-analysis-r7","status":"立即使用","description":"整理商品規格、比較有來源的競品，試算定價與毛利情境。","data":"雲端 AI 依工具同意設定"},
+    {"id":"store-transfer","name":"門市週補貨與調撥","primary":"merch","collaborators":["store"],"href":"/store-transfer/?deploy=20261020-store-transfer-r21","status":"立即使用","description":"商控建立補貨建議，門市確認後送交核准，產生各店 ERP 調撥檔。","data":"本機運算・共用批次"},
+    {"id":"store-orders","name":"門市手寫訂單轉 ERP","primary":"store","collaborators":["merch"],"href":null,"status":"開發中","description":"門市收單、單據辨識與原圖覆核，由商控協作交接；正式功能驗證中。","data":"尚未開放正式使用"}
+  ]
+}
