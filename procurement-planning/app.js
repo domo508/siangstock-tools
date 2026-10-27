@@ -14,7 +14,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261027-activity-period-phase1-r1";
+  const APP_VERSION = "20261027-approved-consignment-r1";
   const state = {
     shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -309,7 +309,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261027-activity-period-phase1-r1");
+        const worker = new Worker("inventory-reader-worker.js?v=20261027-approved-consignment-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1074,7 +1074,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261027-activity-period-phase1-r1");
+      const worker = new Worker("seasonal-model-worker.js?v=20261027-approved-consignment-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -3447,36 +3447,48 @@
     await persistWorkflowDraft("downloaded");
   }
 
-  function addDraftConsignmentReservations(target, draft) {
-    if (!["first_reviewed", "second_reviewed", "pending_approval", "approved"].includes(draft?.stage)) return;
-    const rows = draft.review?.rows || draft.firstReview?.rows || [];
-    rows.forEach((row) => {
-      if (!/普優[瑪碼]|力榮/.test(String(row.supplier || ""))) return;
-      const sku = core.normalizeSku(row.sku);
-      const quantity = Math.max(0, Number(row.finalQty || 0));
-      if (sku && quantity > 0) target.set(sku, Number(target.get(sku) || 0) + quantity);
+  async function activeConsignmentReservations(suppliers = []) {
+    const query = new URLSearchParams();
+    [...new Set(suppliers)].filter((supplier) => /普優[瑪碼]|力榮/.test(supplier)).forEach((supplier) => query.append("supplier", supplier));
+    if (suppliers.length && !query.size) return new Map();
+    const response = await fetch(`/api/procurement/consignment-reservations?${query}`, {
+      headers: { Accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(30000)
     });
-  }
-
-  async function activeConsignmentReservations() {
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.version !== 1 || result.source !== "approved_not_erp" || !Array.isArray(result.reservations)) {
+      throw new Error(`無法核對公司已核准寄庫預留；請確認公司登入及最新版後重試。${result.error || `HTTP ${response.status}`}`);
+    }
     const reservations = new Map();
-    const currentKeys = new Set([state.draftId, state.sharedDraftId].filter(Boolean));
+    reservations.sourcesBySku = new Map();
     const seen = new Set();
-    const include = (draft) => {
-      const key = draft?.sharedDraftId || draft?.id;
-      if (!key || currentKeys.has(key) || seen.has(key)) return;
+    for (const row of result.reservations) {
+      const sku = core.normalizeSku(row.sku);
+      const key = `${row.batchId}::${sku}`;
+      if (!sku || !row.batchId || row.status !== "approved" || !Number.isSafeInteger(row.quantity) || row.quantity <= 0 || seen.has(key)) {
+        throw new Error("公司已核准寄庫預留資料不完整或重複，已停止核對，請重新載入後重試。");
+      }
       seen.add(key);
-      addDraftConsignmentReservations(reservations, draft);
-    };
-    state.workflowDrafts.forEach(include);
-    for (const metadata of state.sharedDrafts) {
-      if (!metadata?.id || currentKeys.has(metadata.id) || seen.has(metadata.id)) continue;
-      const response = await fetch(`/api/procurement/collaboration-drafts/${encodeURIComponent(metadata.id)}`, { headers: { Accept: "application/json" }, cache: "no-store" });
-      const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-      if (!response.ok) throw new Error(`無法核對其他有效採購批次的寄庫占用：${result.error || `HTTP ${response.status}`}`);
-      include(await decodeSharedSnapshot(result.draft));
+      if (row.batchId === state.batchId) continue;
+      reservations.set(sku, Number(reservations.get(sku) || 0) + row.quantity);
+      if (!reservations.sourcesBySku.has(sku)) reservations.sourcesBySku.set(sku, []);
+      reservations.sourcesBySku.get(sku).push(row);
     }
     return reservations;
+  }
+
+  function confirmConsignmentReservations(review) {
+    const warnings = (review?.warnings || []).filter((warning) => warning.type === "consignment_reservation_conflict");
+    if (!warnings.length) return true;
+    const confirmed = globalThis.confirm(`公司已核准預留造成以下供貨差異：\n\n${warnings.map((warning) => warning.message).join("\n")}\n\n原人工量保持不變；此提醒不代表供貨已確保。是否確認供貨差異並繼續覆核？`);
+    if (!confirmed) return false;
+    const skus = new Set(warnings.map((warning) => warning.sku));
+    for (const row of review.rows || []) {
+      if (!skus.has(row.sku)) continue;
+      row.consignmentReservationConfirmed = true;
+      row.consignmentReservationConfirmedAt = new Date().toISOString();
+      row.consignmentReservationConfirmedBy = state.config?.email || "公司授權使用者";
+    }
+    return true;
   }
 
   function confirmPurchaseUnitExceptions(review) {
@@ -3505,7 +3517,7 @@
     try {
       const baselineRows = workUnitBaselineRows(state.activeWorkUnit);
       const exportedRows = state.analysis.suggestedRows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
-      const reservedConsignmentBySku = await activeConsignmentReservations();
+      const reservedConsignmentBySku = await activeConsignmentReservations(baselineRows.map((row) => row.supplier));
       state.firstReview = core.reviewReturnedWorkbook(state.reviewWorkbook || await readWorkbook(state.reviewFile), XLSX, {
         asOfDate: elements.salesDate.value || today(),
         orderDate: elements.orderDate.value,
@@ -3517,9 +3529,9 @@
         manualAdditionCatalogAvailable: Boolean(state.analysis.manualAdditionCatalog?.rows?.length),
         reservedConsignmentBySku
       });
-      if (!state.firstReview.errors.length && !confirmPurchaseUnitExceptions(state.firstReview)) {
+      if (!state.firstReview.errors.length && (!confirmConsignmentReservations(state.firstReview) || !confirmPurchaseUnitExceptions(state.firstReview))) {
         state.review = null;
-        setWorkflowStatus("已取消箱數例外確認；尚未產生覆核表，也未寫入批次。可調整人工量後重新檢查。", "warning");
+        setWorkflowStatus("已取消供貨差異或箱數例外確認；尚未產生覆核表，也未寫入批次。可調整人工量後重新檢查。", "warning");
         return;
       }
       const t = state.firstReview.totals;
@@ -3562,9 +3574,9 @@
     try {
       clearWorkflowErrors();
       state.review = core.reviewSecondApprovalWorkbook(await readWorkbook(state.secondReviewFile), XLSX, { asOfDate: elements.salesDate.value || today(), orderDate: elements.orderDate.value, supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, baselineBySku: new Map(state.firstReview.rows.map((row) => [row.sku, row])) });
-      if (!state.review.errors.length && !confirmPurchaseUnitExceptions(state.review)) {
+      if (!state.review.errors.length && (!confirmConsignmentReservations(state.review) || !confirmPurchaseUnitExceptions(state.review))) {
         state.review = null;
-        setWorkflowStatus("已取消箱數例外確認；本次第二次異動尚未套用。", "warning");
+        setWorkflowStatus("已取消供貨差異或箱數例外確認；本次第二次異動尚未套用。", "warning");
         return;
       }
       const t = state.review.totals;

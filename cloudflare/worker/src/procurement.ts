@@ -1617,6 +1617,51 @@ async function notify(request: Request, env: ProcurementEnv, batchId: string): P
   return fail("Gmail寄送", String(response.error?.message || `Gmail HTTP ${send.status}`), 502);
 }
 
+// Read the current formal ledger in one database snapshot. Drafts never reserve stock.
+async function consignmentReservations(request: Request, env: ProcurementEnv): Promise<Response> {
+  await verifyCompanyUser(request, procurementAccess(env));
+  const requestedSuppliers = new URL(request.url).searchParams.getAll("supplier");
+  if (requestedSuppliers.length > 100 || requestedSuppliers.some((value) => !value || value.length > 120)) throw new RequestValidationError("寄庫核對供應商範圍無效。");
+  const result = await env.DB.prepare(`SELECT b.id batch_id, b.supplier_summary, b.approved_amount batch_amount,
+    b.revision, b.approved_at, i.sku, i.supplier, i.approved_quantity, i.approved_amount item_amount,
+    i.remaining_quantity, d.status erp_status
+    FROM procurement_batches b LEFT JOIN procurement_batch_items i ON i.batch_id = b.id
+    LEFT JOIN procurement_batch_erp_documents d ON d.batch_id = i.batch_id AND d.supplier = i.supplier
+    WHERE b.status = 'approved' ORDER BY b.id, i.sku`).all<Record<string, unknown>>();
+  const batches = new Map<string, Record<string, unknown>[]>();
+  for (const row of result.results) {
+    const id = String(row.batch_id);
+    if (!batches.has(id)) batches.set(id, []);
+    batches.get(id)!.push(row);
+  }
+  const reservations: Record<string, unknown>[] = [];
+  for (const [batchId, rows] of batches) {
+    const suppliers = parseJsonText(String(rows[0].supplier_summary || "[]"));
+    if (!Array.isArray(suppliers) || !suppliers.every((value) => typeof value === "string")) {
+      throw new RequestValidationError(`批次${batchId}的供應商基準不完整，無法核對寄庫預留。`, 409);
+    }
+    const isConsignment = (supplier: unknown) => /普優[瑪碼]|力榮/.test(String(supplier || ""));
+    if (!suppliers.some(isConsignment) && !rows.some((row) => isConsignment(row.supplier))) continue;
+    if (requestedSuppliers.length && !suppliers.some((supplier) => requestedSuppliers.includes(supplier)) && !rows.some((row) => requestedSuppliers.includes(String(row.supplier)))) continue;
+    const total = rows.reduce((sum, row) => sum + Number(row.item_amount || 0), 0);
+    if (Math.abs(total - Number(rows[0].batch_amount)) >= 0.05
+      || (Number(rows[0].batch_amount) > 0 && suppliers.filter(isConsignment).some((supplier) => !rows.some((row) => row.supplier === supplier && row.sku)))) {
+      throw new RequestValidationError(`批次${batchId}缺少完整核准逐品項明細，已停止寄庫核對；請先補齊正式台帳。`, 409);
+    }
+    for (const row of rows) {
+      if (!row.sku || !isConsignment(row.supplier) || row.erp_status === "erp_created" || (requestedSuppliers.length && !requestedSuppliers.includes(String(row.supplier)))) continue;
+      const approved = Number(row.approved_quantity);
+      const remaining = Number(row.remaining_quantity);
+      if (!Number.isSafeInteger(approved) || approved < 0 || !Number.isSafeInteger(remaining) || remaining < 0 || remaining > approved) {
+        throw new RequestValidationError(`批次${batchId}的${String(row.sku)}預留數量無效，已停止寄庫核對。`, 409);
+      }
+      if (remaining > 0) reservations.push({ batchId, sku: String(row.sku), supplier: String(row.supplier), quantity: remaining,
+        revision: Number(row.revision), approvedAt: row.approved_at, status: "approved" });
+    }
+  }
+  return json({ version: 1, source: "approved_not_erp", reservations });
+}
+
 export async function procurementRoute(request: Request, env: ProcurementEnv): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/procurement")) return null;
@@ -1644,6 +1689,7 @@ export async function procurementRoute(request: Request, env: ProcurementEnv): P
   if (shortageCloseMatch && request.method === "POST") return closeStoreShortageNeed(request, env, decodeURIComponent(shortageCloseMatch[1]), decodeURIComponent(shortageCloseMatch[2]));
   if (url.pathname === "/api/procurement/month-plan" && request.method === "GET") return monthPlan(request, env);
   if (url.pathname === "/api/procurement/month-plan" && request.method === "PUT") return saveMonthPlan(request, env);
+  if (url.pathname === "/api/procurement/consignment-reservations" && request.method === "GET") return consignmentReservations(request, env);
   if (url.pathname === "/api/procurement/history" && request.method === "GET") return procurementHistory(request, env);
   if (url.pathname === "/api/procurement/cost-snapshot" && request.method === "GET") return costSnapshot(request, env);
   if (url.pathname === "/api/procurement/cost-snapshot" && request.method === "PUT") return saveCostSnapshot(request, env);

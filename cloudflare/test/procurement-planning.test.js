@@ -2933,3 +2933,56 @@ describe("採購規劃前台與入口", () => {
     expect(toolApp).not.toContain("documents.forEach((document)");
   });
 });
+
+
+describe("寄庫回匯：原報表基準與正式預留分開", () => {
+  const supplier = "普優瑪寢具有限公司";
+  function fixture(manuals = [9,20], sparse = false) {
+    const book = XLSX.utils.book_new();
+    const headers = ["ERP品號","商品品名","供應商","建議採購量","人工確認採購量","進貨價","人工調整原因類別","人工調整補充說明","寄倉現貨","已採購未到貨"];
+    const values = [headers,["SYNTH01","合成商品一",supplier,10,manuals[0],275,"","",9,0],...(sparse?[[]]:[]),["SYNTH02","合成商品二",supplier,20,manuals[1],590,"","",29,0]];
+    XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(values),"03B2_合成");
+    const bytes = XLSX.write(book,{type:"array",bookType:"xlsx",cellStyles:true});
+    const workbook = XLSX.read(bytes,{type:"array",cellDates:true,cellStyles:true,nodim:true});
+    const baselineBySku = new Map([
+      ["SYNTH01",{sku:"SYNTH01",name:"合成商品一",supplier,suggestedPurchaseQty:10,unitCost:275,consignmentCurrentQty:9,pendingQty:0,packSize:10}],
+      ["SYNTH02",{sku:"SYNTH02",name:"合成商品二",supplier,suggestedPurchaseQty:20,unitCost:590,consignmentCurrentQty:29,pendingQty:0,packSize:20}]
+    ]);
+    const reservedConsignmentBySku = new Map([["SYNTH01",1],["SYNTH02",10]]);
+    reservedConsignmentBySku.sourcesBySku = new Map([["SYNTH01",[{batchId:"FORMAL-SYNTH",quantity:1}]]]);
+    return {workbook,options:{baselineBySku,reservedConsignmentBySku}};
+  }
+  it.each([[9,20],["",""]])("未改量及留白不因後續預留改量，不誤要求原因；覆核與ERP件數金額守恆 %j", (a,b) => {
+    const {workbook,options} = fixture([a,b]);
+    expect(core.listManualReasonCandidates(workbook,XLSX,options)).toHaveLength(0);
+    const first = core.reviewReturnedWorkbook(workbook,XLSX,options);
+    expect(first.errors).toEqual([]);
+    expect(first.rows.map(row=>row.finalQty)).toEqual([9,20]);
+    expect(first.totals.approvedAmount).toBe(14275);
+    expect(first.warnings.filter(row=>row.type==="consignment_reservation_conflict")).toHaveLength(2);
+    expect(first.warnings.find(row=>row.sku==="SYNTH01"&&row.type==="consignment_reservation_conflict").message).toContain("FORMAL-SYNTH");
+    const secondBook = core.buildSecondReviewWorkbook(first,XLSX);
+    const second = core.reviewSecondApprovalWorkbook(XLSX.read(XLSX.write(secondBook,{type:"array",bookType:"xlsx"}),{type:"array",cellDates:true,cellStyles:true,nodim:true}),XLSX,{baselineBySku:new Map(first.rows.map(row=>[row.sku,row]))});
+    expect(second.errors).toEqual([]);
+    expect(second.rows.map(row=>row.finalQty)).toEqual([9,20]);
+    expect(second.totals.approvedAmount).toBe(first.totals.approvedAmount);
+    const erp = core.buildErpPurchaseWorkbook(second,XLSX,{approved:true,batchId:"SYNTHETIC"});
+    const erpRows=XLSX.utils.sheet_to_json(erp.Sheets["通用貨品數量"],{header:1,defval:""}).slice(1);
+    expect(erpRows.reduce((sum,row)=>sum+Number(row[4]||0),0)).toBe(29);
+    expect(erpRows.reduce((sum,row)=>sum+Number(row[4]||0)*Number(row[5]||0),0)).toBe(14275);
+  });
+  it.each([[8,20],[0,20],[10,20]])("真實異動仍需原因，包含明確歸零 %j",(a,b)=>{
+    const {workbook,options}=fixture([a,b]);
+    expect(core.listManualReasonCandidates(workbook,XLSX,options).map(row=>row.sku)).toEqual(["SYNTH01"]);
+    expect(core.reviewReturnedWorkbook(workbook,XLSX,options).errors.some(row=>/修改採購量/.test(row.message))).toBe(true);
+  });
+  it("空白列前後原因寫回實際Excel列，重讀後可通過",()=>{
+    const {workbook,options}=fixture([9,0],true);
+    const candidates=core.listManualReasonCandidates(workbook,XLSX,options);
+    expect(candidates).toHaveLength(1);expect(candidates[0].sourceRow).toBe(4);
+    core.applyManualReasonUpdates(workbook,XLSX,candidates.map(row=>({...row,reasonCategory:"其他",reasonDetail:"合成調整"})));
+    const reread=XLSX.read(XLSX.write(workbook,{type:"array",bookType:"xlsx"}),{type:"array",cellDates:true,cellStyles:true,nodim:true});
+    const review=core.reviewReturnedWorkbook(reread,XLSX,options);
+    expect(review.errors).toEqual([]);expect(review.rows[1]).toMatchObject({sourceRow:4,finalQty:0,reasonDetail:"合成調整"});
+  });
+});
