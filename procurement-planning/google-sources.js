@@ -70,6 +70,7 @@
       try {
         response = await fetch(url, { ...options, headers: { ...(options.headers || {}), Authorization: `Bearer ${accessToken}` } });
       } catch (error) {
+        if (options.signal?.aborted) throw error;
         if (attempt < retryDelays.length) {
           await wait(retryDelays[attempt]);
           continue;
@@ -100,12 +101,12 @@
     return { email };
   }
 
-  async function downloadDriveFile(fileId, fileName) {
-    const response = await googleFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`);
+  async function downloadDriveFile(fileId, fileName, options = {}) {
+    const response = await googleFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, options);
     return new File([await response.blob()], fileName, { type: XLSX_MIME });
   }
 
-  async function listDriveExcelFiles(folderId) {
+  async function listDriveExcelFiles(folderId, options = {}) {
     const files = [];
     let pageToken = "";
     do {
@@ -119,7 +120,7 @@
         includeItemsFromAllDrives: "true"
       });
       if (pageToken) params.set("pageToken", pageToken);
-      const response = await googleFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
+      const response = await googleFetch(`https://www.googleapis.com/drive/v3/files?${params}`, options);
       const payload = await response.json();
       files.push(...(payload.files || []).filter((file) => file.mimeType === XLSX_MIME && file.parents?.length === 1 && file.parents[0] === folderId));
       pageToken = payload.nextPageToken || "";
@@ -247,7 +248,7 @@
   async function loadLatestMaster(folderId) {
     const query = `'${folderId.replace(/'/g, "\\'")}' in parents and trashed = false`;
     const params = new URLSearchParams({ q: query, fields: "files(id,name,mimeType,modifiedTime,parents,size)", orderBy: "modifiedTime desc", pageSize: "100" });
-    const response = await googleFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
+    const response = await googleFetch(`https://www.googleapis.com/drive/v3/files?${params}`, options);
     const files = (await response.json()).files || [];
     const candidates = files.filter((file) => file.mimeType === XLSX_MIME && file.parents?.length === 1 && file.parents[0] === folderId);
     if (!candidates.length) throw new Error("商品主檔資料夾沒有直屬.xlsx候選檔。");

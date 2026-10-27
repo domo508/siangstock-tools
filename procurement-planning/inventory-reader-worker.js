@@ -1,6 +1,6 @@
 "use strict";
 
-importScripts("../inventory/assets/xlsx.full.min.js", "core.js?v=20261027-summary-authorization-r1", "inventory-stream-reader.js?v=20261005-inventory-stream-r1");
+importScripts("../inventory/assets/xlsx.full.min.js", "core.js?v=20261027-activity-period-phase1-r1", "inventory-stream-reader.js?v=20261005-inventory-stream-r1");
 
 const STREAM_THRESHOLD_BYTES = 450 * 1024 * 1024;
 

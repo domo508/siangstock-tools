@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20261027-summary-authorization-r1">
+  <link rel="stylesheet" href="style.css?v=20261027-activity-period-phase1-r1">
 </head>
 <body>
   <section id="version-warning" class="version-warning" role="alert" hidden>
@@ -428,10 +428,12 @@
       <section id="activity-transfer-result" class="activity-transfer-publish" aria-labelledby="activity-transfer-result-title" hidden>
         <div class="section-heading compact"><div><p class="eyebrow">活動分析結果 · 門市交接</p><h3 id="activity-transfer-result-title">門市活動分配草稿</h3></div><span id="activity-transfer-badge">尚未發布</span></div>
         <p id="activity-transfer-summary"></p>
+        <p id="activity-period-shared-note" class="budget-note" hidden></p>
+        <button id="refresh-transfer-activity-period" class="secondary-button" type="button">更新共用門市期間</button>
         <details><summary>展開六店建議分配（唯讀）</summary><div id="activity-retail-targets"></div></details>
         <details id="activity-transfer-backfill">
           <summary>已完成採購？重建門市分配草稿</summary>
-          <p>請先接續原活動完整母批次。本區保留原全通路目標與採購結果，只重建門市規劃；與原採購分配可能有差額，須總部核對。</p>
+          <p>可從原母批次或其子批次操作。本區讀取完整母批次，只更正共用門市期間與分配；不重新估算採購，不改三份子批次的人工量、回匯或核准結果。</p>
           <div class="activity-grid">
             <label>更正後活動開始日<input id="activity-correction-start" type="date"></label>
             <label>更正後活動結束日<input id="activity-correction-end" type="date"></label>
@@ -443,11 +445,12 @@
               <span class="activity-step-label">步驟1・建立／重新計算</span>
               <button aria-describedby="build-transfer-activity-help" id="build-transfer-activity-draft" class="secondary-button" type="button" disabled>重建門市分配草稿（不重算採購）</button>
               <p id="build-transfer-activity-help">原批次尚無門市草稿，或修改本區活動日期／門市目標後才需按此重建。只更新門市分配，不重算原採購，也不儲存或發布；已完成且未修改時不需重按。</p>
+              <p id="activity-rebuild-status" class="main-status" role="status" aria-live="polite" tabindex="-1" hidden></p>
             </div>
             <div class="activity-draft-step activity-draft-step-save">
               <span class="activity-step-label">步驟2・保存供同仁接續</span>
               <button aria-describedby="save-transfer-activity-help" id="save-transfer-activity-draft" class="secondary-button" type="button" disabled>儲存至原母批次（尚不發布週調撥）</button>
-              <p id="save-transfer-activity-help">核對重建草稿後，將門市分配與日期更正儲存至公司共用原母批次，供同仁接續。成功儲存後按鈕停用，不改原採購量、金額與核准狀態；儲存不等於發布，確認後仍須按下方「發布至週調撥總部」。</p>
+              <p id="save-transfer-activity-help">核對重建草稿後，可直接在目前子批次將門市分配與日期更正保存至原共用母批次。其他子批次接續時會讀取共用設定，不需逐份重建。成功儲存後按鈕停用，不改原採購量、金額與核准狀態；儲存不等於發布，確認後仍須按下方「發布至週調撥總部」。</p>
             </div>
           </div>
         </details>
@@ -618,13 +621,14 @@
   <script src="xlsx-style-runtime.js?v=20260930-month-end-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20261027-summary-authorization-r1"></script>
+  <script src="core.js?v=20261027-activity-period-phase1-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
-  <script src="google-sources.js?v=20261027-summary-authorization-r1"></script>
+  <script src="google-sources.js?v=20261027-activity-period-phase1-r1"></script>
   <script src="../store-transfer/core.js?v=20261027-activity-transfer-r6"></script>
   <script src="../store-transfer/activity.js?v=20261027-activity-transfer-r6"></script>
-  <script src="activity-planning.js?v=20261027-summary-authorization-r1"></script>
-  <script src="shortage-batch.js?v=20261027-summary-authorization-r1"></script>
-  <script src="app.js?v=20261027-summary-authorization-r1"></script>
+  <script src="activity-planning.js?v=20261027-activity-period-phase1-r1"></script>
+  <script src="shortage-batch.js?v=20261027-activity-period-phase1-r1"></script>
+  <script src="activity-period.js?v=20261027-activity-period-phase1-r1"></script>
+  <script src="app.js?v=20261027-activity-period-phase1-r1"></script>
 </body>
 </html>
