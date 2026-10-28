@@ -1,5 +1,5 @@
 {
-  "version": "20261027-activity-entry-r6",
+  "version": "20261028-source-entry-r1",
   "departments": [
     {
       "id": "admin",
@@ -63,7 +63,7 @@
       "name": "庫存採購規劃",
       "primary": "merch",
       "collaborators": [],
-      "href": "/procurement-planning/?deploy=20261027-approved-consignment-r1",
+      "href": "/procurement-planning/?deploy=20261028-google-sources-r1",
       "status": "立即使用",
       "description": "從需求試算、分批覆核到採購核准，銜接公司額度與 ERP。",
       "data": "本機運算・共用批次"
@@ -87,7 +87,7 @@
       "collaborators": [
         "store"
       ],
-      "href": "/store-transfer/?deploy=20261027-transfer-activity-r2",
+      "href": "/store-transfer/?deploy=20261028-transfer-sources-r1",
       "status": "立即使用",
       "description": "商控建立補貨建議，門市確認後送交核准，產生各店 ERP 調撥檔。",
       "data": "本機運算・共用批次"

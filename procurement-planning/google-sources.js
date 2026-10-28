@@ -245,7 +245,7 @@
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   }
 
-  async function loadLatestMaster(folderId) {
+  async function loadLatestMaster(folderId, options = {}) {
     const query = `'${folderId.replace(/'/g, "\\'")}' in parents and trashed = false`;
     const params = new URLSearchParams({ q: query, fields: "files(id,name,mimeType,modifiedTime,parents,size)", orderBy: "modifiedTime desc", pageSize: "100" });
     const response = await googleFetch(`https://www.googleapis.com/drive/v3/files?${params}`, options);
@@ -255,7 +255,7 @@
     const latestTime = candidates[0].modifiedTime;
     const latest = candidates.filter((file) => file.modifiedTime === latestTime);
     if (latest.length !== 1) throw new Error("商品主檔有多份相同修改時間的最新候選，已停止自動選取。");
-    const file = await downloadDriveFile(latest[0].id, latest[0].name);
+    const file = await downloadDriveFile(latest[0].id, latest[0].name, options);
     return { file, metadata: { ...latest[0], sha256: await sha256(await file.arrayBuffer()), fetchedAt: new Date().toISOString() } };
   }
 

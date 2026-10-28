@@ -1391,7 +1391,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
     return json({ plans:rows.results });
   }
   requireSameOrigin(request,env);
-  if(request.headers.get("X-Store-Transfer-Version") !== "20261027-transfer-activity-r2") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
+  if(request.headers.get("X-Store-Transfer-Version") !== "20261028-transfer-sources-r1") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
   const body = await readBody(request,3_000_000), now = new Date().toISOString();
   if (request.method === "POST" && !id) {
     const source = activitySource(body.source), planId = crypto.randomUUID();
