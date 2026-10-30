@@ -1,4 +1,4 @@
-import * as C from './core.js?v=20261030-store-orders-r25';
+import * as C from './core.js?v=20261030-store-orders-r26';
 const abs=x=>x<0n?-x:x;
 function gcd(a,b){while(b)[a,b]=[b,a%b];return a;}
 function egcd(a,b){let x=1n,y=0n,u=0n,v=1n;while(b){const q=a/b;[a,b]=[b,a%b];[x,u]=[u,x-q*u];[y,v]=[v,y-q*v];}return {g:a,x,y};}
@@ -24,4 +24,4 @@ export function allocateBundle(order,group){
  const lines=entries.map(({item,index},i)=>({index,sku:item.sku,quantity:item.quantity,unitCost:String(item.costSnapshot.value),costField:item.costSnapshot.field,masterVersion:item.costSnapshot.masterVersion,unitPrice:Number(prices[i]),amountCents:Number(prices[i]*quantities[i]*100n),weightShare:Number(costs[i]*quantities[i])/Number(weight)}));
  if(lines.reduce((n,l)=>n+l.amountCents,0)!==Number(cents))throw Error('組合拆價金額不守恆');return {groupId:group.id,paperCode:group.paperCode||'',amountCents:Number(cents),method:'cost-weighted-unit-integer-v1',lines};
 }
-export function resolvedERPPrices(order){const prices=new Map(),groups=[];for(const [i,item] of order.items.entries())if(!C.totalOnlyGroup(order,item))prices.set(i,C.cents(item.unitPrice)/100);for(const group of order.priceGroups||[])if(group.pricingMode==='total_only'){const allocation=allocateBundle(order,group);groups.push(allocation);for(const line of allocation.lines)prices.set(line.index,line.unitPrice);}return {prices,groups};}
+export function resolvedERPPrices(order){const prices=new Map(),groups=[];for(const [i,item] of order.items.entries())if(!C.totalOnlyGroup(order,item))prices.set(i,C.ordinaryERPPrice(order,item));for(const group of order.priceGroups||[])if(group.pricingMode==='total_only'){const allocation=allocateBundle(order,group);groups.push(allocation);for(const line of allocation.lines)prices.set(line.index,line.unitPrice);}return {prices,groups};}

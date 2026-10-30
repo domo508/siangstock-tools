@@ -1,6 +1,6 @@
-import {resolvedERPPrices} from "./bundle-pricing.js?v=20261030-store-orders-r25";
+import {resolvedERPPrices} from "./bundle-pricing.js?v=20261030-store-orders-r26";
 // Revised ERP template: explicit columns, never copy sample orders or infer payment semantics.
-import * as C from './core.js?v=20261030-store-orders-r25';
+import * as C from './core.js?v=20261030-store-orders-r26';
 export const BASE_HEADERS=Object.freeze(['單號','結帳日期','開單倉庫','出貨倉庫','取貨倉庫','會員編號','姓名','電話','地址','備註','中信信用卡','現金','百貨現金卷','LinePay','銷別','貨號','數量','顏色','色號','尺碼','碼號','贈品','導購','實收率']);
 const PRICE_HEADERS=['價格'];
 export const FINAL_HEADERS=Object.freeze([...BASE_HEADERS.slice(0,17),'價格',...BASE_HEADERS.slice(17)]);
@@ -31,7 +31,7 @@ export function revisedPOSRows(orders,profile={}){
   const resolved=resolvedERPPrices(order);
   return order.items.map((item,i)=>{
    const [billing,shipping,pickup]=C.warehouses(order.storeCode,item.saleType);
-   const value={'單號':order.paperNumber,'結帳日期':order.businessDate.replaceAll('-','/'),'開單倉庫':billing,'出貨倉庫':shipping,'取貨倉庫':pickup,'會員編號':'','姓名':String(order.customer?.name??''),'電話':String(order.customer?.phone??''),'地址':String(order.customer?.address??''),'備註':String(order.note??''),'中信信用卡':i===0?C.cents(order.payments['中信信用卡'])/100:'','現金':i===0?C.cents(order.payments['現金'])/100:'','百貨現金卷':i===0?C.cents(order.payments['百貨現金卷'])/100:'','LinePay':i===0?C.cents(order.payments.LinePay)/100:'','銷別':item.saleType,'貨號':C.text(item.sku),'數量':item.quantity,'顏色':C.text(item.color),'色號':C.text(item.colorCode),'尺碼':C.text(item.size),'碼號':C.text(item.sizeCode),'贈品':'','導購':'','實收率':100,[profile.template.priceHeader]:resolved.prices.get(i)};
+   const value={'單號':order.paperNumber,'結帳日期':order.businessDate.replaceAll('-','/'),'開單倉庫':billing,'出貨倉庫':shipping,'取貨倉庫':pickup,'會員編號':String(order.memberNumber??''),'姓名':String(order.customer?.name??''),'電話':String(order.customer?.phone??''),'地址':String(order.customer?.address??''),'備註':String(order.note??''),'中信信用卡':i===0?C.cents(order.payments['中信信用卡'])/100:'','現金':i===0?C.cents(order.payments['現金'])/100:'','百貨現金卷':i===0?C.cents(order.payments['百貨現金卷'])/100:'','LinePay':i===0?C.cents(order.payments.LinePay)/100:'','銷別':item.saleType,'貨號':C.text(item.sku),'數量':item.quantity,'顏色':C.text(item.color),'色號':C.text(item.colorCode),'尺碼':C.text(item.size),'碼號':C.text(item.sizeCode),'贈品':'','導購':'','實收率':100,[profile.template.priceHeader]:resolved.prices.get(i)};
    return profile.template.headers.map(h=>value[h]);
   });
  });
@@ -42,7 +42,7 @@ export function assertRevisedPOSConservation(orders,rows,headers){
  for(const o of orders){const actual=rows.filter(r=>r[col('單號')]===o.paperNumber),t=C.totals(o);let qty=0,amount=0,paid=0;
   if(actual.length!==o.items.length)throw Error('新版POS品項列數不守恆');
   const priceCol=headers.findIndex(h=>PRICE_HEADERS.includes(h)),resolved=resolvedERPPrices(o);
-  for(const [i,r] of actual.entries()){const item=o.items[i];if(r[col('貨號')]!==C.text(item.sku)||r[col('數量')]!==item.quantity||r[priceCol]!==resolved.prices.get(i)||r[col('銷別')]!==item.saleType||JSON.stringify(['開單倉庫','出貨倉庫','取貨倉庫'].map(h=>r[col(h)]))!==JSON.stringify(C.warehouses(o.storeCode,item.saleType)))throw Error('新版POS貨號、數量、價格或倉庫不守恆');qty+=r[col('數量')];amount+=r[col('數量')]*C.cents(r[priceCol]);paid+=['中信信用卡','現金','百貨現金卷','LinePay'].reduce((n,h)=>n+C.cents(r[col(h)]===''?0:r[col(h)]),0);}
+  for(const [i,r] of actual.entries()){const item=o.items[i];if(r[col('會員編號')]!==String(o.memberNumber??''))throw Error('POS會員編號與覆核內容不一致');if(r[col('貨號')]!==C.text(item.sku)||r[col('數量')]!==item.quantity||r[priceCol]!==resolved.prices.get(i)||r[col('銷別')]!==item.saleType||JSON.stringify(['開單倉庫','出貨倉庫','取貨倉庫'].map(h=>r[col(h)]))!==JSON.stringify(C.warehouses(o.storeCode,item.saleType)))throw Error('新版POS貨號、數量、價格或倉庫不守恆');qty+=r[col('數量')];amount+=r[col('數量')]*C.cents(r[priceCol]);paid+=['中信信用卡','現金','百貨現金卷','LinePay'].reduce((n,h)=>n+C.cents(r[col(h)]===''?0:r[col(h)]),0);}
   if(qty!==t.quantity||amount!==t.amountCents||paid!==t.paidCents)throw Error('新版POS件數、成交金額或付款不守恆');
   for(const [header,key] of [['中信信用卡','中信信用卡'],['現金','現金'],['百貨現金卷','百貨現金卷'],['LinePay','LinePay']]){const sum=actual.reduce((n,r)=>n+C.cents(r[col(header)]===''?0:r[col(header)]),0);if(sum!==C.cents(o.payments[key]))throw Error('新版POS付款方式對照或各項金額不守恆');}
  }

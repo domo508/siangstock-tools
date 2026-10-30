@@ -1,5 +1,5 @@
 // Shared browser/Worker business rules. No customer data is persisted here.
-export const VERSION = "20261030-store-orders-r25";
+export const VERSION = "20261030-store-orders-r26";
 export const READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 export const WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 export const POS_HEADERS = Object.freeze(["單號", "結帳日期", "開單倉庫", "出貨倉庫", "取貨倉庫", "會員卡號", "銷別", "備註", "貨號", "顏色", "顏色編碼", "尺碼", "尺碼編碼", "是否贈品", "導購", "實收率", "數量", "中信信用卡", "現金", "百貨現金卷", "LinePay"]);
@@ -20,15 +20,25 @@ export function cents(value) {
 export function newOrder(id, storeCode = "R00", date = taipeiDate()) {
   return { schemaVersion: 1, id, storeCode, businessDate: date, paperNumber: "", clerk: "", customer: { name: "", phone: "", address: "" }, note: "", pageCount: 1, paperRowCount: null, sources: [], items: [], priceGroups: [], payments: Object.fromEntries(PAYMENTS.map(k => [k, 0])), unpaid: 0, paperTotal: "", masterVersion: "", status: "pending", version: 0, reviewed: false, exceptionReason: "" };
 }
+// Missing basis means historical per-unit prices; never reinterpret saved orders.
+export function lineAmountCents(order,item){return order.priceBasis==='line_total'?cents(item.unitPrice):item.quantity*cents(item.unitPrice);}
+export function ordinaryERPPrice(order,item){
+ if(order.priceBasis!=='line_total')return cents(item.unitPrice)/100;
+ if(!Number.isSafeInteger(item.quantity)||item.quantity<1)throw Error('數量須為正整數');
+ const amount=cents(item.unitPrice),divisor=item.quantity*100;
+ if(amount%divisor!==0)throw Error('本列總金額無法換算為整元ERP單價；請確認數量與價格，不會自動改動總金額');
+ return amount/divisor;
+}
 export function totalOnlyGroup(order,item){return (Array.isArray(order.priceGroups)?order.priceGroups:[]).find(g=>g.id===item.priceGroupId&&g.pricingMode==="total_only");}
 export function useTotalOnlyGroups(order){for(const g of order.priceGroups||[]){if(g.pricingMode!=="total_only"){g.previousAllocations=order.items.flatMap((i,n)=>i.priceGroupId===g.id?[{row:n+1,unitPrice:i.unitPrice}]:[]);}g.pricingMode="total_only";g.totalConfirmed=false;for(const i of order.items)if(i.priceGroupId===g.id)i.unitPrice="";}return order;}
 export function totals(order) {
+  if(order.priceBasis!==undefined&&!["unit","line_total"].includes(order.priceBasis))throw Error("請確認價格是單件單價或本列商品總金額");
   const check=priceGroupValidation(order,false);if(check.errors.length)throw Error(check.errors.join("；"));
   let quantity = 0, amountCents = 0;
   for (const item of order.items) {
     if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0 || item.quantity > 100000) throw new Error("數量須為1至100000的整數");
     quantity += item.quantity;
-    if(!totalOnlyGroup(order,item))amountCents += item.quantity * cents(item.unitPrice);
+    if(!totalOnlyGroup(order,item))amountCents += lineAmountCents(order,item);
   }
   for(const g of order.priceGroups||[])if(g.pricingMode==="total_only")amountCents+=cents(g.amount);
   const paidCents = PAYMENTS.reduce((n, k) => n + cents(order.payments[k]), 0);
@@ -37,6 +47,9 @@ export function totals(order) {
 }
 export function validateOrder(order, { complete = false } = {}) {
   const errors = [], warnings = [];
+  if(order?.priceBasis!==undefined&&!["unit","line_total","unknown"].includes(order.priceBasis))errors.push("價格計算方式無效");
+  if(complete&&order?.priceBasis==="unknown")errors.push("請確認價格是單件單價或本列商品總金額");
+  if(order?.memberNumber!==undefined&&(typeof order.memberNumber!=="string"||order.memberNumber.length>100))errors.push("會員編號格式錯誤");
   if (!order || order.schemaVersion !== 1 || !/^[a-zA-Z0-9-]{8,80}$/.test(order.id || "")) return { errors: ["訂單識別或資料版本錯誤"], warnings };
   if (!validStoreCode(order.storeCode)) errors.push("門市代號格式錯誤");
   if (!validDate(order.businessDate)) errors.push("業務日期格式錯誤");

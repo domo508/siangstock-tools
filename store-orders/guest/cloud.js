@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261030-store-orders-r25";
+var VERSION = "20261030-store-orders-r26";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -28,6 +28,16 @@ function cents(value) {
 function newOrder(id, storeCode = "R00", date = taipeiDate()) {
   return { schemaVersion: 1, id, storeCode, businessDate: date, paperNumber: "", clerk: "", customer: { name: "", phone: "", address: "" }, note: "", pageCount: 1, paperRowCount: null, sources: [], items: [], priceGroups: [], payments: Object.fromEntries(PAYMENTS.map((k) => [k, 0])), unpaid: 0, paperTotal: "", masterVersion: "", status: "pending", version: 0, reviewed: false, exceptionReason: "" };
 }
+function lineAmountCents(order, item) {
+  return order.priceBasis === "line_total" ? cents(item.unitPrice) : item.quantity * cents(item.unitPrice);
+}
+function ordinaryERPPrice(order, item) {
+  if (order.priceBasis !== "line_total") return cents(item.unitPrice) / 100;
+  if (!Number.isSafeInteger(item.quantity) || item.quantity < 1) throw Error("\u6578\u91CF\u9808\u70BA\u6B63\u6574\u6578");
+  const amount = cents(item.unitPrice), divisor = item.quantity * 100;
+  if (amount % divisor !== 0) throw Error("\u672C\u5217\u7E3D\u91D1\u984D\u7121\u6CD5\u63DB\u7B97\u70BA\u6574\u5143ERP\u55AE\u50F9\uFF1B\u8ACB\u78BA\u8A8D\u6578\u91CF\u8207\u50F9\u683C\uFF0C\u4E0D\u6703\u81EA\u52D5\u6539\u52D5\u7E3D\u91D1\u984D");
+  return amount / divisor;
+}
 function totalOnlyGroup(order, item) {
   return (Array.isArray(order.priceGroups) ? order.priceGroups : []).find((g) => g.id === item.priceGroupId && g.pricingMode === "total_only");
 }
@@ -43,13 +53,14 @@ function useTotalOnlyGroups(order) {
   return order;
 }
 function totals(order) {
+  if (order.priceBasis !== void 0 && !["unit", "line_total"].includes(order.priceBasis)) throw Error("\u8ACB\u78BA\u8A8D\u50F9\u683C\u662F\u55AE\u4EF6\u55AE\u50F9\u6216\u672C\u5217\u5546\u54C1\u7E3D\u91D1\u984D");
   const check = priceGroupValidation(order, false);
   if (check.errors.length) throw Error(check.errors.join("\uFF1B"));
   let quantity = 0, amountCents = 0;
   for (const item of order.items) {
     if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0 || item.quantity > 1e5) throw new Error("\u6578\u91CF\u9808\u70BA1\u81F3100000\u7684\u6574\u6578");
     quantity += item.quantity;
-    if (!totalOnlyGroup(order, item)) amountCents += item.quantity * cents(item.unitPrice);
+    if (!totalOnlyGroup(order, item)) amountCents += lineAmountCents(order, item);
   }
   for (const g of order.priceGroups || []) if (g.pricingMode === "total_only") amountCents += cents(g.amount);
   const paidCents = PAYMENTS.reduce((n, k) => n + cents(order.payments[k]), 0);
@@ -58,6 +69,9 @@ function totals(order) {
 }
 function validateOrder(order, { complete = false } = {}) {
   const errors = [], warnings = [];
+  if (order?.priceBasis !== void 0 && !["unit", "line_total", "unknown"].includes(order.priceBasis)) errors.push("\u50F9\u683C\u8A08\u7B97\u65B9\u5F0F\u7121\u6548");
+  if (complete && order?.priceBasis === "unknown") errors.push("\u8ACB\u78BA\u8A8D\u50F9\u683C\u662F\u55AE\u4EF6\u55AE\u50F9\u6216\u672C\u5217\u5546\u54C1\u7E3D\u91D1\u984D");
+  if (order?.memberNumber !== void 0 && (typeof order.memberNumber !== "string" || order.memberNumber.length > 100)) errors.push("\u6703\u54E1\u7DE8\u865F\u683C\u5F0F\u932F\u8AA4");
   if (!order || order.schemaVersion !== 1 || !/^[a-zA-Z0-9-]{8,80}$/.test(order.id || "")) return { errors: ["\u8A02\u55AE\u8B58\u5225\u6216\u8CC7\u6599\u7248\u672C\u932F\u8AA4"], warnings };
   if (!validStoreCode(order.storeCode)) errors.push("\u9580\u5E02\u4EE3\u865F\u683C\u5F0F\u932F\u8AA4");
   if (!validDate(order.businessDate)) errors.push("\u696D\u52D9\u65E5\u671F\u683C\u5F0F\u932F\u8AA4");
@@ -567,7 +581,7 @@ function allocateBundle(order, group) {
 }
 function resolvedERPPrices(order) {
   const prices = /* @__PURE__ */ new Map(), groups = [];
-  for (const [i, item] of order.items.entries()) if (!totalOnlyGroup(order, item)) prices.set(i, cents(item.unitPrice) / 100);
+  for (const [i, item] of order.items.entries()) if (!totalOnlyGroup(order, item)) prices.set(i, ordinaryERPPrice(order, item));
   for (const group of order.priceGroups || []) if (group.pricingMode === "total_only") {
     const allocation = allocateBundle(order, group);
     groups.push(allocation);
@@ -619,7 +633,7 @@ function revisedPOSRows(orders, profile2 = {}) {
     const resolved = resolvedERPPrices(order);
     return order.items.map((item, i) => {
       const [billing, shipping, pickup] = warehouses(order.storeCode, item.saleType);
-      const value = { "\u55AE\u865F": order.paperNumber, "\u7D50\u5E33\u65E5\u671F": order.businessDate.replaceAll("-", "/"), "\u958B\u55AE\u5009\u5EAB": billing, "\u51FA\u8CA8\u5009\u5EAB": shipping, "\u53D6\u8CA8\u5009\u5EAB": pickup, "\u6703\u54E1\u7DE8\u865F": "", "\u59D3\u540D": String(order.customer?.name ?? ""), "\u96FB\u8A71": String(order.customer?.phone ?? ""), "\u5730\u5740": String(order.customer?.address ?? ""), "\u5099\u8A3B": String(order.note ?? ""), "\u4E2D\u4FE1\u4FE1\u7528\u5361": i === 0 ? cents(order.payments["\u4E2D\u4FE1\u4FE1\u7528\u5361"]) / 100 : "", "\u73FE\u91D1": i === 0 ? cents(order.payments["\u73FE\u91D1"]) / 100 : "", "\u767E\u8CA8\u73FE\u91D1\u5377": i === 0 ? cents(order.payments["\u767E\u8CA8\u73FE\u91D1\u5377"]) / 100 : "", "LinePay": i === 0 ? cents(order.payments.LinePay) / 100 : "", "\u92B7\u5225": item.saleType, "\u8CA8\u865F": text(item.sku), "\u6578\u91CF": item.quantity, "\u984F\u8272": text(item.color), "\u8272\u865F": text(item.colorCode), "\u5C3A\u78BC": text(item.size), "\u78BC\u865F": text(item.sizeCode), "\u8D08\u54C1": "", "\u5C0E\u8CFC": "", "\u5BE6\u6536\u7387": 100, [profile2.template.priceHeader]: resolved.prices.get(i) };
+      const value = { "\u55AE\u865F": order.paperNumber, "\u7D50\u5E33\u65E5\u671F": order.businessDate.replaceAll("-", "/"), "\u958B\u55AE\u5009\u5EAB": billing, "\u51FA\u8CA8\u5009\u5EAB": shipping, "\u53D6\u8CA8\u5009\u5EAB": pickup, "\u6703\u54E1\u7DE8\u865F": String(order.memberNumber ?? ""), "\u59D3\u540D": String(order.customer?.name ?? ""), "\u96FB\u8A71": String(order.customer?.phone ?? ""), "\u5730\u5740": String(order.customer?.address ?? ""), "\u5099\u8A3B": String(order.note ?? ""), "\u4E2D\u4FE1\u4FE1\u7528\u5361": i === 0 ? cents(order.payments["\u4E2D\u4FE1\u4FE1\u7528\u5361"]) / 100 : "", "\u73FE\u91D1": i === 0 ? cents(order.payments["\u73FE\u91D1"]) / 100 : "", "\u767E\u8CA8\u73FE\u91D1\u5377": i === 0 ? cents(order.payments["\u767E\u8CA8\u73FE\u91D1\u5377"]) / 100 : "", "LinePay": i === 0 ? cents(order.payments.LinePay) / 100 : "", "\u92B7\u5225": item.saleType, "\u8CA8\u865F": text(item.sku), "\u6578\u91CF": item.quantity, "\u984F\u8272": text(item.color), "\u8272\u865F": text(item.colorCode), "\u5C3A\u78BC": text(item.size), "\u78BC\u865F": text(item.sizeCode), "\u8D08\u54C1": "", "\u5C0E\u8CFC": "", "\u5BE6\u6536\u7387": 100, [profile2.template.priceHeader]: resolved.prices.get(i) };
       return profile2.template.headers.map((h) => value[h]);
     });
   });
@@ -634,6 +648,7 @@ function assertRevisedPOSConservation(orders, rows, headers) {
     const priceCol = headers.findIndex((h) => PRICE_HEADERS.includes(h)), resolved = resolvedERPPrices(o);
     for (const [i, r] of actual.entries()) {
       const item = o.items[i];
+      if (r[col("\u6703\u54E1\u7DE8\u865F")] !== String(o.memberNumber ?? "")) throw Error("POS\u6703\u54E1\u7DE8\u865F\u8207\u8986\u6838\u5167\u5BB9\u4E0D\u4E00\u81F4");
       if (r[col("\u8CA8\u865F")] !== text(item.sku) || r[col("\u6578\u91CF")] !== item.quantity || r[priceCol] !== resolved.prices.get(i) || r[col("\u92B7\u5225")] !== item.saleType || JSON.stringify(["\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB"].map((h) => r[col(h)])) !== JSON.stringify(warehouses(o.storeCode, item.saleType))) throw Error("\u65B0\u7248POS\u8CA8\u865F\u3001\u6578\u91CF\u3001\u50F9\u683C\u6216\u5009\u5EAB\u4E0D\u5B88\u6046");
       qty += r[col("\u6578\u91CF")];
       amount += r[col("\u6578\u91CF")] * cents(r[priceCol]);
@@ -719,7 +734,8 @@ function assertMergedPOSConservation(orders, wb, XLSX2, headers) {
 }
 
 // store-orders/recognition.js
-var EXTRACTION_SCHEMA = { type: "object", additionalProperties: false, required: ["rows", "sharedPrices", "warnings"], properties: {
+var EXTRACTION_SCHEMA = { type: "object", additionalProperties: false, required: ["rows", "sharedPrices", "warnings", "priceBasis"], properties: {
+  priceBasis: { type: "string", enum: ["unit", "line_total", "unknown"] },
   rows: { type: "array", items: { type: "object", additionalProperties: false, required: ["row", "sku", "paperName", "quantity", "unitPrice", "saleType", "gift", "uncertain", "groupCode"], properties: { groupCode: { type: "string" }, row: { type: "integer" }, sku: { type: "string" }, paperName: { type: "string" }, quantity: { type: ["integer", "null"] }, unitPrice: { type: ["number", "null"] }, saleType: { type: "string", enum: ["\u92B7\u8CA8", "\u8A02\u8CA8", ""] }, gift: { type: "boolean" }, uncertain: { type: "boolean" } } } },
   sharedPrices: { type: "array", items: { type: "object", additionalProperties: false, required: ["rows", "amount"], properties: { rows: { type: "array", items: { type: "integer" } }, amount: { type: ["number", "null"] } } } },
   warnings: { type: "array", items: { type: "string" } }
@@ -729,7 +745,8 @@ function exactKeys(value, keys) {
 }
 function validateExtractionShape(data) {
   if (data && Object.hasOwn(data, "header")) return validateFullExtraction(data);
-  if (!exactKeys(data, ["rows", "sharedPrices", "warnings"]) || !Array.isArray(data.rows) || !data.rows.length || data.rows.length > 100 || !Array.isArray(data.sharedPrices) || data.sharedPrices.length > 50 || !Array.isArray(data.warnings) || data.warnings.length > 100 || data.warnings.some((x) => typeof x !== "string" || x.length > 500)) throw Error("\u8FA8\u8B58\u56DE\u50B3\u683C\u5F0F\u932F\u8AA4\u6216\u6C92\u6709\u5546\u54C1\u5217\uFF0C\u8ACB\u91CD\u65B0\u8FA8\u8B58\u6216\u4EBA\u5DE5\u8F38\u5165");
+  if (!exactKeys(data, ["rows", "sharedPrices", "warnings", ...Object.hasOwn(data || {}, "priceBasis") ? ["priceBasis"] : []]) || !Array.isArray(data.rows) || !data.rows.length || data.rows.length > 100 || !Array.isArray(data.sharedPrices) || data.sharedPrices.length > 50 || !Array.isArray(data.warnings) || data.warnings.length > 100 || data.warnings.some((x) => typeof x !== "string" || x.length > 500)) throw Error("\u8FA8\u8B58\u56DE\u50B3\u683C\u5F0F\u932F\u8AA4\u6216\u6C92\u6709\u5546\u54C1\u5217\uFF0C\u8ACB\u91CD\u65B0\u8FA8\u8B58\u6216\u4EBA\u5DE5\u8F38\u5165");
+  if (data.priceBasis !== void 0 && !["unit", "line_total", "unknown"].includes(data.priceBasis)) throw Error("\u8FA8\u8B58\u50F9\u683C\u8A08\u7B97\u65B9\u5F0F\u7121\u6548");
   const ids = /* @__PURE__ */ new Set();
   for (const r of data.rows) {
     if (!exactKeys(r, Object.hasOwn(r, "groupCode") ? ["row", "sku", "paperName", "quantity", "unitPrice", "saleType", "gift", "uncertain", "groupCode"] : ["row", "sku", "paperName", "quantity", "unitPrice", "saleType", "gift", "uncertain"]) || Object.hasOwn(r, "groupCode") && (typeof r.groupCode !== "string" || r.groupCode.length > 20) || !Number.isSafeInteger(r.row) || r.row < 1 || r.row > 100 || ids.has(r.row) || typeof r.sku !== "string" || r.sku.length > 80 || typeof r.paperName !== "string" || r.paperName.length > 200 || !(r.quantity === null || Number.isSafeInteger(r.quantity) && r.quantity > 0 && r.quantity <= 1e5) || !["\u92B7\u8CA8", "\u8A02\u8CA8", ""].includes(r.saleType) || typeof r.gift !== "boolean" || typeof r.uncertain !== "boolean") throw Error("\u8FA8\u8B58\u5546\u54C1\u5217\u683C\u5F0F\u932F\u8AA4\uFF0C\u5DF2\u505C\u6B62\u63A1\u7528");
@@ -787,6 +804,7 @@ function extractionOrder(data, master2) {
   order.paperRowCount = data.rows.length;
   order.masterVersion = master2?.version || "";
   order.priceGroups = [];
+  order.priceBasis = data.priceBasis || "unit";
   order.items = data.rows.map((r) => {
     let item = { sku: text(r.sku).toUpperCase(), paperName: r.paperName, name: "", color: "", size: "", quantity: r.quantity, unitPrice: r.unitPrice === null ? "" : r.unitPrice, saleType: r.saleType, zeroConfirmed: false, matchStatus: "missing", manualConfirmed: false, recognitionUncertain: r.uncertain };
     const found = matchProduct(master2, item.sku);
@@ -812,19 +830,20 @@ function extractionOrder(data, master2) {
     order.storeCode = h.storeCode;
     order.businessDate = normalizePaperDate(h.businessDate);
     order.clerk = h.clerk;
+    order.memberNumber = h.memberNumber || "";
     order.customer = { ...h.customer };
     order.note = h.note;
-    order.paperRowCount = h.paperRowCount;
-    order.pageCount = h.pageCount;
+    order.paperRowCount = h.paperRowCount ?? (data.priceBasis === "line_total" ? data.rows.length : null);
+    order.pageCount = h.pageCount ?? (data.priceBasis === "line_total" ? 1 : null);
     order.paperTotal = data.paperTotal === null ? "" : data.paperTotal;
     order.payments = Object.fromEntries(PAYMENTS.map((k) => [k, data.payments[k] === null ? "" : data.payments[k]]));
-    order.headerRecognition = { confirmed: false, uncertainFields: [...h.uncertainFields], pageNumber: h.pageNumber, rawDate: h.businessDate, synthetic: true };
+    order.headerRecognition = { confirmed: false, uncertainFields: [...h.uncertainFields], pageNumber: h.pageNumber ?? (data.priceBasis === "line_total" ? 1 : null), rawDate: h.businessDate, synthetic: true };
   }
   return order;
 }
-var FULL_EXTRACTION_SCHEMA = { type: "object", additionalProperties: false, required: ["header", "payments", "paperTotal", "rows", "sharedPrices", "warnings"], properties: {
+var FULL_EXTRACTION_SCHEMA = { type: "object", additionalProperties: false, required: ["header", "payments", "paperTotal", "rows", "sharedPrices", "warnings", "priceBasis"], properties: {
   ...EXTRACTION_SCHEMA.properties,
-  header: { type: "object", additionalProperties: false, required: ["paperNumber", "storeCode", "businessDate", "clerk", "pageNumber", "pageCount", "paperRowCount", "customer", "note", "uncertainFields"], properties: { paperNumber: { type: "string" }, storeCode: { type: "string" }, businessDate: { type: "string" }, clerk: { type: "string" }, pageNumber: { type: ["integer", "null"] }, pageCount: { type: ["integer", "null"] }, paperRowCount: { type: ["integer", "null"] }, customer: { type: "object", additionalProperties: false, required: ["name", "phone", "address"], properties: { name: { type: "string" }, phone: { type: "string" }, address: { type: "string" } } }, note: { type: "string" }, uncertainFields: { type: "array", items: { type: "string" } } } },
+  header: { type: "object", additionalProperties: false, required: ["paperNumber", "storeCode", "businessDate", "clerk", "pageNumber", "pageCount", "paperRowCount", "customer", "note", "uncertainFields", "memberNumber"], properties: { memberNumber: { type: "string" }, paperNumber: { type: "string" }, storeCode: { type: "string" }, businessDate: { type: "string" }, clerk: { type: "string" }, pageNumber: { type: ["integer", "null"] }, pageCount: { type: ["integer", "null"] }, paperRowCount: { type: ["integer", "null"] }, customer: { type: "object", additionalProperties: false, required: ["name", "phone", "address"], properties: { name: { type: "string" }, phone: { type: "string" }, address: { type: "string" } } }, note: { type: "string" }, uncertainFields: { type: "array", items: { type: "string" } } } },
   payments: { type: "object", additionalProperties: false, required: [...PAYMENTS], properties: Object.fromEntries(PAYMENTS.map((k) => [k, { type: ["number", "null"] }])) },
   paperTotal: { type: ["number", "null"] }
 } };
@@ -837,9 +856,10 @@ function normalizePaperDate(value) {
   return validDate(date) ? date : "";
 }
 function validateFullExtraction(data) {
-  if (!exactKeys(data, ["header", "payments", "paperTotal", "rows", "sharedPrices", "warnings"])) throw Error("\u5B8C\u6574\u55AE\u8FA8\u8B58\u683C\u5F0F\u932F\u8AA4");
-  validateExtractionShape({ rows: data.rows, sharedPrices: data.sharedPrices, warnings: data.warnings });
-  const h = data.header, keys = ["paperNumber", "storeCode", "businessDate", "clerk", "pageNumber", "pageCount", "paperRowCount", "customer", "note", "uncertainFields"];
+  if (!exactKeys(data, ["header", "payments", "paperTotal", "rows", "sharedPrices", "warnings", ...Object.hasOwn(data || {}, "priceBasis") ? ["priceBasis"] : []])) throw Error("\u5B8C\u6574\u55AE\u8FA8\u8B58\u683C\u5F0F\u932F\u8AA4");
+  validateExtractionShape({ rows: data.rows, sharedPrices: data.sharedPrices, warnings: data.warnings, ...data.priceBasis !== void 0 ? { priceBasis: data.priceBasis } : {} });
+  const h = data.header, keys = ["paperNumber", "storeCode", "businessDate", "clerk", "pageNumber", "pageCount", "paperRowCount", "customer", "note", "uncertainFields", ...Object.hasOwn(data.header || {}, "memberNumber") ? ["memberNumber"] : []];
+  if (h.memberNumber !== void 0 && (typeof h.memberNumber !== "string" || h.memberNumber.length > 100)) throw Error("\u6703\u54E1\u7DE8\u865F\u683C\u5F0F\u932F\u8AA4");
   if (!exactKeys(h, keys) || !["paperNumber", "storeCode", "businessDate", "clerk", "note"].every((k) => typeof h[k] === "string" && h[k].length <= (k === "note" ? 1e3 : 100)) || !exactKeys(h.customer, ["name", "phone", "address"]) || !Object.values(h.customer).every((v) => typeof v === "string" && v.length <= 500) || !Array.isArray(h.uncertainFields) || h.uncertainFields.length > 30 || h.uncertainFields.some((v) => typeof v !== "string" || v.length > 100)) throw Error("\u5B8C\u6574\u55AE\u8868\u982D\u683C\u5F0F\u932F\u8AA4\uFF0C\u96FB\u8A71\u9808\u4FDD\u7559\u6587\u5B57\u578B\u5225");
   for (const k of ["pageNumber", "pageCount", "paperRowCount"]) if (h[k] !== null && (!Number.isSafeInteger(h[k]) || h[k] < 1 || h[k] > (k === "paperRowCount" ? 100 : 30))) throw Error("\u5B8C\u6574\u55AE\u9801\u78BC\u6216\u5546\u54C1\u5217\u6578\u683C\u5F0F\u932F\u8AA4");
   if (!exactKeys(data.payments, [...PAYMENTS])) throw Error("\u5B8C\u6574\u55AE\u4ED8\u6B3E\u6B04\u4F4D\u683C\u5F0F\u932F\u8AA4");
@@ -865,6 +885,7 @@ function confirmItem(item, confirmed) {
 }
 function confirmReview(order, value) {
   order.reviewed = value;
+  if (value && order.priceBasis === "line_total") order.paperRowCount = order.items.length;
   if (order.headerRecognition) order.headerRecognition.confirmed = value;
   order.items.forEach((i) => confirmItem(i, value));
   (order.priceGroups || []).forEach((g) => {
@@ -891,7 +912,7 @@ function reviewErrors(order, { imagePresent = false, sourceConfirmed = false, ex
 }
 function reviewWorkbook(order, XLSX2) {
   const wb = XLSX2.utils.book_new(), t = totals(order);
-  const rows = [["ERP\u532F\u5165\u6E2C\u8A66\u6838\u5C0D\u8868\uFF08\u672C\u6A94\u4E0D\u53EF\u532F\u5165ERP\uFF09"], ["\u7D19\u672C\u55AE\u865F", "\u9580\u5E02", "\u65E5\u671F", "\u5217\u6578", "\u4EF6\u6578", "\u6210\u4EA4\u7E3D\u984D", "\u4ED8\u6B3E\u5408\u8A08"], [order.paperNumber, order.storeCode, order.businessDate, t.rows, t.quantity, t.amountCents / 100, t.paidCents / 100], [], ["\u5E8F", "\u8CA8\u865F", "\u7D19\u672C\u54C1\u540D", "\u6B63\u5F0F\u54C1\u540D", "\u984F\u8272", "\u5C3A\u78BC", "\u6578\u91CF", "\u6210\u4EA4\u55AE\u50F9", "\u5C0F\u8A08", "\u92B7\u5225", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u7D44\u5408"], ...order.items.map((i, n) => [n + 1, i.sku, i.paperName, i.name, i.color, i.size, i.quantity, totalOnlyGroup(order, i) ? "" : Number(i.unitPrice), totalOnlyGroup(order, i) ? "" : i.quantity * cents(i.unitPrice) / 100, i.saleType, ...warehouses(order.storeCode, i.saleType), i.priceGroupId || ""]), [], ["\u4ED8\u6B3E\u65B9\u5F0F", "\u91D1\u984D"], ...PAYMENTS.map((k) => [k, Number(order.payments[k])]), [], ["\u6CE8\u610F", "\u65B0\u7248\u4F9D\u6240\u9078\u6700\u7D42\u7BC4\u672C\u9010\u5217\u532F\u5165\u55AE\u50F9\uFF1B\u820A\u7248\u4E0D\u542B\u55AE\u50F9\u3002\u9700\u5728ERP\u6838\u5C0D\u6210\u4EA4\u50F9\u3001\u7D44\u5408\u3001\u8D08\u54C1\u3001\u4ED8\u6B3E\u8207\u5009\u5EAB\u3002"]];
+  const rows = [["ERP\u532F\u5165\u6E2C\u8A66\u6838\u5C0D\u8868\uFF08\u672C\u6A94\u4E0D\u53EF\u532F\u5165ERP\uFF09"], ["\u7D19\u672C\u55AE\u865F", "\u9580\u5E02", "\u65E5\u671F", "\u5217\u6578", "\u4EF6\u6578", "\u6210\u4EA4\u7E3D\u984D", "\u4ED8\u6B3E\u5408\u8A08"], [order.paperNumber, order.storeCode, order.businessDate, t.rows, t.quantity, t.amountCents / 100, t.paidCents / 100], [], ["\u5E8F", "\u8CA8\u865F", "\u7D19\u672C\u54C1\u540D", "\u6B63\u5F0F\u54C1\u540D", "\u984F\u8272", "\u5C3A\u78BC", "\u6578\u91CF", order.priceBasis === "line_total" ? "\u50F9\u683C\uFF08\u672C\u5217\u7E3D\u91D1\u984D\uFF09" : "\u6210\u4EA4\u55AE\u50F9", "\u672C\u5217\u91D1\u984D", "\u92B7\u5225", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u7D44\u5408"], ...order.items.map((i, n) => [n + 1, i.sku, i.paperName, i.name, i.color, i.size, i.quantity, totalOnlyGroup(order, i) ? "" : Number(i.unitPrice), totalOnlyGroup(order, i) ? "" : lineAmountCents(order, i) / 100, i.saleType, ...warehouses(order.storeCode, i.saleType), i.priceGroupId || ""]), [], ["\u4ED8\u6B3E\u65B9\u5F0F", "\u91D1\u984D"], ...PAYMENTS.map((k) => [k, Number(order.payments[k])]), [], ["\u6CE8\u610F", "\u65B0\u7248\u4F9D\u6240\u9078\u6700\u7D42\u7BC4\u672C\u9010\u5217\u532F\u5165\u55AE\u50F9\uFF1B\u820A\u7248\u4E0D\u542B\u55AE\u50F9\u3002\u9700\u5728ERP\u6838\u5C0D\u6210\u4EA4\u50F9\u3001\u7D44\u5408\u3001\u8D08\u54C1\u3001\u4ED8\u6B3E\u8207\u5009\u5EAB\u3002"]];
   const ws = XLSX2.utils.aoa_to_sheet(rows);
   for (const cell of Object.values(ws)) if (cell && typeof cell === "object" && typeof cell.v === "string") {
     cell.t = "s";
@@ -946,7 +967,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
     const wrap = node("label", label), input = document.createElement(options ? "select" : "input");
     input.dataset.reviewField = key2;
     if (options) for (const v of options) {
-      const opt = node("option", v || "\u8ACB\u9078\u64C7");
+      const opt = node("option", key2 === "priceBasis" ? { unknown: "\u8ACB\u78BA\u8A8D\u7D19\u672C\u586B\u6CD5", line_total: "\u672C\u5217\u5546\u54C1\u7E3D\u91D1\u984D\uFF08\u65B0\u7248\uFF09", unit: "\u6BCF\u4EF6\u6210\u4EA4\u55AE\u50F9\uFF08\u820A\u7248\uFF09" }[v] || v : v || "\u8ACB\u9078\u64C7");
       opt.value = v;
       input.append(opt);
     }
@@ -1027,7 +1048,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
           n.textContent = "\u542B\u65BC\u6574\u7D44\u7E3D\u50F9";
           return;
         }
-        n.textContent = Number.isSafeInteger(i.quantity) ? String(i.quantity * cents(i.unitPrice) / 100) : "\u5F85\u586B";
+        n.textContent = Number.isSafeInteger(i.quantity) ? String(lineAmountCents(order, i) / 100) : "\u5F85\u586B";
       } catch {
         n.textContent = "\u5F85\u586B";
       }
@@ -1089,7 +1110,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         const file = restoreInput.files[0];
         if (!file || file.size > 1e6) throw Error("\u8ACB\u90781MB\u5167\u7684\u4EBA\u5DE5\u8986\u6838\u5099\u4EFD");
         const b = JSON.parse(await file.text());
-        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
+        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
         if (!cloudMode || b.original?.rows?.length) validateExtraction(b.original);
         if (!b.original.header || JSON.stringify(b.original) !== JSON.stringify(original)) throw Error("\u5099\u4EFD\u8207\u76EE\u524D\u539F\u59CB\u8FA8\u8B58\u4E0D\u540C\uFF0C\u8ACB\u5148\u8F09\u5165\u540C\u4EFD\u539F\u8FA8\u8B58JSON\u8207\u539F\u5716");
         const o = b.reviewedOrder;
@@ -1139,11 +1160,19 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
     field(head, "\u9580\u5E02\uFF0F\u4EE3\u865F", order.storeCode, (v) => order.storeCode = text(v).toUpperCase(), { key: "storeCode" });
     field(head, "\u8A02\u8CFC\u65E5\u671F\uFF08\u897F\u5143\uFF09", order.businessDate, (v) => order.businessDate = v, { type: "date", key: "businessDate" });
     field(head, "\u7D93\u624B\u4EBA", order.clerk, (v) => order.clerk = v, { key: "clerk" });
+    field(head, "\u6703\u54E1\u7DE8\u865F", order.memberNumber || "", (v) => order.memberNumber = v, { key: "memberNumber" });
+    field(head, "\u7D19\u672C\u50F9\u683C\u586B\u5BEB\u65B9\u5F0F", order.priceBasis || "unit", (v) => {
+      order.priceBasis = v;
+      draw();
+    }, { options: ["unknown", "line_total", "unit"], key: "priceBasis" });
+    form.append(node("p", order.priceBasis === "line_total" ? "\u50F9\u683C\uFF1D\u672C\u5217\u5546\u54C1\u7E3D\u91D1\u984D\u3002\u4F8B\u5982\u6578\u91CF2\u3001\u50F9\u683C1000\uFF0CERP\u55AE\u50F9500\uFF1B\u7D44\u5408\u4ECD\u53EA\u586B\u6574\u7D44\u7E3D\u50F9\u3002" : "\u6B77\u53F2\u55AE\u4EF6\u8A08\u50F9\uFF1A\u50F9\u683C\uFF1D\u6BCF\u4EF6\u6210\u4EA4\u55AE\u50F9\u3002\u78BA\u8A8D\u7D19\u672C\u586B\u6CD5\u5F8C\u624D\u6539\u8A08\u50F9\u65B9\u5F0F\u3002", "notice"));
     const pages = node("div", "", "form-grid");
     head.append(pages);
+    if (order.priceBasis === "line_total") pages.hidden = true;
     field(pages, "\u9801\u78BC", order.headerRecognition.pageNumber, (v) => order.headerRecognition.pageNumber = v, { type: "number", key: "pageNumber" });
     field(pages, "\u5171\u5E7E\u9801", order.pageCount, (v) => order.pageCount = v, { type: "number", key: "pageCount" });
-    field(head, "\u6574\u55AE\u5546\u54C1\u5217\u6578\uFF08\u8ACB\u7167\u7D19\u672C\u78BA\u8A8D\uFF09", order.paperRowCount, (v) => order.paperRowCount = v, { type: "number", key: "paperRowCount" });
+    const countField = field(head, "\u6574\u55AE\u5546\u54C1\u5217\u6578\uFF08\u8ACB\u7167\u7D19\u672C\u78BA\u8A8D\uFF09", order.paperRowCount, (v) => order.paperRowCount = v, { type: "number", key: "paperRowCount" });
+    if (order.priceBasis === "line_total") countField.parentElement.hidden = true;
     head.append(node("span", "", "paper-grid-space"));
     for (const [k, label] of [["name", "\u59D3\u540D"], ["phone", "\u96FB\u8A71\uFF08\u4FDD\u7559\u524D\u5C0E0\uFF09"], ["address", "\u5730\u5740"]]) {
       const input = field(head, label, order.customer[k], (v) => order.customer[k] = v, { key: `customer.${k}` });
@@ -1151,7 +1180,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
     }
     form.append(node("p", `\u539F\u8FA8\u8B58\u65E5\u671F\uFF1A${original.header.businessDate || "\u672A\u8B80\u51FA"}\uFF1B\u7591\u7FA9\uFF1A${original.header.uncertainFields.join("\u3001") || "\u7121"}\u3002\u539F\u59CB\u8FA8\u8B58\u7D50\u679C\u4FDD\u7559\u65BC\u4E0B\u65B9\u8207\u5099\u4EFD\u4E2D\u3002`, "muted"));
     const scroll = node("div", "", "paper-table-scroll"), table = node("table", "", "paper-review-table"), thead = node("thead"), tr = node("tr");
-    for (const title of ["\u5E8F", "\u5B8C\u6574\u8CA8\u865F", "\u54C1\u540D\uFF0F\u898F\u683C", "\u6578\u91CF", "\u6210\u4EA4\u55AE\u50F9", "\u5C0F\u8A08", "\u92B7\u5225"]) tr.append(node("th", title));
+    for (const title of ["\u5E8F", "\u5B8C\u6574\u8CA8\u865F", "\u54C1\u540D\uFF0F\u898F\u683C", "\u6578\u91CF", order.priceBasis === "line_total" ? "\u50F9\u683C\uFF08\u672C\u5217\u7E3D\u91D1\u984D\uFF09" : "\u6210\u4EA4\u55AE\u50F9", "\u672C\u5217\u91D1\u984D", "\u92B7\u5225"]) tr.append(node("th", title));
     thead.append(tr);
     table.append(thead);
     const body = node("tbody");
@@ -1212,7 +1241,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         const td = cell();
         if (k === "unitPrice" && item.priceGroupId) {
           td.append(node("p", "\u63A1\u6574\u7D44\u7E3D\u50F9\uFF0C\u4E0D\u53E6\u586B\u55AE\u50F9"));
-        } else field(td, label, item[k], (v) => {
+        } else field(td, k === "unitPrice" && order.priceBasis === "line_total" ? "\u50F9\u683C\uFF08\u672C\u5217\u7E3D\u91D1\u984D\uFF09" : label, item[k], (v) => {
           item[k] = v;
           confirmItem(item, false);
           if (k === "quantity" && item.priceGroupId) draw();
@@ -1436,6 +1465,9 @@ function mergeFullPages(input) {
   if (numbers.size > 1) throw Error("\u4F86\u6E90\u8A02\u55AE\u7DE8\u865F\u4E0D\u540C\uFF0C\u4E0D\u80FD\u5408\u4F75\u70BA\u540C\u4E00\u5F35\u8A02\u55AE");
   const stores = new Set(pages.map((p) => text(p.header.storeCode).toUpperCase()).filter(Boolean));
   if (stores.size > 1) throw Error("\u4F86\u6E90\u9580\u5E02\u4E0D\u540C\uFF0C\u4E0D\u80FD\u5408\u4F75");
+  const bases = new Set(pages.map((p) => p.priceBasis || "unit"));
+  if (bases.size > 1) throw Error("\u4F86\u6E90\u50F9\u683C\u586B\u6CD5\u4E0D\u540C\uFF0C\u4E0D\u80FD\u81EA\u52D5\u5408\u4F75");
+  const lineTotals = pages[0].priceBasis === "line_total";
   const known = pages.map((p) => p.header.pageNumber).filter((n) => n !== null);
   if (new Set(known).size !== known.length) throw Error("\u4F86\u6E90\u9801\u78BC\u91CD\u8907\uFF0C\u8ACB\u6838\u5C0D\u662F\u5426\u91CD\u50B3");
   const sorted = [...pages].sort((a, b) => (a.header.pageNumber ?? 31) - (b.header.pageNumber ?? 31));
@@ -1456,11 +1488,11 @@ function mergeFullPages(input) {
     }
     return usable[0] ?? empty;
   }
-  for (const k of ["paperNumber", "storeCode", "clerk", "note"]) out.header[k] = select(pages.map((p) => p.header[k]), k);
+  for (const k of ["paperNumber", "storeCode", "clerk", "note", "memberNumber"]) out.header[k] = select(pages.map((p) => p.header[k]), k);
   out.header.businessDate = select(pages.map((p) => normalizePaperDate(p.header.businessDate)), "businessDate");
   for (const k of ["name", "phone", "address"]) out.header.customer[k] = select(pages.map((p) => p.header.customer[k]), "customer." + k);
   for (const k of ["paperRowCount", "pageCount"]) out.header[k] = select(pages.map((p) => p.header[k]), k, null);
-  if (known.length !== pages.length || known.some((n) => n > pages.length) || out.header.pageCount !== pages.length) {
+  if (!lineTotals && (known.length !== pages.length || known.some((n) => n > pages.length) || out.header.pageCount !== pages.length)) {
     uncertain("pageCount");
   }
   out.header.pageNumber = 1;
@@ -1487,6 +1519,11 @@ function mergeFullPages(input) {
     out.sharedPrices.push({ rows: ids, amount: amounts.length === 1 ? amounts[0] : null });
     if (amounts.length > 1) out.warnings.push(`\u7D44\u5408${code}\u8DE8\u9801\u7E3D\u50F9\u4E0D\u4E00\u81F4\uFF0C\u8ACB\u4EBA\u5DE5\u4FEE\u6B63`);
   }
+  if (lineTotals) {
+    out.header.pageCount = pages.length;
+    out.header.paperRowCount = out.rows.length;
+  }
+  if (!pages.some((p) => Object.hasOwn(p.header, "memberNumber"))) delete out.header.memberNumber;
   return validateExtraction(out);
 }
 
@@ -1618,6 +1655,8 @@ function blankRaw(order) {
 }
 function newDraft(sources) {
   const o = newOrder(crypto.randomUUID(), store(), $("cloud-date").value);
+  o.priceBasis = "line_total";
+  o.memberNumber = "";
   o.sources = sources;
   o.pageCount = sources.reduce((n, s) => n + s.pages, 0);
   o.originalExtraction = blankRaw(o);

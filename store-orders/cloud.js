@@ -1,13 +1,13 @@
-import * as C from './core.js?v=20261030-store-orders-r25';
-import * as G from './google.js?v=20261030-store-orders-r25';
-import {VersionGuard} from './runtime.js?v=20261030-store-orders-r25';
-import {pagesFor} from './media.js?v=20261030-store-orders-r25';
-import {prepareImageInput} from './image-input.js?v=20261030-store-orders-r25';
-import {createReview,reviewErrors,confirmReview,reviewWorkbook} from './review.js?v=20261030-store-orders-r25';
-import {createPOSProfile} from './pos-profile.js?v=20261030-store-orders-r25';
-import {buildRevisedPOS,TEMPLATE_WRITE_OPTIONS,revisedPOSErrors} from './pos-template.js?v=20261030-store-orders-r25';
-import {costUnits} from './bundle-pricing.js?v=20261030-store-orders-r25';
-import {mergeFullPages} from './merge-pages.js?v=20261030-store-orders-r25';
+import * as C from './core.js?v=20261030-store-orders-r26';
+import * as G from './google.js?v=20261030-store-orders-r26';
+import {VersionGuard} from './runtime.js?v=20261030-store-orders-r26';
+import {pagesFor} from './media.js?v=20261030-store-orders-r26';
+import {prepareImageInput} from './image-input.js?v=20261030-store-orders-r26';
+import {createReview,reviewErrors,confirmReview,reviewWorkbook} from './review.js?v=20261030-store-orders-r26';
+import {createPOSProfile} from './pos-profile.js?v=20261030-store-orders-r26';
+import {buildRevisedPOS,TEMPLATE_WRITE_OPTIONS,revisedPOSErrors} from './pos-template.js?v=20261030-store-orders-r26';
+import {costUnits} from './bundle-pricing.js?v=20261030-store-orders-r26';
+import {mergeFullPages} from './merge-pages.js?v=20261030-store-orders-r26';
 const $=id=>document.getElementById(id),guard=new VersionGuard(),guestPage=location.pathname.startsWith('/store-orders/guest/');
 const apiPrefix=guestPage?'/api/store-orders-guest':'/api/store-orders';
 const state={session:null,master:null,current:null,base:'',sources:[],pages:[],urls:[],queue:[],busy:false,correction:false,settlement:null,aiOperation:null};
@@ -30,7 +30,7 @@ async function getFile(id){if(!guestPage)return G.download(id);const r=await fet
 async function loadImages(order){state.urls.forEach(URL.revokeObjectURL);state.urls=[];state.pages=[];for(const source of order.sources){const pages=await pagesFor(await getFile(source.fileId));if(pages.length!==source.pages)throw Error('來源頁數與保存內容不符，請重新核對');for(const [index,blob] of pages.entries()){state.pages.push({fileId:source.fileId,index,blob});state.urls.push(URL.createObjectURL(blob));}}}
 function adopt(order){state.current=structuredClone(order);review.loadSaved(order,state.master,state.urls);state.base=JSON.stringify(snapshot().order);$('cloud-handling').value=['pending','reviewed','needs_info','cancelled'].includes(order.status)?order.status:'pending';$('cloud-reason').value=order.exceptionReason||'';controls();}
 function blankRaw(order){return {header:{paperNumber:order.paperNumber,storeCode:order.storeCode,businessDate:order.businessDate,clerk:order.clerk,pageNumber:1,pageCount:order.pageCount,paperRowCount:order.paperRowCount,customer:structuredClone(order.customer),note:order.note,uncertainFields:[]},paperTotal:order.paperTotal||null,payments:structuredClone(order.payments),rows:[],sharedPrices:[],warnings:[]};}
-function newDraft(sources){const o=C.newOrder(crypto.randomUUID(),store(),$('cloud-date').value);o.sources=sources;o.pageCount=sources.reduce((n,s)=>n+s.pages,0);o.originalExtraction=blankRaw(o);o.headerRecognition={pageNumber:1,confirmed:false,uncertainFields:[],rawDate:o.businessDate,synthetic:false};o.reviewEdits=[];o.recognizedPages=[];o.recognition=null;return o;}
+function newDraft(sources){const o=C.newOrder(crypto.randomUUID(),store(),$('cloud-date').value);o.priceBasis="line_total";o.memberNumber="";o.sources=sources;o.pageCount=sources.reduce((n,s)=>n+s.pages,0);o.originalExtraction=blankRaw(o);o.headerRecognition={pageNumber:1,confirmed:false,uncertainFields:[],rawDate:o.businessDate,synthetic:false};o.reviewEdits=[];o.recognizedPages=[];o.recognition=null;return o;}
 async function registerSource(fileId){const r=await api('/sources','POST',{storeCode:store(),fileId});if(r.orderId)return {existing:r.orderId};if(r.duplicate)throw Error('此照片與已上傳原圖重複，請開啟原來的單據');return {id:r.fileId};}
 async function openSource(fileId,append=false){if(!append)checkLeave();if(append&&(!state.current||state.current.batchId))throw Error('請先開啟未結算訂單');const r=await registerSource(fileId);if(r.existing){if(append)throw Error('原圖已屬其他訂單');return openOrder(r.existing);}const blob=await getFile(r.id),pages=await pagesFor(blob),source={fileId:r.id,pages:pages.length,verified:true};if(append){const o=snapshot().order;if(o.sources.some(s=>s.fileId===r.id))throw Error('此來源已加入目前訂單');o.sources.push(source);o.pageCount+=pages.length;o.reviewed=false;await loadImages(o);adopt(o);state.base='';}else{clearOrder();const o=newDraft([source]);await loadImages(o);adopt(o);state.base='';}message('原圖已載入。可送出AI辨識，或直接依原圖人工填寫；尚未保存公司訂單。');}
 async function openOrder(id){checkLeave();const {order}=await api('/orders/'+id);clearOrder();await loadImages(order);if(!order.originalExtraction)order.originalExtraction=blankRaw(order);adopt(order);message('已讀取公司保存版本；結算後門市無法再讀取內容。');}
