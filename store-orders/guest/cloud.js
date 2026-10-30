@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261030-store-orders-r26";
+var VERSION = "20261031-store-orders-r27";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -1110,7 +1110,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         const file = restoreInput.files[0];
         if (!file || file.size > 1e6) throw Error("\u8ACB\u90781MB\u5167\u7684\u4EBA\u5DE5\u8986\u6838\u5099\u4EFD");
         const b = JSON.parse(await file.text());
-        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
+        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
         if (!cloudMode || b.original?.rows?.length) validateExtraction(b.original);
         if (!b.original.header || JSON.stringify(b.original) !== JSON.stringify(original)) throw Error("\u5099\u4EFD\u8207\u76EE\u524D\u539F\u59CB\u8FA8\u8B58\u4E0D\u540C\uFF0C\u8ACB\u5148\u8F09\u5165\u540C\u4EFD\u539F\u8FA8\u8B58JSON\u8207\u539F\u5716");
         const o = b.reviewedOrder;
@@ -1574,6 +1574,7 @@ function controls() {
   $("cloud-authorize").disabled = !connected || disabled;
   $("cloud-logout").disabled = disabled;
   $("cloud-hq").hidden = !hq();
+  $("cloud-hq-access").hidden = !state.session?.canManageHQ;
   $("cloud-order").hidden = !state.current;
   const locked = !!state.current?.batchId && !state.correction;
   $("cloud-review").inert = disabled || locked;
@@ -1624,9 +1625,9 @@ function clearOrder() {
   controls();
 }
 async function getFile(id) {
-  if (!guestPage) return download(id);
+  if (!guestPage && !hq()) return download(id);
   const r = await fetch(apiPrefix + "/file/" + encodeURIComponent(id), { credentials: "same-origin", cache: "no-store" });
-  if (!r.ok) throw Error("\u8A2A\u5BA2\u7121\u6B0A\u53D6\u5F97\u6B64\u539F\u5716\uFF0C\u6216\u767B\u5165\u5DF2\u5230\u671F");
+  if (!r.ok) throw Error("\u7121\u6B0A\u53D6\u5F97\u6B64\u8A02\u55AE\u539F\u5716\uFF0C\u6216\u767B\u5165\u6B0A\u9650\u5DF2\u5230\u671F");
   return r.blob();
 }
 async function loadImages(order) {
@@ -2016,6 +2017,36 @@ $("cloud-export").onclick = () => run(async () => {
   download2(bytes, `POS-${o.paperNumber}.xlsx`);
   await refresh();
   message("POS\u5DF2\u7522\u751F\uFF0C\u8ACB\u532F\u5165ERP\u4E26\u767B\u8A18\u7D50\u679C\uFF1B\u7D50\u679C\u4E0D\u660E\u6642\u8ACB\u52FF\u91CD\u7522\u3002");
+});
+var hqAccess = null;
+async function showHQAccess() {
+  if (!state.session?.canManageHQ) throw Error("\u53EA\u6709\u6700\u9AD8\u6B0A\u9650\u5E33\u865F\u53EF\u7BA1\u7406\u7E3D\u90E8\u6B0A\u9650");
+  hqAccess = await api("/hq-access");
+  $("cloud-hq-owner").textContent = `\u6700\u9AD8\u6B0A\u9650\uFF08\u56FA\u5B9A\u4FDD\u7559\uFF09\uFF1A${hqAccess.ownerEmail}`;
+  $("cloud-hq-accounts").replaceChildren();
+  for (const email of hqAccess.emails) {
+    const row = node2("div", void 0, "item");
+    row.append(node2("span", email));
+    const remove = node2("button", "\u79FB\u9664 " + email, "secondary");
+    remove.onclick = () => run(async () => {
+      if (!confirm(`\u79FB\u9664 ${email} \u7684\u9580\u5E02\u8A02\u55AE\u7E3D\u90E8\u6B0A\u9650\uFF1F\u6B64\u5E33\u865F\u5F8C\u7E8C\u64CD\u4F5C\u5C07\u505C\u6B62\u3002`)) return;
+      await api("/hq-access", "PUT", { emails: hqAccess.emails.filter((e) => e !== email), expectedVersion: hqAccess.version });
+      await showHQAccess();
+      message("\u5DF2\u79FB\u9664\u7E3D\u90E8\u6B0A\u9650\u3002");
+    });
+    row.append(remove);
+    $("cloud-hq-accounts").append(row);
+  }
+  $("cloud-hq-access-status").textContent = `\u5DF2\u8B80\u53D6\u540D\u55AE\u7248\u672C${hqAccess.version}\u30FB${hqAccess.emails.length}\u4F4D\u7E3D\u90E8\u540C\u4EC1`;
+}
+$("cloud-hq-access-refresh").onclick = () => run(showHQAccess);
+$("cloud-hq-access-add").onclick = () => run(async () => {
+  if (!hqAccess) throw Error("\u8ACB\u5148\u8B80\u53D6\u76EE\u524D\u540D\u55AE");
+  const email = $("cloud-hq-access-email").value.trim().toLowerCase();
+  await api("/hq-access", "PUT", { emails: [...hqAccess.emails, email], expectedVersion: hqAccess.version });
+  $("cloud-hq-access-email").value = "";
+  await showHQAccess();
+  message("\u5DF2\u65B0\u589E\u7E3D\u90E8\u6B0A\u9650\uFF1B\u540C\u4EC1\u53EF\u7528\u516C\u53F8Google\u5E33\u865F\u767B\u5165\u3002");
 });
 async function invitations() {
   if (!hq()) return;

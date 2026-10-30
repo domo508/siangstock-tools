@@ -1,3 +1,4 @@
+import {STORE_ORDER_SUPER_ADMIN,readHQAccess,updateHQAccess,HQAccessError} from "./store-order-hq-access";
 import {ownerStorageSetupRoute} from "./store-order-setup";
 import {ownerDriveToken,OwnerError,type OwnerEnv} from "./store-order-owner";
 import {issueGuestInvite,redeemGuestInvite,verifyGuest,logoutGuest,GuestError} from "./store-order-guests";
@@ -27,6 +28,7 @@ const emailList = (v: unknown) => Array.isArray(v) && v.every(x => typeof x === 
 async function configuration(env: OrdersEnv): Promise<Config> {
   let c: Config; try { c = JSON.parse(env.STORE_ORDERS_CONFIG || await env.STORE_ORDERS_VAULT?.get("configuration") || ""); } catch { return fail("門市訂單雲端尚未設定，目前只能使用本機測試，不能交接或結算", 503); }
   [c.settledFolderId, c.recycleFolderId].forEach(folderId); emailList(c.hqEmails);
+  if(c.storageType==="company_account"&&c.ownerEmail===STORE_ORDER_SUPER_ADMIN){const access=await readHQAccess(env.DB);c.hqEmails=[STORE_ORDER_SUPER_ADMIN,...access.emails];}
   if(c.storageType==="company_account"){folderId(c.rootFolderId);if(!c.ownerEmail||!c.hqEmails.includes(c.ownerEmail))fail("資料夾擁有者必須具有總部權限",503);}else folderId(c.sharedDriveId);
   if (!c.hqEmails.length || !c.stores || !Object.keys(c.stores).length) fail("角色與資料夾尚未設定", 503);
   const folders = [c.settledFolderId, c.recycleFolderId,...(c.catalogFolderId?[folderId(c.catalogFolderId)]:[])], assigned = new Set<string>();
@@ -311,10 +313,16 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promis
     if(guestPath&&action==="/redeem"&&request.method==="POST"){const result=await redeemGuestInvite(request,env,await bounded(request,1000),Object.keys(c.stores));return Response.json(result.body,{headers:{...JSON_HEADERS,"Set-Cookie":result.setCookie}});}
     const who = await actor(request, env, c);
     if(guestPath&&action==="/logout"&&request.method==="POST"){await bounded(request,1000);return Response.json({loggedOut:true},{headers:{...JSON_HEADERS,"Set-Cookie":await logoutGuest(env,who.sessionId!)}});}
+    if(action==="/hq-access"){
+      if(guestPath||who.email!==STORE_ORDER_SUPER_ADMIN)fail("只有最高權限帳號可管理總部權限",403);
+      if(request.method==="GET")return response(await readHQAccess(env.DB));
+      if(request.method==="PUT")return response(await updateHQAccess(env.DB,who.email,await bounded(request,20000),Object.values(c.stores).flatMap(s=>s.emails)));
+      fail("不支援的帳號管理操作",405);
+    }
     if(action==="/guest-invites"){hq(who);if(request.method==="GET")return response({invites:(await env.DB.prepare("SELECT id,store_code,expires_at,max_uses,uses,created_at,revoked_at,version FROM store_order_invites ORDER BY created_at DESC LIMIT 100").all()).results});if(request.method==="POST"){const b=await bounded(request,1000),store=storeFor(who,b.storeCode,c);return response(await issueGuestInvite(env,who.email,store,{hours:b.hours,maxUses:b.maxUses}));}}
     const revoke=action.match(/^\/guest-invites\/([A-Za-z0-9-]{8,80})\/revoke$/);if(revoke&&request.method==="POST"){hq(who);const b=await bounded(request,1000),r=await env.DB.prepare("UPDATE store_order_invites SET revoked_at=?,version=version+1 WHERE id=? AND version=? AND revoked_at IS NULL").bind(now(),revoke[1],b.expectedVersion).run();if(!r.meta.changes)fail("邀請碼已更新或停用，請重新整理",409);return response({revoked:true});}
 
-    if (action === "/session" && request.method === "GET") return response({ ...who, version: VERSION, guest:!!who.guest, googleClientId: who.guest?undefined:env.GOOGLE_OAUTH_CLIENT_ID, masterFolderId: who.guest?undefined:FIXED_SOURCES.productMasterFolderId, cloudReady: c.storageType==="company_account"?!!env.STORE_ORDERS_VAULT:!!env.STORE_ORDERS_SERVICE_ACCOUNT, productionExportEnabled: env.STORE_ORDERS_PRODUCTION_EXPORT==="approved-20261030", recognitionReady:!!env.OPENAI_API_KEY, recognitionModel:ORDER_AI_MODEL, stores: Object.fromEntries(Object.entries(c.stores).filter(([k]) => who.role === "hq" || who.storeCode === k).map(([k, v]) => [k, { name: STORES[k] || k, pendingFolderId: who.guest?undefined:v.pendingFolderId }])) });
+    if (action === "/session" && request.method === "GET") return response({ ...who, canManageHQ: !who.guest&&who.email===STORE_ORDER_SUPER_ADMIN, version: VERSION, guest:!!who.guest, googleClientId: who.guest?undefined:env.GOOGLE_OAUTH_CLIENT_ID, masterFolderId: who.guest?undefined:FIXED_SOURCES.productMasterFolderId, cloudReady: c.storageType==="company_account"?!!env.STORE_ORDERS_VAULT:!!env.STORE_ORDERS_SERVICE_ACCOUNT, productionExportEnabled: env.STORE_ORDERS_PRODUCTION_EXPORT==="approved-20261030", recognitionReady:!!env.OPENAI_API_KEY, recognitionModel:ORDER_AI_MODEL, stores: Object.fromEntries(Object.entries(c.stores).filter(([k]) => who.role === "hq" || who.storeCode === k).map(([k, v]) => [k, { name: STORES[k] || k, pendingFolderId: who.guest?undefined:v.pendingFolderId }])) });
     const drive = new OrderDrive(env, c);
     if(action==="/catalog"){
       const catalogFolder=c.catalogFolderId;if(!catalogFolder)throw new OrderError("門市商品查詢尚未設定",503);
@@ -329,6 +337,14 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promis
     }
     const guestFile=action.match(/^\/file\/([A-Za-z0-9_-]{8,200})$/);
     if(guestPath&&guestFile&&request.method==="GET"){const folder=c.stores[who.storeCode!].pendingFolderId,meta=await drive.owned(guestFile[1],folder);if(meta.appProperties?.soActor!==who.email||!MIME.has(meta.mimeType))fail("無權取得此原圖",403);return new Response(await drive.read(guestFile[1],20000000),{headers:{...JSON_HEADERS,"Content-Type":meta.mimeType}});}
+    if(!guestPath&&guestFile&&request.method==="GET"){
+      hq(who);const id=guestFile[1],source=await env.DB.prepare("SELECT order_id,store_code FROM store_order_sources WHERE file_id=?").bind(id).first<{order_id:string|null;store_code:string}>();
+      let folder:string;
+      if(source?.order_id){const row=await index(env,source.order_id);visible(who,row,c);folder=row.batch_id?c.settledFolderId:c.stores[row.store_code].pendingFolderId;}
+      else {const meta=await drive.meta(id),entry=Object.values(c.stores).find(s=>meta.parents?.includes(s.pendingFolderId));if(!entry)fail("無權取得此原圖",403);folder=entry!.pendingFolderId;}
+      const meta=await drive.owned(id,folder);if(!MIME.has(meta.mimeType))fail("只能讀取授權訂單原圖",403);if(source)await unchangedSource(env,drive,id);
+      return new Response(await drive.read(id,20000000),{headers:{...JSON_HEADERS,"Content-Type":meta.mimeType,"Content-Disposition":"inline"}});
+    }
     if(action==="/recognize"&&request.method==="POST"){
       const b=await bounded(request,23000000),store=storeFor(who,b.storeCode,c),fileId=folderId(b.fileId);
       return response(await recognizeStoreOrder(env,b,{actor:who.email,storeCode:store,fileId,validateSource:async()=>{const registered=await env.DB.prepare("SELECT file_id FROM store_order_sources WHERE file_id=? AND store_code=? AND duplicate_of IS NULL").bind(fileId,store).first();if(!registered)fail("請先登記本店來源原圖",403);const meta=await drive.owned(fileId,c.stores[store].pendingFolderId);if(who.guest&&meta.appProperties?.soActor!==who.email)fail("無權辨識其他人的原圖",403);await unchangedSource(env,drive,fileId);}}));
@@ -435,6 +451,7 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promis
     }
     return response({ error: "找不到此操作" }, 404);
   } catch (error) {
+    if(error instanceof HQAccessError)return response({error:error.message},error.status);
     if(error instanceof OwnerError)return response({error:error.message},error.status);
     if(error instanceof GuestError)return response({error:error.message},error.status);
     if(error instanceof RecognitionError)return response({error:error.message},error.status);
