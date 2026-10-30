@@ -1,10 +1,10 @@
-import {createPOSProfile} from "/store-orders/pos-profile.js?v=20261031-store-orders-r27";
-import {prepareImageInput} from "/store-orders/image-input.js?v=20261031-store-orders-r27";
-import {createReview} from "/store-orders/review.js?v=20261031-store-orders-r27";
-import {syntheticFullOrder,renderSyntheticForm} from "/store-orders/synthetic-form.js?v=20261031-store-orders-r27";
-import * as C from "/store-orders/core.js?v=20261031-store-orders-r27";
-import {VersionGuard} from "/store-orders/runtime.js?v=20261031-store-orders-r27";
-import {validateExtraction,extractionOrder,evaluateExtraction,fullOrderChecks} from "/store-orders/recognition.js?v=20261031-store-orders-r27";
+import {createPOSProfile} from "/store-orders/pos-profile.js?v=20261031-store-orders-r28";
+import {prepareImageInput} from "/store-orders/image-input.js?v=20261031-store-orders-r28";
+import {createReview} from "/store-orders/review.js?v=20261031-store-orders-r28";
+import {syntheticFullOrder,renderSyntheticForm} from "/store-orders/synthetic-form.js?v=20261031-store-orders-r28";
+import * as C from "/store-orders/core.js?v=20261031-store-orders-r28";
+import {VersionGuard} from "/store-orders/runtime.js?v=20261031-store-orders-r28";
+import {validateExtraction,extractionOrder,evaluateExtraction,fullOrderChecks} from "/store-orders/recognition.js?v=20261031-store-orders-r28";
 const $=id=>document.getElementById(id),guard=new VersionGuard();let master=null,image=null,cropData="",raw=null,expected=null,config=null,busy=false,previewUrl="",provenance="",syntheticImage="",prepared=null,recognition=null,profileUI=null;
 const review=createReview($("paper-review"),{requireVersion:async()=>{try{await guard.require();}finally{controls();}},exportProfile:()=>profileUI?.get()??($("pos-format")?.value==="legacy"?null:{}),context:()=>({existingNumbers:$("existing-numbers").value.split(/[,，、\s]+/).filter(Boolean)})});
 profileUI=createPOSProfile($("pos-template-panel"),{requireVersion:()=>guard.require(),onChange:()=>review.refresh()});

@@ -14,11 +14,35 @@ async function configureFolders(env:SetupEnv,c:{ownerEmail:string;rootFolderId:s
  const existing=await env.STORE_ORDERS_VAULT!.get('configuration');if(existing){const before=JSON.parse(existing);if(before.rootFolderId!==c.rootFolderId||before.ownerEmail!==c.ownerEmail)throw new OwnerError('已有不同的正式儲存設定，不會覆蓋');for(const key of ['settledFolderId','recycleFolderId','catalogFolderId'])if(before[key]!==result[key])throw new OwnerError('現有資料夾與儲存設定不同，不會自動替換');return;}
  await env.STORE_ORDERS_VAULT!.put('configuration',JSON.stringify(result));
 }
+async function storageStatus(env:SetupEnv,c:ReturnType<typeof setup>,check=false){
+ const clientReady=!!env.GOOGLE_OAUTH_CLIENT_ID&&!!env.GOOGLE_OAUTH_CLIENT_SECRET&&!!env.STORE_ORDERS_VAULT&&!!env.STORE_ORDERS_CREDENTIAL_KEY;
+ const authorized=!!await env.STORE_ORDERS_VAULT?.get('owner-credential'),raw=await env.STORE_ORDERS_VAULT?.get('configuration'),configured=!!raw;
+ const base={ownerEmail:c.ownerEmail,clientReady,authorized,configured};
+ if(!clientReady)return {...base,state:'client_missing',canAuthorize:false,message:'系統連線設定尚未完成，請由維護人員處理。'};
+ if(!authorized)return {...base,state:'authorization_required',canAuthorize:true,message:configured?'儲存授權缺漏，需要由最高權限帳號修復。':'尚未啟用儲存，首次設定需要Google授權。'};
+ if(!check)return {...base,state:configured?'configured':'setup_incomplete',canAuthorize:false,message:configured?'雲端儲存已設定，日常收單不需操作。':'已取得授權，尚需完成資料夾設定，不必重新授權。'};
+ try{
+  const token=await ownerDriveToken(env,c.ownerEmail,c.rootFolderId);
+  if(!configured)return {...base,state:'setup_incomplete',canAuthorize:false,message:'Google授權可用，請完成資料夾設定，不必重新授權。'};
+  const config=JSON.parse(raw!);if(config.rootFolderId!==c.rootFolderId||config.ownerEmail!==c.ownerEmail)throw new OwnerError('儲存設定與指定公司資料夾不同');
+  const ids=[c.rootFolderId,config.settledFolderId,config.recycleFolderId,config.catalogFolderId,...Object.values(config.stores||{}).map((v:any)=>v.pendingFolderId)];
+  if(ids.length<5||ids.some(id=>!(/^[A-Za-z0-9_-]{8,200}$/).test(id||'')))throw new OwnerError('資料夾設定不完整');
+  for(const id of ids){const r=await fetch(`https://www.googleapis.com/drive/v3/files/${id}?fields=id,mimeType,parents,driveId,owners(emailAddress),permissions(type,emailAddress,deleted)&supportsAllDrives=true`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok){await r.body?.cancel();throw new OwnerError('資料夾權限或Google連線無法確認');}const m:any=await r.json();if(m.driveId||m.mimeType!=='application/vnd.google-apps.folder'||!m.permissions?.length||m.permissions.some((p:any)=>!p.deleted&&(p.type!=='user'||p.emailAddress?.toLowerCase()!==c.ownerEmail))||(id===c.rootFolderId?!m.owners?.some((o:any)=>o.emailAddress?.toLowerCase()===c.ownerEmail):!m.parents?.includes(c.rootFolderId)))throw new OwnerError('資料夾權限需要核對');}
+  return {...base,state:'ready',canAuthorize:false,message:'雲端連線與資料夾權限正常，無須重新授權。'};
+ }catch(e){if(e instanceof OwnerError&&e.code==='authorization_required')return {...base,state:'authorization_required',canAuthorize:true,message:'Google已確認原授權失效，需要由最高權限帳號重新授權。'};return {...base,state:'unavailable',canAuthorize:false,message:'目前無法確認連線或資料夾權限。請稍後再檢查或交由維護人員處理，不會開放重新授權。'};}
+}
+async function confirmedStart(request:Request){if(!/^application\/json(?:;|$)/i.test(request.headers.get('Content-Type')||''))throw new OwnerError('請確認授權操作',400);const raw=await request.text();if(raw.length>1000)throw new OwnerError('請確認授權操作',400);let body;try{body=JSON.parse(raw);}catch{throw new OwnerError('請確認授權操作',400);}if(body?.confirmed!==true||Object.keys(body).some(k=>k!=='confirmed'))throw new OwnerError('請先確認此為首次設定或必要的授權修復',400);}
 export async function ownerStorageSetupRoute(request:Request,env:SetupEnv):Promise<Response|null>{
- const url=new URL(request.url),path=url.pathname;if(!['/api/store-orders/storage-setup','/api/store-orders/oauth/start','/api/store-orders/oauth/callback'].includes(path))return null;
+ const url=new URL(request.url),path=url.pathname;if(!['/api/store-orders/storage-setup','/api/store-orders/storage-setup/check','/api/store-orders/storage-setup/complete','/api/store-orders/oauth/start','/api/store-orders/oauth/callback'].includes(path))return null;
  const c=setup(env),email=await verifyAdmin(request,{...env,ACCESS_AUD:env.STORE_ORDERS_ACCESS_AUD||env.PROCUREMENT_ACCESS_AUD||env.ACCESS_AUD});if(email!==c.ownerEmail)throw new OwnerError('首次儲存授權只限指定POS資料夾擁有者',403);
- if(path==='/api/store-orders/storage-setup'&&request.method==='GET')return Response.json({ownerEmail:c.ownerEmail,rootFolderId:c.rootFolderId,redirectUri:'https://siangstock.com/api/store-orders/oauth/callback',clientReady:!!env.GOOGLE_OAUTH_CLIENT_SECRET&&!!env.STORE_ORDERS_VAULT&&!!env.STORE_ORDERS_CREDENTIAL_KEY,authorized:!!await env.STORE_ORDERS_VAULT?.get('owner-credential'),configured:!!await env.STORE_ORDERS_VAULT?.get('configuration')},{headers});
- if(path.endsWith('/start')&&request.method==='POST'){const result=await beginOwnerAuthorization(env,c.ownerEmail,c.rootFolderId);return Response.json({authorizeUrl:result.authorizeUrl},{headers:{...headers,'Set-Cookie':result.setCookie}});}
+ if(path==='/api/store-orders/storage-setup'&&request.method==='GET')return Response.json(await storageStatus(env,c),{headers});
+ if(path==='/api/store-orders/storage-setup/check'&&request.method==='POST')return Response.json(await storageStatus(env,c,true),{headers});
+ if(path==='/api/store-orders/storage-setup/complete'&&request.method==='POST'){const status=await storageStatus(env,c,true);if(status.state!=='setup_incomplete')throw new OwnerError('目前不需要完成初始設定，請先檢查狀態',409);await configureFolders(env,c);return Response.json(await storageStatus(env,c,true),{headers});}
+ if(path.endsWith('/start')&&request.method==='POST'){
+  await confirmedStart(request);const status=await storageStatus(env,c,true);
+  if(!status.canAuthorize)throw new OwnerError(status.state==='ready'?'目前儲存授權正常，無須重新授權':status.message,409);
+  const result=await beginOwnerAuthorization(env,c.ownerEmail,c.rootFolderId);return Response.json({authorizeUrl:result.authorizeUrl},{headers:{...headers,'Set-Cookie':result.setCookie}});
+ }
  if(path.endsWith('/callback')&&request.method==='GET'){await completeOwnerAuthorization(request,env,c.ownerEmail,c.rootFolderId);await configureFolders(env,c);return new Response('<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><title>總部雲端授權完成</title><h1>總部雲端授權完成</h1><p>已建立受限收單、結算與回收設定。請回工具重新連線；設定同步可能需要一分鐘。正式入口仍須完成部署驗收後才開放。</p><a href="/store-orders/">返回門市訂單工具</a></html>',{headers:{...headers,'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",'Set-Cookie':'__Secure-so_owner=; Path=/api/store-orders/oauth/; HttpOnly; Secure; SameSite=Lax; Max-Age=0'}});}
  return Response.json({error:'不支援的儲存設定操作'},{status:405,headers});
 }

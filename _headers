@@ -43,7 +43,7 @@
 /store-orders/vendor/*
   Cache-Control: public, max-age=31536000, immutable
 
-/store-orders/vendor/20261031-store-orders-r27/ocr/worker.min.js
+/store-orders/vendor/20261031-store-orders-r28/ocr/worker.min.js
   Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; worker-src 'none'; object-src 'none'; base-uri 'none'
 
 /store-orders/validation.html
@@ -217,3 +217,9 @@
 
 /homepage/20261026-departments-r3.css
   Cache-Control: public, max-age=31536000, immutable
+
+/store-orders/settings.html
+  Cache-Control: no-store, max-age=0, must-revalidate
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer

@@ -1,4 +1,4 @@
-import { VERSION } from "./core.js?v=20261031-store-orders-r27";
+import { VERSION } from "./core.js?v=20261031-store-orders-r28";
 export class VersionGuard {
   constructor(fetcher = (...args) => fetch(...args)) { this.fetcher = fetcher; this.blocked = true; this.current = ""; }
   async check() {

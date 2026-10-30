@@ -1,5 +1,5 @@
 // Shared browser/Worker business rules. No customer data is persisted here.
-export const VERSION = "20261031-store-orders-r27";
+export const VERSION = "20261031-store-orders-r28";
 export const READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 export const WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 export const POS_HEADERS = Object.freeze(["單號", "結帳日期", "開單倉庫", "出貨倉庫", "取貨倉庫", "會員卡號", "銷別", "備註", "貨號", "顏色", "顏色編碼", "尺碼", "尺碼編碼", "是否贈品", "導購", "實收率", "數量", "中信信用卡", "現金", "百貨現金卷", "LinePay"]);

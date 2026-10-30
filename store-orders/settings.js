@@ -1,0 +1,14 @@
+import {VERSION} from './core.js?v=20261031-store-orders-r28';
+import {VersionGuard} from './runtime.js?v=20261031-store-orders-r28';
+const $=id=>document.getElementById(id),guard=new VersionGuard();let info=null,busy=false;
+function controls(){const blocked=busy||guard.blocked;$('version-warning').hidden=!guard.blocked;$('storage-retry').disabled=blocked;$('storage-check').disabled=blocked||!info;$('storage-authorize').disabled=blocked||info?.canAuthorize!==true||!$('storage-confirm').checked;$('storage-complete').disabled=blocked||info?.state!=='setup_incomplete';$('storage-confirm').disabled=blocked;}
+function render(value){info=value;$('storage-retry').hidden=true;$('storage-controls').hidden=false;$('storage-owner').textContent=`設定管理者：${value.ownerEmail}`;$('storage-status').textContent=value.message;$('storage-status').className=['ready','configured'].includes(value.state)?'success':'warning';$('storage-repair').hidden=!value.canAuthorize;$('storage-confirm').checked=false;$('storage-complete').hidden=value.state!=='setup_incomplete';$('storage-authorize').textContent=value.canAuthorize?'前往Google完成必要授權':['ready','configured'].includes(value.state)?'已設定，無須重新授權':'目前不開放重新授權';controls();}
+async function request(path,body){const r=await fetch('/api/store-orders/'+path,{method:body?'POST':'GET',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json','X-Store-Orders-Version':VERSION},...(body?{body:JSON.stringify(body)}:{})});if(!(r.headers.get('Content-Type')||'').includes('application/json'))throw Error('公司登入已過期，請返回工具重新登入');const data=await r.json();if(!r.ok)throw Error(data.error||'設定檢查尚未完成');return data;}
+async function run(work){if(busy)return;busy=true;controls();try{await guard.require();await work();}catch(e){info=null;$('storage-controls').hidden=true;$('storage-retry').hidden=false;$('storage-status').textContent=e.message||'無法確認設定，請稍後再試';$('storage-status').className='error';}finally{busy=false;controls();}}
+$('storage-retry').onclick=()=>run(async()=>render(await request('storage-setup')));
+$('storage-check').onclick=()=>run(async()=>render(await request('storage-setup/check',{})));
+$('storage-complete').onclick=()=>run(async()=>render(await request('storage-setup/complete',{})));
+$('storage-confirm').onchange=controls;
+$('storage-authorize').onclick=()=>run(async()=>{if(!info?.canAuthorize||!$('storage-confirm').checked)throw Error('目前不需要授權，或尚未確認必要操作');const data=await request('oauth/start',{confirmed:true});location.assign(data.authorizeUrl);});
+$('reload-version').onclick=()=>location.assign(`/store-orders/settings.html?deploy=${encodeURIComponent(guard.current||VERSION)}&reload=${Date.now()}`);
+setInterval(()=>guard.check().then(controls),60000);window.addEventListener('focus',()=>guard.check().then(controls));await run(async()=>render(await request('storage-setup')));

@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261031-store-orders-r27";
+var VERSION = "20261031-store-orders-r28";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
