@@ -1,5 +1,5 @@
 // Shared browser/Worker business rules. No customer data is persisted here.
-export const VERSION = "20261030-store-orders-r24";
+export const VERSION = "20261030-store-orders-r25";
 export const READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 export const WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 export const POS_HEADERS = Object.freeze(["單號", "結帳日期", "開單倉庫", "出貨倉庫", "取貨倉庫", "會員卡號", "銷別", "備註", "貨號", "顏色", "顏色編碼", "尺碼", "尺碼編碼", "是否贈品", "導購", "實收率", "數量", "中信信用卡", "現金", "百貨現金卷", "LinePay"]);
@@ -18,7 +18,7 @@ export function cents(value) {
   return n;
 }
 export function newOrder(id, storeCode = "R00", date = taipeiDate()) {
-  return { schemaVersion: 1, id, storeCode, businessDate: date, paperNumber: "", clerk: "", customer: { name: "", phone: "", address: "" }, note: "", pageCount: 1, paperRowCount: null, sources: [], items: [], payments: Object.fromEntries(PAYMENTS.map(k => [k, 0])), unpaid: 0, paperTotal: "", masterVersion: "", status: "pending", version: 0, reviewed: false, exceptionReason: "" };
+  return { schemaVersion: 1, id, storeCode, businessDate: date, paperNumber: "", clerk: "", customer: { name: "", phone: "", address: "" }, note: "", pageCount: 1, paperRowCount: null, sources: [], items: [], priceGroups: [], payments: Object.fromEntries(PAYMENTS.map(k => [k, 0])), unpaid: 0, paperTotal: "", masterVersion: "", status: "pending", version: 0, reviewed: false, exceptionReason: "" };
 }
 export function totalOnlyGroup(order,item){return (Array.isArray(order.priceGroups)?order.priceGroups:[]).find(g=>g.id===item.priceGroupId&&g.pricingMode==="total_only");}
 export function useTotalOnlyGroups(order){for(const g of order.priceGroups||[]){if(g.pricingMode!=="total_only"){g.previousAllocations=order.items.flatMap((i,n)=>i.priceGroupId===g.id?[{row:n+1,unitPrice:i.unitPrice}]:[]);}g.pricingMode="total_only";g.totalConfirmed=false;for(const i of order.items)if(i.priceGroupId===g.id)i.unitPrice="";}return order;}

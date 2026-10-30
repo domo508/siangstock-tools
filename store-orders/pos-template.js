@@ -1,6 +1,6 @@
-import {resolvedERPPrices} from "./bundle-pricing.js?v=20261030-store-orders-r24";
+import {resolvedERPPrices} from "./bundle-pricing.js?v=20261030-store-orders-r25";
 // Revised ERP template: explicit columns, never copy sample orders or infer payment semantics.
-import * as C from './core.js?v=20261030-store-orders-r24';
+import * as C from './core.js?v=20261030-store-orders-r25';
 export const BASE_HEADERS=Object.freeze(['單號','結帳日期','開單倉庫','出貨倉庫','取貨倉庫','會員編號','姓名','電話','地址','備註','中信信用卡','現金','百貨現金卷','LinePay','銷別','貨號','數量','顏色','色號','尺碼','碼號','贈品','導購','實收率']);
 const PRICE_HEADERS=['價格'];
 export const FINAL_HEADERS=Object.freeze([...BASE_HEADERS.slice(0,17),'價格',...BASE_HEADERS.slice(17)]);
