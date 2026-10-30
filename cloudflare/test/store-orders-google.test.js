@@ -1,0 +1,6 @@
+import {it,expect,vi,beforeEach,afterEach} from 'vitest';
+import * as G from '../../store-orders/google.js';
+beforeEach(()=>{vi.useFakeTimers();vi.stubGlobal('google',{accounts:{oauth2:{initTokenClient:()=>({requestAccessToken(){this.callback({access_token:'synthetic-ephemeral',expires_in:1});}})}}});G.configure('synthetic-client');vi.stubGlobal('fetch',vi.fn());});
+afterEach(()=>{G.clear();vi.useRealTimers();vi.unstubAllGlobals();});
+it('短期雲端授權逾時後不再當已授權，不發送已到期讀檔請求',async()=>{await G.authorize();expect(G.hasAuthorization()).toBe(true);vi.advanceTimersByTime(1500);expect(G.hasAuthorization()).toBe(false);await expect(G.latestMaster('synthetic-folder')).rejects.toThrow(/授權並載入商品主檔/);expect(fetch).not.toHaveBeenCalled();});
+it('誤選帳號即丟棄授權，仍可重新選擇正確帳號',async()=>{await G.authorize();fetch.mockResolvedValueOnce(Response.json({email:'other@siangapato.com.tw'}));await expect(G.verifyIdentity('hq@siangapato.com.tw')).rejects.toThrow(/相同公司帳號/);expect(G.hasAuthorization()).toBe(false);await G.authorize();fetch.mockResolvedValueOnce(Response.json({email:'hq@siangapato.com.tw'}));await expect(G.verifyIdentity('hq@siangapato.com.tw')).resolves.toBeUndefined();expect(G.hasAuthorization()).toBe(true);});

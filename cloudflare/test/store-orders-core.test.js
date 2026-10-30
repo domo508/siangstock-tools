@@ -74,3 +74,5 @@ it("已確認組合分配的POS真實格式往返，保留列數件數收款與�
 it("發布版本與資產雜湊JSON必須明確允許提交，不能被通用資料保護規則排除",()=>{const ignore=readFileSync("../.gitignore","utf8");for(const file of ["store-orders/version.json","store-orders/guest/version.json","store-orders/vendor/SHA256.json"])expect(ignore.split(/\r?\n/)).toContain("!"+file);expect(ignore).not.toContain("!store-orders/**/*.json");});
 
 it("全新人工訂單初始化空組合清單，未辨識也可直接新增商品",()=>{const o=C.newOrder("manual-draft-001","R14","2026-10-30");expect(o.priceGroups).toEqual([]);o.items.push({sku:"A103088",quantity:1,unitPrice:100,saleType:"銷貨"});expect(o.priceGroups.find(g=>g.id===o.items[0].priceGroupId)).toBeUndefined();expect(C.totals(o).amountCents).toBe(10000);});
+
+it('門市顯示去除代號與名稱相同的重複值',()=>{for(const name of ['R14',' R14 ','',undefined])expect(C.storeLabel('R14',name)).toBe('R14');expect(C.storeLabel('R01','台中北屯門市')).toBe('R01・台中北屯門市');});

@@ -1,5 +1,6 @@
 // Tokens live only in this module's memory; no refresh tokens or persistent credentials.
-let token = "", client = null;
+let token = "", client = null,expiresAt=0;
+export function hasAuthorization(){return !!token&&Date.now()<expiresAt;}
 export function configure(clientId) {
   if (!clientId || !globalThis.google?.accounts?.oauth2) throw Error("Google 授權元件尚未就緒，請稍後重試");
   client = google.accounts.oauth2.initTokenClient({ client_id: clientId, scope: "openid email https://www.googleapis.com/auth/drive.readonly", include_granted_scopes: false, callback: () => {} });
@@ -8,14 +9,14 @@ export async function authorize() {
   if (!client) throw Error("請先完成公司工具登入");
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(Error("Google 授權逾時，請重試")), 120000);
-    client.callback = r => { clearTimeout(timeout); if (r.error || !r.access_token) return reject(Error("Google 授權失敗")); token = r.access_token; resolve(); };
+    client.callback = r => { clearTimeout(timeout); if (r.error || !r.access_token) return reject(Error("Google 授權失敗")); token = r.access_token;expiresAt=Date.now()+(Number(r.expires_in)>0?Number(r.expires_in):3600)*1000; resolve(); };
     client.error_callback = () => { clearTimeout(timeout); reject(Error("Google 授權已取消，請重試")); };
     client.requestAccessToken({ prompt: token ? "" : "select_account", hd: "siangapato.com.tw" });
   });
 }
-export function clear() { token = ""; client = null; }
+export function clear() { token = ""; client = null;expiresAt=0; }
 async function request(path, options = {}, upload = false) {
-  if (!token) throw Error("請先按「授權公司雲端硬碟」");
+  if (!hasAuthorization()){token="";throw Error("請先按「授權並載入商品主檔」");}
   const r = await fetch(`https://www.googleapis.com/${upload ? "upload/" : ""}drive/v3/${path}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${token}` } });
   if (r.status === 401) { token = ""; throw Error("Google 授權已過期，請重新授權"); }
   if (!r.ok) throw Error("公司雲端操作未成功，請確認帳號、權限或額度後重試");
@@ -23,7 +24,7 @@ async function request(path, options = {}, upload = false) {
 }
 export async function verifyIdentity(expected) {
   const r = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${token}` } });
-  if (!r.ok || (await r.json()).email?.toLowerCase() !== expected.toLowerCase()) { clear(); throw Error("雲端帳號與公司工具登入帳號不同，請重新登入"); }
+  if (!r.ok || (await r.json()).email?.toLowerCase() !== expected.toLowerCase()) { token="";expiresAt=0;throw Error("雲端帳號與公司工具登入帳號不同，請重新選擇相同公司帳號"); }
 }
 export async function upload(file, session) {
   if(session.completed) return {id:session.fileId};

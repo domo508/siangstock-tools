@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261031-store-orders-r28";
+var VERSION = "20261031-store-orders-r29";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -8,6 +8,10 @@ var STORES = Object.freeze({ R00: "\u53F0\u5317\u4E2D\u5C71\u9580\u5E02", R01: "
 var STATUS = Object.freeze({ pending: "\u5F85\u8986\u6838", needs_info: "\u5F85\u88DC\u4EF6", reviewed: "\u5DF2\u8986\u6838", settled: "\u5DF2\u7D50\u7B97", exported: "\u5DF2\u7522\u6A94", import_unknown: "\u5F85\u78BA\u8A8D\u532F\u5165\u7D50\u679C", import_failed: "\u532F\u5165\u5931\u6557", erp_created: "ERP \u5DF2\u5EFA\u7ACB", cancelled: "\u5DF2\u53D6\u6D88" });
 function text(value) {
   return String(value ?? "").normalize("NFKC").trim();
+}
+function storeLabel(code, name) {
+  const label = text(name);
+  return !label || label === text(code) ? text(code) : `${text(code)}\u30FB${label}`;
 }
 function validStoreCode(code) {
   return typeof code === "string" && /^[A-Z0-9][A-Z0-9-]{0,15}$/.test(code);
@@ -309,6 +313,10 @@ function buildPOS(orders, XLSX2, options) {
 // store-orders/google.js
 var token = "";
 var client = null;
+var expiresAt = 0;
+function hasAuthorization() {
+  return !!token && Date.now() < expiresAt;
+}
 function configure(clientId) {
   if (!clientId || !globalThis.google?.accounts?.oauth2) throw Error("Google \u6388\u6B0A\u5143\u4EF6\u5C1A\u672A\u5C31\u7DD2\uFF0C\u8ACB\u7A0D\u5F8C\u91CD\u8A66");
   client = google.accounts.oauth2.initTokenClient({ client_id: clientId, scope: "openid email https://www.googleapis.com/auth/drive.readonly", include_granted_scopes: false, callback: () => {
@@ -322,6 +330,7 @@ async function authorize() {
       clearTimeout(timeout);
       if (r.error || !r.access_token) return reject(Error("Google \u6388\u6B0A\u5931\u6557"));
       token = r.access_token;
+      expiresAt = Date.now() + (Number(r.expires_in) > 0 ? Number(r.expires_in) : 3600) * 1e3;
       resolve();
     };
     client.error_callback = () => {
@@ -334,9 +343,13 @@ async function authorize() {
 function clear() {
   token = "";
   client = null;
+  expiresAt = 0;
 }
 async function request(path, options = {}, upload2 = false) {
-  if (!token) throw Error("\u8ACB\u5148\u6309\u300C\u6388\u6B0A\u516C\u53F8\u96F2\u7AEF\u786C\u789F\u300D");
+  if (!hasAuthorization()) {
+    token = "";
+    throw Error("\u8ACB\u5148\u6309\u300C\u6388\u6B0A\u4E26\u8F09\u5165\u5546\u54C1\u4E3B\u6A94\u300D");
+  }
   const r = await fetch(`https://www.googleapis.com/${upload2 ? "upload/" : ""}drive/v3/${path}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${token}` } });
   if (r.status === 401) {
     token = "";
@@ -348,8 +361,9 @@ async function request(path, options = {}, upload2 = false) {
 async function verifyIdentity(expected) {
   const r = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${token}` } });
   if (!r.ok || (await r.json()).email?.toLowerCase() !== expected.toLowerCase()) {
-    clear();
-    throw Error("\u96F2\u7AEF\u5E33\u865F\u8207\u516C\u53F8\u5DE5\u5177\u767B\u5165\u5E33\u865F\u4E0D\u540C\uFF0C\u8ACB\u91CD\u65B0\u767B\u5165");
+    token = "";
+    expiresAt = 0;
+    throw Error("\u96F2\u7AEF\u5E33\u865F\u8207\u516C\u53F8\u5DE5\u5177\u767B\u5165\u5E33\u865F\u4E0D\u540C\uFF0C\u8ACB\u91CD\u65B0\u9078\u64C7\u76F8\u540C\u516C\u53F8\u5E33\u865F");
   }
 }
 async function upload(file, session) {
@@ -1110,7 +1124,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         const file = restoreInput.files[0];
         if (!file || file.size > 1e6) throw Error("\u8ACB\u90781MB\u5167\u7684\u4EBA\u5DE5\u8986\u6838\u5099\u4EFD");
         const b = JSON.parse(await file.text());
-        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
+        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
         if (!cloudMode || b.original?.rows?.length) validateExtraction(b.original);
         if (!b.original.header || JSON.stringify(b.original) !== JSON.stringify(original)) throw Error("\u5099\u4EFD\u8207\u76EE\u524D\u539F\u59CB\u8FA8\u8B58\u4E0D\u540C\uFF0C\u8ACB\u5148\u8F09\u5165\u540C\u4EFD\u539F\u8FA8\u8B58JSON\u8207\u539F\u5716");
         const o = b.reviewedOrder;
@@ -1532,7 +1546,7 @@ var $ = (id) => document.getElementById(id);
 var guard = new VersionGuard();
 var guestPage = location.pathname.startsWith("/store-orders/guest/");
 var apiPrefix = guestPage ? "/api/store-orders-guest" : "/api/store-orders";
-var state = { session: null, master: null, current: null, base: "", sources: [], pages: [], urls: [], queue: [], busy: false, correction: false, settlement: null, aiOperation: null };
+var state = { session: null, master: null, masterIssue: false, masterSource: "", current: null, base: "", sources: [], pages: [], urls: [], queue: [], busy: false, correction: false, settlement: null, aiOperation: null };
 var key = () => `store-orders-cloud:${state.session?.email || "disconnected"}`;
 var review = createReview($("cloud-review"), { cloudMode: true, requireVersion: () => guard.require(), context: () => ({ expectedStore: store(), existingNumbers: [], sourcePageCount: state.pages.length, guest: !!state.session?.guest }) });
 var profile = createPOSProfile($("cloud-pos-profile"), { requireVersion: () => guard.require(), allowLegacy: false, onChange: () => controls() });
@@ -1571,7 +1585,11 @@ function controls() {
   $("cloud-work").inert = !connected || disabled;
   profile.setBlocked(disabled);
   $("cloud-connect").disabled = disabled;
-  $("cloud-authorize").disabled = !connected || disabled;
+  $("cloud-authorize").disabled = !connected || disabled || !!(state.master && state.masterSource === "cloud" && hasAuthorization());
+  $("cloud-authorize").textContent = state.master && state.masterSource === "cloud" && hasAuthorization() ? "\u5546\u54C1\u4E3B\u6A94\u5DF2\u5C31\u7DD2" : state.master ? "\u91CD\u65B0\u6388\u6B0A\u4E26\u66F4\u65B0\u4E3B\u6A94" : "\u6388\u6B0A\u4E26\u8F09\u5165\u5546\u54C1\u4E3B\u6A94";
+  $("cloud-master-backup").hidden = guestPage || !state.masterIssue;
+  $("cloud-master-file").disabled = disabled || !connected || !state.masterIssue;
+  $("cloud-master").disabled = disabled || !connected || !guestPage && !hasAuthorization();
   $("cloud-logout").disabled = disabled;
   $("cloud-hq").hidden = !hq();
   $("cloud-hq-access").hidden = !state.session?.canManageHQ;
@@ -1581,7 +1599,7 @@ function controls() {
   $("cloud-review").inert = disabled || locked;
   $("cloud-save").disabled = disabled || locked;
   $("cloud-correct").hidden = !hq() || !state.current?.batchId || !["settled", "import_failed"].includes(state.current?.status);
-  $("cloud-ai").disabled = disabled || locked || !state.pages.length || !state.session?.recognitionReady;
+  $("cloud-ai").disabled = disabled || locked || !state.master || !state.pages.length || !state.session?.recognitionReady;
   $("cloud-export").disabled = disabled || !hq() || !state.current || !["settled", "import_failed"].includes(state.current.status) || !state.session.productionExportEnabled || !!revisedPOSErrors(state.current ? [state.current] : [], profile.get()).length;
   $("cloud-result-save").disabled = disabled || !hq() || !state.current || !["exported", "import_failed", "import_unknown"].includes(state.current.status);
   $("cloud-retry-settle").hidden = !state.settlement;
@@ -1744,8 +1762,15 @@ async function guestCatalog() {
       bySku.get(r.sku).push(r);
     }
     state.master = { version: data.version, count: bySku.size, bySku };
-    $("cloud-master-status").textContent = `\u5DF2\u8F09\u5165${bySku.size}\u500B\u5546\u54C1\u67E5\u8A62\u8CC7\u6599\uFF08\u4E0D\u542B\u6210\u672C\uFF09`;
+    state.masterIssue = false;
+    state.masterSource = "catalog";
+    $("cloud-master-tools").open = false;
+    $("cloud-master-status").textContent = `\u5DF2\u81EA\u52D5\u8F09\u5165${bySku.size}\u500B\u5546\u54C1\u67E5\u8A62\u8CC7\u6599\uFF08\u4E0D\u542B\u6210\u672C\uFF09\uFF0C\u4E0D\u9700\u624B\u52D5\u532F\u5165`;
   } catch (e) {
+    state.masterIssue = true;
+    state.master = null;
+    $("cloud-master-tools").open = true;
+    $("cloud-master-status").textContent = "\u5546\u54C1\u67E5\u8A62\u5C1A\u672A\u53D6\u5F97\uFF0C\u8ACB\u5728\u9032\u968E\u5340\u91CD\u8A66\u66F4\u65B0\u5546\u54C1\u67E5\u8A62\u3002";
     message(e.message, true);
   }
 }
@@ -1755,7 +1780,7 @@ async function connect() {
   if (s.version !== VERSION) throw Error("API\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u91CD\u65B0\u8F09\u5165\u6700\u65B0\u7248");
   state.session = s;
   $("cloud-store").replaceChildren(...Object.entries(s.stores).map(([id, value]) => {
-    const o = node2("option", `${id}\u30FB${value.name}`);
+    const o = node2("option", storeLabel(id, value.name));
     o.value = id;
     return o;
   }));
@@ -1776,10 +1801,19 @@ async function connect() {
 async function master(blob, version) {
   const m = parseMaster(XLSX.read(await blob.arrayBuffer(), READ_OPTIONS), XLSX, version);
   state.master = m;
-  $("cloud-master-status").textContent = `\u5DF2\u8F09\u5165${m.count}\u500B\u8CA8\u865F\uFF1B\u7248\u672C${version}\u3002\u5DF2\u4FDD\u5B58\u7684\u5546\u54C1\u8207\u6210\u672C\u5FEB\u7167\u4E0D\u88AB\u8986\u84CB\u3002`;
+  state.masterIssue = false;
+  state.masterSource = version.startsWith("manual:") ? "manual" : "cloud";
+  $("cloud-master-tools").open = false;
+  $("cloud-master-status").textContent = `\u5546\u54C1\u4E3B\u6A94\u5DF2\u5C31\u7DD2\uFF1A${m.count}\u500B\u8CA8\u865F\uFF08${state.masterSource === "cloud" ? "\u96F2\u7AEF\u81EA\u52D5\u8F09\u5165\uFF0C\u7121\u9808\u518D\u624B\u52D5\u532F\u5165" : "\u624B\u52D5\u5099\u63F4"}\uFF09\uFF1B\u7248\u672C${version}\u3002\u5DF2\u4FDD\u5B58\u7684\u5546\u54C1\u8207\u6210\u672C\u5FEB\u7167\u4E0D\u88AB\u8986\u84CB\u3002`;
+  let synced = true;
   if (hq()) {
     const records = [...m.bySku.values()].flat().map((r) => ({ sku: text(r.sku), name: text(r.name), color: text(r.color), colorCode: text(r.colorCode), size: text(r.size), sizeCode: text(r.sizeCode), discontinued: r.discontinued === true }));
-    await api("/catalog", "POST", { version, records });
+    try {
+      await api("/catalog", "POST", { version, records });
+    } catch {
+      synced = false;
+      $("cloud-master-status").textContent += " \u9580\u5E02\u5546\u54C1\u67E5\u8A62\u540C\u6B65\u5C1A\u672A\u5B8C\u6210\uFF0C\u53EF\u7A0D\u5F8C\u5728\u9032\u968E\u5340\u66F4\u65B0\uFF1B\u76EE\u524D\u4E3B\u6A94\u5DF2\u8F09\u5165\u3002";
+    }
   }
   if (state.current) {
     const snap = snapshot(), o = snap.order;
@@ -1788,6 +1822,7 @@ async function master(blob, version) {
     o.recognition = snap.recognition;
     review.loadSaved(o, m, state.urls);
   }
+  return synced;
 }
 $("cloud-review").addEventListener("change", (e) => {
   if (e.target.id === "review-all") $("cloud-handling").value = e.target.checked ? "reviewed" : "pending";
@@ -1818,6 +1853,34 @@ $("cloud-restore-draft").onclick = () => run(async () => {
   state.base = "";
   message("\u5DF2\u6062\u5FA9\u5206\u9801\u8349\u7A3F\uFF0C\u8ACB\u91CD\u65B0\u6838\u5C0D\u4E26\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\u3002");
 });
+function masterFailed(error) {
+  state.masterIssue = true;
+  state.master = null;
+  state.masterSource = "";
+  $("cloud-master-tools").open = true;
+  $("cloud-master-status").textContent = "\u96F2\u7AEF\u4E3B\u6A94\u5C1A\u672A\u53D6\u5F97\u6210\u529F\u3002\u8ACB\u91CD\u8A66\u4E0A\u65B9\u6388\u6B0A\uFF1B\u7121\u6CD5\u9023\u7DDA\u6642\uFF0C\u624D\u4F7F\u7528\u4E0B\u65B9\u624B\u52D5\u5099\u63F4\u3002";
+  if (state.current) {
+    const snap = snapshot(), o = snap.order;
+    o.originalExtraction = snap.original;
+    o.recognition = snap.recognition;
+    o.reviewEdits = snap.edits;
+    review.loadSaved(o, null, state.urls);
+  }
+  throw error;
+}
+async function loadCloudMaster() {
+  let latest;
+  try {
+    latest = await latestMaster(state.session.masterFolderId);
+  } catch (e) {
+    return masterFailed(e);
+  }
+  try {
+    return await master(latest.blob, latest.version);
+  } catch (e) {
+    return masterFailed(e);
+  }
+}
 $("cloud-connect").onclick = () => run(async () => {
   if (guestPage) {
     const code = $("cloud-guest-code").value;
@@ -1827,24 +1890,29 @@ $("cloud-connect").onclick = () => run(async () => {
   await connect();
 });
 $("cloud-authorize").onclick = () => run(async () => {
-  await authorize();
-  await verifyIdentity(state.session.email);
-  const latest = await latestMaster(state.session.masterFolderId);
-  await master(latest.blob, latest.version);
-  message("\u96F2\u7AEF\u6388\u6B0A\u5B8C\u6210\uFF0C\u5DF2\u53D6\u5F97\u6700\u65B0\u5546\u54C1\u4E3B\u6A94\u3002");
+  try {
+    await authorize();
+    await verifyIdentity(state.session.email);
+  } catch (e) {
+    return masterFailed(e);
+  }
+  const synced = await loadCloudMaster();
+  message(synced ? "\u96F2\u7AEF\u6388\u6B0A\u5B8C\u6210\uFF0C\u5DF2\u53D6\u5F97\u6700\u65B0\u5546\u54C1\u4E3B\u6A94\uFF1B\u4E0D\u5FC5\u518D\u624B\u52D5\u532F\u5165\u3002" : "\u96F2\u7AEF\u4E3B\u6A94\u5DF2\u8F09\u5165\uFF0C\u9580\u5E02\u67E5\u8A62\u540C\u6B65\u5C1A\u672A\u5B8C\u6210\uFF0C\u8ACB\u7A0D\u5F8C\u66F4\u65B0\u3002");
 });
 $("cloud-master").onclick = () => run(async () => {
   if (guestPage) return guestCatalog();
-  const latest = await latestMaster(state.session.masterFolderId);
-  await master(latest.blob, latest.version);
+  const synced = await loadCloudMaster();
+  message(synced ? "\u96F2\u7AEF\u5546\u54C1\u4E3B\u6A94\u5DF2\u66F4\u65B0\uFF0C\u4E0D\u5FC5\u624B\u52D5\u532F\u5165\u3002" : "\u4E3B\u6A94\u5DF2\u8F09\u5165\uFF0C\u9580\u5E02\u67E5\u8A62\u540C\u6B65\u5C1A\u672A\u5B8C\u6210\uFF0C\u8ACB\u7A0D\u5F8C\u66F4\u65B0\u3002");
 });
 $("cloud-master-file").onchange = () => run(async () => {
+  if (!state.masterIssue) throw Error("\u96F2\u7AEF\u4E3B\u6A94\u5DF2\u53EF\u4F7F\u7528\uFF0C\u4E0D\u9700\u8981\u624B\u52D5\u5099\u63F4");
   const f = $("cloud-master-file").files[0];
   if (f) {
     const digest = await crypto.subtle.digest("SHA-256", await f.arrayBuffer());
     await master(f, `manual:${[...new Uint8Array(digest)].map((v) => v.toString(16).padStart(2, "0")).join("")}`);
+    $("cloud-master-file").value = "";
+    message("\u5DF2\u8F09\u5165\u624B\u52D5\u5099\u63F4\u5546\u54C1\u4E3B\u6A94\u3002");
   }
-  ;
 });
 $("cloud-upload").onchange = () => run(async () => {
   const files = [...$("cloud-upload").files];
@@ -2094,6 +2162,8 @@ $("cloud-logout").onclick = () => run(async () => {
   clearOrder();
   state.session = null;
   state.master = null;
+  state.masterIssue = false;
+  state.masterSource = "";
   $("cloud-invite-code").value = "";
   $("cloud-master-file").value = "";
   $("cloud-upload").value = "";
