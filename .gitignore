@@ -44,3 +44,7 @@ build/
 
 # 隔離工作區的依賴可能採本機連結
 /cloudflare/node_modules
+
+!store-orders/version.json
+!store-orders/guest/version.json
+!store-orders/vendor/SHA256.json

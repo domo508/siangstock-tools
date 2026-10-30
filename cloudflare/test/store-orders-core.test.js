@@ -70,3 +70,5 @@ it("其它門市代號保持POS三倉與數量金額",()=>{
 });
 
 it("已確認組合分配的POS真實格式往返，保留列數件數收款與混合銷別",()=>{const o=example();o.items.forEach(i=>i.priceGroupId="bundle-001");o.priceGroups=[{id:"bundle-001",amount:250,allocationConfirmed:true}];const bytes=X.write(C.buildPOS([o],X,{mode:"test"}),C.WRITE_OPTIONS),wb=X.read(bytes,C.READ_OPTIONS),rows=X.utils.sheet_to_json(wb.Sheets.Sheet1,{header:1,raw:true,defval:""});expect(rows.slice(2).map(r=>r[16])).toEqual([2,1]);expect(rows[2].slice(2,5)).toEqual(["R00","R00","R00"]);expect(rows[3].slice(2,5)).toEqual(["R00","R00","T00"]);C.assertConservation([o],rows.slice(2));expect(C.totals(o).amountCents).toBe(25000);});
+
+it("發布版本與資產雜湊JSON必須明確允許提交，不能被通用資料保護規則排除",()=>{const ignore=readFileSync("../.gitignore","utf8");for(const file of ["store-orders/version.json","store-orders/guest/version.json","store-orders/vendor/SHA256.json"])expect(ignore.split(/\r?\n/)).toContain("!"+file);expect(ignore).not.toContain("!store-orders/**/*.json");});
