@@ -1,0 +1,20 @@
+// Standalone local integration; all OpenAI responses are synthetic.
+import assert from 'node:assert/strict';
+import {createValidationServer} from './store-orders-ai-server.mjs';
+import {syntheticFullOrder} from '../../store-orders/synthetic-form.js';
+import {VERSION} from '../../store-orders/core.js';
+const port=18771,origin=`http://127.0.0.1:${port}`;let calls=0,requestPayload,failReason=null;
+const extraction={rows:[{row:1,sku:'SYNTH01',paperName:'合成商品',quantity:1,unitPrice:100,saleType:'銷貨',gift:false,uncertain:false}],sharedPrices:[],warnings:[]};
+const server=createValidationServer({port,key:'synthetic-not-a-key',model:'synthetic-model',fetcher:async(url,options)=>{calls++;assert.equal(url,'https://api.openai.com/v1/responses');requestPayload=JSON.parse(options.body);if(failReason)return Response.json({status:"incomplete",incomplete_details:{reason:failReason},output:[]});return Response.json({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(requestPayload.text.format.name==='synthetic_full_order'?syntheticFullOrder():extraction)}]}],usage:{input_tokens:10,output_tokens:20}});}});
+await new Promise(resolve=>server.listen(port,'127.0.0.1',resolve));
+try{
+ const config=await(await fetch(origin+'/api/store-orders-validation/config')).json();assert.equal(config.ready,true);assert.equal(JSON.stringify(config).includes('synthetic-not-a-key'),false);
+ const body={image:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=',deidentifiedConfirmed:true};
+ const post=(value,headers={})=>fetch(origin+'/api/store-orders-validation/recognize',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json','X-Store-Orders-Version':VERSION,...headers},body:JSON.stringify(value)});
+ assert.equal((await post(body,{Origin:'http://untrusted.example'})).status,403);assert.equal((await post(body,{'X-Store-Orders-Version':'old'})).status,409);assert.equal((await post({...body,deidentifiedConfirmed:false})).status,400);assert.equal((await post({...body,master:'must-not-be-sent'})).status,400);assert.equal(calls,0);
+ const response=await post(body);assert.equal(response.status,200);assert.deepEqual((await response.json()).extraction,extraction);assert.equal(calls,1);assert.equal(requestPayload.store,false);assert.equal(requestPayload.text.format.strict,true);
+ failReason='max_output_tokens';const failed=await post(body);assert.equal(failed.status,502);const details=await failed.json();assert.equal(details.code,'ai_output_limit');assert.match(details.error,/輸出額度/);assert.equal(Object.hasOwn(details,'extraction'),false);assert.equal(calls,2);
+ failReason=null;assert.equal((await post({...body,mode:'full'})).status,400);const full=await post({image:body.image,detailImages:[body.image,body.image,body.image],mode:'full',syntheticHeaderConfirmed:true});assert.equal(full.status,200);const fullResult=await full.json();assert.equal(fullResult.extraction.header.customer.phone,'0000000000');assert.equal(fullResult.recognition.pipeline,'full-page-bands-v1');assert.equal(fullResult.recognition.images.length,4);assert.equal(fullResult.recognition.images[0].width,1);assert.match(fullResult.recognition.images[0].sha256,/^[a-f0-9]{64}$/);assert.equal(fullResult.recognition.requestedModel,'synthetic-model');assert.equal(requestPayload.input[1].content.filter(c=>c.type==='input_image').length,4);const count=calls;assert.equal((await post({...body,detailImages:[body.image,body.image,body.image]})).status,400);assert.equal((await post({image:body.image,mode:'full',syntheticHeaderConfirmed:true,detailImages:[body.image]})).status,400);assert.equal(calls,count);assert.equal(requestPayload.text.format.name,'synthetic_full_order');
+ for(const file of ['/store-orders/.env','/.local-context/work/store-orders-ai/.env','/cloudflare/scripts/store-orders-ai-server.mjs'])assert.equal((await fetch(origin+file)).status,404);
+ console.log('Local API integration passed: origin/version/consent/schema guards, secret isolation, one synthetic upstream request, no retry.');
+}finally{await new Promise(resolve=>server.close(resolve));}

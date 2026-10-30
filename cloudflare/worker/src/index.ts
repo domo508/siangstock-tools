@@ -1,3 +1,4 @@
+import { cleanupStoreOrders, storeOrdersRoute } from "./store-orders";
 import { homepageDepartmentsRoute } from "./homepage-departments";
 import { verifyAdmin } from "./access";
 import { RequestValidationError, validateRules, validateUpdateBody } from "./schema";
@@ -99,6 +100,8 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     try {
+      const storeOrdersResponse = await storeOrdersRoute(request, env);
+      if (storeOrdersResponse) return storeOrdersResponse;
       const homepageResponse = await homepageDepartmentsRoute(request, env);
       if (homepageResponse) return homepageResponse;
       const procurementResponse = await procurementRoute(request, env);
@@ -121,6 +124,6 @@ export default {
     }
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(Promise.all([cleanupNotifications(env), cleanupStoreTransfers(env)]).then(() => undefined));
+    ctx.waitUntil(Promise.all([cleanupNotifications(env), cleanupStoreTransfers(env), cleanupStoreOrders(env)]).then(() => undefined));
   }
 } satisfies ExportedHandler<Env>;

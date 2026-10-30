@@ -1,0 +1,9 @@
+import {it,expect} from 'vitest';
+import {mergeFullPages} from '../../store-orders/merge-pages.js';
+import {syntheticFullOrder} from '../../store-orders/synthetic-form.js';
+const two=()=>{const a=syntheticFullOrder(),b=syntheticFullOrder();a.header.pageCount=b.header.pageCount=2;a.header.paperRowCount=b.header.paperRowCount=6;b.header.pageNumber=2;return [a,b];};
+it('多頁重複付款只記一次，商品逐列保留且原辨識不改寫',()=>{const pages=two(),before=structuredClone(pages),out=mergeFullPages(pages);expect(out.rows).toHaveLength(6);expect(out.rows.map(r=>r.row)).toEqual([1,2,3,4,5,6]);expect(out.payments).toEqual(pages[0].payments);expect(pages).toEqual(before);});
+it('不同訂單／門市或重複頁碼不得合併',()=>{for(const change of [p=>p[1].header.paperNumber='OTHER',p=>p[1].header.storeCode='OTHER',p=>p[1].header.pageNumber=1]){const pages=two();change(pages);expect(()=>mergeFullPages(pages)).toThrow();}});
+it('有疑義的付款維持null，不把辨識失敗當0或以總額回推',()=>{let p=two();p[1].payments.現金=250;expect(mergeFullPages(p).payments.現金).toBeNull();p=two();p[0].payments.LinePay=null;expect(mergeFullPages(p).payments.LinePay).toBeNull();});
+it('頁數不完整、表頭及總額矛盾須警示，成交總額不相加',()=>{const p=two();p[1].paperTotal=750;p[1].header.customer.phone='111';const out=mergeFullPages(p);expect(out.paperTotal).toBeNull();expect(out.header.customer.phone).toBe('');expect(out.header.uncertainFields).toContain('customer.phone');expect(mergeFullPages([p[0]]).header.uncertainFields).toContain('pageCount');});
+it('跨頁相同明確代號及相同整組價只計一組；矛盾總價保持待填',()=>{const p=two();for(const page of p){page.rows[0].groupCode=page.rows[1].groupCode='A';page.rows[0].unitPrice=page.rows[1].unitPrice=700;page.sharedPrices=[];}const out=mergeFullPages(p);expect(out.sharedPrices).toEqual([{rows:[1,2,4,5],amount:700}]);p[1].rows[0].unitPrice=p[1].rows[1].unitPrice=750;expect(mergeFullPages(p).sharedPrices[0].amount).toBeNull();});
