@@ -1,5 +1,5 @@
-import {VERSION} from './core.js?v=20261031-store-orders-r35';
-import {VersionGuard} from './runtime.js?v=20261031-store-orders-r35';
+import {VERSION} from './core.js?v=20261031-store-orders-r36';
+import {VersionGuard} from './runtime.js?v=20261031-store-orders-r36';
 const $=id=>document.getElementById(id),guard=new VersionGuard();let info=null,busy=false;
 function controls(){const blocked=busy||guard.blocked;$('version-warning').hidden=!guard.blocked;$('storage-retry').disabled=blocked;$('storage-check').disabled=blocked||!info;$('storage-authorize').disabled=blocked||info?.canAuthorize!==true||!$('storage-confirm').checked;$('storage-complete').disabled=blocked||info?.state!=='setup_incomplete';$('storage-confirm').disabled=blocked;}
 function render(value){info=value;$('storage-retry').hidden=true;$('storage-controls').hidden=false;$('storage-owner').textContent=`設定管理者：${value.ownerEmail}`;$('storage-status').textContent=value.message;$('storage-status').className=['ready','configured'].includes(value.state)?'success':'warning';$('storage-repair').hidden=!value.canAuthorize;$('storage-confirm').checked=false;$('storage-complete').hidden=value.state!=='setup_incomplete';$('storage-authorize').textContent=value.canAuthorize?'前往Google完成必要授權':['ready','configured'].includes(value.state)?'已設定，無須重新授權':'目前不開放重新授權';controls();}

@@ -1,4 +1,4 @@
-import * as C from './core.js?v=20261031-store-orders-r35';
+import * as C from './core.js?v=20261031-store-orders-r36';
 const abs=x=>x<0n?-x:x;
 function gcd(a,b){while(b)[a,b]=[b,a%b];return a;}
 function egcd(a,b){let x=1n,y=0n,u=0n,v=1n;while(b){const q=a/b;[a,b]=[b,a%b];[x,u]=[u,x-q*u];[y,v]=[v,y-q*v];}return {g:a,x,y};}
