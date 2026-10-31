@@ -1,5 +1,105 @@
+// store-orders/flow-feedback.js
+function createFlowFeedback(doc = document) {
+  const areas = { session: "cloud-status", master: "cloud-master-feedback", receipt: "cloud-receipt-status", incoming: "cloud-incoming-status", ai: "cloud-ai-status", review: "cloud-review-status", save: "cloud-save-status", settlement: "cloud-settlement-status", hq: "cloud-hq-status" };
+  const anchors = { session: "cloud-login", master: "cloud-master-zone", receipt: "cloud-receipt", incoming: "cloud-incoming-heading", ai: "cloud-ai-zone", review: "cloud-review", save: "cloud-save-zone", settlement: "cloud-settlement", hq: "cloud-hq", version: "version-warning" };
+  const labels = { "cloud-upload-zone": "\u9078\u64C7\u7167\u7247", "cloud-master-tools": "\u66F4\u65B0\u5546\u54C1\u67E5\u8A62", version: "\u66F4\u65B0\u7248\u672C", session: "\u9023\u7DDA\u516C\u53F8\u5DE5\u5177", master: "\u53D6\u5F97\u5546\u54C1\u4E3B\u6A94", receipt: "\u4E0A\u50B3\u8A02\u8CFC\u55AE", incoming: "\u8F09\u5165\u55AE\u64DA", ai: "\u8FA8\u8B58\u5B8C\u6574\u8A02\u8CFC\u55AE", review: "\u6838\u5C0D\u8A02\u55AE", save: "\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF", settlement: "\u9589\u5E97\u7D50\u7B97", hq: "\u7E3D\u90E8\u64CD\u4F5C" };
+  let last = "session", active = null, next = null, pending = null;
+  const get = (id) => doc.getElementById(id);
+  function areaFor(target2) {
+    if (!target2?.closest) return last;
+    if (target2.closest("#cloud-next-step")) return last;
+    if (target2.closest("#cloud-authorize,#cloud-master,#cloud-master-file,#cloud-master-tools")) return "master";
+    if (target2.closest("#cloud-ai,#cloud-ai-consent")) return "ai";
+    if (target2.closest("#cloud-save-zone")) return "save";
+    if (target2.closest("#cloud-review")) return "review";
+    if (target2.closest("#cloud-incoming,#cloud-queue,#cloud-batches")) return "incoming";
+    if (target2.closest("#cloud-hq")) return "hq";
+    if (target2.closest("#cloud-settlement")) return "settlement";
+    if (target2.closest("#cloud-receipt")) return "receipt";
+    return "session";
+  }
+  doc.addEventListener("click", (e) => {
+    last = areaFor(e.target);
+  }, true);
+  doc.addEventListener("change", (e) => {
+    last = areaFor(e.target);
+  }, true);
+  function target(area) {
+    if (area === "review") return doc.querySelector("#cloud-review .paper-review-sheet") || get(anchors.review);
+    return get(anchors[area] || area);
+  }
+  function go(area) {
+    const el = target(area);
+    if (!el || el.hidden) return;
+    el.setAttribute("tabindex", "-1");
+    el.scrollIntoView({ block: "start", behavior: "auto" });
+    el.focus({ preventScroll: true });
+  }
+  function guide(area, title, hint, { scroll = false, scrollTo = area } = {}) {
+    next = area;
+    get("cloud-next-step").hidden = false;
+    get("cloud-next-title").textContent = title;
+    get("cloud-next-hint").textContent = hint;
+    const button = get("cloud-next-go");
+    button.textContent = "\u524D\u5F80" + (labels[area] || "\u67E5\u770B\u63D0\u793A");
+    button.hidden = !area;
+    if (scroll) pending = scrollTo;
+  }
+  get("cloud-next-go").onclick = () => {
+    if (next) go(next);
+  };
+  function show(text2, error = false, area = active?.area || last) {
+    const el = get(areas[area] || areas.session);
+    el.hidden = false;
+    el.textContent = text2;
+    el.className = "notice " + (error ? "danger" : "success");
+    if (active) active.messaged = true;
+    if (error) {
+      const hints = { master: "\u8ACB\u67E5\u770B\u4E3B\u6A94\u5340\u7684\u539F\u56E0\uFF0C\u91CD\u8A66\u96F2\u7AEF\u8B80\u53D6\uFF1B\u9700\u8981\u6642\u518D\u4F7F\u7528\u624B\u52D5\u5099\u63F4\u3002", receipt: "\u8ACB\u5148\u6AA2\u67E5\u5F85\u6536\u6E05\u55AE\uFF0C\u78BA\u8A8D\u6C92\u6709\u539F\u5716\u5F8C\u518D\u91CD\u8A66\uFF0C\u907F\u514D\u91CD\u8907\u4E0A\u50B3\u3002", incoming: "\u8ACB\u67E5\u770B\u6B64\u8655\u539F\u56E0\uFF0C\u6838\u5C0D\u5F85\u6536\u6E05\u55AE\u6216\u539F\u4F86\u7684\u55AE\u64DA\u3002", ai: "\u8ACB\u67E5\u770B\u6309\u9215\u65C1\u7684\u932F\u8AA4\u3002\u518D\u6B21\u8FA8\u8B58\u6703\u53E6\u8A08\u8CBB\u7528\uFF0C\u4E0D\u6703\u81EA\u52D5\u91CD\u9001\u3002", save: "\u8ACB\u56DE\u5230\u8986\u6838\u6B04\u4F4D\u4FEE\u6B63\uFF0C\u4FDD\u5B58\u6210\u529F\u524D\u4E0D\u4EE3\u8868\u5DF2\u4EA4\u63A5\u3002", settlement: "\u8ACB\u6838\u5C0D\u7570\u5E38\u55AE\u8207\u96F2\u7AEF\u7D50\u679C\uFF1B\u4E0D\u8981\u91CD\u8907\u5EFA\u7ACB\u7D50\u7B97\u6279\u6B21\u3002" };
+      guide(area, "\u9019\u4E00\u6B65\u5C1A\u672A\u5B8C\u6210", hints[area] || "\u8ACB\u4F9D\u6B64\u8655\u932F\u8AA4\u63D0\u793A\u4FEE\u6B63\u5F8C\u518D\u64CD\u4F5C\u3002", { scroll: true });
+      if (active) active.failed = true;
+    }
+  }
+  function begin({ area = last, working } = {}) {
+    active = { area, messaged: false, failed: false };
+    pending = null;
+    const el = get(areas[area] || areas.session);
+    el.hidden = false;
+    el.className = "notice flow-working";
+    el.textContent = working || `\u6B63\u5728${labels[area] || "\u8655\u7406"}\uFF0C\u8ACB\u7A0D\u5019\u2026`;
+    el.setAttribute("aria-busy", "true");
+    guide(area, "\u8655\u7406\u4E2D", el.textContent);
+    return active;
+  }
+  function finish(context) {
+    const el = get(areas[context.area] || areas.session);
+    el?.removeAttribute("aria-busy");
+    if (context.cancelled) {
+      show("\u5DF2\u53D6\u6D88\u672C\u6B21\u64CD\u4F5C\uFF0C\u6C92\u6709\u9001\u51FA\u65B0\u7684\u8ACB\u6C42\u3002", false, context.area);
+      guide(context.area, "\u5DF2\u53D6\u6D88\u64CD\u4F5C", "\u53EF\u67E5\u770B\u76EE\u524D\u5167\u5BB9\uFF0C\u78BA\u5B9A\u9700\u8981\u6642\u518D\u64CD\u4F5C\u3002");
+    }
+    if (!context.messaged && !context.failed && el?.classList.contains("flow-working")) {
+      el.textContent = "\u64CD\u4F5C\u5DF2\u5B8C\u6210\uFF0C\u8ACB\u7E7C\u7E8C\u4E0B\u4E00\u6B65\u3002";
+      el.className = "notice success";
+    }
+    if (get("cloud-next-title").textContent === "\u8655\u7406\u4E2D") guide(context.area, "\u9019\u4E00\u6B65\u5DF2\u5B8C\u6210", "\u7D50\u679C\u5DF2\u986F\u793A\u5728\u76EE\u524D\u6B65\u9A5F\uFF0C\u8ACB\u6838\u5C0D\u5F8C\u7E7C\u7E8C\u64CD\u4F5C\u3002");
+    const destination = pending || areas[context.area];
+    pending = null;
+    active = null;
+    if (destination) go(destination);
+  }
+  function failure(error, blocked) {
+    show(error.message || "\u64CD\u4F5C\u5C1A\u672A\u78BA\u8A8D\u5B8C\u6210", true);
+    if (/公司登入|請先連線|登入權限已到期|需要公司登入/.test(error.message || "")) guide("session", "\u4E0B\u4E00\u6B65\uFF1A\u91CD\u65B0\u9023\u7DDA\u516C\u53F8\u5DE5\u5177", "\u767B\u5165\u72C0\u614B\u5C1A\u672A\u78BA\u8A8D\uFF0C\u8ACB\u91CD\u65B0\u9023\u7DDA\u5F8C\u56DE\u5230\u539F\u6B65\u9A5F\u3002", { scroll: true });
+    else if (/請先保存目前|請先保存.*草稿/.test(error.message || "")) guide("save", "\u4E0B\u4E00\u6B65\uFF1A\u5148\u4FDD\u5B58\u76EE\u524D\u55AE\u64DA", "\u76EE\u524D\u5167\u5BB9\u5C1A\u672A\u4FDD\u5B58\uFF0C\u8ACB\u5148\u6838\u5C0D\u4E26\u4FDD\u5B58\uFF0C\u518D\u5207\u63DB\u5176\u4ED6\u55AE\u64DA\u3002", { scroll: true });
+    else if (/門市.*未授權|此門市未授權/.test(error.message || "")) guide("receipt", "\u8ACB\u78BA\u8A8D\u9580\u5E02\u6B0A\u9650", "\u8ACB\u9078\u64C7\u5DF2\u6388\u6B0A\u9580\u5E02\uFF1B\u9700\u8981\u5176\u4ED6\u9580\u5E02\u6642\u8ACB\u7531\u7E3D\u90E8\u8A2D\u5B9A\u3002", { scroll: true });
+    if (blocked) guide("version", "\u8ACB\u91CD\u65B0\u8F09\u5165\u6700\u65B0\u7248", "\u76EE\u524D\u64CD\u4F5C\u5DF2\u505C\u6B62\uFF0C\u8ACB\u5148\u66F4\u65B0\u7248\u672C\u3002", { scroll: true });
+  }
+  return { begin, finish, show, guide, failure, go };
+}
+
 // store-orders/core.js
-var VERSION = "20261031-store-orders-r34";
+var VERSION = "20261031-store-orders-r35";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -1160,7 +1260,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         const file = restoreInput.files[0];
         if (!file || file.size > 1e6) throw Error("\u8ACB\u90781MB\u5167\u7684\u4EBA\u5DE5\u8986\u6838\u5099\u4EFD");
         const b = JSON.parse(await file.text());
-        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32", "20261031-store-orders-r33"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
+        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32", "20261031-store-orders-r33", "20261031-store-orders-r34"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
         if (!cloudMode || b.original?.rows?.length) validateExtraction(b.original);
         if (!b.original.header || JSON.stringify(b.original) !== JSON.stringify(original)) throw Error("\u5099\u4EFD\u8207\u76EE\u524D\u539F\u59CB\u8FA8\u8B58\u4E0D\u540C\uFF0C\u8ACB\u5148\u8F09\u5165\u540C\u4EFD\u539F\u8FA8\u8B58JSON\u8207\u539F\u5716");
         const o = b.reviewedOrder;
@@ -1582,7 +1682,8 @@ var $ = (id) => document.getElementById(id);
 var guard = new VersionGuard();
 var guestPage = location.pathname.startsWith("/store-orders/guest/");
 var apiPrefix = guestPage ? "/api/store-orders-guest" : "/api/store-orders";
-var state = { session: null, master: null, masterIssue: false, masterSource: "", current: null, base: "", sources: [], pages: [], urls: [], queue: [], busy: false, correction: false, settlement: null, aiOperation: null };
+var state = { session: null, master: null, masterIssue: false, masterSource: "", current: null, base: "", sources: [], pages: [], urls: [], queue: [], busy: false, refreshSerial: 0, refreshing: false, correction: false, settlement: null, aiOperation: null };
+var feedback = createFlowFeedback();
 var key = () => `store-orders-cloud:${state.session?.email || "disconnected"}`;
 var review = createReview($("cloud-review"), { cloudMode: true, requireVersion: () => guard.require(), context: () => ({ expectedStore: store(), existingNumbers: [], sourcePageCount: state.pages.length, guest: !!state.session?.guest }) });
 var profile = createPOSProfile($("cloud-pos-profile"), { requireVersion: () => guard.require(), allowLegacy: false, onChange: () => controls() });
@@ -1593,8 +1694,7 @@ function node2(tag, text2, cls) {
   return n;
 }
 function message(text2, error = false) {
-  $("cloud-status").textContent = text2;
-  $("cloud-status").className = error ? "error" : "success";
+  feedback.show(text2, error);
 }
 function store() {
   return $("cloud-store").value === "__other__" ? text($("cloud-store-other").value).toUpperCase() : $("cloud-store").value;
@@ -1641,18 +1741,28 @@ function controls() {
   $("cloud-result-save").disabled = disabled || !hq() || !state.current || !["exported", "import_failed", "import_unknown"].includes(state.current.status);
   $("cloud-retry-settle").hidden = !state.settlement;
 }
-async function run(fn) {
+async function run(fn, options = {}) {
   if (state.busy) return;
+  const context = options.silent ? null : feedback.begin(options);
   state.busy = true;
   controls();
   try {
     await guard.require();
-    await fn();
+    const result = await fn();
+    if (result === false && context) context.cancelled = true;
   } catch (e) {
-    message(e.message || "\u64CD\u4F5C\u5C1A\u672A\u78BA\u8A8D\u5B8C\u6210", true);
+    if (context) {
+      feedback.failure(e, guard.blocked);
+      if (!guard.blocked && context.area === "save" && !e.status && $("review-errors")?.children.length) feedback.guide("review", "\u4FDD\u5B58\u5C1A\u672A\u5B8C\u6210", "\u8ACB\u5148\u4FEE\u6B63\u4E0B\u65B9\u8986\u6838\u6AA2\u67E5\u6307\u51FA\u7684\u6B04\u4F4D\uFF0C\u518D\u4FDD\u5B58\u3002", { scroll: true, scrollTo: "review-errors" });
+    } else {
+      $("cloud-receipt-status").hidden = false;
+      $("cloud-receipt-status").textContent = "\u80CC\u666F\u6AA2\u67E5\u672A\u5B8C\u6210\uFF0C\u8ACB\u9700\u8981\u6642\u6309\u300C\u7ACB\u5373\u6AA2\u67E5\u65B0\u55AE\u300D\u3002";
+      $("cloud-receipt-status").className = "notice warning";
+    }
   } finally {
     state.busy = false;
     controls();
+    if (context) feedback.finish(context);
   }
 }
 async function api(path, method = "GET", body) {
@@ -1762,7 +1872,9 @@ async function openSource(fileId, append = false) {
     adopt(o);
     state.base = "";
   }
-  message("\u539F\u5716\u5DF2\u8F09\u5165\u3002\u53EF\u9001\u51FAAI\u8FA8\u8B58\uFF0C\u6216\u76F4\u63A5\u4F9D\u539F\u5716\u4EBA\u5DE5\u586B\u5BEB\uFF1B\u5C1A\u672A\u4FDD\u5B58\u516C\u53F8\u8A02\u55AE\u3002");
+  message("\u539F\u5716\u5DF2\u8F09\u5165\u3002\u5C1A\u672A\u4FDD\u5B58\u516C\u53F8\u8A02\u55AE\u3002");
+  if (state.master) feedback.guide("ai", "\u4E0B\u4E00\u6B65\uFF1A\u8FA8\u8B58\u9019\u5F35\u8A02\u55AE", "\u6838\u5C0D\u539F\u5716\u5F8C\u52FE\u9078\u8CC7\u6599\u50B3\u9001\u6388\u6B0A\uFF0C\u518D\u6309AI\u8FA8\u8B58\uFF1B\u4E5F\u53EF\u76F4\u63A5\u4EBA\u5DE5\u8F38\u5165\u3002", { scroll: true });
+  else feedback.guide(guestPage ? "cloud-master-tools" : "master", "\u4E0B\u4E00\u6B65\uFF1A\u53D6\u5F97\u5546\u54C1\u67E5\u8A62", guestPage ? "\u539F\u5716\u5DF2\u4FDD\u7559\u3002\u8ACB\u5728\u66F4\u65B0\u8207\u7570\u5E38\u8655\u7406\u5340\u91CD\u8A66\u5546\u54C1\u67E5\u8A62\uFF0C\u4E0D\u9700Google\u6388\u6B0A\u3002" : "\u539F\u5716\u5DF2\u4FDD\u7559\u5728\u672C\u9801\uFF0C\u8ACB\u5148\u8F09\u5165\u5546\u54C1\u4E3B\u6A94\uFF0C\u518D\u56DE\u5230\u8FA8\u8B58\u5340\u3002", { scroll: true });
 }
 async function openOrder(id) {
   checkLeave();
@@ -1772,18 +1884,26 @@ async function openOrder(id) {
   if (!order.originalExtraction) order.originalExtraction = blankRaw(order);
   adopt(order);
   message("\u5DF2\u8B80\u53D6\u516C\u53F8\u4FDD\u5B58\u7248\u672C\uFF1B\u7D50\u7B97\u5F8C\u9580\u5E02\u7121\u6CD5\u518D\u8B80\u53D6\u5167\u5BB9\u3002");
+  feedback.guide("review", "\u4E0B\u4E00\u6B65\uFF1A\u6838\u5C0D\u9019\u5F35\u8A02\u55AE", "\u8ACB\u7531\u8868\u982D\u5F80\u4E0B\u6838\u5C0D\u5546\u54C1\u8207\u4ED8\u6B3E\uFF1B\u6B64\u52D5\u4F5C\u4E0D\u6703\u91CD\u65B0\u547C\u53EBAI\u3002", { scroll: true });
 }
 async function refresh() {
+  const serial = ++state.refreshSerial;
   const code = store(), date = $("cloud-date").value;
   if (!validStoreCode(code) || !validDate(date)) throw Error("\u8ACB\u9078\u64C7\u6709\u6548\u9580\u5E02\u8207\u65E5\u671F");
   const data = await api(`/queue?store=${encodeURIComponent(code)}&date=${date}`), scan = await api(`/scan?store=${encodeURIComponent(code)}`);
+  if (serial !== state.refreshSerial) return;
   state.queue = data.orders;
   state.sources = scan.files;
   $("cloud-incoming").replaceChildren();
   for (const f of scan.files.filter((f2) => !f2.orderId)) {
     const row = node2("div", void 0, "item"), label = node2("p", `\u5F85\u6536\u55AE\u30FB${new Date(f.createdTime).toLocaleString("zh-TW")}\u30FB${f.mimeType}`), open = node2("button", "\u958B\u555F\u70BA\u65B0\u8A02\u55AE"), append = node2("button", "\u52A0\u5165\u76EE\u524D\u8A02\u55AE", "secondary");
-    open.onclick = () => run(() => openSource(f.id));
-    append.onclick = () => run(() => openSource(f.id, true));
+    row.dataset.sourceId = f.id;
+    if (state.lastUploads?.has(f.id)) {
+      row.classList.add("flow-new-source");
+      row.prepend(node2("strong", "\u672C\u6B21\u4E0A\u50B3"));
+    }
+    open.onclick = () => run(() => openSource(f.id), { area: "incoming", working: "\u6B63\u5728\u8F09\u5165\u539F\u5716\uFF0C\u8ACB\u7A0D\u5019\u2026" });
+    append.onclick = () => run(() => openSource(f.id, true), { area: "incoming", working: "\u6B63\u5728\u52A0\u5165\u540C\u5F35\u8A02\u55AE\u7684\u4E0B\u4E00\u9801\u2026" });
     row.append(label, open, append);
     $("cloud-incoming").append(row);
   }
@@ -1792,7 +1912,7 @@ async function refresh() {
     const row = node2("div", void 0, "item");
     row.append(node2("p", `${o.id}\u30FB${{ pending: "\u5F85\u8986\u6838", reviewed: "\u5DF2\u8986\u6838", needs_info: "\u5F85\u88DC\u4EF6", cancelled: "\u53D6\u6D88", settled: "\u5DF2\u7D50\u7B97", exported: "\u5DF2\u7522\u6A94", import_unknown: "\u532F\u5165\u7D50\u679C\u5F85\u78BA\u8A8D", import_failed: "\u78BA\u8A8D\u532F\u5165\u5931\u6557", erp_created: "ERP\u5DF2\u5EFA\u7ACB" }[o.status] || o.status}\u30FB\u7248\u672C${o.version}`));
     const b = node2("button", "\u958B\u555F\uFF0F\u7E8C\u4F5C", "secondary");
-    b.onclick = () => run(() => openOrder(o.id));
+    b.onclick = () => run(() => openOrder(o.id), { area: "incoming", working: "\u6B63\u5728\u8B80\u53D6\u5DF2\u4FDD\u5B58\u55AE\u64DA\u2026" });
     row.append(b);
     $("cloud-queue").append(row);
   }
@@ -1841,7 +1961,9 @@ async function connect() {
   if (guestPage) {
     await guestCatalog();
     message("\u8A2A\u5BA2\u5DF2\u767B\u5165\uFF0C\u53EA\u80FD\u67E5\u770B\u81EA\u5DF1\u63D0\u4EA4\u7684\u55AE\u64DA\u3002");
-  } else message("\u516C\u53F8\u5DE5\u5177\u5DF2\u9023\u7DDA\uFF0C\u8ACB\u6388\u6B0A\u8B80\u53D6\u516C\u53F8\u96F2\u7AEF\u786C\u789F\u3002");
+  } else message("\u516C\u53F8\u5DE5\u5177\u5DF2\u9023\u7DDA\u3002");
+  if (guestPage && state.master) feedback.guide("receipt", "\u4E0B\u4E00\u6B65\uFF1A\u4E0A\u50B3\u6216\u958B\u555F\u539F\u5716", "\u53EF\u8907\u9078\u7167\u7247\uFF1B\u82E5\u5DF2\u7D93\u4E0A\u50B3\uFF0C\u76F4\u63A5\u67E5\u770B\u4E0B\u65B9\u5F85\u6536\u6E05\u55AE\u3002", { scroll: true });
+  else feedback.guide(guestPage ? "cloud-master-tools" : "master", "\u4E0B\u4E00\u6B65\uFF1A\u53D6\u5F97\u5546\u54C1\u67E5\u8A62", guestPage ? "\u8ACB\u5728\u5546\u54C1\u67E5\u8A62\u66F4\u65B0\u8207\u7570\u5E38\u8655\u7406\u5340\u91CD\u8A66\uFF0C\u4E0D\u9700Google\u6388\u6B0A\u3002" : "\u8ACB\u6309\u300C\u6388\u6B0A\u4E26\u8F09\u5165\u5546\u54C1\u4E3B\u6A94\u300D\uFF0C\u6210\u529F\u5F8C\u6703\u5E36\u5230\u4E0A\u50B3\u5340\u3002", { scroll: true });
 }
 async function master(blob, version) {
   const m = parseMaster(XLSX.read(await blob.arrayBuffer(), READ_OPTIONS), XLSX, version);
@@ -1870,6 +1992,7 @@ async function master(blob, version) {
   return synced;
 }
 $("cloud-review").addEventListener("change", (e) => {
+  if (e.target.id === "review-all" && e.target.checked) feedback.guide("save", "\u4E0B\u4E00\u6B65\uFF1A\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF", "\u8ACB\u6309\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\uFF0C\u770B\u5230\u6210\u529F\u8A0A\u606F\u5F8C\u624D\u7B97\u5DF2\u5132\u5B58\u3002");
   if (e.target.id === "review-all") $("cloud-handling").value = e.target.checked ? "reviewed" : "pending";
   stash();
 });
@@ -1897,6 +2020,7 @@ $("cloud-restore-draft").onclick = () => run(async () => {
   adopt(o);
   state.base = "";
   message("\u5DF2\u6062\u5FA9\u5206\u9801\u8349\u7A3F\uFF0C\u8ACB\u91CD\u65B0\u6838\u5C0D\u4E26\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\u3002");
+  feedback.guide("review", "\u4E0B\u4E00\u6B65\uFF1A\u6838\u5C0D\u6062\u5FA9\u7684\u8349\u7A3F", "\u6062\u5FA9\u5167\u5BB9\u5C1A\u672A\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\uFF0C\u8ACB\u6838\u5C0D\u5F8C\u518D\u4FDD\u5B58\u3002", { scroll: true });
 });
 function masterFailed(error) {
   state.masterIssue = true;
@@ -1943,7 +2067,8 @@ $("cloud-authorize").onclick = () => run(async () => {
   }
   const synced = await loadCloudMaster();
   message(synced ? "\u96F2\u7AEF\u6388\u6B0A\u5B8C\u6210\uFF0C\u5DF2\u53D6\u5F97\u6700\u65B0\u5546\u54C1\u4E3B\u6A94\uFF1B\u4E0D\u5FC5\u518D\u624B\u52D5\u532F\u5165\u3002" : "\u96F2\u7AEF\u4E3B\u6A94\u5DF2\u8F09\u5165\uFF0C\u9580\u5E02\u67E5\u8A62\u540C\u6B65\u5C1A\u672A\u5B8C\u6210\uFF0C\u8ACB\u7A0D\u5F8C\u66F4\u65B0\u3002");
-});
+  feedback.guide(state.current ? "ai" : "cloud-upload-zone", state.current ? "\u4E0B\u4E00\u6B65\uFF1A\u8FA8\u8B58\u9019\u5F35\u8A02\u55AE" : "\u4E0B\u4E00\u6B65\uFF1A\u9078\u64C7\u8A02\u8CFC\u55AE\u7167\u7247", state.current ? "\u539F\u5716\u5DF2\u5728\u672C\u9801\uFF0C\u8ACB\u6838\u5C0D\u5F8C\u52FE\u9078\u6388\u6B0A\u4E26\u9001\u51FA\u8FA8\u8B58\u3002" : "\u9078\u64C7\u5B8C\u6574\u55AE\u7167\u7247\uFF0C\u53EF\u8907\u9078\uFF1B\u4E0A\u50B3\u5F8C\u6703\u81EA\u52D5\u66F4\u65B0\u6E05\u55AE\u3002", { scroll: true });
+}, { area: "master", working: "\u6B63\u5728\u6388\u6B0A\u4E26\u8F09\u5165\u5546\u54C1\u4E3B\u6A94\u2026" });
 $("cloud-master").onclick = () => run(async () => {
   if (guestPage) return guestCatalog();
   const synced = await loadCloudMaster();
@@ -1960,7 +2085,9 @@ $("cloud-master-file").onchange = () => run(async () => {
   }
 });
 $("cloud-upload").onchange = () => run(async () => {
+  state.lastUploads = /* @__PURE__ */ new Set();
   const files = [...$("cloud-upload").files];
+  if (!files.length) return false;
   $("cloud-upload-results").replaceChildren();
   let failed = 0;
   for (const [i, f] of files.entries()) {
@@ -1970,9 +2097,10 @@ $("cloud-upload").onchange = () => run(async () => {
       const pages = await pagesFor(f);
       if (!pages.length) throw Error("\u7121\u53EF\u89E3\u6790\u9801\u9762");
       const mime = f.type || (/\.hei[cf]$/i.test(f.name) ? "image/heic" : "");
-      await sourceUploader.send(new Blob([f], { type: mime }), store(), (stage) => {
+      const confirmed = await sourceUploader.send(new Blob([f], { type: mime }), store(), (stage) => {
         line.textContent = `\u7B2C${i + 1}\u500B\u6A94\u6848\uFF1A${stage}\u2026`;
       });
+      state.lastUploads.add(confirmed.fileId);
       line.textContent = `\u7B2C${i + 1}\u500B\u6A94\u6848\u5DF2\u4E0A\u50B3\u516C\u53F8\u96F2\u7AEF\uFF0C\u5F85\u8986\u6838`;
       line.className = "success";
     } catch (e) {
@@ -1983,9 +2111,16 @@ $("cloud-upload").onchange = () => run(async () => {
   }
   $("cloud-upload").value = "";
   await refresh();
-  message(`\u4E0A\u50B3\u5B8C\u6210\uFF1A\u6210\u529F${files.length - failed}\uFF0C\u5931\u6557${failed}\u3002\u4E0A\u50B3\u4E0D\u4EE3\u8868\u5DF2\u4FDD\u5B58\u8A02\u55AE\u6216\u7D50\u7B97\u3002`, failed > 0);
-});
-$("cloud-refresh").onclick = () => run(refresh);
+  message(`\u4E0A\u50B3\u78BA\u8A8D\uFF1A\u6210\u529F${files.length - failed}\uFF0C\u5C1A\u672A\u78BA\u8A8D${failed}\u3002\u4E0A\u50B3\u4E0D\u4EE3\u8868\u5DF2\u4FDD\u5B58\u8A02\u55AE\u6216\u7D50\u7B97\u3002`, failed > 0);
+  if (state.lastUploads.size) feedback.guide("incoming", "\u4E0B\u4E00\u6B65\uFF1A\u958B\u555F\u525B\u4E0A\u50B3\u7684\u539F\u5716", "\u6E05\u55AE\u5DF2\u81EA\u52D5\u66F4\u65B0\uFF0C\u8ACB\u6838\u5C0D\u300C\u672C\u6B21\u4E0A\u50B3\u300D\u6A19\u8A18\uFF0C\u518D\u9EDE\u958B\u555F\u70BA\u65B0\u8A02\u55AE\u3002", { scroll: true });
+  else if (failed) feedback.guide("receipt", "\u4E0A\u50B3\u5C1A\u672A\u78BA\u8A8D\u5B8C\u6210", "\u8ACB\u67E5\u770B\u5404\u6A94\u6848\u7684\u539F\u56E0\uFF0C\u5148\u6AA2\u67E5\u5F85\u6536\u6E05\u55AE\uFF0C\u78BA\u8A8D\u6C92\u6709\u539F\u5716\u518D\u91CD\u8A66\u3002", { scroll: true, scrollTo: "cloud-upload-results" });
+}, { area: "receipt", working: "\u6B63\u5728\u8B80\u53D6\u53CA\u4E0A\u50B3\u7167\u7247\uFF0C\u8ACB\u52FF\u91CD\u8907\u9078\u6A94\u2026" });
+$("cloud-refresh").onclick = () => run(async () => {
+  await refresh();
+  const count = state.sources.filter((f) => !f.orderId).length;
+  message(count ? `\u5DF2\u66F4\u65B0\uFF1A\u6709${count}\u5F35\u5F85\u6536\u539F\u5716\u3002\u8ACB\u6838\u5C0D\u6E05\u55AE\u3002` : "\u5DF2\u66F4\u65B0\uFF0C\u76EE\u524D\u6C92\u6709\u5F85\u6536\u539F\u5716\uFF1B\u5DF2\u6709\u8A02\u55AE\u53EF\u5230\u6574\u65E5\u6E05\u55AE\u67E5\u770B\u3002");
+  feedback.guide(count ? "incoming" : "cloud-upload-zone", count ? "\u4E0B\u4E00\u6B65\uFF1A\u958B\u555F\u5F85\u6536\u539F\u5716" : "\u4E0B\u4E00\u6B65\uFF1A\u9078\u64C7\u7167\u7247\u6216\u67E5\u770B\u6574\u65E5\u6E05\u55AE", count ? "\u6838\u5C0D\u7167\u7247\u5F8C\u9EDE\u958B\u555F\u70BA\u65B0\u8A02\u55AE\uFF1B\u540C\u5F35\u591A\u9801\u624D\u9078\u52A0\u5165\u76EE\u524D\u8A02\u55AE\u3002" : "\u82E5\u525B\u4E0A\u50B3\u904E\uFF0C\u8ACB\u5148\u78BA\u8A8D\u5E33\u865F\u8207\u9580\u5E02\uFF0C\u907F\u514D\u76F4\u63A5\u91CD\u50B3\u3002", { scroll: true });
+}, { area: "incoming", working: "\u6B63\u5728\u6AA2\u67E5\u96F2\u7AEF\u5F85\u6536\u6E05\u55AE\u2026" });
 for (const id of ["cloud-store", "cloud-store-other", "cloud-date"]) $(id).onchange = () => run(async () => {
   if (dirty()) {
     if (state.current) {
@@ -2009,7 +2144,7 @@ $("cloud-ai").onclick = async () => {
       if (!$("cloud-ai-consent").checked) throw Error("\u8ACB\u5148\u78BA\u8A8D\u5B8C\u6574\u55AE\u50B3\u9001\u6388\u6B0A");
       if (!state.current || state.current.batchId) throw Error("\u8ACB\u958B\u555F\u672A\u7D50\u7B97\u7684\u5B8C\u6574\u8A02\u55AE");
       if (!state.master) throw Error("\u8ACB\u5148\u53D6\u5F97\u5546\u54C1\u4E3B\u6A94");
-      if ((snapshot().order.items.length || state.aiOperation) && !confirm("\u9019\u5F35\u55AE\u5DF2\u9001\u51FA\u904E\u8FA8\u8B58\u3002\u518D\u6B21\u8FA8\u8B58\u6703\u53E6\u8A08API\u8CBB\u7528\uFF0C\u4E26\u8986\u84CB\u76EE\u524D\u672A\u4FDD\u5B58\u7684\u8868\u982D\u3001\u5546\u54C1\u53CA\u4ED8\u6B3E\u4FEE\u6B63\u3002\u78BA\u5B9A\u91CD\u65B0\u8FA8\u8B58\uFF1F")) return;
+      if ((snapshot().order.items.length || state.aiOperation) && !confirm("\u9019\u5F35\u55AE\u5DF2\u9001\u51FA\u904E\u8FA8\u8B58\u3002\u518D\u6B21\u8FA8\u8B58\u6703\u53E6\u8A08API\u8CBB\u7528\uFF0C\u4E26\u8986\u84CB\u76EE\u524D\u672A\u4FDD\u5B58\u7684\u8868\u982D\u3001\u5546\u54C1\u53CA\u4ED8\u6B3E\u4FEE\u6B63\u3002\u78BA\u5B9A\u91CD\u65B0\u8FA8\u8B58\uFF1F")) return false;
       const progress = () => {
         status.textContent = `AI\u8FA8\u8B58\u8655\u7406\u4E2D\uFF0C\u5DF2\u7B49\u5F85${Math.floor((Date.now() - started) / 1e3)}\u79D2\uFF1B\u5B8C\u6574\u55AE\u53EF\u80FD\u9700\u89812\u81F33\u5206\u9418\uFF0C\u8ACB\u4FDD\u6301\u6B64\u9801\u958B\u555F\uFF0C\u52FF\u91CD\u8907\u9001\u51FA\u3002`;
       };
@@ -2042,6 +2177,7 @@ $("cloud-ai").onclick = async () => {
       status.textContent = "\u8FA8\u8B58\u5B8C\u6210\uFF0C\u8868\u982D\u3001\u5546\u54C1\u8207\u4ED8\u6B3E\u5DF2\u5E36\u5165\uFF0C\u8ACB\u4F9D\u539F\u5716\u8986\u6838\u4E26\u4FDD\u5B58\u3002";
       status.className = "notice success";
       message(status.textContent);
+      feedback.guide("review", "\u4E0B\u4E00\u6B65\uFF1A\u7531\u8868\u982D\u958B\u59CB\u8986\u6838", "\u8FA8\u8B58\u7D50\u679C\u5DF2\u5E36\u5165\uFF0C\u8ACB\u6838\u5C0D\u8868\u982D\u3001\u5546\u54C1\u3001\u7D44\u5408\u8207\u4ED8\u6B3E\uFF0C\u518D\u52FE\u6700\u4E0B\u65B9\u5169\u9805\u78BA\u8A8D\u3002", { scroll: true });
     } catch (e) {
       if (e instanceof TypeError) e = Error("\u8FA8\u8B58\u9023\u7DDA\u4E2D\u65B7\uFF0C\u672A\u6536\u5230\u5B8C\u6574\u7D50\u679C\uFF1B\u8ACB\u4FDD\u6301\u9801\u9762\u958B\u555F\uFF0C\u52FF\u76F4\u63A5\u91CD\u8907\u9001\u51FA");
       status.textContent = e.message || "\u8FA8\u8B58\u7D50\u679C\u672A\u78BA\u8A8D\u6536\u5230\uFF0C\u8ACB\u52FF\u91CD\u8907\u9001\u51FA";
@@ -2050,7 +2186,7 @@ $("cloud-ai").onclick = async () => {
     } finally {
       clearInterval(ticks);
     }
-  });
+  }, { area: "ai", working: "\u6B63\u5728\u6E96\u5099\u5B8C\u6574\u55AE\u8FA8\u8B58\u2026" });
 };
 async function saveOrder() {
   if (!state.current) throw Error("\u8ACB\u5148\u958B\u555F\u8A02\u55AE");
@@ -2080,8 +2216,9 @@ async function saveOrder() {
   sessionStorage.removeItem(key());
   await refresh();
   message("\u5DF2\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\uFF0C\u5C1A\u672A\u7D50\u7B97\u6642\u4ECD\u53EF\u7E7C\u7E8C\u8986\u6838\u3002");
+  feedback.guide(guestPage ? "receipt" : state.sources.some((f) => !f.orderId) ? "incoming" : "settlement", "\u4FDD\u5B58\u6210\u529F\uFF0C\u9078\u64C7\u4E0B\u4E00\u6B65", guestPage ? "\u672C\u5F35\u5DF2\u4FDD\u5B58\uFF0C\u5F8C\u7E8C\u7D50\u7B97\u53CAPOS\u7531\u7E3D\u90E8\u8655\u7406\uFF1B\u53EF\u7E7C\u7E8C\u6536\u4E0B\u4E00\u5F35\u3002" : state.sources.some((f) => !f.orderId) ? "\u9084\u6709\u5F85\u6536\u539F\u5716\uFF0C\u53EF\u7E7C\u7E8C\u958B\u555F\u4E0B\u4E00\u5F35\uFF1B\u9589\u5E97\u6642\u518D\u6838\u5C0D\u6574\u65E5\u6E05\u55AE\u3002" : "\u672C\u5F35\u5DF2\u4FDD\u5B58\uFF0C\u9589\u5E97\u6642\u6838\u5C0D\u7D19\u672C\u8207\u6574\u65E5\u6E05\u55AE\u5F8C\u518D\u7D50\u7B97\u3002", { scroll: true, scrollTo: "save" });
 }
-$("cloud-save").onclick = () => run(saveOrder);
+$("cloud-save").onclick = () => run(saveOrder, { area: "save", working: "\u6B63\u5728\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\uFF0C\u8ACB\u52FF\u96E2\u958B\u2026" });
 $("cloud-correct").onclick = () => {
   if (!["settled", "import_failed"].includes(state.current?.status)) return;
   state.correction = true;
@@ -2113,6 +2250,7 @@ async function settle(body) {
     clearOrder();
     await refresh();
     message(`\u96F2\u7AEF\u4EA4\u63A5\u5B8C\u6210\uFF0C\u6279\u6B21${result.batchId}`);
+    feedback.guide(hq() ? "hq" : "receipt", "\u7D50\u7B97\u4EA4\u63A5\u5B8C\u6210", hq() ? "\u53EF\u5230\u7E3D\u90E8\u4F5C\u696D\u958B\u555F\u5DF2\u7D50\u7B97\u8A02\u55AE\uFF0C\u78BA\u8A8D\u5F8C\u518D\u4E0B\u8F09POS\u3002" : "\u5DF2\u4EA4\u63A5\u7E3D\u90E8\uFF1B\u5982\u9084\u6709\u65B0\u55AE\uFF0C\u53EF\u56DE\u5230\u6536\u55AE\u5340\u5EFA\u7ACB\u88DC\u4EA4\u6279\u6B21\u3002", { scroll: true, scrollTo: "settlement" });
   } catch (e) {
     if (e.code === "settlement_reconfirm") {
       state.settlement = null;
@@ -2166,7 +2304,7 @@ async function showHQAccess() {
     row.append(node2("span", email));
     const remove = node2("button", "\u79FB\u9664 " + email, "secondary");
     remove.onclick = () => run(async () => {
-      if (!confirm(`\u79FB\u9664 ${email} \u7684\u9580\u5E02\u8A02\u55AE\u7E3D\u90E8\u6B0A\u9650\uFF1F\u6B64\u5E33\u865F\u5F8C\u7E8C\u64CD\u4F5C\u5C07\u505C\u6B62\u3002`)) return;
+      if (!confirm(`\u79FB\u9664 ${email} \u7684\u9580\u5E02\u8A02\u55AE\u7E3D\u90E8\u6B0A\u9650\uFF1F\u6B64\u5E33\u865F\u5F8C\u7E8C\u64CD\u4F5C\u5C07\u505C\u6B62\u3002`)) return false;
       await api("/hq-access", "PUT", { emails: hqAccess.emails.filter((e) => e !== email), expectedVersion: hqAccess.version });
       await showHQAccess();
       message("\u5DF2\u79FB\u9664\u7E3D\u90E8\u6B0A\u9650\u3002");
@@ -2255,9 +2393,26 @@ window.addEventListener("beforeunload", (e) => {
     e.returnValue = "";
   }
 });
+async function backgroundRefresh() {
+  if (state.refreshing) return;
+  state.refreshing = true;
+  try {
+    await guard.require();
+    if (!state.busy) await refresh();
+  } catch {
+    $("cloud-receipt-status").hidden = false;
+    $("cloud-receipt-status").textContent = "\u80CC\u666F\u6AA2\u67E5\u672A\u5B8C\u6210\uFF0C\u8ACB\u9700\u8981\u6642\u6309\u300C\u7ACB\u5373\u6AA2\u67E5\u65B0\u55AE\u300D\u3002";
+    $("cloud-receipt-status").className = "notice warning";
+  } finally {
+    state.refreshing = false;
+    if (guard.blocked) controls();
+  }
+}
 setInterval(() => {
-  guard.check().then(controls);
-  if (state.session && !state.busy && !document.hidden) run(refresh);
+  guard.check().then(() => {
+    if (guard.blocked) controls();
+  });
+  if (state.session && !state.busy && !document.hidden) void backgroundRefresh();
 }, 6e4);
 window.addEventListener("focus", () => guard.check().then(controls));
 $("cloud-date").value = taipeiDate();
