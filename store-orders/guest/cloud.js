@@ -1,11 +1,11 @@
 // store-orders/core.js
-var VERSION = "20261031-store-orders-r37";
+var VERSION = "20261031-store-orders-r38";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
 var PAYMENTS = Object.freeze(["\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
 var STORES = Object.freeze({ R00: "\u53F0\u5317\u4E2D\u5C71\u9580\u5E02", R01: "\u53F0\u4E2D\u5317\u5C6F\u9580\u5E02", R03: "\u65B0\u7AF9\u6771\u5340\u9580\u5E02", R10: "\u65B0\u838A\u9580\u5E02", R07: "\u8AA0\u54C1480\u9580\u5E02", R06: "\u6587\u5FC3\u79C0\u6CF0\u9580\u5E02" });
-var STATUS = Object.freeze({ pending: "\u5F85\u8986\u6838", needs_info: "\u5F85\u88DC\u4EF6", reviewed: "\u5DF2\u8986\u6838", settled: "\u5DF2\u7D50\u7B97", exported: "\u5DF2\u7522\u6A94", import_unknown: "\u5F85\u78BA\u8A8D\u532F\u5165\u7D50\u679C", import_failed: "\u532F\u5165\u5931\u6557", erp_created: "ERP \u5DF2\u5EFA\u7ACB", cancelled: "\u5DF2\u53D6\u6D88" });
+var STATUS = Object.freeze({ pending: "\u5F85\u8986\u6838", needs_info: "\u5F85\u88DC\u4EF6", reviewed: "\u5DF2\u8986\u6838", settled: "\u5DF2\u7D50\u7B97", exported: "\u5DF2\u7522\u6A94", import_unknown: "\u5F85\u78BA\u8A8D\u532F\u5165\u7D50\u679C", import_failed: "\u532F\u5165\u5931\u6557", erp_created: "ERP \u5DF2\u5EFA\u7ACB", cancelled: "\u5DF2\u4F5C\u5EE2" });
 function text(value) {
   return String(value ?? "").normalize("NFKC").trim();
 }
@@ -308,6 +308,42 @@ function buildPOS(orders, XLSX2, options) {
   }));
   XLSX2.utils.book_append_sheet(wb, ws, "Sheet1");
   return wb;
+}
+
+// store-orders/order-list.js
+async function listSummaries(rows, { storeCode, businessDate, actor, cache, read }) {
+  const out = [];
+  for (let i = 0; i < rows.length; i += 3) {
+    out.push(...await Promise.all(rows.slice(i, i + 3).map(async (row) => {
+      const key2 = JSON.stringify([actor, storeCode, businessDate, row.id, row.version, row.status, row.batch_id || null]);
+      if (cache.has(key2)) return cache.get(key2);
+      try {
+        const o = await read(row.id);
+        if (o.id !== row.id || o.version !== row.version || o.status !== row.status || o.storeCode !== storeCode || o.businessDate !== businessDate || (o.batchId || null) !== (row.batch_id || null)) throw Error("\u8CC7\u6599\u7248\u672C\u5DF2\u8B8A\u52D5");
+        let amountCents = null;
+        try {
+          amountCents = o.items.length ? totals(o).amountCents : null;
+        } catch {
+        }
+        const summary = { id: row.id, paperNumber: text(o.paperNumber), amountCents };
+        cache.set(key2, summary);
+        return summary;
+      } catch {
+        return { id: row.id, error: "\u55AE\u865F\u8207\u91D1\u984D\u6458\u8981\u672A\u80FD\u78BA\u8A8D\uFF0C\u8ACB\u66F4\u65B0\u6E05\u55AE\u6216\u958B\u555F\u539F\u55AE\u6838\u5C0D\u3002" };
+      }
+    })));
+  }
+  const keys = new Set(rows.map((row) => JSON.stringify([actor, storeCode, businessDate, row.id, row.version, row.status, row.batch_id || null])));
+  for (const key2 of cache.keys()) if (!keys.has(key2)) cache.delete(key2);
+  return out;
+}
+function canVoidOrder(order) {
+  return !!order && Number.isSafeInteger(order.version) && order.version > 0 && !order.batchId && ["pending", "needs_info", "reviewed"].includes(order.status);
+}
+function voidSavedOrder(order, reason) {
+  if (!canVoidOrder(order)) throw Error("\u53EA\u6709\u5C1A\u672A\u7D50\u7B97\u7684\u5DF2\u4FDD\u5B58\u8A02\u55AE\u53EF\u4F5C\u5EE2");
+  if (!text(reason) || text(reason).length > 1e3) throw Error("\u8ACB\u586B\u5BEB1000\u5B57\u5167\u7684\u4F5C\u5EE2\u539F\u56E0");
+  return { ...structuredClone(order), status: "cancelled", exceptionReason: text(reason) };
 }
 
 // store-orders/daily-report.js
@@ -1392,7 +1428,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
     restoreLabel.append(restoreInput);
     const backupTools = node("details");
     backupTools.id = "review-backup-tools";
-    backupTools.append(node("summary", "\u5099\u63F4\u5DE5\u5177\uFF08\u9700\u8981\u6642\u4F7F\u7528\uFF09"), node("p", "\u65E5\u5E38\u8ACB\u4F7F\u7528\u300C\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\u300D\u3002\u50C5\u5728\u6392\u67E5\u6216\u5FA9\u539F\u6642\u4E0B\u8F09\u5099\u4EFD\uFF1B\u6062\u5FA9\u9808\u70BA\u540C\u4E00\u8A02\u55AE\u3001\u76F8\u540C\u4F86\u6E90\u53CA\u539F\u8FA8\u8B58\uFF0C\u6062\u5FA9\u5F8C\u5FC5\u9808\u91CD\u65B0\u78BA\u8A8D\u3002\u5099\u4EFD\u542B\u5BA2\u6236\u500B\u8CC7\uFF0C\u8ACB\u59A5\u5584\u4FDD\u7BA1\u3002"));
+    backupTools.append(node("summary", "\u5099\u63F4\u5DE5\u5177\uFF08\u9700\u8981\u6642\u4F7F\u7528\uFF09"), node("p", "\u65E5\u5E38\u8ACB\u4F7F\u7528\u300C\u8986\u6838\u5B8C\u6210\u4E26\u4FDD\u5B58\u300D\u3002\u50C5\u5728\u6392\u67E5\u6216\u5FA9\u539F\u6642\u4E0B\u8F09\u5099\u4EFD\uFF1B\u6062\u5FA9\u9808\u70BA\u540C\u4E00\u8A02\u55AE\u3001\u76F8\u540C\u4F86\u6E90\u53CA\u539F\u8FA8\u8B58\uFF0C\u6062\u5FA9\u5F8C\u5FC5\u9808\u91CD\u65B0\u78BA\u8A8D\u3002\u5099\u4EFD\u542B\u5BA2\u6236\u500B\u8CC7\uFF0C\u8ACB\u59A5\u5584\u4FDD\u7BA1\u3002"));
     if (cloudMode) backupTools.append(restoreLabel);
     else root.append(restoreLabel);
     restoreInput.onchange = async () => {
@@ -1401,7 +1437,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         const file = restoreInput.files[0];
         if (!file || file.size > 1e6) throw Error("\u8ACB\u90781MB\u5167\u7684\u4EBA\u5DE5\u8986\u6838\u5099\u4EFD");
         const b = JSON.parse(await file.text());
-        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32", "20261031-store-orders-r33", "20261031-store-orders-r34", "20261031-store-orders-r35", "20261031-store-orders-r36"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
+        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32", "20261031-store-orders-r33", "20261031-store-orders-r34", "20261031-store-orders-r35", "20261031-store-orders-r36", "20261031-store-orders-r37"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
         if (!cloudMode || b.original?.rows?.length) validateExtraction(b.original);
         if (!b.original.header || JSON.stringify(b.original) !== JSON.stringify(original)) throw Error("\u5099\u4EFD\u8207\u76EE\u524D\u539F\u59CB\u8FA8\u8B58\u4E0D\u540C\uFF0C\u8ACB\u5148\u8F09\u5165\u540C\u4EFD\u539F\u8FA8\u8B58JSON\u8207\u539F\u5716");
         const o = b.reviewedOrder;
@@ -1425,7 +1461,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         root.querySelector("#review-errors").prepend(node("p", e.message, "error"));
       }
     };
-    root.append(node("p", "\u5148\u7531\u4E0A\u5F80\u4E0B\u5C0D\u7167\u539F\u5716\uFF0C\u4FEE\u6B63\u8868\u982D\u3001\u5546\u54C1\u3001\u7D44\u5408\u7E3D\u50F9\u8207\u4ED8\u6B3E\u3002\u6838\u5C0D\u5B8C\u6210\u5F8C\uFF0C\u53EA\u9700\u52FE\u9078\u6700\u4E0B\u65B9\u5169\u9805\u78BA\u8A8D\u3002" + (cloudMode ? "\u96E2\u958B\u524D\u8ACB\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\uFF0C\u4E26\u78BA\u8A8D\u4FDD\u5B58\u6210\u529F\u3002" : "\u4FEE\u6B63\u50C5\u7559\u5728\u76EE\u524D\u5206\u9801\uFF0C\u96E2\u958B\u524D\u53EF\u4E0B\u8F09\u542B\u539F\u8FA8\u8B58\u53CA\u4FEE\u6B63\u7D00\u9304\u7684\u5099\u4EFD\u3002")));
+    root.append(node("p", "\u5148\u7531\u4E0A\u5F80\u4E0B\u5C0D\u7167\u539F\u5716\uFF0C\u4FEE\u6B63\u8868\u982D\u3001\u5546\u54C1\u3001\u7D44\u5408\u7E3D\u50F9\u8207\u4ED8\u6B3E\u3002\u6838\u5C0D\u5B8C\u6210\u5F8C\uFF0C\u53EA\u9700\u52FE\u9078\u6700\u4E0B\u65B9\u5169\u9805\u78BA\u8A8D\u3002" + (cloudMode ? "\u96E2\u958B\u524D\u8ACB\u6309\u300C\u8986\u6838\u5B8C\u6210\u4E26\u4FDD\u5B58\u300D\uFF0C\u4E26\u78BA\u8A8D\u4FDD\u5B58\u6210\u529F\u3002" : "\u4FEE\u6B63\u50C5\u7559\u5728\u76EE\u524D\u5206\u9801\uFF0C\u96E2\u958B\u524D\u53EF\u4E0B\u8F09\u542B\u539F\u8FA8\u8B58\u53CA\u4FEE\u6B63\u7D00\u9304\u7684\u5099\u4EFD\u3002")));
     const layout = node("div", "", "paper-review-layout"), aside = node("aside", "", "paper-reference");
     aside.append(node("h4", "\u539F\u5716\u5C0D\u7167"));
     if (image && (Array.isArray(image) ? image.length : true)) {
@@ -1826,7 +1862,7 @@ var $ = (id) => document.getElementById(id);
 var guard = new VersionGuard();
 var guestPage = location.pathname.startsWith("/store-orders/guest/");
 var apiPrefix = guestPage ? "/api/store-orders-guest" : "/api/store-orders";
-var state = { session: null, master: null, masterIssue: false, masterSource: "", current: null, base: "", sources: [], pages: [], urls: [], queue: [], busy: false, refreshSerial: 0, refreshing: false, selectedSources: /* @__PURE__ */ new Set(), incomingSignature: "", previewUrls: [], sourcePreviews: /* @__PURE__ */ new Map(), correction: false, settlement: null, aiOperation: null };
+var state = { listCache: /* @__PURE__ */ new Map(), session: null, master: null, masterIssue: false, masterSource: "", current: null, base: "", sources: [], pages: [], urls: [], queue: [], busy: false, refreshSerial: 0, refreshing: false, selectedSources: /* @__PURE__ */ new Set(), incomingSignature: "", previewUrls: [], sourcePreviews: /* @__PURE__ */ new Map(), correction: false, settlement: null, aiOperation: null };
 var feedback = createFlowFeedback();
 var key = () => `store-orders-cloud:${state.session?.email || "disconnected"}`;
 var review = createReview($("cloud-review"), { cloudMode: true, requireVersion: () => guard.require(), context: () => ({ expectedStore: store(), existingNumbers: [], sourcePageCount: state.pages.length, guest: !!state.session?.guest }) });
@@ -1879,9 +1915,15 @@ function controls() {
   $("cloud-hq-access").hidden = !state.session?.canManageHQ;
   $("cloud-system-settings").hidden = !state.session?.canManageHQ;
   $("cloud-order").hidden = !state.current;
-  const locked = !!state.current?.batchId && !state.correction;
+  const locked = !!state.current?.batchId && !state.correction || state.current?.status === "cancelled";
   $("cloud-review").inert = disabled || locked;
   $("cloud-save").disabled = disabled || locked;
+  $("cloud-save").textContent = state.correction ? "\u8986\u6838\u5B8C\u6210\u4E26\u4FDD\u5B58\u66F4\u6B63" : "\u8986\u6838\u5B8C\u6210\u4E26\u4FDD\u5B58";
+  $("cloud-save-draft").disabled = disabled || locked || state.correction;
+  $("cloud-discard").disabled = disabled || !state.current;
+  $("cloud-void").disabled = disabled || !canVoidOrder(state.current) || state.correction;
+  $("cloud-void-confirm").disabled = $("cloud-void").disabled;
+  $("cloud-correction-reason").hidden = !state.correction;
   $("cloud-correct").hidden = !hq() || !state.current?.batchId || !["settled", "import_failed"].includes(state.current?.status);
   $("cloud-ai").disabled = disabled || locked || !state.master || !state.pages.length || !state.session?.recognitionReady;
   $("cloud-export").disabled = disabled || !hq() || !state.current || !["settled", "import_failed"].includes(state.current.status) || !state.session.productionExportEnabled || !!revisedPOSErrors(state.current ? [state.current] : [], profile.get()).length;
@@ -1933,6 +1975,8 @@ async function api(path, method = "GET", body) {
   return data;
 }
 function clearOrder() {
+  $("cloud-void-panel").hidden = true;
+  $("cloud-void-reason").value = "";
   state.urls.forEach(URL.revokeObjectURL);
   state.urls = [];
   state.pages = [];
@@ -1970,7 +2014,11 @@ function adopt(order) {
   $("cloud-page-summary").textContent = `\u672C\u8A02\u55AE\u5171${order.sources.length}\u500B\u6A94\u6848\uFF0F${order.pageCount}\u9801\uFF0C\u8ACB\u9010\u9801\u6838\u5C0D\u3002`;
   review.loadSaved(order, state.master, state.urls);
   state.base = JSON.stringify(snapshot().order);
-  $("cloud-handling").value = ["pending", "reviewed", "needs_info", "cancelled"].includes(order.status) ? order.status : "pending";
+  $("cloud-void-panel").hidden = true;
+  $("cloud-void-reason").value = "";
+  $("cloud-draft-tools").open = false;
+  $("cloud-saved-state").hidden = !order.version;
+  $("cloud-saved-state").textContent = order.version ? `\u5DF2\u4FDD\u5B58\u7248\u672C${order.version}\uFF5C${order.status === "cancelled" ? "\u5DF2\u4F5C\u5EE2\uFF0C\u4E0D\u8A08\u5165\u6BCF\u65E5\u5E33\u6B3E" : STATUS[order.status] || order.status}${order.status === "cancelled" ? "\uFF1B\u6B64\u55AE\u4FDD\u7559\u7D00\u9304\uFF0C\u8ACB\u53E6\u5EFA\u65B0\u55AE\u3002" : "\uFF1B\u672A\u7D50\u7B97\u53EF\u4FEE\u6B63\u5F8C\u91CD\u65B0\u8986\u6838\u4FDD\u5B58\u3002"}` : "";
   $("cloud-reason").value = order.exceptionReason || "";
   controls();
 }
@@ -2110,8 +2158,8 @@ $("cloud-group-separate").onclick = () => {
   groupControls();
   feedback.show("\u5DF2\u4FDD\u7559\u70BA\u4E0D\u540C\u8A02\u55AE\uFF0C\u8ACB\u9010\u7B46\u9EDE\u300C\u958B\u555F\u70BA\u65B0\u8A02\u55AE\u300D\uFF1B\u53EA\u6709\u540C\u4E00\u8A02\u55AE\u7684\u9801\u9762\u624D\u9700\u52FE\u9078\u5408\u4F75\u3002", false, "incoming");
 };
-async function openOrder(id) {
-  checkLeave();
+async function openOrder(id, discard = false) {
+  if (!discard) checkLeave();
   const { order } = await api("/orders/" + id);
   clearOrder();
   await loadImages(order);
@@ -2125,6 +2173,7 @@ async function refresh() {
   const code = store(), date = $("cloud-date").value;
   if (!validStoreCode(code) || !validDate(date)) throw Error("\u8ACB\u9078\u64C7\u6709\u6548\u9580\u5E02\u8207\u65E5\u671F");
   const data = await api(`/queue?store=${encodeURIComponent(code)}&date=${date}`), scan = await api(`/scan?store=${encodeURIComponent(code)}`);
+  const summaries = await listSummaries(data.orders, { storeCode: code, businessDate: date, actor: state.session.email, cache: state.listCache, read: async (id) => (await api("/orders/" + encodeURIComponent(id))).order });
   if (serial !== state.refreshSerial) return;
   state.queue = data.orders;
   state.sources = scan.files;
@@ -2132,7 +2181,12 @@ async function refresh() {
   $("cloud-queue").replaceChildren();
   for (const o of data.orders) {
     const row = node2("div", void 0, "item");
-    row.append(node2("p", `${o.id}\u30FB${{ pending: "\u5F85\u8986\u6838", reviewed: "\u5DF2\u8986\u6838", needs_info: "\u5F85\u88DC\u4EF6", cancelled: "\u53D6\u6D88", settled: "\u5DF2\u7D50\u7B97", exported: "\u5DF2\u7522\u6A94", import_unknown: "\u532F\u5165\u7D50\u679C\u5F85\u78BA\u8A8D", import_failed: "\u78BA\u8A8D\u532F\u5165\u5931\u6557", erp_created: "ERP\u5DF2\u5EFA\u7ACB" }[o.status] || o.status}\u30FB\u7248\u672C${o.version}`));
+    const summary = summaries.find((s) => s.id === o.id);
+    row.append(node2("h4", `\u7D19\u672C\u55AE\u865F\uFF1A${summary?.paperNumber || "\u5C1A\u672A\u78BA\u8A8D"}`), node2("p", `\u6210\u4EA4\u7E3D\u984D\uFF1A${summary?.amountCents === null || summary?.amountCents === void 0 ? "\u5F85\u78BA\u8A8D" : summary.amountCents / 100 + " \u5143"}\uFF5C${o.status === "cancelled" ? "\u5DF2\u4F5C\u5EE2\uFF08\u4E0D\u8A08\u5165\u5E33\u6B3E\uFF09" : STATUS[o.status] || o.status}\uFF5C\u7248\u672C${o.version}`));
+    if (summary?.error) row.append(node2("p", summary.error, "warning"));
+    const identity = node2("details");
+    identity.append(node2("summary", "\u7CFB\u7D71\u8B58\u5225"), node2("p", o.id));
+    row.append(identity);
     const b = node2("button", "\u958B\u555F\uFF0F\u7E8C\u4F5C", "secondary");
     b.onclick = () => run(() => openOrder(o.id), { area: "incoming", working: "\u6B63\u5728\u8B80\u53D6\u5DF2\u4FDD\u5B58\u55AE\u64DA\u2026" });
     row.append(b);
@@ -2214,8 +2268,7 @@ async function master(blob, version) {
   return synced;
 }
 $("cloud-review").addEventListener("change", (e) => {
-  if (e.target.id === "review-all" && e.target.checked) feedback.guide("save", "\u4E0B\u4E00\u6B65\uFF1A\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF", "\u8ACB\u6309\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\uFF0C\u770B\u5230\u6210\u529F\u8A0A\u606F\u5F8C\u624D\u7B97\u5DF2\u5132\u5B58\u3002");
-  if (e.target.id === "review-all") $("cloud-handling").value = e.target.checked ? "reviewed" : "pending";
+  if (e.target.id === "review-all" && e.target.checked) feedback.guide("save", "\u4E0B\u4E00\u6B65\uFF1A\u8986\u6838\u5B8C\u6210\u4E26\u4FDD\u5B58", "\u8ACB\u6309\u300C\u8986\u6838\u5B8C\u6210\u4E26\u4FDD\u5B58\u300D\uFF0C\u770B\u5230\u6210\u529F\u8A0A\u606F\u5F8C\u624D\u7B97\u5DF2\u5132\u5B58\u3002");
   stash();
 });
 $("cloud-restore-draft").onclick = () => run(async () => {
@@ -2431,14 +2484,18 @@ $("cloud-ai").onclick = async () => {
     }
   }, { area: "ai", working: "\u6B63\u5728\u6E96\u5099\u5B8C\u6574\u55AE\u8FA8\u8B58\u2026" });
 };
-async function saveOrder() {
+async function saveOrder(mode = "reviewed") {
   if (!state.current) throw Error("\u8ACB\u5148\u958B\u555F\u8A02\u55AE");
   const snap = snapshot(), o = snap.order;
   o.originalExtraction = snap.original;
   o.recognition = snap.recognition;
   o.reviewEdits = snap.edits;
-  o.exceptionReason = $("cloud-reason").value;
-  o.status = $("cloud-handling").value;
+  if (!["pending", "reviewed"].includes(mode)) throw Error("\u4FDD\u5B58\u65B9\u5F0F\u932F\u8AA4");
+  if (state.current.status === "cancelled") throw Error("\u5DF2\u4F5C\u5EE2\u8A02\u55AE\u4E0D\u53EF\u518D\u6B21\u4FDD\u5B58\uFF0C\u8ACB\u53E6\u5EFA\u65B0\u55AE");
+  o.exceptionReason = state.correction ? $("cloud-reason").value : "";
+  o.status = mode;
+  if (state.correction && mode !== "reviewed") throw Error("\u7E3D\u90E8\u66F4\u6B63\u5FC5\u9808\u5B8C\u6210\u8986\u6838");
+  if (mode === "pending") confirmReview(o, false);
   if (!validDate(o.businessDate)) throw Error("\u8ACB\u5728\u8986\u6838\u5340\u4F9D\u7D19\u672C\u586B\u5BEB\u6709\u6548\u8A02\u8CFC\u65E5\u671F\uFF1B\u4E0D\u6703\u81EA\u52D5\u63A1\u7528\u4ECA\u5929\u6216\u67E5\u8A62\u65E5\u671F");
   if (o.status === "reviewed") {
     const errors = reviewErrors(o, { imagePresent: state.urls.length > 0, sourceConfirmed: $("review-source")?.checked === true, expectedStore: store(), allowMultiPage: true, sourcePageCount: state.pages.length, guest: !!state.session?.guest });
@@ -2462,13 +2519,50 @@ async function saveOrder() {
   message(`\u5DF2\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\uFF0C\u5DF2\u5E36\u81F3\u55AE\u64DA\u65E5\u671F ${o.businessDate} \u7684\u6E05\u55AE\uFF1B\u5C1A\u672A\u7D50\u7B97\u6642\u4ECD\u53EF\u7E7C\u7E8C\u8986\u6838\u3002`);
   feedback.guide(guestPage ? "receipt" : state.sources.some((f) => !f.orderId) ? "incoming" : "settlement", "\u4FDD\u5B58\u6210\u529F\uFF0C\u9078\u64C7\u4E0B\u4E00\u6B65", guestPage ? "\u672C\u5F35\u5DF2\u4FDD\u5B58\uFF0C\u5F8C\u7E8C\u7D50\u7B97\u53CAPOS\u7531\u7E3D\u90E8\u8655\u7406\uFF1B\u53EF\u7E7C\u7E8C\u6536\u4E0B\u4E00\u5F35\u3002" : state.sources.some((f) => !f.orderId) ? "\u9084\u6709\u5F85\u6536\u539F\u5716\uFF0C\u53EF\u7E7C\u7E8C\u958B\u555F\u4E0B\u4E00\u5F35\uFF1B\u9589\u5E97\u6642\u518D\u6838\u5C0D\u6574\u65E5\u6E05\u55AE\u3002" : "\u672C\u5F35\u5DF2\u4FDD\u5B58\uFF0C\u9589\u5E97\u6642\u6838\u5C0D\u7D19\u672C\u8207\u6574\u65E5\u6E05\u55AE\u5F8C\u518D\u7D50\u7B97\u3002", { scroll: true, scrollTo: "save" });
 }
-$("cloud-save").onclick = () => run(saveOrder, { area: "save", working: "\u6B63\u5728\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\uFF0C\u8ACB\u52FF\u96E2\u958B\u2026" });
+$("cloud-save").onclick = () => run(() => saveOrder(), { area: "save", working: "\u6B63\u5728\u4FDD\u5B58\u5DF2\u8986\u6838\u8A02\u55AE\uFF0C\u8ACB\u52FF\u96E2\u958B\u2026" });
+$("cloud-save-draft").onclick = () => run(() => saveOrder("pending"), { area: "save", working: "\u6B63\u5728\u66AB\u5B58\u672A\u5B8C\u6210\u8349\u7A3F\u2026" });
 $("cloud-correct").onclick = () => {
   if (!["settled", "import_failed"].includes(state.current?.status)) return;
   state.correction = true;
   controls();
   message("\u7E3D\u90E8\u66F4\u6B63\u6A21\u5F0F\uFF1A\u4FEE\u6B63\u5F8C\u91CD\u65B0\u6838\u5C0D\uFF0C\u586B\u539F\u56E0\u4E26\u4FDD\u5B58\uFF1B\u539F\u7248\u6703\u4FDD\u7559\u3002");
 };
+$("cloud-void").onclick = () => {
+  $("cloud-void-panel").hidden = false;
+  $("cloud-void-reason").focus();
+};
+$("cloud-void-close").onclick = () => {
+  $("cloud-void-panel").hidden = true;
+};
+$("cloud-void-confirm").onclick = () => run(async () => {
+  const current = state.current;
+  if (!canVoidOrder(current) || state.correction) throw Error("\u6B64\u8A02\u55AE\u4E0D\u80FD\u5728\u6B64\u4F5C\u5EE2");
+  const reason = $("cloud-void-reason").value;
+  voidSavedOrder(current, reason);
+  if (!confirm(`\u4F5C\u5EE2\u5DF2\u4FDD\u5B58\u8A02\u55AE ${current.paperNumber || current.id}\uFF1F\u672C\u55AE\u5C07\u4E0D\u8A08\u5165\u6BCF\u65E5\u5E33\u6B3E\uFF1B\u76EE\u524D\u672A\u4FDD\u5B58\u4FEE\u6539\u4E0D\u6703\u5E36\u5165\u3002`)) return false;
+  const { order: saved } = await api("/orders/" + current.id);
+  if (saved.version !== current.version) throw Error("\u8A02\u55AE\u5DF2\u6709\u8F03\u65B0\u7248\u672C\uFF0C\u8ACB\u91CD\u65B0\u958B\u555F\u5F8C\u518D\u78BA\u8A8D\u4F5C\u5EE2");
+  const o = voidSavedOrder(saved, reason), r = await api("/orders", "POST", { order: o, expectedVersion: current.version, operationId: crypto.randomUUID() });
+  o.version = r.version;
+  adopt(o);
+  sessionStorage.removeItem(key());
+  $("cloud-date").value = o.businessDate;
+  await refresh();
+  message("\u6B64\u55AE\u5DF2\u4F5C\u5EE2\u4E26\u4FDD\u7559\u7D00\u9304\uFF0C\u4E0D\u518D\u8A08\u5165\u6BCF\u65E5\u5E33\u6B3E\u3002\u82E5\u9700\u91CD\u505A\uFF0C\u8ACB\u53E6\u5EFA\u7ACB\u65B0\u8A02\u55AE\u3002");
+}, { area: "save", working: "\u6B63\u5728\u4FDD\u5B58\u4F5C\u5EE2\u7D00\u9304\u2026" });
+$("cloud-discard").onclick = () => run(async () => {
+  if (!state.current) return;
+  if (!confirm("\u653E\u68C4\u76EE\u524D\u672A\u4FDD\u5B58\u4FEE\u6539\uFF1F\u5DF2\u4FDD\u5B58\u8A02\u55AE\u8207\u4F86\u6E90\u539F\u5716\u6703\u4FDD\u7559\uFF1B\u6B64\u64CD\u4F5C\u4E0D\u6703\u4F5C\u5EE2\u8A02\u55AE\u3002")) return false;
+  const id = state.current.version > 0 ? state.current.id : null;
+  sessionStorage.removeItem(key());
+  if (id) await openOrder(id, true);
+  else {
+    clearOrder();
+    await refresh();
+    message("\u5DF2\u653E\u68C4\u672A\u4FDD\u5B58\u5167\u5BB9\uFF1B\u539F\u5716\u4ECD\u5728\u5F85\u6536\u6E05\u55AE\uFF0C\u53EF\u91CD\u65B0\u958B\u555F\uFF0C\u4E0D\u9700\u91CD\u50B3\u3002");
+    feedback.guide("incoming", "\u53EF\u91CD\u65B0\u958B\u555F\u539F\u5716", "\u8ACB\u5F9E\u5F85\u6536\u6E05\u55AE\u9078\u64C7\u7167\u7247\uFF1B\u91CD\u65B0\u8FA8\u8B58\u4ECD\u6703\u7522\u751FAPI\u8CBB\u7528\u3002", { scroll: true });
+  }
+}, { area: "save", working: "\u6B63\u5728\u6062\u5FA9\u5DF2\u4FDD\u5B58\u7248\u672C\u6216\u56DE\u5230\u5F85\u6536\u539F\u5716\u2026" });
 async function prepareCosts() {
   if (!hq()) return;
   if (!state.master) throw Error("\u7E3D\u90E8\u7D50\u7B97\u524D\u8ACB\u5148\u53D6\u5F97\u6700\u65B0\u5546\u54C1\u4E3B\u6A94");
@@ -2627,6 +2721,7 @@ $("cloud-logout").onclick = () => run(async () => {
   state.selectedSources.clear();
   state.incomingSignature = "";
   $("cloud-incoming").replaceChildren();
+  state.listCache.clear();
   state.session = null;
   state.master = null;
   state.masterIssue = false;

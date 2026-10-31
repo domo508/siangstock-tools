@@ -1,11 +1,11 @@
 // Shared browser/Worker business rules. No customer data is persisted here.
-export const VERSION = "20261031-store-orders-r37";
+export const VERSION = "20261031-store-orders-r38";
 export const READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 export const WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 export const POS_HEADERS = Object.freeze(["單號", "結帳日期", "開單倉庫", "出貨倉庫", "取貨倉庫", "會員卡號", "銷別", "備註", "貨號", "顏色", "顏色編碼", "尺碼", "尺碼編碼", "是否贈品", "導購", "實收率", "數量", "中信信用卡", "現金", "百貨現金卷", "LinePay"]);
 export const PAYMENTS = Object.freeze(["中信信用卡", "現金", "百貨現金卷", "LinePay"]);
 export const STORES = Object.freeze({ R00: "台北中山門市", R01: "台中北屯門市", R03: "新竹東區門市", R10: "新莊門市", R07: "誠品480門市", R06: "文心秀泰門市" });
-export const STATUS = Object.freeze({ pending: "待覆核", needs_info: "待補件", reviewed: "已覆核", settled: "已結算", exported: "已產檔", import_unknown: "待確認匯入結果", import_failed: "匯入失敗", erp_created: "ERP 已建立", cancelled: "已取消" });
+export const STATUS = Object.freeze({ pending: "待覆核", needs_info: "待補件", reviewed: "已覆核", settled: "已結算", exported: "已產檔", import_unknown: "待確認匯入結果", import_failed: "匯入失敗", erp_created: "ERP 已建立", cancelled: "已作廢" });
 export function text(value) { return String(value ?? "").normalize("NFKC").trim(); }
 export function storeLabel(code,name){const label=text(name);return !label||label===text(code)?text(code):`${text(code)}・${label}`;}
 export function validStoreCode(code) { return typeof code === "string" && /^[A-Z0-9][A-Z0-9-]{0,15}$/.test(code); }

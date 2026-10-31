@@ -1,4 +1,4 @@
-import * as C from './core.js?v=20261031-store-orders-r37';
+import * as C from './core.js?v=20261031-store-orders-r38';
 
 const counted=new Set(['reviewed','settled','exported','import_unknown','import_failed','erp_created']);
 const excluded=new Set(['pending','needs_info','cancelled']);

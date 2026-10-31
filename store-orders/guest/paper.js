@@ -1,11 +1,11 @@
 // store-orders/core.js
-var VERSION = "20261031-store-orders-r37";
+var VERSION = "20261031-store-orders-r38";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
 var PAYMENTS = Object.freeze(["\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
 var STORES = Object.freeze({ R00: "\u53F0\u5317\u4E2D\u5C71\u9580\u5E02", R01: "\u53F0\u4E2D\u5317\u5C6F\u9580\u5E02", R03: "\u65B0\u7AF9\u6771\u5340\u9580\u5E02", R10: "\u65B0\u838A\u9580\u5E02", R07: "\u8AA0\u54C1480\u9580\u5E02", R06: "\u6587\u5FC3\u79C0\u6CF0\u9580\u5E02" });
-var STATUS = Object.freeze({ pending: "\u5F85\u8986\u6838", needs_info: "\u5F85\u88DC\u4EF6", reviewed: "\u5DF2\u8986\u6838", settled: "\u5DF2\u7D50\u7B97", exported: "\u5DF2\u7522\u6A94", import_unknown: "\u5F85\u78BA\u8A8D\u532F\u5165\u7D50\u679C", import_failed: "\u532F\u5165\u5931\u6557", erp_created: "ERP \u5DF2\u5EFA\u7ACB", cancelled: "\u5DF2\u53D6\u6D88" });
+var STATUS = Object.freeze({ pending: "\u5F85\u8986\u6838", needs_info: "\u5F85\u88DC\u4EF6", reviewed: "\u5DF2\u8986\u6838", settled: "\u5DF2\u7D50\u7B97", exported: "\u5DF2\u7522\u6A94", import_unknown: "\u5F85\u78BA\u8A8D\u532F\u5165\u7D50\u679C", import_failed: "\u532F\u5165\u5931\u6557", erp_created: "ERP \u5DF2\u5EFA\u7ACB", cancelled: "\u5DF2\u4F5C\u5EE2" });
 
 // store-orders/runtime.js
 var VersionGuard = class {
