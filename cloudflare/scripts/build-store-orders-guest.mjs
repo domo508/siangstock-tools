@@ -7,6 +7,8 @@ const require=createRequire(import.meta.url),{build}=createRequire(require.resol
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..'),tool=path.join(root,'store-orders'),out=path.join(tool,'guest');
 const {VERSION}=await import(path.join(tool,'core.js'));
 await mkdir(out,{recursive:true});
+// The deployed HQ entry must match the canonical cloud page used in local acceptance.
+await cp(path.join(tool,'cloud.html'),path.join(tool,'index.html'));
 const strip={name:'versioned-local-imports',setup(b){b.onResolve({filter:/\.js\?v=/},a=>({path:path.resolve(a.resolveDir,a.path.split('?')[0])}));}};
 for(const name of ['cloud','paper'])await build({entryPoints:[path.join(tool,name+'.js')],outfile:path.join(out,name+'.js'),bundle:true,format:'esm',target:'es2022',plugins:[strip]});
 let html=await readFile(path.join(tool,'cloud.html'),'utf8');

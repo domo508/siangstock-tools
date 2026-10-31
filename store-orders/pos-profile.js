@@ -1,5 +1,5 @@
-import * as C from './core.js?v=20261031-store-orders-r33';
-import {readPOSTemplate,revisedPOSErrors} from './pos-template.js?v=20261031-store-orders-r33';
+import * as C from './core.js?v=20261031-store-orders-r34';
+import {readPOSTemplate,revisedPOSErrors} from './pos-template.js?v=20261031-store-orders-r34';
 export function createPOSProfile(root,{requireVersion,onChange=()=>{},allowLegacy=true}){
  let template=null,reading=false,blocked=false;
  root.innerHTML='<h3>ERP匯入格式</h3><label>匯出格式<select id="pos-format"><option value="latest">新版POS（依工程師最終範本）</option><option value="legacy">舊版21欄（僅歷史回歸測試）</option></select></label><div id="pos-latest"><label>最終POS範本（只在本機讀取，不採用範例訂單）<input id="pos-template-file" type="file" accept=".xlsx,.xls"></label><p>新版依範本放入姓名、電話、地址；下載檔含個資，請妥善保管。原始範本不會被修改或上傳。同單共用資訊與付款欄垂直合併，取貨倉庫不同時分開保留；商品欄逐列保留。</p><label class="check"><input id="pos-payment-confirmed" type="checkbox" checked>已確認付款對照（如需變更請先取消勾選）：中信信用卡、現金、百貨現金卷、LinePay</label></div><p id="pos-template-status" role="status"></p>';

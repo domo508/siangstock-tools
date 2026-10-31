@@ -1,4 +1,4 @@
-import * as C from "./core.js?v=20261031-store-orders-r33";
+import * as C from "./core.js?v=20261031-store-orders-r34";
 export const EXTRACTION_SCHEMA={type:"object",additionalProperties:false,required:["rows","sharedPrices","warnings","priceBasis"],properties:{priceBasis:{type:"string",enum:["unit","line_total","unknown"]},
  rows:{type:"array",items:{type:"object",additionalProperties:false,required:["row","sku","paperName","quantity","unitPrice","saleType","gift","uncertain","groupCode"],properties:{groupCode:{type:"string"},row:{type:"integer"},sku:{type:"string"},paperName:{type:"string"},quantity:{type:["integer","null"]},unitPrice:{type:["number","null"]},saleType:{type:"string",enum:["銷貨","訂貨",""]},gift:{type:"boolean"},uncertain:{type:"boolean"}}}},
  sharedPrices:{type:"array",items:{type:"object",additionalProperties:false,required:["rows","amount"],properties:{rows:{type:"array",items:{type:"integer"}},amount:{type:["number","null"]}}}},warnings:{type:"array",items:{type:"string"}}

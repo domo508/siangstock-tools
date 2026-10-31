@@ -1,9 +1,9 @@
-import {createPOSProfile} from './pos-profile.js?v=20261031-store-orders-r33';
-import {prepareImageInput} from './image-input.js?v=20261031-store-orders-r33';
-import {createReview} from './review.js?v=20261031-store-orders-r33';
-import * as C from './core.js?v=20261031-store-orders-r33';
-import {VersionGuard} from './runtime.js?v=20261031-store-orders-r33';
-import {validateExtraction} from './recognition.js?v=20261031-store-orders-r33';
+import {createPOSProfile} from './pos-profile.js?v=20261031-store-orders-r34';
+import {prepareImageInput} from './image-input.js?v=20261031-store-orders-r34';
+import {createReview} from './review.js?v=20261031-store-orders-r34';
+import * as C from './core.js?v=20261031-store-orders-r34';
+import {VersionGuard} from './runtime.js?v=20261031-store-orders-r34';
+import {validateExtraction} from './recognition.js?v=20261031-store-orders-r34';
 const $=id=>document.getElementById(id),guard=new VersionGuard();
 let master=null,image=null,prepared=null,raw=null,recognition=null,config=null,busy=false,profileUI=null;
 const context=()=>({existingNumbers:$('existing-numbers').value.split(/[,，、\s]+/).filter(Boolean),expectedStore:$('expected-store').value.trim().toUpperCase()});
