@@ -4,3 +4,12 @@ th:nth-child(3){width:9%}
 @media print{body{font-size:12px}header p{margin:6px 0}.header-fields p{margin:5px 0}.hint{font-size:10px;line-height:1.4}th,td{padding:3px}td{height:9mm}table{font-size:10px}section>p{margin:7px 0}footer{margin-top:8px;font-size:9px}}
 
 th:nth-child(4){width:8%}th:nth-child(5){width:16%}
+
+/* Keep handwriting space in the header and payment area on both screen and paper. */
+header>p{line-height:9mm;margin:2mm 0}
+.header-fields{row-gap:1mm}
+.header-fields p{min-height:8mm;line-height:8mm;margin:0}
+.payment-fields{margin-top:3mm}
+.payment-fields>p{min-height:9mm;line-height:9mm;margin:1mm 0}
+footer{margin-top:3mm;padding-top:3mm;line-height:1.6}
+@media print{header>p{line-height:9mm;margin:2mm 0}.header-fields p{min-height:8mm;line-height:8mm;margin:0}.payment-fields>p{min-height:9mm;line-height:9mm;margin:1mm 0}footer{margin-top:3mm;padding-top:3mm}}
