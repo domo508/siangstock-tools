@@ -1,0 +1,11 @@
+import {it,expect} from 'vitest';
+import {readFileSync} from 'node:fs';
+import * as C from '../../store-orders/core.js';
+import {reviewDraft,confirmReview} from '../../store-orders/review.js';
+import {syntheticFullOrder} from '../../store-orders/synthetic-form.js';
+import {mergeFullPages} from '../../store-orders/merge-pages.js';
+import {normalizePaperDate} from '../../store-orders/recognition.js';
+it('收單不填日期，清單日期移至日結且新草稿明確留空',()=>{const h=readFileSync('../store-orders/cloud.html','utf8'),j=readFileSync('../store-orders/cloud.js','utf8');expect(h.slice(h.indexOf('id="cloud-receipt"'),h.indexOf('id="cloud-order"'))).not.toContain('id="cloud-date"');expect(h.indexOf('id="cloud-date"')).toBeGreaterThan(h.indexOf('id="cloud-settlement"'));expect(j).toContain("C.newOrder(crypto.randomUUID(),store(),'')");expect(j).toContain("$('cloud-date').onchange=()=>run(filterDay");const handler=j.slice(j.indexOf('async function filterDay()'),j.indexOf("$('cloud-ai').onclick="));expect(handler).not.toContain('clearOrder()');expect(handler).not.toContain('businessDate=');});
+it.each(['','不明日期','115/2/30'])('辨識不到或日期無效（%s）不採操作當日，人工補填後保留紙本日期',value=>{const raw=syntheticFullOrder();raw.header.businessDate=value;const o=reviewDraft(raw,null);expect(o.businessDate).toBe('');expect(C.validateOrder(o).errors).toContain('業務日期格式錯誤');o.businessDate='2026-08-30';expect(C.validateOrder(o).errors).not.toContain('業務日期格式錯誤');expect(raw.header.businessDate).toBe(value);});
+it('跨日補傳保留紙本日期，多頁日期矛盾必須人工補填，缺日期頁不覆寫已知紙本日',()=>{const a=syntheticFullOrder(),b=syntheticFullOrder();a.header.pageNumber=1;b.header.pageNumber=2;a.header.pageCount=b.header.pageCount=2;a.header.businessDate='115/08/30';b.header.businessDate='2026/08/31';let merged=mergeFullPages([a,b]);expect(merged.header.businessDate).toBe('');expect(merged.header.uncertainFields).toContain('businessDate');b.header.businessDate='';merged=mergeFullPages([a,b]);expect(merged.header.businessDate).toBe('2026-08-30');expect(normalizePaperDate('115年8月30日')).toBe('2026-08-30');});
+it('已存歷史日期不改為操作日，覆核日期修正只改新快照',()=>{const raw=syntheticFullOrder(),o=reviewDraft(raw,null),before=structuredClone(o);o.businessDate='2026-08-31';confirmReview(o,true);expect(before.businessDate).toBe('2026-08-30');expect(raw.header.businessDate).toBe('115年08月30日');expect(o.businessDate).toBe('2026-08-31');});
