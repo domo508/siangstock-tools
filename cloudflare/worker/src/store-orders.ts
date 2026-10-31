@@ -1,3 +1,4 @@
+import {recognitionResponse} from './store-order-stream';
 import {STORE_ORDER_SUPER_ADMIN,readHQAccess,updateHQAccess,HQAccessError} from "./store-order-hq-access";
 import {ownerStorageSetupRoute} from "./store-order-setup";
 import {ownerDriveToken,OwnerError,type OwnerEnv} from "./store-order-owner";
@@ -347,7 +348,7 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promis
     }
     if(action==="/recognize"&&request.method==="POST"){
       const b=await bounded(request,23000000),store=storeFor(who,b.storeCode,c),fileId=folderId(b.fileId);
-      return response(await recognizeStoreOrder(env,b,{actor:who.email,storeCode:store,fileId,validateSource:async()=>{const registered=await env.DB.prepare("SELECT file_id FROM store_order_sources WHERE file_id=? AND store_code=? AND duplicate_of IS NULL").bind(fileId,store).first();if(!registered)fail("請先登記本店來源原圖",403);const meta=await drive.owned(fileId,c.stores[store].pendingFolderId);if(who.guest&&meta.appProperties?.soActor!==who.email)fail("無權辨識其他人的原圖",403);await unchangedSource(env,drive,fileId);}}));
+      return recognitionResponse(()=>recognizeStoreOrder(env,b,{actor:who.email,storeCode:store,fileId,validateSource:async()=>{const registered=await env.DB.prepare("SELECT file_id FROM store_order_sources WHERE file_id=? AND store_code=? AND duplicate_of IS NULL").bind(fileId,store).first();if(!registered)fail("請先登記本店來源原圖",403);const meta=await drive.owned(fileId,c.stores[store].pendingFolderId);if(who.guest&&meta.appProperties?.soActor!==who.email)fail("無權辨識其他人的原圖",403);await unchangedSource(env,drive,fileId);}}),error=>({error:error instanceof RecognitionError||error instanceof OrderError?error.message:"辨識結果未確認收到，請先檢查狀態，勿重複送出",status:error instanceof RecognitionError||error instanceof OrderError?error.status:503}));
     }
     if(action==="/attention"&&request.method==="GET") {
       hq(who);

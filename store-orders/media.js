@@ -1,4 +1,4 @@
-import { VERSION } from "./core.js?v=20261031-store-orders-r32";
+import { VERSION } from "./core.js?v=20261031-store-orders-r33";
 const BASE = `${typeof location!=="undefined"&&location.pathname.startsWith("/store-orders/guest/")?"/store-orders/guest":"/store-orders"}/vendor/${VERSION}/`;
 export async function pagesFor(file) {
   if (file.size > 20000000) throw Error("每個檔案最多20MB，請分頁拍攝或壓縮");

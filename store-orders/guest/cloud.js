@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261031-store-orders-r32";
+var VERSION = "20261031-store-orders-r33";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -1160,7 +1160,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         const file = restoreInput.files[0];
         if (!file || file.size > 1e6) throw Error("\u8ACB\u90781MB\u5167\u7684\u4EBA\u5DE5\u8986\u6838\u5099\u4EFD");
         const b = JSON.parse(await file.text());
-        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
+        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
         if (!cloudMode || b.original?.rows?.length) validateExtraction(b.original);
         if (!b.original.header || JSON.stringify(b.original) !== JSON.stringify(original)) throw Error("\u5099\u4EFD\u8207\u76EE\u524D\u539F\u59CB\u8FA8\u8B58\u4E0D\u540C\uFF0C\u8ACB\u5148\u8F09\u5165\u540C\u4EFD\u539F\u8FA8\u8B58JSON\u8207\u539F\u5716");
         const o = b.reviewedOrder;
@@ -1658,12 +1658,18 @@ async function run(fn) {
 async function api(path, method = "GET", body) {
   if (!state.session && !["/session", "/redeem"].includes(path)) throw Error("\u8ACB\u5148\u9023\u7DDA\u516C\u53F8\u5DE5\u5177");
   const r = await fetch(apiPrefix + path, { method, credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json", "X-Store-Orders-Version": VERSION }, ...body ? { body: JSON.stringify(body) } : {} });
-  if (!(r.headers.get("Content-Type") || "").includes("application/json")) throw Error("\u516C\u53F8\u767B\u5165\u5DF2\u904E\u671F\uFF0C\u8ACB\u91CD\u65B0\u9023\u7DDA");
-  const data = await r.json();
-  if (!r.ok) {
+  if (!(r.headers.get("Content-Type") || "").includes("application/json")) throw Error(path === "/recognize" ? "\u672A\u6536\u5230\u5B8C\u6574\u8FA8\u8B58\u56DE\u61C9\uFF0C\u53EF\u80FD\u70BA\u9023\u7DDA\u903E\u6642\uFF1B\u8ACB\u5148\u6AA2\u67E5\u72C0\u614B\uFF0C\u52FF\u91CD\u8907\u9001\u51FA" : "\u516C\u53F8\u767B\u5165\u5DF2\u904E\u671F\uFF0C\u8ACB\u91CD\u65B0\u9023\u7DDA");
+  let data;
+  try {
+    data = await r.json();
+  } catch (e) {
+    if (path === "/recognize") throw Error("\u8FA8\u8B58\u9023\u7DDA\u4E2D\u65B7\uFF0C\u672A\u6536\u5230\u5B8C\u6574\u7D50\u679C\uFF1B\u8ACB\u52FF\u76F4\u63A5\u91CD\u8907\u9001\u51FA\uFF0C\u5148\u78BA\u8A8D\u76EE\u524D\u8FA8\u8B58\u72C0\u614B");
+    throw e;
+  }
+  if (!r.ok || data.error) {
     const e = Error(data.error || "\u516C\u53F8\u96F2\u7AEF\u64CD\u4F5C\u672A\u5B8C\u6210");
     e.code = data.code;
-    e.status = r.status;
+    e.status = data.status || r.status;
     throw e;
   }
   return data;
@@ -1678,6 +1684,8 @@ function clearOrder() {
   state.aiOperation = null;
   review.clear();
   $("cloud-ai-consent").checked = false;
+  $("cloud-ai-status").textContent = "\u8ACB\u5148\u6838\u5C0D\u539F\u5716\u4E26\u53D6\u5F97\u5546\u54C1\u4E3B\u6A94\uFF0C\u518D\u9001\u51FA\u8FA8\u8B58\uFF1B\u8655\u7406\u671F\u9593\u8ACB\u4FDD\u6301\u6B64\u9801\u958B\u555F\u3002";
+  $("cloud-ai-status").className = "notice";
   controls();
 }
 async function getFile(id) {
@@ -1991,37 +1999,59 @@ for (const id of ["cloud-store", "cloud-store-other", "cloud-date"]) $(id).oncha
   clearOrder();
   await refresh();
 });
-$("cloud-ai").onclick = () => run(async () => {
-  if (!$("cloud-ai-consent").checked) throw Error("\u8ACB\u5148\u78BA\u8A8D\u5B8C\u6574\u55AE\u50B3\u9001\u6388\u6B0A");
-  if (!state.current || state.current.batchId) throw Error("\u8ACB\u958B\u555F\u672A\u7D50\u7B97\u7684\u5B8C\u6574\u8A02\u55AE");
-  if (!state.master) throw Error("\u8ACB\u5148\u53D6\u5F97\u5546\u54C1\u4E3B\u6A94");
-  if (snapshot().order.items.length && !confirm("\u91CD\u65B0\u8FA8\u8B58\u6703\u8986\u84CB\u76EE\u524D\u672A\u4FDD\u5B58\u7684\u8868\u982D\u3001\u5546\u54C1\u53CA\u4ED8\u6B3E\u4FEE\u6B63\uFF0C\u4E26\u53E6\u8A08API\u8CBB\u7528\u3002\u78BA\u5B9A\u91CD\u65B0\u8FA8\u8B58\uFF1F")) return;
-  const results = [];
-  for (const [i, p] of state.pages.entries()) {
-    message(`\u6B63\u5728\u8FA8\u8B58\u7B2C${i + 1}\uFF0F${state.pages.length}\u9801\uFF0C\u8ACB\u52FF\u91CD\u8907\u64CD\u4F5C\u3002`);
-    const image = await createImageBitmap(p.blob);
-    let prepared;
+$("cloud-ai").onclick = async () => {
+  const status = $("cloud-ai-status");
+  let ticks;
+  const started = Date.now();
+  status.className = "notice";
+  await run(async () => {
     try {
-      prepared = prepareImageInput(image, { full: true });
+      if (!$("cloud-ai-consent").checked) throw Error("\u8ACB\u5148\u78BA\u8A8D\u5B8C\u6574\u55AE\u50B3\u9001\u6388\u6B0A");
+      if (!state.current || state.current.batchId) throw Error("\u8ACB\u958B\u555F\u672A\u7D50\u7B97\u7684\u5B8C\u6574\u8A02\u55AE");
+      if (!state.master) throw Error("\u8ACB\u5148\u53D6\u5F97\u5546\u54C1\u4E3B\u6A94");
+      if ((snapshot().order.items.length || state.aiOperation) && !confirm("\u9019\u5F35\u55AE\u5DF2\u9001\u51FA\u904E\u8FA8\u8B58\u3002\u518D\u6B21\u8FA8\u8B58\u6703\u53E6\u8A08API\u8CBB\u7528\uFF0C\u4E26\u8986\u84CB\u76EE\u524D\u672A\u4FDD\u5B58\u7684\u8868\u982D\u3001\u5546\u54C1\u53CA\u4ED8\u6B3E\u4FEE\u6B63\u3002\u78BA\u5B9A\u91CD\u65B0\u8FA8\u8B58\uFF1F")) return;
+      const progress = () => {
+        status.textContent = `AI\u8FA8\u8B58\u8655\u7406\u4E2D\uFF0C\u5DF2\u7B49\u5F85${Math.floor((Date.now() - started) / 1e3)}\u79D2\uFF1B\u5B8C\u6574\u55AE\u53EF\u80FD\u9700\u89812\u81F33\u5206\u9418\uFF0C\u8ACB\u4FDD\u6301\u6B64\u9801\u958B\u555F\uFF0C\u52FF\u91CD\u8907\u9001\u51FA\u3002`;
+      };
+      progress();
+      ticks = setInterval(progress, 1e3);
+      const results = [];
+      for (const [i, p] of state.pages.entries()) {
+        message(`\u6B63\u5728\u8FA8\u8B58\u7B2C${i + 1}\uFF0F${state.pages.length}\u9801\uFF0C\u8ACB\u52FF\u91CD\u8907\u64CD\u4F5C\u3002`);
+        const image = await createImageBitmap(p.blob);
+        let prepared;
+        try {
+          prepared = prepareImageInput(image, { full: true });
+        } finally {
+          image.close();
+        }
+        const request2 = { storeCode: store(), fileId: p.fileId, operationId: crypto.randomUUID(), mode: "full", consent: true, image: prepared.image, detailImages: prepared.detailImages };
+        state.aiOperation = request2.operationId;
+        const result = await api("/recognize", "POST", request2);
+        results.push(result);
+      }
+      const raw = mergeFullPages(results.map((r) => r.extraction));
+      if (text(raw.header.storeCode).toUpperCase() !== store()) throw Error("\u8FA8\u8B58\u9580\u5E02\u8207\u76EE\u524D\u9580\u5E02\u4E0D\u540C\uFF0C\u672A\u5957\u7528\u7D50\u679C\uFF0C\u8ACB\u5C0D\u7167\u539F\u5716\u4EBA\u5DE5\u4FEE\u6B63");
+      const base = snapshot().order;
+      review.update(raw, state.master, state.urls, results.map((r) => r.recognition));
+      const draft = review.get().order;
+      Object.assign(draft, { id: base.id, version: base.version, sources: base.sources, status: "pending", reviewed: false, originalExtraction: raw, recognizedPages: results.map((r) => r.extraction), recognition: results.map((r) => r.recognition), reviewEdits: [], headerRecognition: { ...draft.headerRecognition, synthetic: false } });
+      adopt(draft);
+      state.base = "";
+      $("cloud-ai-consent").checked = false;
+      status.textContent = "\u8FA8\u8B58\u5B8C\u6210\uFF0C\u8868\u982D\u3001\u5546\u54C1\u8207\u4ED8\u6B3E\u5DF2\u5E36\u5165\uFF0C\u8ACB\u4F9D\u539F\u5716\u8986\u6838\u4E26\u4FDD\u5B58\u3002";
+      status.className = "notice success";
+      message(status.textContent);
+    } catch (e) {
+      if (e instanceof TypeError) e = Error("\u8FA8\u8B58\u9023\u7DDA\u4E2D\u65B7\uFF0C\u672A\u6536\u5230\u5B8C\u6574\u7D50\u679C\uFF1B\u8ACB\u4FDD\u6301\u9801\u9762\u958B\u555F\uFF0C\u52FF\u76F4\u63A5\u91CD\u8907\u9001\u51FA");
+      status.textContent = e.message || "\u8FA8\u8B58\u7D50\u679C\u672A\u78BA\u8A8D\u6536\u5230\uFF0C\u8ACB\u52FF\u91CD\u8907\u9001\u51FA";
+      status.className = "notice danger";
+      throw e;
     } finally {
-      image.close();
+      clearInterval(ticks);
     }
-    const request2 = { storeCode: store(), fileId: p.fileId, operationId: crypto.randomUUID(), mode: "full", consent: true, image: prepared.image, detailImages: prepared.detailImages };
-    state.aiOperation = request2.operationId;
-    const result = await api("/recognize", "POST", request2);
-    results.push(result);
-  }
-  const raw = mergeFullPages(results.map((r) => r.extraction));
-  if (text(raw.header.storeCode).toUpperCase() !== store()) throw Error("\u8FA8\u8B58\u9580\u5E02\u8207\u76EE\u524D\u9580\u5E02\u4E0D\u540C\uFF0C\u672A\u5957\u7528\u7D50\u679C\uFF0C\u8ACB\u5C0D\u7167\u539F\u5716\u4EBA\u5DE5\u4FEE\u6B63");
-  const base = snapshot().order;
-  review.update(raw, state.master, state.urls, results.map((r) => r.recognition));
-  const draft = review.get().order;
-  Object.assign(draft, { id: base.id, version: base.version, sources: base.sources, status: "pending", reviewed: false, originalExtraction: raw, recognizedPages: results.map((r) => r.extraction), recognition: results.map((r) => r.recognition), reviewEdits: [], headerRecognition: { ...draft.headerRecognition, synthetic: false } });
-  adopt(draft);
-  state.base = "";
-  $("cloud-ai-consent").checked = false;
-  message("\u8FA8\u8B58\u5B8C\u6210\uFF0C\u8ACB\u4F9D\u539F\u5716\u6838\u5C0D\u4E26\u4FEE\u6B63\u3002\u53EA\u6709\u52FE\u9078\u5B8C\u6574\u8986\u6838\u78BA\u8A8D\u4E14\u4FDD\u5B58\u5F8C\uFF0C\u624D\u5217\u5165\u5DF2\u8986\u6838\u8A02\u55AE\u3002");
-});
+  });
+};
 async function saveOrder() {
   if (!state.current) throw Error("\u8ACB\u5148\u958B\u555F\u8A02\u55AE");
   const snap = snapshot(), o = snap.order;
