@@ -99,3 +99,31 @@ it('最高權限增減即時生效，版本衝突不覆寫，原子歷史保留�
 it('外部email、重複、門市角色、最高權限移除企圖、舊版本及跨來源不能寫入名單',async()=>{await hqRegistry();for(const emails of [['outside@gmail.com'],['HQ2@siangapato.com.tw','hq2@siangapato.com.tw'],[EMAIL],['siang01@siangapato.com.tw']])expect((await updateRoles({emails,expectedVersion:1})).status).toBe(400);expect((await updateRoles({emails:[],expectedVersion:1},undefined,{'X-Store-Orders-Version':'old'})).status).toBe(409);expect((await updateRoles({emails:[],expectedVersion:1},undefined,{Origin:'https://evil.example'})).status).toBe(403);expect((await call('/hq-access',undefined,'siang01@siangapato.com.tw')).body.version).toBe(1);});
 it('新增總部透過受保護API讀取原圖，不需Drive分享；撤權後拒絕，其他檔案不洩漏',async()=>{await register();expect((await save()).status).toBe(200);await hqRegistry();let r=await storeOrdersRoute(new Request('https://siangstock.com/api/store-orders/file/source-file-001',{headers:{'X-Test-Email':'hq2@siangapato.com.tw'}}),env);expect(r.status).toBe(200);expect(await r.text()).toBe('synthetic-image');expect(r.headers.get('Cache-Control')).toContain('no-store');file('unrelated-source','other-folder-001','unrelated','image/png',{driveId:undefined});r=await storeOrdersRoute(new Request('https://siangstock.com/api/store-orders/file/unrelated-source',{headers:{'X-Test-Email':'hq2@siangapato.com.tw'}}),env);expect(r.status).toBe(403);expect((await call('/orders/test-order-001',undefined,'hq2@siangapato.com.tw')).status).toBe(200);await updateRoles({emails:[],expectedVersion:1});r=await storeOrdersRoute(new Request('https://siangstock.com/api/store-orders/file/source-file-001',{headers:{'X-Test-Email':'hq2@siangapato.com.tw'}}),env);expect(r.status).toBe(403);});
 it('權限表遺失或毀損時停止存取，不退回過時KV總部名單',async()=>{await hqRegistry();sql.prepare('UPDATE store_order_hq_access SET emails=?,version=version+1 WHERE id=1').run('["outside@example.com"]');expect((await call('/session',undefined,'siang01@siangapato.com.tw')).status).toBe(503);});
+
+it('瀏覽器直傳工作階段帶入已驗證的Origin，完成確認不建立新工作階段',async()=>{
+ vi.spyOn(OrderDrive.prototype,'token').mockResolvedValue('synthetic-token');
+ const network=vi.spyOn(globalThis,'fetch').mockResolvedValue(new Response('',{status:200,headers:{Location:'https://www.googleapis.com/upload/drive/v3/files?upload_id=synthetic'}}));
+ const body={storeCode:'R00',mimeType:'image/png',size:12,operationId:crypto.randomUUID()};
+ expect((await call('/upload-session',body)).body.completed).toBe(false);
+ expect(network.mock.calls[0][1].headers.Origin).toBe('https://siangstock.com');
+ expect((await call('/upload-confirm',body)).body).toEqual({completed:false});expect(network).toHaveBeenCalledTimes(1);
+ expect((await call('/upload-session',body,EMAIL,{Origin:'https://evil.example'})).status).toBe(403);
+});
+it('已完成上傳確認檢查本人、本店、大小與格式；重試同操作不再建立上傳',async()=>{
+ const body={storeCode:'R00',mimeType:'image/png',size:JSON.stringify('synthetic-image').length,operationId:crypto.randomUUID()};
+ file('confirmed-source-001',config.stores.R00.pendingFolderId,'synthetic-image','image/png',{appProperties:{soUpload:body.operationId,soActor:EMAIL}});
+ const network=vi.spyOn(globalThis,'fetch');
+ expect((await call('/upload-confirm',body)).body).toEqual({completed:true,fileId:'confirmed-source-001'});
+ expect((await call('/upload-session',body)).body.completed).toBe(true);expect(network).not.toHaveBeenCalled();
+ for(const mismatch of [{size:body.size+1},{mimeType:'image/jpeg'}])expect((await call('/upload-confirm',{...body,...mismatch})).status).toBe(409);
+ expect((await call('/upload-confirm',body,HQ)).status).toBe(403);
+ expect((await call('/upload-confirm',{...body,storeCode:'R01'})).status).toBe(403);
+ files.get('confirmed-source-001').appProperties.soActor=OTHER;expect((await call('/upload-confirm',body)).status).toBe(403);
+});
+it('上傳操作重複檔案、不合法大小、舊版本與其他訪客均不能確認',async()=>{
+ const body={storeCode:'R00',mimeType:'image/png',size:10,operationId:crypto.randomUUID()};
+ for(const id of ['duplicate-source-001','duplicate-source-002'])file(id,config.stores.R00.pendingFolderId,'x','image/png',{appProperties:{soUpload:body.operationId,soActor:EMAIL}});
+ expect((await call('/upload-confirm',body)).status).toBe(409);expect((await call('/upload-confirm',{...body,size:0})).status).toBe(400);expect((await call('/upload-confirm',body,EMAIL,{'X-Store-Orders-Version':'old'})).status).toBe(409);
+ const cookie=await guestLogin();expect((await guestCall(cookie,'/upload-confirm',body)).status).toBe(409);
+ files.delete('duplicate-source-002');expect((await guestCall(cookie,'/upload-confirm',body)).status).toBe(403);
+});

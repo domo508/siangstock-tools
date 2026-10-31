@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261031-store-orders-r31";
+var VERSION = "20261031-store-orders-r32";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -389,6 +389,42 @@ async function latestMaster(folderId) {
   files.sort((a, b) => b.modifiedTime.localeCompare(a.modifiedTime));
   if (!files.length || files[0].modifiedTime === files[1]?.modifiedTime) throw Error("\u5546\u54C1\u4E3B\u6A94\u6C92\u6709\u552F\u4E00\u7684\u6700\u65B0\u6A94\uFF0C\u8ACB\u78BA\u8A8D\u8CC7\u6599\u593E");
   return { blob: await download(files[0].id), version: `${files[0].id}:${files[0].modifiedTime}` };
+}
+
+// store-orders/source-upload.js
+function createSourceUploader({ api: api2, upload: upload2 }) {
+  const attempts = /* @__PURE__ */ new Map();
+  async function send(file, storeCode, progress = () => {
+  }) {
+    const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    const key2 = storeCode + ":" + file.type + ":" + [...new Uint8Array(digest)].map((v) => v.toString(16).padStart(2, "0")).join("");
+    for (const [k, v] of attempts) if (v.expires < Date.now()) attempts.delete(k);
+    if (!attempts.has(key2)) {
+      if (attempts.size >= 100) throw Error("\u672C\u5206\u9801\u4E0A\u50B3\u7B46\u6578\u5DF2\u9054\u4E0A\u9650\uFF0C\u8ACB\u5148\u6838\u5C0D\u65B0\u55AE\u518D\u91CD\u65B0\u958B\u555F");
+      attempts.set(key2, { operationId: crypto.randomUUID(), expires: Date.now() + 72e5 });
+    }
+    const body = { storeCode, mimeType: file.type, size: file.size, operationId: attempts.get(key2).operationId };
+    progress("\u5EFA\u7ACB\u96F2\u7AEF\u4E0A\u50B3");
+    const session = await api2("/upload-session", "POST", body);
+    if (!session.completed) {
+      progress("\u50B3\u9001\u539F\u5716");
+      try {
+        await upload2(file, session);
+      } catch {
+      }
+    }
+    progress("\u78BA\u8A8D\u96F2\u7AEF\u5B58\u6A94");
+    let confirmed;
+    try {
+      confirmed = await api2("/upload-confirm", "POST", body);
+    } catch (e) {
+      if (e.status) throw e;
+      throw Error("\u7121\u6CD5\u9023\u7DDA\u78BA\u8A8D\u96F2\u7AEF\u5B58\u6A94\uFF0C\u8ACB\u5148\u6309\u300C\u7ACB\u5373\u6AA2\u67E5\u65B0\u55AE\u300D\uFF0C\u52FF\u91CD\u8907\u4E0A\u50B3");
+    }
+    if (!confirmed.completed || !confirmed.fileId) throw Error("\u5C1A\u672A\u78BA\u8A8D\u539F\u5716\u5B8C\u6574\u4E0A\u50B3\uFF1B\u8ACB\u5148\u6309\u300C\u7ACB\u5373\u6AA2\u67E5\u65B0\u55AE\u300D\u3002\u82E5\u7121\u6B64\u5716\uFF0C\u518D\u9078\u540C\u4E00\u6A94\u6848\u91CD\u8A66");
+    return confirmed;
+  }
+  return { send, clear: () => attempts.clear() };
 }
 
 // store-orders/runtime.js
@@ -1124,7 +1160,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         const file = restoreInput.files[0];
         if (!file || file.size > 1e6) throw Error("\u8ACB\u90781MB\u5167\u7684\u4EBA\u5DE5\u8986\u6838\u5099\u4EFD");
         const b = JSON.parse(await file.text());
-        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
+        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
         if (!cloudMode || b.original?.rows?.length) validateExtraction(b.original);
         if (!b.original.header || JSON.stringify(b.original) !== JSON.stringify(original)) throw Error("\u5099\u4EFD\u8207\u76EE\u524D\u539F\u59CB\u8FA8\u8B58\u4E0D\u540C\uFF0C\u8ACB\u5148\u8F09\u5165\u540C\u4EFD\u539F\u8FA8\u8B58JSON\u8207\u539F\u5716");
         const o = b.reviewedOrder;
@@ -1564,6 +1600,7 @@ function store() {
   return $("cloud-store").value === "__other__" ? text($("cloud-store-other").value).toUpperCase() : $("cloud-store").value;
 }
 var hq = () => state.session?.role === "hq";
+var sourceUploader = createSourceUploader({ api, upload });
 function stash() {
   if (state.current && dirty()) try {
     sessionStorage.setItem(key(), JSON.stringify({ expires: Date.now() + 72e5, ...snapshot() }));
@@ -1925,13 +1962,14 @@ $("cloud-upload").onchange = () => run(async () => {
       const pages = await pagesFor(f);
       if (!pages.length) throw Error("\u7121\u53EF\u89E3\u6790\u9801\u9762");
       const mime = f.type || (/\.hei[cf]$/i.test(f.name) ? "image/heic" : "");
-      const session = await api("/upload-session", "POST", { storeCode: store(), mimeType: mime, size: f.size, operationId: crypto.randomUUID() });
-      await upload(new Blob([f], { type: mime }), session);
+      await sourceUploader.send(new Blob([f], { type: mime }), store(), (stage) => {
+        line.textContent = `\u7B2C${i + 1}\u500B\u6A94\u6848\uFF1A${stage}\u2026`;
+      });
       line.textContent = `\u7B2C${i + 1}\u500B\u6A94\u6848\u5DF2\u4E0A\u50B3\u516C\u53F8\u96F2\u7AEF\uFF0C\u5F85\u8986\u6838`;
       line.className = "success";
     } catch (e) {
       failed++;
-      line.textContent = `\u7B2C${i + 1}\u500B\u6A94\u6848\u5931\u6557\uFF1A${e.message}`;
+      line.textContent = `\u7B2C${i + 1}\u500B\u6A94\u6848\u5C1A\u672A\u78BA\u8A8D\u5B8C\u6210\uFF1A${e instanceof TypeError ? "\u9023\u7DDA\u4E2D\u65B7\uFF0C\u8ACB\u5148\u6AA2\u67E5\u65B0\u55AE\u6E05\u55AE\uFF0C\u518D\u91CD\u8A66" : e.message}`;
       line.className = "error";
     }
   }
@@ -2159,6 +2197,7 @@ $("cloud-logout").onclick = () => run(async () => {
   sessionStorage.removeItem(key());
   sessionStorage.removeItem(key() + ":settlement");
   clear();
+  sourceUploader.clear();
   clearOrder();
   state.session = null;
   state.master = null;

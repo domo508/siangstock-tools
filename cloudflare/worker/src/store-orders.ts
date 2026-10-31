@@ -355,13 +355,21 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promis
       const maintenance=await env.DB.prepare("SELECT event,created_at FROM store_order_events WHERE event IN ('retention_completed','retention_failed') ORDER BY created_at DESC LIMIT 1").first();
       return response({orders:overdue.results,maintenance});
     }
-    if (action === "/upload-session" && request.method === "POST") {
+    if (["/upload-session","/upload-confirm"].includes(action) && request.method === "POST") {
       const b=await bounded(request),store=storeFor(who,b.storeCode,c),op=uuid(b.operationId),folder=c.stores[store].pendingFolderId;
       if(!MIME.has(b.mimeType)||!Number.isSafeInteger(b.size)||b.size<1||b.size>20000000) fail("檔案格式或大小錯誤，每檔最多20MB");
       await drive.checkFolder(folder,[...c.hqEmails,...c.stores[store].emails]);
-      const existing=(await drive.list(folder,true)).find(f=>f.appProperties?.soUpload===op);
-      if(existing){if(who.guest&&existing.appProperties?.soActor!==who.email)fail("上傳操作不屬於此訪客",403);return response({fileId:existing.id,completed:true});}
-      const started=await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id",{method:"POST",headers:{Authorization:`Bearer ${await drive.token()}`,"Content-Type":"application/json","X-Upload-Content-Type":b.mimeType,"X-Upload-Content-Length":String(b.size)},body:JSON.stringify({name:`${crypto.randomUUID()}.${b.mimeType==="application/pdf"?"pdf":"image"}`,parents:[folder],mimeType:b.mimeType,appProperties:{soUpload:op,soActor:who.email}})});
+      const matches=(await drive.list(folder,true)).filter(f=>f.appProperties?.soUpload===op);
+      if(matches.length>1)fail("同一上傳出現多個檔案，請先核對新單清單",409);
+      const existing=matches[0];
+      if(existing){
+        if(existing.appProperties?.soActor!==who.email)fail("上傳操作不屬於目前登入者",403);
+        const meta=await drive.owned(existing.id,folder);
+        if(meta.appProperties?.soUpload!==op||meta.appProperties?.soActor!==who.email||meta.mimeType!==b.mimeType||Number(meta.size)!==b.size||!meta.md5Checksum)fail("雲端檔案尚未完整確認，請先核對新單清單",409);
+        return response({fileId:existing.id,completed:true});
+      }
+      if(action==="/upload-confirm")return response({completed:false});
+      const started=await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id",{method:"POST",headers:{Authorization:`Bearer ${await drive.token()}`,Origin:request.headers.get("Origin")!,"Content-Type":"application/json","X-Upload-Content-Type":b.mimeType,"X-Upload-Content-Length":String(b.size)},body:JSON.stringify({name:`${crypto.randomUUID()}.${b.mimeType==="application/pdf"?"pdf":"image"}`,parents:[folder],mimeType:b.mimeType,appProperties:{soUpload:op,soActor:who.email}})});
       const uploadUrl=started.headers.get("Location");
       if(!started.ok||!uploadUrl||new URL(uploadUrl).protocol!=="https:"||new URL(uploadUrl).hostname!=="www.googleapis.com") fail("公司雲端尚未建立上傳工作階段",503);
       return response({uploadUrl,completed:false});
