@@ -16,8 +16,8 @@ export function createSourceUploader({api,upload}) {
   }
   progress('確認雲端存檔');
   let confirmed;
-  try{confirmed=await api('/upload-confirm','POST',body);}catch(e){if(e.status)throw e;throw Error('無法連線確認雲端存檔，請先按「立即檢查新單」，勿重複上傳');}
-  if(!confirmed.completed||!confirmed.fileId)throw Error('尚未確認原圖完整上傳；請先按「立即檢查新單」。若無此圖，再選同一檔案重試');
+  try{confirmed=await api('/upload-confirm','POST',body);}catch(e){if(e.status)throw e;throw Error('無法連線確認雲端存檔，請先按「手動檢查新單」，勿重複上傳');}
+  if(!confirmed.completed||!confirmed.fileId)throw Error('尚未確認原圖完整上傳；請先按「手動檢查新單」。若無此圖，再選同一檔案重試');
   return confirmed;
  }
  return {send,clear:()=>attempts.clear()};

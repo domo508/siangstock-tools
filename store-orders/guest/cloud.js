@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261101-store-orders-r39";
+var VERSION = "20261101-store-orders-r41";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -692,9 +692,9 @@ function createSourceUploader({ api: api2, upload: upload2 }) {
       confirmed = await api2("/upload-confirm", "POST", body);
     } catch (e) {
       if (e.status) throw e;
-      throw Error("\u7121\u6CD5\u9023\u7DDA\u78BA\u8A8D\u96F2\u7AEF\u5B58\u6A94\uFF0C\u8ACB\u5148\u6309\u300C\u7ACB\u5373\u6AA2\u67E5\u65B0\u55AE\u300D\uFF0C\u52FF\u91CD\u8907\u4E0A\u50B3");
+      throw Error("\u7121\u6CD5\u9023\u7DDA\u78BA\u8A8D\u96F2\u7AEF\u5B58\u6A94\uFF0C\u8ACB\u5148\u6309\u300C\u624B\u52D5\u6AA2\u67E5\u65B0\u55AE\u300D\uFF0C\u52FF\u91CD\u8907\u4E0A\u50B3");
     }
-    if (!confirmed.completed || !confirmed.fileId) throw Error("\u5C1A\u672A\u78BA\u8A8D\u539F\u5716\u5B8C\u6574\u4E0A\u50B3\uFF1B\u8ACB\u5148\u6309\u300C\u7ACB\u5373\u6AA2\u67E5\u65B0\u55AE\u300D\u3002\u82E5\u7121\u6B64\u5716\uFF0C\u518D\u9078\u540C\u4E00\u6A94\u6848\u91CD\u8A66");
+    if (!confirmed.completed || !confirmed.fileId) throw Error("\u5C1A\u672A\u78BA\u8A8D\u539F\u5716\u5B8C\u6574\u4E0A\u50B3\uFF1B\u8ACB\u5148\u6309\u300C\u624B\u52D5\u6AA2\u67E5\u65B0\u55AE\u300D\u3002\u82E5\u7121\u6B64\u5716\uFF0C\u518D\u9078\u540C\u4E00\u6A94\u6848\u91CD\u8A66");
     return confirmed;
   }
   return { send, clear: () => attempts.clear() };
@@ -1437,7 +1437,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         const file = restoreInput.files[0];
         if (!file || file.size > 1e6) throw Error("\u8ACB\u90781MB\u5167\u7684\u4EBA\u5DE5\u8986\u6838\u5099\u4EFD");
         const b = JSON.parse(await file.text());
-        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32", "20261031-store-orders-r33", "20261031-store-orders-r34", "20261031-store-orders-r35", "20261031-store-orders-r36", "20261031-store-orders-r37", "20261031-store-orders-r38"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
+        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32", "20261031-store-orders-r33", "20261031-store-orders-r34", "20261031-store-orders-r35", "20261031-store-orders-r36", "20261031-store-orders-r37", "20261031-store-orders-r38", "20261101-store-orders-r39", "20261101-store-orders-r40"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
         if (!cloudMode || b.original?.rows?.length) validateExtraction(b.original);
         if (!b.original.header || JSON.stringify(b.original) !== JSON.stringify(original)) throw Error("\u5099\u4EFD\u8207\u76EE\u524D\u539F\u59CB\u8FA8\u8B58\u4E0D\u540C\uFF0C\u8ACB\u5148\u8F09\u5165\u540C\u4EFD\u539F\u8FA8\u8B58JSON\u8207\u539F\u5716");
         const o = b.reviewedOrder;
@@ -1515,7 +1515,9 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
     scroll.append(table);
     form.append(scroll);
     order.items.forEach((item, index) => {
-      const row = node("tr"), cell = () => {
+      const row = node("tr", "", "review-product-row");
+      row.setAttribute("aria-label", `\u5546\u54C1\u7B2C${index + 1}\u5217`);
+      const cell = () => {
         const td = node("td");
         row.append(td);
         return td;
@@ -1881,12 +1883,6 @@ function store() {
 }
 var hq = () => state.session?.role === "hq";
 var sourceUploader = createSourceUploader({ api, upload });
-function stash() {
-  if (state.current && dirty()) try {
-    sessionStorage.setItem(key(), JSON.stringify({ expires: Date.now() + 72e5, ...snapshot() }));
-  } catch {
-  }
-}
 function snapshot() {
   return review.get();
 }
@@ -1946,7 +1942,7 @@ async function run(fn, options = {}) {
       if (!guard.blocked && context.area === "save" && !e.status && $("review-errors")?.children.length) feedback.guide("review", "\u4FDD\u5B58\u5C1A\u672A\u5B8C\u6210", "\u8ACB\u5148\u4FEE\u6B63\u4E0B\u65B9\u8986\u6838\u6AA2\u67E5\u6307\u51FA\u7684\u6B04\u4F4D\uFF0C\u518D\u4FDD\u5B58\u3002", { scroll: true, scrollTo: "review-errors" });
     } else {
       $("cloud-receipt-status").hidden = false;
-      $("cloud-receipt-status").textContent = "\u80CC\u666F\u6AA2\u67E5\u672A\u5B8C\u6210\uFF0C\u8ACB\u9700\u8981\u6642\u6309\u300C\u7ACB\u5373\u6AA2\u67E5\u65B0\u55AE\u300D\u3002";
+      $("cloud-receipt-status").textContent = "\u80CC\u666F\u6AA2\u67E5\u672A\u5B8C\u6210\uFF0C\u8ACB\u9700\u8981\u6642\u6309\u300C\u624B\u52D5\u6AA2\u67E5\u65B0\u55AE\u300D\u3002";
       $("cloud-receipt-status").className = "notice warning";
     }
   } finally {
@@ -2220,6 +2216,7 @@ async function connect(resumed = null) {
   const s = resumed || await api("/session");
   if (s.version !== VERSION) throw Error("API\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u91CD\u65B0\u8F09\u5165\u6700\u65B0\u7248");
   state.session = s;
+  sessionStorage.removeItem(key());
   $("cloud-store").replaceChildren(...Object.entries(s.stores).map(([id, value]) => {
     const o = node2("option", storeLabel(id, value.name));
     o.value = id;
@@ -2269,33 +2266,6 @@ async function master(blob, version) {
 }
 $("cloud-review").addEventListener("change", (e) => {
   if (e.target.id === "review-all" && e.target.checked) feedback.guide("save", "\u4E0B\u4E00\u6B65\uFF1A\u8986\u6838\u5B8C\u6210\u4E26\u4FDD\u5B58", "\u8ACB\u6309\u300C\u8986\u6838\u5B8C\u6210\u4E26\u4FDD\u5B58\u300D\uFF0C\u770B\u5230\u6210\u529F\u8A0A\u606F\u5F8C\u624D\u7B97\u5DF2\u5132\u5B58\u3002");
-  stash();
-});
-$("cloud-restore-draft").onclick = () => run(async () => {
-  checkLeave();
-  const stored = JSON.parse(sessionStorage.getItem(key()) || "null");
-  if (!stored || stored.expires <= Date.now()) {
-    sessionStorage.removeItem(key());
-    throw Error("\u6C92\u6709\u5169\u5C0F\u6642\u5167\u53EF\u6062\u5FA9\u7684\u5206\u9801\u8349\u7A3F");
-  }
-  const o = stored.order;
-  if (!Object.hasOwn(state.session.stores, o.storeCode)) throw Error("\u8349\u7A3F\u9580\u5E02\u672A\u6388\u6B0A");
-  if (o.version > 0) {
-    const saved = await api("/orders/" + o.id);
-    if (saved.order.version !== o.version) throw Error("\u96F2\u7AEF\u5DF2\u6709\u8F03\u65B0\u7248\u672C\uFF0C\u8ACB\u91CD\u65B0\u958B\u555F\u4E26\u5C0D\u7167\u5099\u4EFD\u4FEE\u6B63");
-  }
-  clearOrder();
-  $("cloud-store").value = o.storeCode;
-  if (validDate(o.businessDate)) $("cloud-date").value = o.businessDate;
-  o.originalExtraction = stored.original;
-  o.recognition = stored.recognition;
-  o.reviewEdits = stored.edits;
-  confirmReview(o, false);
-  await loadImages(o);
-  adopt(o);
-  state.base = "";
-  message("\u5DF2\u6062\u5FA9\u5206\u9801\u8349\u7A3F\uFF0C\u8ACB\u91CD\u65B0\u6838\u5C0D\u4E26\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\u3002");
-  feedback.guide("review", "\u4E0B\u4E00\u6B65\uFF1A\u6838\u5C0D\u6062\u5FA9\u7684\u8349\u7A3F", "\u6062\u5FA9\u5167\u5BB9\u5C1A\u672A\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF\uFF0C\u8ACB\u6838\u5C0D\u5F8C\u518D\u4FDD\u5B58\u3002", { scroll: true });
 });
 function masterFailed(error) {
   state.masterIssue = true;
@@ -2755,10 +2725,6 @@ $("reload-version").onclick = () => {
 };
 window.addEventListener("beforeunload", (e) => {
   if (dirty()) {
-    try {
-      sessionStorage.setItem(key(), JSON.stringify({ expires: Date.now() + 72e5, ...snapshot() }));
-    } catch {
-    }
     e.preventDefault();
     e.returnValue = "";
   }
@@ -2771,7 +2737,7 @@ async function backgroundRefresh() {
     if (!state.busy) await refresh();
   } catch {
     $("cloud-receipt-status").hidden = false;
-    $("cloud-receipt-status").textContent = "\u80CC\u666F\u6AA2\u67E5\u672A\u5B8C\u6210\uFF0C\u8ACB\u9700\u8981\u6642\u6309\u300C\u7ACB\u5373\u6AA2\u67E5\u65B0\u55AE\u300D\u3002";
+    $("cloud-receipt-status").textContent = "\u80CC\u666F\u6AA2\u67E5\u672A\u5B8C\u6210\uFF0C\u8ACB\u9700\u8981\u6642\u6309\u300C\u624B\u52D5\u6AA2\u67E5\u65B0\u55AE\u300D\u3002";
     $("cloud-receipt-status").className = "notice warning";
   } finally {
     state.refreshing = false;
