@@ -47,3 +47,12 @@
 @media(max-width:380px){.paper-review-table .review-product-row{grid-template-columns:minmax(0,1fr)}}
 
 .invite-create-controls{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:16px 0}.invite-create-controls label{flex:1 1 240px}.invite-create-controls button{flex:0 0 auto}@media(max-width:760px){.invite-create-controls button{width:100%}}
+
+.flow-caption{display:none}
+@media(min-width:761px){
+ .flow-next{position:sticky;top:12px;z-index:15;box-shadow:0 6px 22px #17324d18;max-height:180px;overflow:auto;box-sizing:border-box}
+ .flow-next>div{min-width:0;overflow-wrap:anywhere}
+ .flow-next strong{font-size:1.05rem}
+ .flow-caption{display:block;font-size:.8rem;font-weight:650;color:var(--blue);margin-bottom:5px}
+ [id^="cloud-"],.paper-review-sheet,#review-errors{scroll-margin-top:210px}
+}

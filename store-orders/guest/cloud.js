@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261101-store-orders-r43";
+var VERSION = "20261101-store-orders-r44";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -1455,7 +1455,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         const file = restoreInput.files[0];
         if (!file || file.size > 1e6) throw Error("\u8ACB\u90781MB\u5167\u7684\u4EBA\u5DE5\u8986\u6838\u5099\u4EFD");
         const b = JSON.parse(await file.text());
-        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32", "20261031-store-orders-r33", "20261031-store-orders-r34", "20261031-store-orders-r35", "20261031-store-orders-r36", "20261031-store-orders-r37", "20261031-store-orders-r38", "20261101-store-orders-r39", "20261101-store-orders-r40", "20261101-store-orders-r41", "20261101-store-orders-r42"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
+        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32", "20261031-store-orders-r33", "20261031-store-orders-r34", "20261031-store-orders-r35", "20261031-store-orders-r36", "20261031-store-orders-r37", "20261031-store-orders-r38", "20261101-store-orders-r39", "20261101-store-orders-r40", "20261101-store-orders-r41", "20261101-store-orders-r42", "20261101-store-orders-r43"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
         if (!cloudMode || b.original?.rows?.length) validateExtraction(b.original);
         if (!b.original.header || JSON.stringify(b.original) !== JSON.stringify(original)) throw Error("\u5099\u4EFD\u8207\u76EE\u524D\u539F\u59CB\u8FA8\u8B58\u4E0D\u540C\uFF0C\u8ACB\u5148\u8F09\u5165\u540C\u4EFD\u539F\u8FA8\u8B58JSON\u8207\u539F\u5716");
         const o = b.reviewedOrder;
@@ -1917,6 +1917,7 @@ function checkLeave() {
   if (dirty()) throw Error("\u8ACB\u5148\u4FDD\u5B58\u76EE\u524D\u8986\u6838\u6216\u8349\u7A3F\uFF0C\u518D\u5207\u63DB\u8A02\u55AE");
 }
 function controls() {
+  if (guard.blocked) feedback.guide("version", "\u8ACB\u91CD\u65B0\u8F09\u5165\u6700\u65B0\u7248", "\u76EE\u524D\u64CD\u4F5C\u5DF2\u505C\u6B62\uFF0C\u8ACB\u5148\u66F4\u65B0\u7248\u672C\u3002");
   const disabled = state.busy || guard.blocked, connected = !!state.session;
   $("version-warning").hidden = !guard.blocked;
   $("cloud-work").inert = !connected || disabled;
@@ -2791,6 +2792,8 @@ if (guestPage) {
 }
 await guard.check();
 controls();
+if (guard.blocked) feedback.guide("version", "\u8ACB\u91CD\u65B0\u8F09\u5165\u6700\u65B0\u7248", "\u76EE\u524D\u64CD\u4F5C\u5DF2\u505C\u6B62\uFF0C\u8ACB\u5148\u66F4\u65B0\u7248\u672C\u3002");
+else feedback.guide("session", guestPage ? "\u4E0B\u4E00\u6B65\uFF1A\u4F7F\u7528\u9080\u8ACB\u78BC\u767B\u5165" : "\u4E0B\u4E00\u6B65\uFF1A\u9023\u7DDA\u516C\u53F8\u5DE5\u5177", guestPage ? "\u8ACB\u8F38\u5165\u7E3D\u90E8\u63D0\u4F9B\u7684\u6709\u6548\u9080\u8ACB\u78BC\uFF1B\u82E5\u539F\u767B\u5165\u4ECD\u6709\u6548\uFF0C\u7CFB\u7D71\u6703\u81EA\u52D5\u6062\u5FA9\u3002" : "\u8ACB\u6309\u300C\u9023\u7DDA\u516C\u53F8\u5DE5\u5177\u300D\uFF0C\u78BA\u8A8D\u767B\u5165\u8EAB\u5206\u5F8C\uFF0C\u518D\u53D6\u5F97\u5546\u54C1\u4E3B\u6A94\u3002");
 if (guestPage && !guard.blocked) await run(async () => {
   const existing = await existingGuest();
   if (existing) await connect(existing);
