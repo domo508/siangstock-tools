@@ -15,9 +15,12 @@ describe('首頁部門工作台發布保護', () => {
     expect(catalog.tools.filter(t => [t.primary, ...t.collaborators].includes('ops'))).toHaveLength(0);
     expect(new Set(catalog.tools.map(t => t.id)).size).toBe(catalog.tools.length);
   });
-  it('入口只連到已部署工具，版本沿用各工具正式資訊，不發布開發中訂單', () => {
-    expect(get('store-orders').href).toBeNull();
-    expect(html).not.toContain('href="/store-orders/');
+  it('入口只連到已部署工具，門市訂單正式開放並沿用工具版本', () => {
+    const ordersVersion=JSON.parse(readFileSync('../store-orders/version.json','utf8')).version;
+    expect(get('store-orders')).toMatchObject({href:`/store-orders/?deploy=${ordersVersion}`,status:'立即使用'});
+    const card=html.match(/<article[^>]*data-tool="store-orders"[\s\S]*?<\/article>/)?.[0];
+    expect(card).toContain(`href="/store-orders/?deploy=${ordersVersion}"`);
+    expect(card).not.toMatch(/開發中|尚未開放|開放後提供/);
     for (const tool of catalog.tools.filter(t => t.href)) {
       const url = new URL(tool.href, 'https://siangstock.com');
       expect(existsSync(`..${url.pathname}index.html`)).toBe(true);

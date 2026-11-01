@@ -1,5 +1,5 @@
 {
-  "version": "20261028-source-entry-r1",
+  "version": "20261101-store-orders-entry-r1",
   "departments": [
     {
       "id": "admin",
@@ -99,10 +99,10 @@
       "collaborators": [
         "merch"
       ],
-      "href": null,
-      "status": "開發中",
-      "description": "門市收單、單據辨識與原圖覆核，由商控協作交接；正式功能驗證中。",
-      "data": "尚未開放正式使用"
+      "href": "/store-orders/?deploy=20261101-store-orders-r48",
+      "status": "立即使用",
+      "description": "上傳手寫訂購單，AI辨識後人工覆核，結算並下載ERP POS檔。",
+      "data": "公司雲端保存・AI辨識依工具授權"
     }
   ]
 }
