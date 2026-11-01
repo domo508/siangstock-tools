@@ -1,7 +1,7 @@
-import {resolvedERPPrices,allocateBundle,costUnits} from "./bundle-pricing.js?v=20261101-store-orders-r44";
-import {buildRevisedPOS,revisedPOSErrors,TEMPLATE_WRITE_OPTIONS} from "./pos-template.js?v=20261101-store-orders-r44";
-import * as C from './core.js?v=20261101-store-orders-r44';
-import {extractionOrder,validateExtraction} from './recognition.js?v=20261101-store-orders-r44';
+import {resolvedERPPrices,allocateBundle,costUnits} from "./bundle-pricing.js?v=20261101-store-orders-r45";
+import {buildRevisedPOS,revisedPOSErrors,TEMPLATE_WRITE_OPTIONS} from "./pos-template.js?v=20261101-store-orders-r45";
+import * as C from './core.js?v=20261101-store-orders-r45';
+import {extractionOrder,validateExtraction} from './recognition.js?v=20261101-store-orders-r45';
 
 // Review is a separate snapshot: editing never changes the original AI response.
 export function reviewDraft(raw,master){const o=C.useTotalOnlyGroups(extractionOrder(raw,master));o.id=crypto.randomUUID();o.sources=[];o.reviewed=false;o.status='pending';return o;}

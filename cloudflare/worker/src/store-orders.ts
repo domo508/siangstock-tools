@@ -265,13 +265,13 @@ async function settle(request: Request, env: OrdersEnv, who: Actor, c: Config, d
 
 async function recycleOrders(env:OrdersEnv,c:Config,drive:OrderDrive) {
       await drive.checkFolder(c.recycleFolderId, c.hqEmails);
-      const rows = await env.DB.prepare("SELECT * FROM store_orders WHERE status='erp_created' AND recycled_at IS NULL AND erp_created_at < ? LIMIT 50").bind(new Date(Date.now()-90*86400000).toISOString()).all<IndexRow>();
+      const rows = await env.DB.prepare("SELECT * FROM store_orders WHERE status IN ('exported','erp_created') AND recycled_at IS NULL AND CASE WHEN status='erp_created' THEN erp_created_at ELSE updated_at END < ? LIMIT 50").bind(new Date(Date.now()-90*86400000).toISOString()).all<IndexRow>();
       let moved = 0; const processed=new Set<string>();
       for (const row of rows.results) {
         if(!row.batch_id||processed.has(row.batch_id))continue;
         processed.add(row.batch_id);
         // Batch manifests may include other unresolved orders; do not move partial batches.
-        const unresolved = await env.DB.prepare("SELECT id FROM store_orders WHERE batch_id=? AND (status!='erp_created' OR erp_created_at >= ?) LIMIT 1").bind(row.batch_id, new Date(Date.now()-90*86400000).toISOString()).first();
+        const unresolved = await env.DB.prepare("SELECT id FROM store_orders WHERE batch_id=? AND (status NOT IN ('exported','erp_created','cancelled') OR CASE WHEN status='erp_created' THEN erp_created_at ELSE updated_at END IS NULL OR CASE WHEN status='erp_created' THEN erp_created_at ELSE updated_at END >= ?) LIMIT 1").bind(row.batch_id, new Date(Date.now()-90*86400000).toISOString()).first();
         if (unresolved) continue;
         const batch = await env.DB.prepare("SELECT manifest_id,manifest_hash FROM store_order_batches WHERE id=?").bind(row.batch_id).first<{manifest_id:string;manifest_hash:string}>();
         if (!batch?.manifest_id) continue;
@@ -279,7 +279,7 @@ async function recycleOrders(env:OrdersEnv,c:Config,drive:OrderDrive) {
         if(await orderHash(JSON.stringify(manifest))!==batch.manifest_hash)fail("結算快照內容已改動，停止回收並請總部核對",409);
         const ids = new Set([...manifest.orders, ...manifest.exceptions].map((o:any)=>o.id));
         let stillNeeded=false;
-        for(const id of ids){const current=await index(env,String(id));if(current.status!=="erp_created"||!current.erp_created_at||current.erp_created_at>=new Date(Date.now()-90*86400000).toISOString())stillNeeded=true;}
+        for(const id of ids){const current=await index(env,String(id));const completedAt=current.status==="erp_created"?current.erp_created_at:current.updated_at;if(!["exported","erp_created","cancelled"].includes(current.status)||!completedAt||completedAt>=new Date(Date.now()-90*86400000).toISOString())stillNeeded=true;}
         if(stillNeeded)continue;
         const files = await drive.list(c.settledFolderId);
         for (const f of files) {
@@ -291,6 +291,61 @@ async function recycleOrders(env:OrdersEnv,c:Config,drive:OrderDrive) {
       }
       await env.DB.prepare("DELETE FROM store_order_events WHERE created_at < ?").bind(new Date(Date.now()-365*86400000).toISOString()).run();
       return { recycledBatches: moved, permanentlyDeleted: false };
+}
+
+// Complete batch only: no selected-order shortcut and no client-supplied order content.
+async function batchExportView(env:OrdersEnv,who:Actor,c:Config,drive:OrderDrive,id:string){
+  hq(who);
+  const batch=await env.DB.prepare("SELECT * FROM store_order_batches WHERE id=?").bind(id).first<any>();
+  if(!batch)fail("找不到結算批次",404);
+  storeFor(who,batch.store_code,c);
+  if(batch.status!=="settled")fail("批次交接尚未完成，不能下載POS",409);
+  const rows=(await env.DB.prepare("SELECT * FROM store_orders WHERE batch_id=? ORDER BY id").bind(id).all<IndexRow>()).results;
+  const active=rows.filter(r=>r.status!=="cancelled");
+  if(active.length>100)fail("批次超過100筆，請聯絡總部",409);
+  const orders=[];
+  for(const row of active){
+    visible(who,row,c);
+    if(row.store_code!==batch.store_code||row.business_date!==batch.business_date)fail("批次門市或日期不一致",409);
+    if(row.lock_until&&row.lock_until>now())fail("批次內訂單正在更新，請稍後重新讀取",409);
+    if(!["settled","exported"].includes(row.status))fail("此舊批次含匯入結果狀態或部分產檔，請總部核對，不可整批重產",409);
+    const o=await snapshot(env,drive,row),check=validateOrder(o,{complete:true});
+    if(check.errors.length)fail(check.errors.join("；"));
+    try{resolvedERPPrices(o);}catch(e){fail(e instanceof Error?e.message:"組合價格未通過");}
+    orders.push(o);
+  }
+  if(new Set(active.map(r=>r.status)).size>1)fail("批次只有部分訂單已產檔，禁止混合重產",409);
+  const summary=settlementSummary(orders.map(o=>({...o,status:"reviewed"})));
+  return {batch:{id:batch.id,storeCode:batch.store_code,businessDate:batch.business_date},orders,summary,excludedCount:rows.length-active.length,downloaded:active.length>0&&active.every(r=>r.status==="exported")};
+}
+async function exportBatch(request:Request,env:OrdersEnv,who:Actor,c:Config,drive:OrderDrive,id:string){
+  hq(who);const b=await bounded(request,30000);
+  if(env.STORE_ORDERS_PRODUCTION_EXPORT!=="approved-20261030")fail("正式POS產檔尚未啟用",403);
+  const view=await batchExportView(env,who,c,drive,id);
+  if(!view.orders.length)fail("此批次沒有可匯出訂單",409);
+  const expected=view.orders.map(o=>({id:o.id,version:o.version}));
+  if(!Array.isArray(b.orders)||JSON.stringify(b.orders)!==JSON.stringify(expected))fail("批次訂單或版本已改變，請重新讀取整批摘要",409);
+  if(view.downloaded){
+    if(b.redownloadConfirmed!==true)fail("此批次已下載；請確認只是補下載，避免重複匯入ERP",409);
+    await event(env,who,"batch_pos_redownload",null,id);
+    return response({saved:true,redownload:true,versions:expected});
+  }
+  const at=now(),versions=JSON.stringify(expected);
+  // MATERIALIZED fixes the eligibility set before any row is changed. One UPDATE
+  // reserves every order or none; D1 batch makes the audit insert atomic with it.
+  const update=env.DB.prepare(`WITH eligible AS MATERIALIZED (
+    SELECT COUNT(*) n FROM store_orders o WHERE batch_id=? AND status='settled'
+    AND (lock_until IS NULL OR lock_until<=?) AND EXISTS (
+      SELECT 1 FROM json_each(?) j WHERE json_extract(j.value,'$.id')=o.id AND json_extract(j.value,'$.version')=o.version)
+  ), total AS MATERIALIZED (SELECT COUNT(*) n FROM store_orders WHERE batch_id=? AND status!='cancelled')
+  UPDATE store_orders SET status='exported',version=version+1,updated_at=?,updated_by=?
+  WHERE batch_id=? AND status='settled' AND (SELECT n FROM eligible)=? AND (SELECT n FROM total)=?`)
+    .bind(id,at,versions,id,at,who.email,id,expected.length,expected.length);
+  const log=env.DB.prepare("INSERT INTO store_order_events(id,batch_id,actor,event,created_at) SELECT ?,?,?,?,? WHERE changes()>0")
+    .bind(crypto.randomUUID(),id,who.email,"batch_pos_exported",at);
+  const result=await env.DB.batch([update,log]);
+  if(result[0].meta.changes!==expected.length)fail("其他同仁已更新或下載此批次，請重新讀取，不會只產部分單據",409);
+  return response({saved:true,redownload:false,versions:expected.map(o=>({...o,version:o.version+1}))});
 }
 
 export async function cleanupStoreOrders(env:OrdersEnv):Promise<void> {
@@ -352,7 +407,7 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promis
     }
     if(action==="/attention"&&request.method==="GET") {
       hq(who);
-      const overdue=await env.DB.prepare("SELECT id,store_code,business_date,status,updated_at FROM store_orders WHERE status NOT IN ('erp_created','cancelled') AND business_date < ? ORDER BY business_date LIMIT 100").bind(new Date(Date.now()-30*86400000).toISOString().slice(0,10)).all();
+      const overdue=await env.DB.prepare("SELECT id,store_code,business_date,status,updated_at FROM store_orders WHERE status NOT IN ('exported','erp_created','cancelled') AND business_date < ? ORDER BY business_date LIMIT 100").bind(new Date(Date.now()-30*86400000).toISOString().slice(0,10)).all();
       const maintenance=await env.DB.prepare("SELECT event,created_at FROM store_order_events WHERE event IN ('retention_completed','retention_failed') ORDER BY created_at DESC LIMIT 1").first();
       return response({orders:overdue.results,maintenance});
     }
@@ -407,6 +462,8 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promis
     if (action === "/orders" && request.method === "POST") return await saveOrder(request, env, who, c, drive);
     if(who.guest&&action==="/settle")fail("訪客只能上傳與覆核，結算由總部執行",403);
     if (action === "/settle" && request.method === "POST") return await settle(request, env, who, c, drive);
+    const batchMatch=action.match(/^\/batches\/([a-zA-Z0-9-]{8,80})(\/export)?$/);
+    if(batchMatch){hq(who);if(!batchMatch[2]&&request.method==="GET")return response(await batchExportView(env,who,c,drive,batchMatch[1]));if(batchMatch[2]&&request.method==="POST")return await exportBatch(request,env,who,c,drive,batchMatch[1]);fail("不支援此批次操作",405);}
     const match = action.match(/^\/orders\/([a-zA-Z0-9-]{8,80})(?:\/(export|result|correct))?$/);
     if (match) {
       const row = await index(env, match[1]); visible(who, row, c);
@@ -418,6 +475,7 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promis
       if (match[2] === "export") {
         const production=b.mode==="production";
         if(!["test","production"].includes(b.mode)||production&&env.STORE_ORDERS_PRODUCTION_EXPORT!=="approved-20261030")fail("正式ERP產檔尚未啟用",403);
+        if(env.STORE_ORDERS_PRODUCTION_EXPORT==="approved-20261030")fail("正式POS請使用步驟5整批下載，不可逐單產檔",410);
         if (!["settled", "import_failed"].includes(row.status)) fail("此單已產檔或結果不明，禁止重複產檔", 409);
         const order = await snapshot(env, drive, row);
         const validation = validateOrder(order, { complete: true }); if (validation.errors.length) fail(validation.errors.join("；"));
@@ -427,16 +485,7 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promis
         await event(env, who, production?"production_export_reserved":"test_export_reserved", row.id);
         return response({ order, version: row.version + 1, testOnly: !production });
       }
-      if (match[2] === "result") {
-        if (!["exported", "import_unknown", "import_failed"].includes(row.status)) fail("訂單目前不能登記匯入結果", 409);
-        if (!["erp_created", "import_failed", "import_unknown"].includes(b.status) || !text(b.reason)) fail("請選結果並填寫確認說明");
-        if (b.status === "erp_created" && !/^[A-Za-z0-9_-]{1,80}$/.test(String(b.erpNumber || ""))) fail("請填ERP單號");
-        const order = await snapshot(env, drive, row), op = uuid(b.operationId);
-        await drive.write(c.settledFolderId, `${row.id}-result-${op}.json`, { orderId: row.id, result: b.status, reason: text(b.reason), erpNumber: text(b.erpNumber), actor: who.email, at: now(), orderVersion: row.version }, op);
-        const r = await env.DB.prepare("UPDATE store_orders SET status=?,erp_number=?,erp_created_at=?,version=version+1,updated_at=?,updated_by=? WHERE id=? AND version=?").bind(b.status, b.status === "erp_created" ? b.erpNumber : null, b.status === "erp_created" ? now() : null, now(), who.email, row.id, row.version).run();
-        if (!r.meta.changes) fail("版本衝突，請重新讀取", 409);
-        await event(env, who, b.status, row.id); return response({ saved: true, version: row.version + 1 });
-      }
+      if (match[2] === "result") fail("本工具已取消ERP結果登記，POS下載後流程即結束",410);
       if (match[2] === "correct") {
         if (!["settled", "import_failed"].includes(row.status) || !text(b.reason)) fail("只有已結算或確認匯入失敗的單可更正，並須填原因", 409);
         const order = b.order;

@@ -1,5 +1,5 @@
-import {validateExtraction,normalizePaperDate} from './recognition.js?v=20261101-store-orders-r44';
-import {text} from './core.js?v=20261101-store-orders-r44';
+import {validateExtraction,normalizePaperDate} from './recognition.js?v=20261101-store-orders-r45';
+import {text} from './core.js?v=20261101-store-orders-r45';
 // The source pages remain immutable evidence. Never sum repeated order-level payments.
 export function mergeFullPages(input){
  if(!Array.isArray(input)||!input.length||input.length>30)throw Error('請收齊1至30頁來源');

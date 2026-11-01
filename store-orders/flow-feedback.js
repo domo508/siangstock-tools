@@ -1,8 +1,8 @@
 // Feedback and navigation only. These helpers never submit forms or call an API.
 export function createFlowFeedback(doc=document) {
- const areas={session:'cloud-status',master:'cloud-master-feedback',receipt:'cloud-receipt-status',incoming:'cloud-incoming-status',ai:'cloud-ai-status',review:'cloud-review-status',save:'cloud-save-status',settlement:'cloud-settlement-status',hq:'cloud-hq-status'};
- const anchors={session:'cloud-login',master:'cloud-master-zone',receipt:'cloud-receipt',incoming:'cloud-incoming-heading',ai:'cloud-ai-zone',review:'cloud-review',save:'cloud-save-zone',settlement:'cloud-settlement',hq:'cloud-hq',version:'version-warning'};
- const labels={'cloud-upload-zone':'選擇照片','cloud-master-tools':'更新商品查詢',version:'更新版本',session:'連線公司工具',master:'取得商品主檔',receipt:'上傳訂購單',incoming:'載入單據',ai:'辨識完整訂購單',review:'核對訂單',save:'保存公司雲端',settlement:'閉店結算',hq:'總部操作'};
+ const areas={session:'cloud-status',master:'cloud-master-feedback',receipt:'cloud-receipt-status',incoming:'cloud-incoming-status',ai:'cloud-ai-status',review:'cloud-review-status',save:'cloud-save-status',settlement:'cloud-settlement-status',hq:'cloud-hq-status',pos:'cloud-pos-status'};
+ const anchors={session:'cloud-login',master:'cloud-master-zone',receipt:'cloud-receipt',incoming:'cloud-incoming-heading',ai:'cloud-ai-zone',review:'cloud-review',save:'cloud-save-zone',settlement:'cloud-settlement',hq:'cloud-hq',pos:'cloud-pos',version:'version-warning'};
+ const labels={'cloud-upload-zone':'選擇照片','cloud-master-tools':'更新商品查詢',version:'更新版本',session:'連線公司工具',master:'取得商品主檔',receipt:'上傳訂購單',incoming:'載入單據',ai:'辨識完整訂購單',review:'核對訂單',save:'保存公司雲端',settlement:'閉店結算',hq:'總部權限工具',pos:'下載整批POS'};
  let last='session',active=null,next=null,pending=null;
  const get=id=>doc.getElementById(id);
  function areaFor(target){
@@ -13,6 +13,7 @@ export function createFlowFeedback(doc=document) {
   if(target.closest('#cloud-save-zone'))return 'save';
   if(target.closest('#cloud-review'))return 'review';
   if(target.closest('#cloud-incoming,#cloud-queue,#cloud-batches'))return 'incoming';
+  if(target.closest('#cloud-pos'))return 'pos';
   if(target.closest('#cloud-hq'))return 'hq';
   if(target.closest('#cloud-settlement'))return 'settlement';
   if(target.closest('#cloud-receipt'))return 'receipt';

@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261101-store-orders-r44";
+var VERSION = "20261101-store-orders-r45";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -490,9 +490,9 @@ async function loadSourceGroup(ids, { register, read, decode, existingSources = 
 
 // store-orders/flow-feedback.js
 function createFlowFeedback(doc = document) {
-  const areas = { session: "cloud-status", master: "cloud-master-feedback", receipt: "cloud-receipt-status", incoming: "cloud-incoming-status", ai: "cloud-ai-status", review: "cloud-review-status", save: "cloud-save-status", settlement: "cloud-settlement-status", hq: "cloud-hq-status" };
-  const anchors = { session: "cloud-login", master: "cloud-master-zone", receipt: "cloud-receipt", incoming: "cloud-incoming-heading", ai: "cloud-ai-zone", review: "cloud-review", save: "cloud-save-zone", settlement: "cloud-settlement", hq: "cloud-hq", version: "version-warning" };
-  const labels = { "cloud-upload-zone": "\u9078\u64C7\u7167\u7247", "cloud-master-tools": "\u66F4\u65B0\u5546\u54C1\u67E5\u8A62", version: "\u66F4\u65B0\u7248\u672C", session: "\u9023\u7DDA\u516C\u53F8\u5DE5\u5177", master: "\u53D6\u5F97\u5546\u54C1\u4E3B\u6A94", receipt: "\u4E0A\u50B3\u8A02\u8CFC\u55AE", incoming: "\u8F09\u5165\u55AE\u64DA", ai: "\u8FA8\u8B58\u5B8C\u6574\u8A02\u8CFC\u55AE", review: "\u6838\u5C0D\u8A02\u55AE", save: "\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF", settlement: "\u9589\u5E97\u7D50\u7B97", hq: "\u7E3D\u90E8\u64CD\u4F5C" };
+  const areas = { session: "cloud-status", master: "cloud-master-feedback", receipt: "cloud-receipt-status", incoming: "cloud-incoming-status", ai: "cloud-ai-status", review: "cloud-review-status", save: "cloud-save-status", settlement: "cloud-settlement-status", hq: "cloud-hq-status", pos: "cloud-pos-status" };
+  const anchors = { session: "cloud-login", master: "cloud-master-zone", receipt: "cloud-receipt", incoming: "cloud-incoming-heading", ai: "cloud-ai-zone", review: "cloud-review", save: "cloud-save-zone", settlement: "cloud-settlement", hq: "cloud-hq", pos: "cloud-pos", version: "version-warning" };
+  const labels = { "cloud-upload-zone": "\u9078\u64C7\u7167\u7247", "cloud-master-tools": "\u66F4\u65B0\u5546\u54C1\u67E5\u8A62", version: "\u66F4\u65B0\u7248\u672C", session: "\u9023\u7DDA\u516C\u53F8\u5DE5\u5177", master: "\u53D6\u5F97\u5546\u54C1\u4E3B\u6A94", receipt: "\u4E0A\u50B3\u8A02\u8CFC\u55AE", incoming: "\u8F09\u5165\u55AE\u64DA", ai: "\u8FA8\u8B58\u5B8C\u6574\u8A02\u8CFC\u55AE", review: "\u6838\u5C0D\u8A02\u55AE", save: "\u4FDD\u5B58\u516C\u53F8\u96F2\u7AEF", settlement: "\u9589\u5E97\u7D50\u7B97", hq: "\u7E3D\u90E8\u6B0A\u9650\u5DE5\u5177", pos: "\u4E0B\u8F09\u6574\u6279POS" };
   let last = "session", active = null, next = null, pending = null;
   const get = (id) => doc.getElementById(id);
   function areaFor(target2) {
@@ -503,6 +503,7 @@ function createFlowFeedback(doc = document) {
     if (target2.closest("#cloud-save-zone")) return "save";
     if (target2.closest("#cloud-review")) return "review";
     if (target2.closest("#cloud-incoming,#cloud-queue,#cloud-batches")) return "incoming";
+    if (target2.closest("#cloud-pos")) return "pos";
     if (target2.closest("#cloud-hq")) return "hq";
     if (target2.closest("#cloud-settlement")) return "settlement";
     if (target2.closest("#cloud-receipt")) return "receipt";
@@ -923,24 +924,10 @@ var BASE_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\
 var PRICE_HEADERS = ["\u50F9\u683C"];
 var FINAL_HEADERS = Object.freeze([...BASE_HEADERS.slice(0, 17), "\u50F9\u683C", ...BASE_HEADERS.slice(17)]);
 var TEMPLATE_WRITE_OPTIONS = Object.freeze({ bookType: "xlsx", type: "array" });
-function readPOSTemplate(wb, XLSX2) {
-  if (wb.SheetNames.length !== 1 || wb.SheetNames[0] !== "Sheet1") throw Error("POS\u7BC4\u672C\u9700\u70BA\u55AE\u4E00Sheet1\u5DE5\u4F5C\u8868");
-  const ws = wb.Sheets.Sheet1, rows = XLSX2.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" }), headers = (rows[1] || []).map(text);
-  const prices = headers.filter((h) => PRICE_HEADERS.includes(h));
-  if (JSON.stringify(headers) !== JSON.stringify(FINAL_HEADERS)) throw Error("POS\u7BC4\u672C\u6B04\u4F4D\u8207\u6700\u7D4225\u6B04\u683C\u5F0F\u4E0D\u7B26\uFF0CR\u6B04\u9808\u70BA\u50F9\u683C\uFF0C\u8ACB\u4F7F\u7528\u5DE5\u7A0B\u5E2B\u78BA\u8A8D\u7248");
-  if (headers.some((h, c) => ws[XLSX2.utils.encode_cell({ r: 1, c })]?.f)) throw Error("POS\u7BC4\u672C\u6B04\u540D\u4E0D\u5F97\u4F7F\u7528\u516C\u5F0F");
-  const cells = [];
-  for (let r = 0; r < 2; r++) for (let c = 0; c < headers.length; c++) {
-    const cell = ws[XLSX2.utils.encode_cell({ r, c })];
-    if (cell?.f) throw Error("POS\u7BC4\u672C\u8868\u982D\u4E0D\u5F97\u4F7F\u7528\u516C\u5F0F");
-    if (cell) cells.push({ r, c, value: cell.v ?? "", style: cell.s ? structuredClone(cell.s) : null, format: cell.z || null });
-  }
-  return { headers, priceHeader: prices[0] || "", cells, merges: structuredClone(ws["!merges"] || []).filter((m) => m.s.r === 0 && m.e.r === 0 && m.e.c < headers.length), format: "20261030-final" };
-}
-function revisedPOSErrors(orders, { template, paymentMappingConfirmed = false } = {}) {
+function revisedPOSErrors(orders, { template: template2, paymentMappingConfirmed = false } = {}) {
   const errors = [];
-  if (!template) errors.push("\u8ACB\u8F09\u5165\u542B\u6BCF\u5217\u55AE\u50F9\u7684\u6700\u7D42POS\u7BC4\u672C");
-  else if (JSON.stringify(template.headers) !== JSON.stringify(FINAL_HEADERS) || template.priceHeader !== "\u50F9\u683C") errors.push("\u8ACB\u91CD\u65B0\u8F09\u5165R\u6B04\u70BA\u50F9\u683C\u7684\u6700\u7D4225\u6B04POS\u7BC4\u672C");
+  if (!template2) errors.push("\u8ACB\u8F09\u5165\u542B\u6BCF\u5217\u55AE\u50F9\u7684\u6700\u7D42POS\u7BC4\u672C");
+  else if (JSON.stringify(template2.headers) !== JSON.stringify(FINAL_HEADERS) || template2.priceHeader !== "\u50F9\u683C") errors.push("\u8ACB\u91CD\u65B0\u8F09\u5165R\u6B04\u70BA\u50F9\u683C\u7684\u6700\u7D4225\u6B04POS\u7BC4\u672C");
   if (!paymentMappingConfirmed) errors.push("\u4ED8\u6B3E\u6B04\u4F4D\u5C0D\u7167\u5C1A\u672A\u78BA\u8A8D\uFF0C\u8ACB\u6838\u5C0D\u56DB\u7A2E\u4ED8\u6B3E\u65B9\u5F0F");
   for (const o of orders) try {
     resolvedERPPrices(o);
@@ -1765,51 +1752,10 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
   }, refresh: refresh2 };
 }
 
-// store-orders/pos-profile.js
-function createPOSProfile(root, { requireVersion, onChange = () => {
-}, allowLegacy = true }) {
-  let template = null, reading = false, blocked = false;
-  root.innerHTML = '<h3>ERP\u532F\u5165\u683C\u5F0F</h3><label>\u532F\u51FA\u683C\u5F0F<select id="pos-format"><option value="latest">\u65B0\u7248POS\uFF08\u4F9D\u5DE5\u7A0B\u5E2B\u6700\u7D42\u7BC4\u672C\uFF09</option><option value="legacy">\u820A\u724821\u6B04\uFF08\u50C5\u6B77\u53F2\u56DE\u6B78\u6E2C\u8A66\uFF09</option></select></label><div id="pos-latest"><label>\u6700\u7D42POS\u7BC4\u672C\uFF08\u53EA\u5728\u672C\u6A5F\u8B80\u53D6\uFF0C\u4E0D\u63A1\u7528\u7BC4\u4F8B\u8A02\u55AE\uFF09<input id="pos-template-file" type="file" accept=".xlsx,.xls"></label><p>\u65B0\u7248\u4F9D\u7BC4\u672C\u653E\u5165\u59D3\u540D\u3001\u96FB\u8A71\u3001\u5730\u5740\uFF1B\u4E0B\u8F09\u6A94\u542B\u500B\u8CC7\uFF0C\u8ACB\u59A5\u5584\u4FDD\u7BA1\u3002\u539F\u59CB\u7BC4\u672C\u4E0D\u6703\u88AB\u4FEE\u6539\u6216\u4E0A\u50B3\u3002\u540C\u55AE\u5171\u7528\u8CC7\u8A0A\u8207\u4ED8\u6B3E\u6B04\u5782\u76F4\u5408\u4F75\uFF0C\u53D6\u8CA8\u5009\u5EAB\u4E0D\u540C\u6642\u5206\u958B\u4FDD\u7559\uFF1B\u5546\u54C1\u6B04\u9010\u5217\u4FDD\u7559\u3002</p><label class="check"><input id="pos-payment-confirmed" type="checkbox" checked>\u5DF2\u78BA\u8A8D\u4ED8\u6B3E\u5C0D\u7167\uFF08\u5982\u9700\u8B8A\u66F4\u8ACB\u5148\u53D6\u6D88\u52FE\u9078\uFF09\uFF1A\u4E2D\u4FE1\u4FE1\u7528\u5361\u3001\u73FE\u91D1\u3001\u767E\u8CA8\u73FE\u91D1\u5377\u3001LinePay</label></div><p id="pos-template-status" role="status"></p>';
-  if (!allowLegacy) {
-    root.querySelector("option[value=legacy]").remove();
-    root.querySelector("#pos-format").closest("label").hidden = true;
-  }
-  const $2 = (id) => root.querySelector("#" + id), get = () => $2("pos-format").value === "legacy" ? null : { template: reading ? null : template, paymentMappingConfirmed: $2("pos-payment-confirmed").checked };
-  function sync() {
-    const p = get();
-    $2("pos-latest").hidden = !p;
-    $2("pos-template-status").textContent = !p ? "\u76EE\u524D\u70BA\u820A\u724821\u6B04\u6E2C\u8A66\u6A94\uFF0C\u4E0D\u542B\u6210\u4EA4\u55AE\u50F9\uFF1B\u4E0D\u4EE3\u8868\u65B0\u7248\u683C\u5F0F\u3002" : reading ? "\u6B63\u5728\u6AA2\u67E5\u7BC4\u672C\u2026" : template ? `\u5DF2\u8B80\u53D6${template.headers.length}\u6B04\uFF1B${template.priceHeader ? "\u55AE\u50F9\u6B04\uFF1A" + template.priceHeader : "\u7F3A\u5C11\u55AE\u50F9\u6B04\uFF0C\u66AB\u4E0D\u53EF\u7522\u6A94"}\u3002${revisedPOSErrors([], p).join("\uFF1B")}` : "\u8ACB\u8F09\u5165\u5DE5\u7A0B\u5E2B\u7684\u6700\u7D42\u7BC4\u672C\uFF1BR\u6B04\u70BA\u50F9\u683C\uFF0C\u517125\u6B04\u3002";
-    setBlocked(blocked);
-    onChange();
-  }
-  function setBlocked(value) {
-    blocked = value;
-    for (const el of root.querySelectorAll("input,select")) el.disabled = blocked || reading;
-  }
-  $2("pos-format").onchange = sync;
-  $2("pos-payment-confirmed").onchange = sync;
-  $2("pos-template-file").onchange = async () => {
-    template = null;
-    reading = true;
-    sync();
-    try {
-      await requireVersion();
-      const f = $2("pos-template-file").files[0];
-      if (!f || f.size > 5e6) throw Error("\u8ACB\u90785MB\u5167\u7684POS\u7BC4\u672C");
-      const wb = XLSX.read(await f.arrayBuffer(), READ_OPTIONS);
-      await requireVersion();
-      template = readPOSTemplate(wb, XLSX);
-    } catch (e) {
-      reading = false;
-      sync();
-      $2("pos-template-status").textContent = e.message;
-      return;
-    }
-    reading = false;
-    sync();
-  };
-  $2("pos-template-status").textContent = "\u8ACB\u8F09\u5165\u542B\u55AE\u50F9\u7684\u6700\u7D42\u7BC4\u672C\uFF1B\u6700\u7D42\u683C\u5F0F\u517125\u6B04\uFF0CR\u6B04\u70BA\u50F9\u683C\u3002";
-  return { get, setBlocked };
+// store-orders/pos-built-in.js
+var template = { "headers": ["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u7DE8\u865F", "\u59D3\u540D", "\u96FB\u8A71", "\u5730\u5740", "\u5099\u8A3B", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay", "\u92B7\u5225", "\u8CA8\u865F", "\u6578\u91CF", "\u50F9\u683C", "\u984F\u8272", "\u8272\u865F", "\u5C3A\u78BC", "\u78BC\u865F", "\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387"], "priceHeader": "\u50F9\u683C", "cells": [{ "r": 0, "c": 0, "value": "POS\u55AE\u8CC7\u8A0A", "style": { "patternType": "none" }, "format": null }, { "r": 0, "c": 10, "value": "\u6536\u6B3E\u65B9\u5F0F", "style": { "patternType": "none" }, "format": null }, { "r": 0, "c": 14, "value": "\u8CA8\u54C1\u8CC7\u8A0A", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 0, "value": "\u55AE\u865F", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 1, "value": "\u7D50\u5E33\u65E5\u671F", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 2, "value": "\u958B\u55AE\u5009\u5EAB", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 3, "value": "\u51FA\u8CA8\u5009\u5EAB", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 4, "value": "\u53D6\u8CA8\u5009\u5EAB", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 5, "value": "\u6703\u54E1\u7DE8\u865F", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 6, "value": "\u59D3\u540D", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 7, "value": "\u96FB\u8A71", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 8, "value": "\u5730\u5740", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 9, "value": "\u5099\u8A3B", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 10, "value": "\u4E2D\u4FE1\u4FE1\u7528\u5361", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 11, "value": "\u73FE\u91D1", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 12, "value": "\u767E\u8CA8\u73FE\u91D1\u5377", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 13, "value": "LinePay", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 14, "value": "\u92B7\u5225", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 15, "value": "\u8CA8\u865F", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 16, "value": "\u6578\u91CF", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 17, "value": "\u50F9\u683C", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 18, "value": "\u984F\u8272", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 19, "value": "\u8272\u865F", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 20, "value": "\u5C3A\u78BC", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 21, "value": "\u78BC\u865F", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 22, "value": "\u8D08\u54C1", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 23, "value": "\u5C0E\u8CFC", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 24, "value": "\u5BE6\u6536\u7387", "style": { "patternType": "solid", "fgColor": { "theme": 0 }, "bgColor": { "indexed": 64 } }, "format": null }], "merges": [{ "s": { "c": 10, "r": 0 }, "e": { "c": 13, "r": 0 } }, { "s": { "c": 0, "r": 0 }, "e": { "c": 9, "r": 0 } }, { "s": { "c": 14, "r": 0 }, "e": { "c": 24, "r": 0 } }], "format": "20261030-final" };
+function builtInPOSProfile() {
+  return { template: structuredClone(template), paymentMappingConfirmed: true };
 }
 
 // store-orders/merge-pages.js
@@ -1888,11 +1834,13 @@ var $ = (id) => document.getElementById(id);
 var guard = new VersionGuard();
 var guestPage = location.pathname.startsWith("/store-orders/guest/");
 var apiPrefix = guestPage ? "/api/store-orders-guest" : "/api/store-orders";
-var state = { listCache: /* @__PURE__ */ new Map(), session: null, master: null, masterIssue: false, masterSource: "", current: null, base: "", sources: [], pages: [], urls: [], queue: [], busy: false, refreshSerial: 0, refreshing: false, selectedSources: /* @__PURE__ */ new Set(), incomingSignature: "", previewUrls: [], sourcePreviews: /* @__PURE__ */ new Map(), correction: false, settlement: null, aiOperation: null };
+var state = { listCache: /* @__PURE__ */ new Map(), session: null, master: null, masterIssue: false, masterSource: "", current: null, base: "", sources: [], pages: [], urls: [], queue: [], busy: false, refreshSerial: 0, refreshing: false, selectedSources: /* @__PURE__ */ new Set(), incomingSignature: "", previewUrls: [], sourcePreviews: /* @__PURE__ */ new Map(), correction: false, settlement: null, aiOperation: null, batchView: null, batchSignature: "", batchSerial: 0 };
 var feedback = createFlowFeedback();
 var key = () => `store-orders-cloud:${state.session?.email || "disconnected"}`;
 var review = createReview($("cloud-review"), { cloudMode: true, requireVersion: () => guard.require(), context: () => ({ expectedStore: store(), existingNumbers: [], sourcePageCount: state.pages.length, guest: !!state.session?.guest }) });
-var profile = createPOSProfile($("cloud-pos-profile"), { requireVersion: () => guard.require(), allowLegacy: false, onChange: () => controls() });
+var profile = { get: builtInPOSProfile, setBlocked() {
+} };
+$("cloud-pos-profile").textContent = "\u5DF2\u5167\u5EFA\u5DE5\u7A0B\u5E2B\u78BA\u8A8D\u7684\u6700\u7D4225\u6B04POS\uFF1AR\u6B04\u70BA\u6BCF\u4EF6\u50F9\u683C\uFF0C\u56DB\u7A2E\u4ED8\u6B3E\u5C0D\u7167\u5DF2\u8A2D\u5B9A\uFF0C\u7121\u9808\u532F\u5165\u7BC4\u672C\u3002";
 function node2(tag, text2, cls) {
   const n = document.createElement(tag);
   if (text2 !== void 0) n.textContent = text2;
@@ -1947,8 +1895,10 @@ function controls() {
   $("cloud-correction-reason").hidden = !state.correction;
   $("cloud-correct").hidden = !hq() || !state.current?.batchId || !["settled", "import_failed"].includes(state.current?.status);
   $("cloud-ai").disabled = disabled || locked || !state.master || !state.pages.length || !state.session?.recognitionReady;
-  $("cloud-export").disabled = disabled || !hq() || !state.current || !["settled", "import_failed"].includes(state.current.status) || !state.session.productionExportEnabled || !!revisedPOSErrors(state.current ? [state.current] : [], profile.get()).length;
-  $("cloud-result-save").disabled = disabled || !hq() || !state.current || !["exported", "import_failed", "import_unknown"].includes(state.current.status);
+  $("cloud-pos").hidden = !hq();
+  $("cloud-pos-batch").disabled = disabled || !hq();
+  $("cloud-pos-refresh").disabled = disabled || !hq() || !$("cloud-pos-batch").value;
+  $("cloud-export").disabled = disabled || !hq() || !state.session?.productionExportEnabled || !state.batchView?.orders.length || state.batchView.downloaded && !$("cloud-pos-redownload").checked;
   $("cloud-retry-settle").hidden = !state.settlement;
   groupControls();
 }
@@ -2214,6 +2164,7 @@ async function refresh() {
     $("cloud-queue").append(row);
   }
   $("cloud-batches").replaceChildren(...data.batches.map((b) => node2("p", `\u6279\u6B21${b.id}\u30FB${b.status === "settled" ? "\u5DF2\u4EA4\u63A5" : b.status}`)));
+  await refreshBatchOptions(data.batches, data.orders);
   $("cloud-list-summary").textContent = `\u672C\u65E5${data.orders.length}\u7B46\u6D41\u7A0B\u7D00\u9304\u30FB${scan.files.filter((f) => !f.orderId).length}\u500B\u5F85\u6536\u4F86\u6E90\u30FB${data.batches.length}\u6279\u4EA4\u63A5\u3002\u7D50\u7B97\u524D\u8ACB\u9010\u55AE\u6838\u5C0D\u539F\u5716\u3001\u9801\u6578\u3001\u4EF6\u6578\u3001\u91D1\u984D\u8207\u6536\u6B3E\u3002`;
 }
 async function guestCatalog() {
@@ -2593,12 +2544,15 @@ async function prepareCosts() {
 async function settle(body) {
   try {
     const result = await api("/settle", "POST", body);
+    state.batchSignature = "";
+    $("cloud-pos-batch").value = result.batchId;
+    state.preferredBatch = result.batchId;
     state.settlement = null;
     sessionStorage.removeItem(key() + ":settlement");
     clearOrder();
     await refresh();
     message(`\u96F2\u7AEF\u4EA4\u63A5\u5B8C\u6210\uFF0C\u6279\u6B21${result.batchId}`);
-    feedback.guide(hq() ? "hq" : "receipt", "\u7D50\u7B97\u4EA4\u63A5\u5B8C\u6210", hq() ? "\u53EF\u5230\u7E3D\u90E8\u4F5C\u696D\u958B\u555F\u5DF2\u7D50\u7B97\u8A02\u55AE\uFF0C\u78BA\u8A8D\u5F8C\u518D\u4E0B\u8F09POS\u3002" : "\u5DF2\u4EA4\u63A5\u7E3D\u90E8\uFF1B\u5982\u9084\u6709\u65B0\u55AE\uFF0C\u53EF\u56DE\u5230\u6536\u55AE\u5340\u5EFA\u7ACB\u88DC\u4EA4\u6279\u6B21\u3002", { scroll: true, scrollTo: "settlement" });
+    feedback.guide(hq() ? "pos" : "receipt", "\u7D50\u7B97\u4EA4\u63A5\u5B8C\u6210", hq() ? "\u8ACB\u5728\u6B65\u9A5F5\u6838\u5C0D\u672C\u6279\u6458\u8981\uFF0C\u518D\u4E00\u6B21\u4E0B\u8F09\u6574\u6279POS\u3002" : "\u5DF2\u4EA4\u63A5\u7E3D\u90E8\uFF1B\u5982\u9084\u6709\u65B0\u55AE\uFF0C\u53EF\u56DE\u5230\u6536\u55AE\u5340\u5EFA\u7ACB\u88DC\u4EA4\u6279\u6B21\u3002", { scroll: true, scrollTo: hq() ? "pos" : "settlement" });
   } catch (e) {
     if (e.code === "settlement_reconfirm") {
       state.settlement = null;
@@ -2638,19 +2592,89 @@ $("cloud-daily-download").onclick = () => run(async () => {
   download2(XLSX.write(dailyWorkbook(report, XLSX), { type: "array", bookType: "xlsx" }), `\u6BCF\u65E5\u5E33\u6B3E\u6838\u5C0D-${code}-${date}.xlsx`);
   message(`\u6BCF\u65E5\u7E3D\u8868\u5DF2\u4E0B\u8F09\uFF1A${report.totals.orders}\u7B46\u7D0D\u5165\u5E33\u6B3E\uFF0C${report.excluded.length}\u7B46\u672A\u7D0D\u5165\u3002${report.pendingSources ? "\u53E6\u6709\u5F85\u6B78\u55AE\u539F\u5716\uFF0C\u8ACB\u78BA\u8A8D\u662F\u5426\u5C6C\u65BC\u672C\u65E5\u3002" : "\u4ECD\u8ACB\u6838\u5C0D\u7D19\u672C\u5F35\u6578\u8207\u5BE6\u969B\u6536\u6B3E\u3002"}`);
 }, { area: "settlement", working: "\u6B63\u5728\u91CD\u65B0\u8B80\u53D6\u4E26\u6838\u5C0D\u672C\u65E5\u8A02\u55AE\uFF0C\u6E96\u5099\u6BCF\u65E5\u7E3D\u8868\u2026" });
+async function loadBatch() {
+  const id = $("cloud-pos-batch").value, serial = ++state.batchSerial, code = store(), date = $("cloud-date").value;
+  state.batchView = null;
+  $("cloud-pos-redownload").checked = false;
+  $("cloud-pos-redownload-label").hidden = true;
+  $("cloud-pos-summary").textContent = "\u6B63\u5728\u8B80\u53D6\u6279\u6B21\u6458\u8981\u2026";
+  controls();
+  if (!hq() || !id) {
+    $("cloud-pos-summary").textContent = "\u6B64\u9580\u5E02\u8207\u65E5\u671F\u5C1A\u7121\u5DF2\u7D50\u7B97\u6279\u6B21\u3002";
+    return;
+  }
+  const view = await api("/batches/" + encodeURIComponent(id));
+  if (serial !== state.batchSerial || code !== store() || date !== $("cloud-date").value || id !== $("cloud-pos-batch").value) return;
+  if (view.batch.storeCode !== code || view.batch.businessDate !== date) throw Error("\u6279\u6B21\u9580\u5E02\u6216\u65E5\u671F\u4E0D\u540C\uFF0C\u8ACB\u91CD\u65B0\u8B80\u53D6");
+  state.batchView = view;
+  const t = view.summary, parts = [node2("h3", `${code}\uFF5C${date}\uFF5C\u6279\u6B21 ${id}`), node2("p", `${t.orders}\u7B46\u8A02\u55AE\uFF0F${t.rows}\u5217\uFF0F${t.quantity}\u4EF6\uFF5C\u5546\u54C1\u7E3D\u984D ${t.amountCents / 100} \u5143\uFF5C\u4ED8\u6B3E ${t.paidCents / 100} \u5143\uFF5C\u4F5C\u5EE2\u6392\u9664 ${view.excludedCount}\u7B46`)];
+  const payments = PAYMENTS.map((k) => `${k} ${view.orders.reduce((n, o) => n + cents(o.payments[k]), 0) / 100} \u5143`).join("\uFF5C");
+  parts.push(node2("p", payments));
+  for (const o of view.orders) parts.push(node2("p", `\u55AE\u865F ${o.paperNumber}\uFF5C${o.items.length}\u5217\uFF5C${totals(o).amountCents / 100} \u5143`));
+  if (view.downloaded) parts.push(node2("p", "\u6B64\u6279\u6B21\u5DF2\u7522\u6A94\u3002\u88DC\u4E0B\u8F09\u4E0D\u6703\u5EFA\u7ACB\u65B0\u7248\u672C\uFF1B\u532F\u5165\u524D\u52D9\u5FC5\u78BA\u8A8DERP\u5C1A\u672A\u5EFA\u55AE\u3002", "warning"));
+  if (!state.session.productionExportEnabled) parts.push(node2("p", "\u6B63\u5F0FPOS\u7522\u6A94\u5C1A\u672A\u958B\u653E\uFF1B\u6279\u6B21\u6458\u8981\u53EF\u5148\u6838\u5C0D\uFF0C\u958B\u653E\u5F8C\u5373\u53EF\u4E0B\u8F09\u3002", "warning"));
+  $("cloud-pos-summary").replaceChildren(...parts);
+  $("cloud-pos-redownload-label").hidden = !view.downloaded;
+  controls();
+}
+async function refreshBatchOptions(batches, orders) {
+  if (!hq()) {
+    state.batchView = null;
+    $("cloud-pos-batch").replaceChildren();
+    return;
+  }
+  const signature2 = JSON.stringify([store(), $("cloud-date").value, batches, orders.map((o) => [o.id, o.version, o.status])]);
+  if (signature2 === state.batchSignature) return;
+  state.batchSignature = "";
+  const previous = state.preferredBatch || $("cloud-pos-batch").value;
+  state.preferredBatch = null;
+  const available = batches.filter((b) => b.status === "settled").reverse();
+  $("cloud-pos-batch").replaceChildren(...available.map((b) => {
+    const o = node2("option", `${b.business_date}\uFF5C\u6279\u6B21 ${b.id}`);
+    o.value = b.id;
+    return o;
+  }));
+  if (available.some((b) => b.id === previous)) $("cloud-pos-batch").value = previous;
+  try {
+    await loadBatch();
+    state.batchSignature = signature2;
+  } catch (e) {
+    $("cloud-pos-summary").textContent = "\u6279\u6B21\u6458\u8981\u7121\u6CD5\u53D6\u5F97\uFF0C\u8ACB\u91CD\u65B0\u8B80\u53D6\u6216\u9078\u64C7\u5176\u4ED6\u6279\u6B21\u3002";
+    feedback.show(e.message, true, "pos");
+  }
+}
+$("cloud-pos-batch").onchange = () => run(loadBatch, { area: "pos", working: "\u6B63\u5728\u6838\u5C0D\u6574\u6279\u8A02\u55AE\u8207\u6B3E\u9805\u2026" });
+$("cloud-pos-refresh").onclick = () => run(loadBatch, { area: "pos", working: "\u6B63\u5728\u91CD\u65B0\u8B80\u53D6\u6279\u6B21\u6458\u8981\u2026" });
+$("cloud-pos-redownload").onchange = controls;
 $("cloud-export").onclick = () => run(async () => {
   checkLeave();
-  const o = state.current;
-  if (!hq() || !state.session.productionExportEnabled || !["settled", "import_failed"].includes(o?.status)) throw Error("\u6B64\u8A02\u55AE\u4E0D\u80FD\u6B63\u5F0F\u7522\u6A94");
-  const p = profile.get(), bytes = XLSX.write(buildRevisedPOS([o], XLSX, p), TEMPLATE_WRITE_OPTIONS);
-  const result = await api(`/orders/${o.id}/export`, "POST", { expectedVersion: o.version, mode: "production" });
-  o.version = result.version;
-  o.status = "exported";
-  adopt(o);
-  download2(bytes, `POS-${o.paperNumber}.xlsx`);
-  await refresh();
-  message("POS\u5DF2\u7522\u751F\uFF0C\u8ACB\u532F\u5165ERP\u4E26\u767B\u8A18\u7D50\u679C\uFF1B\u7D50\u679C\u4E0D\u660E\u6642\u8ACB\u52FF\u91CD\u7522\u3002");
-});
+  if (!hq() || !state.session.productionExportEnabled) throw Error("\u6B63\u5F0FPOS\u7522\u6A94\u5C1A\u672A\u555F\u7528");
+  const id = $("cloud-pos-batch").value, redownload = $("cloud-pos-redownload").checked, code = store(), date = $("cloud-date").value;
+  const view = await api("/batches/" + encodeURIComponent(id));
+  if (view.batch.storeCode !== code || view.batch.businessDate !== date) throw Error("\u6279\u6B21\u7BC4\u570D\u5DF2\u6539\u8B8A");
+  const versions = (v) => JSON.stringify(v?.orders.map((o) => ({ id: o.id, version: o.version })));
+  if (versions(view) !== versions(state.batchView)) {
+    await loadBatch();
+    throw Error("\u6279\u6B21\u5167\u5BB9\u5DF2\u8B8A\u66F4\uFF0C\u8ACB\u6838\u5C0D\u66F4\u65B0\u5F8C\u6458\u8981\uFF0C\u518D\u91CD\u65B0\u4E0B\u8F09");
+  }
+  const bytes = XLSX.write(buildRevisedPOS(view.orders, XLSX, profile.get()), TEMPLATE_WRITE_OPTIONS);
+  await guard.require();
+  if (code !== store() || date !== $("cloud-date").value || id !== $("cloud-pos-batch").value) throw Error("\u9580\u5E02\u3001\u65E5\u671F\u6216\u6279\u6B21\u5DF2\u6539\u8B8A\uFF0C\u8ACB\u91CD\u65B0\u64CD\u4F5C");
+  await api("/batches/" + encodeURIComponent(id) + "/export", "POST", { orders: view.orders.map((o) => ({ id: o.id, version: o.version })), redownloadConfirmed: redownload });
+  download2(bytes, `POS-${code}-${date}-${id}.xlsx`);
+  if (state.current?.batchId === id) clearOrder();
+  state.batchSignature = "";
+  try {
+    await refresh();
+  } catch {
+    state.batchView = null;
+    controls();
+    message("POS\u5DF2\u7522\u6A94\u4E26\u555F\u52D5\u4E0B\u8F09\uFF0C\u4F46\u6458\u8981\u66F4\u65B0\u672A\u5B8C\u6210\uFF1B\u8ACB\u78BA\u8A8D\u6A94\u6848\u5DF2\u6536\u5230\uFF0C\u518D\u91CD\u65B0\u8B80\u53D6\u6279\u6B21\u3002", true);
+    return;
+  }
+  message("\u6574\u6279POS\u5DF2\u4E0B\u8F09\uFF0C\u5DE5\u5177\u6D41\u7A0B\u5230\u6B64\u5B8C\u6210\uFF1B\u8ACB\u7531\u7E3D\u90E8\u4EBA\u5DE5\u532F\u5165ERP\uFF0C\u7121\u9808\u767B\u8A18\u5F8C\u7E8C\u7D50\u679C\u3002");
+  feedback.guide("pos", "\u672C\u6279POS\u5DF2\u4E0B\u8F09", "\u9700\u8981\u88DC\u4E0B\u8F09\u6642\u8ACB\u5148\u78BA\u8A8DERP\u672A\u91CD\u8907\u532F\u5165\uFF1B\u6709\u5176\u4ED6\u88DC\u4EA4\u6279\u6B21\u53EF\u5728\u6B64\u5207\u63DB\u3002");
+}, { area: "pos", working: "\u6B63\u5728\u91CD\u65B0\u6838\u5C0D\u6574\u6279\u8A02\u55AE\u4E26\u6E96\u5099POS\uFF0C\u8ACB\u52FF\u91CD\u6309\u2026" });
 var hqAccess = null;
 async function showHQAccess() {
   if (!state.session?.canManageHQ) throw Error("\u53EA\u6709\u6700\u9AD8\u6B0A\u9650\u5E33\u865F\u53EF\u7BA1\u7406\u7E3D\u90E8\u6B0A\u9650");
@@ -2712,16 +2736,6 @@ $("cloud-invite-create").onclick = () => run(async () => {
   message("\u9080\u8ACB\u78BC\u53EA\u986F\u793A\u9019\u4E00\u6B21\u3002\u8ACB\u7531\u7E3D\u90E8\u81EA\u884C\u63D0\u4F9B\u7D66\u7576\u73ED\u540C\u4EC1\uFF0C\u4E0D\u8981\u516C\u958B\u5F35\u8CBC\u3002");
 });
 $("cloud-invite-refresh").onclick = () => run(invitations);
-$("cloud-result-save").onclick = () => run(async () => {
-  const o = state.current;
-  if (!o) throw Error("\u8ACB\u958B\u555F\u8A02\u55AE");
-  const status = $("cloud-result").value, r = await api(`/orders/${o.id}/result`, "POST", { expectedVersion: o.version, status, erpNumber: $("cloud-erp-number").value, reason: $("cloud-result-reason").value, operationId: crypto.randomUUID() });
-  o.version = r.version;
-  o.status = status;
-  adopt(o);
-  await refresh();
-  message("ERP\u5EFA\u7ACB\u7D50\u679C\u5DF2\u767B\u8A18\u3002");
-});
 $("cloud-logout").onclick = () => run(async () => {
   if (guestPage) await api("/logout", "POST", {});
   sessionStorage.removeItem(key());
