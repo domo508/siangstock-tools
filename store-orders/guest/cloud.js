@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261031-store-orders-r38";
+var VERSION = "20261101-store-orders-r39";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -1437,7 +1437,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         const file = restoreInput.files[0];
         if (!file || file.size > 1e6) throw Error("\u8ACB\u90781MB\u5167\u7684\u4EBA\u5DE5\u8986\u6838\u5099\u4EFD");
         const b = JSON.parse(await file.text());
-        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32", "20261031-store-orders-r33", "20261031-store-orders-r34", "20261031-store-orders-r35", "20261031-store-orders-r36", "20261031-store-orders-r37"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
+        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32", "20261031-store-orders-r33", "20261031-store-orders-r34", "20261031-store-orders-r35", "20261031-store-orders-r36", "20261031-store-orders-r37", "20261031-store-orders-r38"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
         if (!cloudMode || b.original?.rows?.length) validateExtraction(b.original);
         if (!b.original.header || JSON.stringify(b.original) !== JSON.stringify(original)) throw Error("\u5099\u4EFD\u8207\u76EE\u524D\u539F\u59CB\u8FA8\u8B58\u4E0D\u540C\uFF0C\u8ACB\u5148\u8F09\u5165\u540C\u4EFD\u539F\u8FA8\u8B58JSON\u8207\u539F\u5716");
         const o = b.reviewedOrder;
@@ -2215,9 +2215,9 @@ async function guestCatalog() {
     message(e.message, true);
   }
 }
-async function connect() {
+async function connect(resumed = null) {
   if (dirty()) throw Error("\u8ACB\u5148\u4FDD\u5B58\u76EE\u524D\u8349\u7A3F");
-  const s = await api("/session");
+  const s = resumed || await api("/session");
   if (s.version !== VERSION) throw Error("API\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u91CD\u65B0\u8F09\u5165\u6700\u65B0\u7248");
   state.session = s;
   $("cloud-store").replaceChildren(...Object.entries(s.stores).map(([id, value]) => {
@@ -2229,7 +2229,7 @@ async function connect() {
   other.value = "__other__";
   $("cloud-store").append(other);
   if (Object.hasOwn(s.stores, "R14")) $("cloud-store").value = "R14";
-  $("cloud-session").textContent = `${s.email}\u30FB${hq() ? "\u7E3D\u90E8" : "\u9580\u5E02"}\u30FB${s.recognitionReady ? "AI\u8FA8\u8B58\u5DF2\u8A2D\u5B9A" : "AI\u672A\u8A2D\u5B9A\uFF0C\u53EF\u4EBA\u5DE5\u8986\u6838"}`;
+  $("cloud-session").textContent = `${s.email}\u30FB${hq() ? "\u7E3D\u90E8" : "\u9580\u5E02"}\u30FB${s.recognitionReady ? "AI\u8FA8\u8B58\u5DF2\u8A2D\u5B9A" : "AI\u672A\u8A2D\u5B9A\uFF0C\u53EF\u4EBA\u5DE5\u8986\u6838"}${s.guest && s.expiresAt ? "\u30FB\u767B\u5165\u6709\u6548\u81F3 " + new Date(s.expiresAt).toLocaleString("zh-TW") : ""}`;
   state.settlement = JSON.parse(sessionStorage.getItem(key() + ":settlement") || "null");
   if (!guestPage) configure(s.googleClientId);
   await refresh();
@@ -2325,9 +2325,24 @@ async function loadCloudMaster() {
     return masterFailed(e);
   }
 }
+async function existingGuest() {
+  try {
+    return await api("/session");
+  } catch (e) {
+    if (e.status === 401) return null;
+    throw e;
+  }
+}
 $("cloud-connect").onclick = () => run(async () => {
   if (guestPage) {
+    const existing = await existingGuest();
+    if (existing) {
+      $("cloud-guest-code").value = "";
+      await connect(existing);
+      return;
+    }
     const code = $("cloud-guest-code").value;
+    if (!text(code)) throw Error("\u539F\u8A2A\u5BA2\u767B\u5165\u5DF2\u5230\u671F\u6216\u5C1A\u672A\u767B\u5165\uFF0C\u8ACB\u8F38\u5165\u7E3D\u90E8\u63D0\u4F9B\u7684\u6709\u6548\u9080\u8ACB\u78BC");
     await api("/redeem", "POST", { code });
     $("cloud-guest-code").value = "";
   }
@@ -2691,7 +2706,7 @@ async function invitations() {
   }
 }
 $("cloud-invite-create").onclick = () => run(async () => {
-  const result = await api("/guest-invites", "POST", { storeCode: store(), hours: Number($("cloud-invite-hours").value), maxUses: Number($("cloud-invite-uses").value) });
+  const result = await api("/guest-invites", "POST", { storeCode: store() });
   $("cloud-invite-code").value = result.code;
   $("cloud-invite-result").hidden = false;
   await invitations();
@@ -2779,3 +2794,8 @@ if (guestPage) {
 }
 await guard.check();
 controls();
+if (guestPage && !guard.blocked) await run(async () => {
+  const existing = await existingGuest();
+  if (existing) await connect(existing);
+  else message("\u5C1A\u672A\u767B\u5165\u6216\u539F\u767B\u5165\u5DF2\u5230\u671F\uFF0C\u8ACB\u8F38\u5165\u7E3D\u90E8\u63D0\u4F9B\u7684\u6709\u6548\u9080\u8ACB\u78BC\u3002");
+}, { area: "session", working: "\u6B63\u5728\u6062\u5FA9\u8A2A\u5BA2\u767B\u5165\uFF0C\u8ACB\u7A0D\u5019\u2026" });
