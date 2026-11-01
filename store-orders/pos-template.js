@@ -1,6 +1,6 @@
-import {resolvedERPPrices} from "./bundle-pricing.js?v=20261101-store-orders-r46";
+import {resolvedERPPrices} from "./bundle-pricing.js?v=20261101-store-orders-r47";
 // Revised ERP template: explicit columns, never copy sample orders or infer payment semantics.
-import * as C from './core.js?v=20261101-store-orders-r46';
+import * as C from './core.js?v=20261101-store-orders-r47';
 export const BASE_HEADERS=Object.freeze(['單號','結帳日期','開單倉庫','出貨倉庫','取貨倉庫','會員編號','姓名','電話','地址','備註','中信信用卡','現金','百貨現金卷','LinePay','銷別','貨號','數量','顏色','色號','尺碼','碼號','贈品','導購','實收率']);
 const PRICE_HEADERS=['價格'];
 export const FINAL_HEADERS=Object.freeze([...BASE_HEADERS.slice(0,17),'價格',...BASE_HEADERS.slice(17)]);
@@ -48,11 +48,23 @@ export function assertRevisedPOSConservation(orders,rows,headers){
   for(const [header,key] of [['中信信用卡','中信信用卡'],['現金','現金'],['百貨現金卷','百貨現金卷'],['LinePay','LinePay']]){const sum=actual.reduce((n,r)=>n+C.cents(r[col(header)]===''?0:r[col(header)]),0);if(sum!==C.cents(o.payments[key]))throw Error('新版POS付款方式對照或各項金額不守恆');}
  }
 }
+// A:J are one POS-information block. A warehouse change splits every column
+// together, even when the order number / customer values themselves match.
+function posDataMerges(orders,rows){
+ const merges=[];let start=0;
+ const add=(first,last,from,to)=>{if(last>first)for(let c=from;c<to;c++)merges.push({s:{r:first+2,c},e:{r:last+2,c}});};
+ for(const order of orders){const end=start+resolvedERPPrices(order).lines.length;let first=start;
+  for(let r=start+1;r<=end;r++)if(r===end||rows[r].slice(0,10).some((v,c)=>v!==rows[first][c])){add(first,r-1,0,10);first=r;}
+  // K:N belong to the whole order; never repeat payment at a warehouse boundary.
+  add(start,end-1,10,14);start=end;
+ }
+ return merges;
+}
 export function buildRevisedPOS(orders,XLSX,profile={}){
  const rows=revisedPOSRows(orders,profile),t=profile.template;assertRevisedPOSConservation(orders,rows,t.headers);
  const ws=XLSX.utils.aoa_to_sheet([[],t.headers,...rows]);for(const cell of t.cells){const k=XLSX.utils.encode_cell({r:cell.r,c:cell.c});ws[k]={t:typeof cell.value==='number'?'n':'s',v:cell.value,...(cell.style?{s:structuredClone(cell.style)}:{}),...(cell.format?{z:cell.format}:{})};}
  ws['!ref']=XLSX.utils.encode_range({s:{r:0,c:0},e:{r:rows.length+1,c:t.headers.length-1}});ws['!merges']=structuredClone(t.merges);
- let start=2;for(const order of orders){const end=start+resolvedERPPrices(order).lines.length-1;for(let c=0;c<14;c++){let first=start;for(let r=start+1;r<=end+1;r++){const same=r<=end&&(c>=10||rows[r-2][c]===rows[first-2][c]);if(same)continue;if(r-first>1){ws['!merges'].push({s:{r:first,c},e:{r:r-1,c}});for(let covered=first+1;covered<r;covered++)delete ws[XLSX.utils.encode_cell({r:covered,c})];}first=r;}}start=end+1;}
+ for(const merge of posDataMerges(orders,rows)){ws['!merges'].push(merge);for(let r=merge.s.r+1;r<=merge.e.r;r++)delete ws[XLSX.utils.encode_cell({r,c:merge.s.c})];}
  rows.forEach((row,r)=>row.forEach((v,c)=>{const cell=ws[XLSX.utils.encode_cell({r:r+2,c})];if(cell&&typeof v==='string'){cell.t='s';delete cell.f;cell.z='@';}}));
  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Sheet1');
  const roundtrip=XLSX.read(XLSX.write(wb,TEMPLATE_WRITE_OPTIONS),C.READ_OPTIONS);assertMergedPOSConservation(orders,roundtrip,XLSX,t.headers);return wb;
@@ -67,6 +79,8 @@ export function assertMergedPOSConservation(orders,wb,XLSX,headers){
   if(!Number.isInteger(m.s.r)||!Number.isInteger(m.e.r)||m.e.r<=m.s.r||m.s.c!==m.e.c||m.s.c<0||m.s.c>=14||!boundaries.some(b=>m.s.r>=b.start&&m.e.r<=b.end))throw Error('POS合併範圍跨單或覆蓋商品明細');
   for(let r=m.s.r;r<=m.e.r;r++){const key=r+':'+m.s.c;if(covered.has(key))throw Error('POS合併範圍重疊');covered.add(key);if(r===m.s.r)continue;const value=rows[r-2]?.[m.s.c];if(value!==''&&value!==undefined)throw Error('POS合併範圍含隱藏資料');if(m.s.c<10){if(expected[r-2][m.s.c]!==expected[m.s.r-2][m.s.c])throw Error('POS合併範圍含不同倉庫或訂單資訊');rows[r-2][m.s.c]=rows[m.s.r-2][m.s.c];}}
  }
+ const keys=ms=>ms.map(m=>[m.s.r,m.s.c,m.e.r,m.e.c].join(':')).sort();
+ if(JSON.stringify(keys((ws['!merges']||[]).filter(m=>m.s.r!==0)))!==JSON.stringify(keys(posDataMerges(orders,expected))))throw Error('POS單資訊須依取貨倉庫整區同步合併或拆開；收款方式維持整單只計一次');
  if(JSON.stringify(rows)!==JSON.stringify(expected))throw Error('POS合併後資訊與覆核內容不一致');
  assertRevisedPOSConservation(orders,rows,headers);return rows;
 }

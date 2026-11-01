@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261101-store-orders-r46";
+var VERSION = "20261101-store-orders-r47";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -997,6 +997,24 @@ function assertRevisedPOSConservation(orders, rows, headers) {
     }
   }
 }
+function posDataMerges(orders, rows) {
+  const merges = [];
+  let start = 0;
+  const add = (first, last, from, to) => {
+    if (last > first) for (let c = from; c < to; c++) merges.push({ s: { r: first + 2, c }, e: { r: last + 2, c } });
+  };
+  for (const order of orders) {
+    const end = start + resolvedERPPrices(order).lines.length;
+    let first = start;
+    for (let r = start + 1; r <= end; r++) if (r === end || rows[r].slice(0, 10).some((v, c) => v !== rows[first][c])) {
+      add(first, r - 1, 0, 10);
+      first = r;
+    }
+    add(start, end - 1, 10, 14);
+    start = end;
+  }
+  return merges;
+}
 function buildRevisedPOS(orders, XLSX2, profile2 = {}) {
   const rows = revisedPOSRows(orders, profile2), t = profile2.template;
   assertRevisedPOSConservation(orders, rows, t.headers);
@@ -1007,22 +1025,9 @@ function buildRevisedPOS(orders, XLSX2, profile2 = {}) {
   }
   ws["!ref"] = XLSX2.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows.length + 1, c: t.headers.length - 1 } });
   ws["!merges"] = structuredClone(t.merges);
-  let start = 2;
-  for (const order of orders) {
-    const end = start + resolvedERPPrices(order).lines.length - 1;
-    for (let c = 0; c < 14; c++) {
-      let first = start;
-      for (let r = start + 1; r <= end + 1; r++) {
-        const same = r <= end && (c >= 10 || rows[r - 2][c] === rows[first - 2][c]);
-        if (same) continue;
-        if (r - first > 1) {
-          ws["!merges"].push({ s: { r: first, c }, e: { r: r - 1, c } });
-          for (let covered = first + 1; covered < r; covered++) delete ws[XLSX2.utils.encode_cell({ r: covered, c })];
-        }
-        first = r;
-      }
-    }
-    start = end + 1;
+  for (const merge of posDataMerges(orders, rows)) {
+    ws["!merges"].push(merge);
+    for (let r = merge.s.r + 1; r <= merge.e.r; r++) delete ws[XLSX2.utils.encode_cell({ r, c: merge.s.c })];
   }
   rows.forEach((row, r) => row.forEach((v, c) => {
     const cell = ws[XLSX2.utils.encode_cell({ r: r + 2, c })];
@@ -1065,6 +1070,8 @@ function assertMergedPOSConservation(orders, wb, XLSX2, headers) {
       }
     }
   }
+  const keys = (ms) => ms.map((m) => [m.s.r, m.s.c, m.e.r, m.e.c].join(":")).sort();
+  if (JSON.stringify(keys((ws["!merges"] || []).filter((m) => m.s.r !== 0))) !== JSON.stringify(keys(posDataMerges(orders, expected)))) throw Error("POS\u55AE\u8CC7\u8A0A\u9808\u4F9D\u53D6\u8CA8\u5009\u5EAB\u6574\u5340\u540C\u6B65\u5408\u4F75\u6216\u62C6\u958B\uFF1B\u6536\u6B3E\u65B9\u5F0F\u7DAD\u6301\u6574\u55AE\u53EA\u8A08\u4E00\u6B21");
   if (JSON.stringify(rows) !== JSON.stringify(expected)) throw Error("POS\u5408\u4F75\u5F8C\u8CC7\u8A0A\u8207\u8986\u6838\u5167\u5BB9\u4E0D\u4E00\u81F4");
   assertRevisedPOSConservation(orders, rows, headers);
   return rows;

@@ -18,7 +18,7 @@ it('付款總額相同但信用卡現金錯置仍阻擋，電話字串不被正�
 it('多單合併不跨單、混合銷別取貨倉庫保留且付款只計一次',()=>{
  const a=order(),b=order();b.paperNumber='000124';b.items[1].saleType='銷貨';
  const t=template(),p={template:t,paymentMappingConfirmed:true},wb=buildRevisedPOS([a,b],X,p),read=X.read(X.write(wb,TEMPLATE_WRITE_OPTIONS),C.READ_OPTIONS),ws=read.Sheets.Sheet1;
- const merges=ws['!merges'];expect(merges).toContainEqual({s:{r:2,c:0},e:{r:3,c:0}});expect(merges).toContainEqual({s:{r:4,c:0},e:{r:5,c:0}});
+ const merges=ws['!merges'];expect(merges).not.toContainEqual({s:{r:2,c:0},e:{r:3,c:0}});expect(ws.A3.v).toBe(a.paperNumber);expect(ws.A4.v).toBe(a.paperNumber);expect(merges).toContainEqual({s:{r:4,c:0},e:{r:5,c:0}});
  expect(merges).not.toContainEqual({s:{r:2,c:4},e:{r:3,c:4}});expect(merges).toContainEqual({s:{r:4,c:4},e:{r:5,c:4}});
  expect(ws.E3.v).toBe('R14');expect(ws.E4.v).toBe('T00');expect(ws.K4?.v??'').toBe('');expect(ws.K3.v).toBe(100);
  expect(assertMergedPOSConservation([a,b],read,X,t.headers)).toEqual(revisedPOSRows([a,b],p));
@@ -27,3 +27,17 @@ it('多單合併不跨單、混合銷別取貨倉庫保留且付款只計一次'
 it('單列不產生資料合併，所有客戶及付款內容保留',()=>{const o=order();o.items=[o.items[0]];o.paperRowCount=1;o.paperTotal=200;o.payments.現金=100;const t=template(),w=buildRevisedPOS([o],X,{template:t,paymentMappingConfirmed:true});expect(w.Sheets.Sheet1['!merges'].every(m=>m.s.r===0)).toBe(true);expect(()=>assertMergedPOSConservation([o],w,X,t.headers)).not.toThrow();});
 
 it('內建最終範本只含兩列表頭，與讀檔格式一致且副本不可污染下次匯出',async()=>{const {builtInPOSProfile}=await import('../../store-orders/pos-built-in.js');const p=builtInPOSProfile();expect(p.template.headers).toEqual(template().headers);expect(p.template.cells.every(c=>c.r<2)).toBe(true);expect(p.paymentMappingConfirmed).toBe(true);const a=order(),b=order();b.id='second-order';b.paperNumber='SECOND';const w=buildRevisedPOS([a,b],X,p),roundtrip=X.read(X.write(w,TEMPLATE_WRITE_OPTIONS),C.READ_OPTIONS);expect(()=>assertMergedPOSConservation([a,b],roundtrip,X,p.template.headers)).not.toThrow();p.template.headers[0]='壞欄位';expect(builtInPOSProfile().template.headers[0]).toBe('單號');});
+
+
+it('取貨倉庫切換時A:J整區同步分段，相同倉庫不跨中間其他倉庫合併',()=>{
+ const a=order();a.items=['銷貨','銷貨','訂貨','訂貨','銷貨'].map((saleType,i)=>({...a.items[0],sku:'SYNTH'+i,quantity:1,unitPrice:100,saleType}));a.paperRowCount=5;a.paperTotal=500;a.payments.現金=400;
+ const before=structuredClone(a),t=template(),w=buildRevisedPOS([a],X,{template:t,paymentMappingConfirmed:true}),back=X.read(X.write(w,TEMPLATE_WRITE_OPTIONS),C.READ_OPTIONS),ws=back.Sheets.Sheet1;
+ for(let c=0;c<10;c++){const merges=ws['!merges'].filter(m=>m.s.r>0&&m.s.c===c);expect(merges).toEqual([{s:{r:2,c},e:{r:3,c}},{s:{r:4,c},e:{r:5,c}}]);expect(ws[X.utils.encode_cell({r:6,c})]).toBeDefined();}
+ for(let c=10;c<14;c++)expect(ws['!merges']).toContainEqual({s:{r:2,c},e:{r:6,c}});
+ const rows=assertMergedPOSConservation([a],back,X,t.headers);expect(rows.map(r=>r[4])).toEqual(['R14','R14','T00','T00','R14']);expect(rows.map(r=>r[11])).toEqual([400,'','','','']);expect(a).toEqual(before);
+ const bad=structuredClone(back);bad.Sheets.Sheet1['!merges']=bad.Sheets.Sheet1['!merges'].filter(m=>!(m.s.c===0&&m.s.r===2));expect(()=>assertMergedPOSConservation([a],bad,X,t.headers)).toThrow(/整區/);
+});
+it('一般商品整元拆列與混合倉庫並存時，原單號重複填在分段起點且付款只計一次',()=>{
+ const a=order(),b=order();b.paperNumber='NEXT';a.priceBasis='line_total';a.items[0].unitPrice=201;a.items[1].unitPrice=49;const before=structuredClone([a,b]),t=template(),w=buildRevisedPOS([a,b],X,{template:t,paymentMappingConfirmed:true}),back=X.read(X.write(w,TEMPLATE_WRITE_OPTIONS),C.READ_OPTIONS),rows=assertMergedPOSConservation([a,b],back,X,t.headers),ws=back.Sheets.Sheet1;
+ expect(rows).toHaveLength(5);for(let c=0;c<10;c++)expect(ws['!merges']).toContainEqual({s:{r:2,c},e:{r:3,c}});expect(ws.A5.v).toBe(a.paperNumber);expect(ws.A6.v).toBe(b.paperNumber);expect(ws.A7.v).toBe(b.paperNumber);expect(rows.map(r=>r[10])).toEqual([100,'','',100,'']);expect(rows.reduce((n,r)=>n+r[16]*r[17],0)).toBe(500);expect([a,b]).toEqual(before);
+});
