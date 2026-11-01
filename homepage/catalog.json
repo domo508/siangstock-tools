@@ -1,5 +1,5 @@
 {
-  "version": "20261101-store-orders-entry-r1",
+  "version": "20261101-store-orders-entry-r2",
   "departments": [
     {
       "id": "admin",
@@ -99,7 +99,7 @@
       "collaborators": [
         "merch"
       ],
-      "href": "/store-orders/?deploy=20261101-store-orders-r48",
+      "href": "/store-orders/?deploy=20261101-store-orders-r49",
       "status": "立即使用",
       "description": "上傳手寫訂購單，AI辨識後人工覆核，結算並下載ERP POS檔。",
       "data": "公司雲端保存・AI辨識依工具授權"

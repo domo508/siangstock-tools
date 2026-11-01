@@ -56,3 +56,5 @@
  .flow-caption{display:block;font-size:.8rem;font-weight:650;color:var(--blue);margin-bottom:5px}
  [id^="cloud-"],.paper-review-sheet,#review-errors{scroll-margin-top:210px}
 }
+
+.guest-entry-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}.guest-entry-actions button{flex:0 0 auto}.guest-entry-actions [role="status"]{flex-basis:100%;margin:0}
