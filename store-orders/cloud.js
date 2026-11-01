@@ -1,18 +1,18 @@
-import {listSummaries,canVoidOrder,voidSavedOrder} from './order-list.js?v=20261101-store-orders-r41';
-import {collectDailyReport,dailyWorkbook} from './daily-report.js?v=20261101-store-orders-r41';
-import {loadSourceGroup} from './source-group.js?v=20261101-store-orders-r41';
-import {createFlowFeedback} from './flow-feedback.js?v=20261101-store-orders-r41';
-import * as C from './core.js?v=20261101-store-orders-r41';
-import * as G from './google.js?v=20261101-store-orders-r41';
-import {createSourceUploader} from './source-upload.js?v=20261101-store-orders-r41';
-import {VersionGuard} from './runtime.js?v=20261101-store-orders-r41';
-import {pagesFor} from './media.js?v=20261101-store-orders-r41';
-import {prepareImageInput} from './image-input.js?v=20261101-store-orders-r41';
-import {createReview,reviewErrors,confirmReview} from './review.js?v=20261101-store-orders-r41';
-import {createPOSProfile} from './pos-profile.js?v=20261101-store-orders-r41';
-import {buildRevisedPOS,TEMPLATE_WRITE_OPTIONS,revisedPOSErrors} from './pos-template.js?v=20261101-store-orders-r41';
-import {costUnits} from './bundle-pricing.js?v=20261101-store-orders-r41';
-import {mergeFullPages} from './merge-pages.js?v=20261101-store-orders-r41';
+import {listSummaries,canVoidOrder,voidSavedOrder} from './order-list.js?v=20261101-store-orders-r43';
+import {collectDailyReport,dailyWorkbook} from './daily-report.js?v=20261101-store-orders-r43';
+import {loadSourceGroup} from './source-group.js?v=20261101-store-orders-r43';
+import {createFlowFeedback} from './flow-feedback.js?v=20261101-store-orders-r43';
+import * as C from './core.js?v=20261101-store-orders-r43';
+import * as G from './google.js?v=20261101-store-orders-r43';
+import {createSourceUploader} from './source-upload.js?v=20261101-store-orders-r43';
+import {VersionGuard} from './runtime.js?v=20261101-store-orders-r43';
+import {pagesFor} from './media.js?v=20261101-store-orders-r43';
+import {prepareImageInput} from './image-input.js?v=20261101-store-orders-r43';
+import {createReview,reviewErrors,confirmReview} from './review.js?v=20261101-store-orders-r43';
+import {createPOSProfile} from './pos-profile.js?v=20261101-store-orders-r43';
+import {buildRevisedPOS,TEMPLATE_WRITE_OPTIONS,revisedPOSErrors} from './pos-template.js?v=20261101-store-orders-r43';
+import {costUnits} from './bundle-pricing.js?v=20261101-store-orders-r43';
+import {mergeFullPages} from './merge-pages.js?v=20261101-store-orders-r43';
 const $=id=>document.getElementById(id),guard=new VersionGuard(),guestPage=location.pathname.startsWith('/store-orders/guest/');
 const apiPrefix=guestPage?'/api/store-orders-guest':'/api/store-orders';
 const state={listCache:new Map(),session:null,master:null,masterIssue:false,masterSource:"",current:null,base:'',sources:[],pages:[],urls:[],queue:[],busy:false,refreshSerial:0,refreshing:false,selectedSources:new Set(),incomingSignature:'',previewUrls:[],sourcePreviews:new Map(),correction:false,settlement:null,aiOperation:null};
@@ -115,11 +115,11 @@ async function showHQAccess(){
 }
 $('cloud-hq-access-refresh').onclick=()=>run(showHQAccess);
 $('cloud-hq-access-add').onclick=()=>run(async()=>{if(!hqAccess)throw Error('請先讀取目前名單');const email=$('cloud-hq-access-email').value.trim().toLowerCase();await api('/hq-access','PUT',{emails:[...hqAccess.emails,email],expectedVersion:hqAccess.version});$('cloud-hq-access-email').value='';await showHQAccess();message('已新增總部權限；同仁可用公司Google帳號登入。');});
-async function invitations(){if(!hq())return;const data=await api('/guest-invites');$('cloud-invites').replaceChildren();for(const invite of data.invites){const row=node('div',undefined,'item');row.append(node('p',`${invite.store_code}・到期${new Date(invite.expires_at).toLocaleString('zh-TW')}・使用${invite.uses}/${invite.max_uses}${invite.revoked_at?'・已停用':''}`));if(!invite.revoked_at){const b=node('button','停用此邀請碼','secondary');b.onclick=()=>run(async()=>{await api('/guest-invites/'+invite.id+'/revoke','POST',{expectedVersion:invite.version});await invitations();message('邀請碼及已登入的訪客權限已停用。');});row.append(b);}$('cloud-invites').append(row);}}
-$('cloud-invite-create').onclick=()=>run(async()=>{const result=await api('/guest-invites','POST',{storeCode:store()});$('cloud-invite-code').value=result.code;$('cloud-invite-result').hidden=false;await invitations();message('邀請碼只顯示這一次。請由總部自行提供給當班同仁，不要公開張貼。');});
+async function invitations(){if(!hq())return;const data=await api('/guest-invites');$('cloud-invites').replaceChildren();for(const invite of data.invites){const row=node('div',undefined,'item');row.append(node('h4',`名稱：${invite.label||'未命名'}`),node('p',`${invite.store_code}・到期${new Date(invite.expires_at).toLocaleString('zh-TW')}・使用${invite.uses}/${invite.max_uses}${invite.revoked_at?'・已停用':''}`));if(!invite.revoked_at){const b=node('button','停用此邀請碼','secondary');b.onclick=()=>run(async()=>{await api('/guest-invites/'+invite.id+'/revoke','POST',{expectedVersion:invite.version});await invitations();message('邀請碼及已登入的訪客權限已停用。');});row.append(b);}$('cloud-invites').append(row);}}
+$('cloud-invite-create').onclick=()=>run(async()=>{const label=$('cloud-invite-label').value.trim();const result=await api('/guest-invites','POST',{storeCode:store(),label});$('cloud-invite-code').value=result.code;$('cloud-invite-result-name').textContent=`本次邀請碼名稱：${result.label||label||'未命名'}`;$('cloud-invite-result-name').hidden=false;$('cloud-invite-label').value='';$('cloud-invite-result').hidden=false;await invitations();message('邀請碼只顯示這一次。請由總部自行提供給當班同仁，不要公開張貼。');});
 $('cloud-invite-refresh').onclick=()=>run(invitations);
 $('cloud-result-save').onclick=()=>run(async()=>{const o=state.current;if(!o)throw Error('請開啟訂單');const status=$('cloud-result').value,r=await api(`/orders/${o.id}/result`,'POST',{expectedVersion:o.version,status,erpNumber:$('cloud-erp-number').value,reason:$('cloud-result-reason').value,operationId:crypto.randomUUID()});o.version=r.version;o.status=status;adopt(o);await refresh();message('ERP建立結果已登記。');});
-$('cloud-logout').onclick=()=>run(async()=>{if(guestPage)await api('/logout','POST',{});sessionStorage.removeItem(key());sessionStorage.removeItem(key()+':settlement');G.clear();sourceUploader.clear();clearOrder();state.previewUrls.forEach(URL.revokeObjectURL);state.previewUrls=[];state.sourcePreviews.clear();state.selectedSources.clear();state.incomingSignature='';$('cloud-incoming').replaceChildren();state.listCache.clear();state.session=null;state.master=null;state.masterIssue=false;state.masterSource="";$('cloud-invite-code').value='';$('cloud-master-file').value='';$('cloud-upload').value='';controls();location.assign(guestPage?'/store-orders/guest/':'/cdn-cgi/access/logout');});
+$('cloud-logout').onclick=()=>run(async()=>{if(guestPage)await api('/logout','POST',{});sessionStorage.removeItem(key());sessionStorage.removeItem(key()+':settlement');G.clear();sourceUploader.clear();clearOrder();state.previewUrls.forEach(URL.revokeObjectURL);state.previewUrls=[];state.sourcePreviews.clear();state.selectedSources.clear();state.incomingSignature='';$('cloud-incoming').replaceChildren();state.listCache.clear();state.session=null;state.master=null;state.masterIssue=false;state.masterSource="";$('cloud-invite-code').value='';$('cloud-invite-label').value='';$('cloud-invite-result-name').textContent='';$('cloud-invite-result-name').hidden=true;$('cloud-master-file').value='';$('cloud-upload').value='';controls();location.assign(guestPage?'/store-orders/guest/':'/cdn-cgi/access/logout');});
 $('reload-version').onclick=()=>{const url=new URL(location.href);url.searchParams.set('deploy',guard.current||C.VERSION);url.searchParams.set('reload',String(Date.now()));location.assign(url.href);};
 window.addEventListener('beforeunload',e=>{if(dirty()){e.preventDefault();e.returnValue='';}});
 async function backgroundRefresh(){if(state.refreshing)return;state.refreshing=true;try{await guard.require();if(!state.busy)await refresh();}catch{$('cloud-receipt-status').hidden=false;$('cloud-receipt-status').textContent='背景檢查未完成，請需要時按「手動檢查新單」。';$('cloud-receipt-status').className='notice warning';}finally{state.refreshing=false;if(guard.blocked)controls();}}

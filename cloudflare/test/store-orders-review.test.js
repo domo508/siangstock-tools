@@ -18,3 +18,18 @@ it('舊分配模式轉總價模式保留歷史價格，且舊原版快照不受�
 it('組合單價留空不能掩蓋非法付款，零元總組合仍須明確整單確認',()=>{const o=ready();o.priceGroups=[{id:'A',amount:700,pricingMode:'total_only'}];o.items[0].priceGroupId=o.items[1].priceGroupId='A';o.items[0].unitPrice=o.items[1].unitPrice='';confirmReview(o,true);o.payments.現金=-1;expect(reviewErrors(o,opts).length).toBeGreaterThan(0);o.payments.現金=0;o.payments.中信信用卡=0;o.priceGroups[0].amount=0;o.paperTotal=0;confirmReview(o,false);expect(reviewErrors(o,opts).length).toBeGreaterThan(0);confirmReview(o,true);expect(reviewErrors(o,opts)).toEqual([]);expect(C.totals(o).amountCents).toBe(0);});
 
 it('目前門市與辨識門市不同時禁止產檔，修正後可續作',()=>{const o=ready();expect(reviewErrors(o,{...opts,expectedStore:'R14'}).join()).toMatch(/目前門市/);o.storeCode='R14';expect(reviewErrors(o,{...opts,expectedStore:'R14'})).toEqual([]);});
+
+it('含任一訂貨列含混合與組合時地址必填，全部銷貨可空白；草稿不冒充完成覆核',()=>{
+ for(const address of ['', '   ', '\u3000\n\t']){
+  const o=ready();o.status='reviewed';o.customer.address=address;
+  expect(C.requiresDeliveryAddress(o)).toBe(true);
+  expect(reviewErrors(o,opts)).toContain(C.DELIVERY_ADDRESS_ERROR);
+  expect(()=>C.posRows([o])).toThrow(/地址/);
+  expect(()=>C.settlementSummary([o])).toThrow();
+  expect(C.validateOrder(o).errors).not.toContain(C.DELIVERY_ADDRESS_ERROR);
+  o.customer.address='測試市測試路1號';expect(reviewErrors(o,opts)).toEqual([]);
+  o.customer.address='';o.items.forEach(i=>i.saleType='銷貨');expect(reviewErrors(o,opts)).toEqual([]);
+  o.items[2].saleType='訂貨';expect(reviewErrors(o,opts)).toContain(C.DELIVERY_ADDRESS_ERROR);
+ }
+ const o=ready();o.customer.address='';o.items[0].priceGroupId=o.items[1].priceGroupId='A';o.priceGroups=[{id:'A',amount:700,pricingMode:'total_only',totalConfirmed:true}];o.items[0].unitPrice=o.items[1].unitPrice='';confirmReview(o,true);expect(reviewErrors(o,opts)).toContain(C.DELIVERY_ADDRESS_ERROR);
+});

@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261101-store-orders-r41";
+var VERSION = "20261101-store-orders-r43";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -71,7 +71,11 @@ function totals(order) {
   if (![quantity, amountCents, paidCents].every(Number.isSafeInteger)) throw new Error("\u5408\u8A08\u8D85\u904E\u5141\u8A31\u7BC4\u570D");
   return { orders: 1, rows: order.items.length, quantity, amountCents, paidCents, unpaidCents: cents(order.unpaid) };
 }
-function validateOrder(order, { complete = false } = {}) {
+function requiresDeliveryAddress(order) {
+  return Array.isArray(order?.items) && order.items.some((item) => item?.saleType === "\u8A02\u8CA8");
+}
+var DELIVERY_ADDRESS_ERROR = "\u672C\u55AE\u542B\u8A02\u8CA8\u5546\u54C1\uFF0C\u8ACB\u586B\u5BEB\u5BA2\u6236\u5730\u5740\u5F8C\u518D\u5B8C\u6210\u8986\u6838";
+function validateOrder(order, { complete = false, checkDeliveryAddress = true } = {}) {
   const errors = [], warnings = [];
   if (order?.priceBasis !== void 0 && !["unit", "line_total", "unknown"].includes(order.priceBasis)) errors.push("\u50F9\u683C\u8A08\u7B97\u65B9\u5F0F\u7121\u6548");
   if (complete && order?.priceBasis === "unknown") errors.push("\u8ACB\u78BA\u8A8D\u50F9\u683C\u662F\u55AE\u4EF6\u55AE\u50F9\u6216\u672C\u5217\u5546\u54C1\u7E3D\u91D1\u984D");
@@ -88,6 +92,7 @@ function validateOrder(order, { complete = false } = {}) {
     if (typeof h !== "object" || Array.isArray(h) || typeof h.confirmed !== "boolean" || typeof h.rawDate !== "string" || h.rawDate.length > 100 || !Array.isArray(h.uncertainFields) || h.uncertainFields.length > 30 || h.uncertainFields.some((v) => typeof v !== "string" || v.length > 100)) errors.push("\u8868\u982D\u8FA8\u8B58\u8986\u6838\u8CC7\u6599\u683C\u5F0F\u932F\u8AA4");
   }
   if (complete) {
+    if (checkDeliveryAddress && requiresDeliveryAddress(order) && !text(order.customer?.address)) errors.push(DELIVERY_ADDRESS_ERROR);
     if (order.headerRecognition) {
       if (order.headerRecognition.confirmed !== true) errors.push("\u5B8C\u6574\u55AE\u8868\u982D\u8207\u6536\u6B3E\u8FA8\u8B58\u5C1A\u672A\u4EBA\u5DE5\u78BA\u8A8D");
       if (!Number.isSafeInteger(order.headerRecognition.pageNumber) || order.headerRecognition.pageNumber < 1 || order.headerRecognition.pageNumber > order.pageCount) errors.push("\u8ACB\u78BA\u8A8D\u4F86\u6E90\u9801\u78BC\u8207\u7E3D\u9801\u6578");
@@ -389,7 +394,7 @@ function dailyReport(orders, { storeCode, businessDate, pendingSources = 0, gene
       result.excluded.push({ id: o.id, paperNumber: text(o.paperNumber), status: o.status });
       continue;
     }
-    const errors = validateOrder(o, { complete: true }).errors;
+    const errors = validateOrder(o, { complete: true, checkDeliveryAddress: false }).errors;
     if (errors.length) throw Error(`\u8A02\u55AE ${o.paperNumber || o.id} \u5C1A\u6709\u8CC7\u6599\u932F\u8AA4\uFF1A${errors.join("\uFF1B")}\uFF1B\u672A\u7522\u751F\u90E8\u5206\u7E3D\u8868`);
     const number = text(o.paperNumber);
     if (numbers.has(number)) throw Error(`\u7D19\u672C\u55AE\u865F ${number} \u91CD\u8907\uFF0C\u8ACB\u78BA\u8A8D\u5F8C\u518D\u4E0B\u8F09\u6BCF\u65E5\u7E3D\u8868`);
@@ -1331,6 +1336,19 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
   }
   function refresh2() {
     if (!order) return;
+    const address = root.querySelector('[data-review-field="customer.address"]');
+    if (address) {
+      const required = requiresDeliveryAddress(order), missing = required && !text(order.customer.address);
+      address.required = required;
+      address.setAttribute("aria-required", String(required));
+      address.setAttribute("aria-invalid", String(missing));
+      address.parentElement.firstChild.textContent = required ? "\u5730\u5740\uFF08\u6709\u8A02\u8CA8\uFF0C\u5FC5\u586B\uFF09" : "\u5730\u5740";
+      const hint = root.querySelector("#review-address-hint");
+      if (hint) {
+        hint.textContent = required ? "\u672C\u55AE\u542B\u8A02\u8CA8\u5546\u54C1\uFF0C\u8ACB\u586B\u5BEB\u5BE6\u969B\u6536\u4EF6\u5730\u5740\u5F8C\u518D\u5B8C\u6210\u8986\u6838\u3002" : "\u5168\u90E8\u70BA\u92B7\u8CA8\u6642\uFF0C\u5730\u5740\u53EF\u7559\u7A7A\uFF1B\u82E5\u6539\u9078\u8A02\u8CA8\uFF0C\u5730\u5740\u5C07\u6210\u70BA\u5FC5\u586B\u3002";
+        hint.className = missing ? "error" : "muted";
+      }
+    }
     const errors = reviewErrors(order, { imagePresent: Array.isArray(image) ? image.length > 0 : !!image, sourceConfirmed, existingNumbers: context().existingNumbers, expectedStore: context().expectedStore, allowMultiPage: cloudMode, sourcePageCount: context().sourcePageCount || 0 });
     const profile2 = exportProfile(), erpErrors = profile2 ? revisedPOSErrors([order], profile2) : [];
     const box = root.querySelector("#review-errors");
@@ -1437,7 +1455,7 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
         const file = restoreInput.files[0];
         if (!file || file.size > 1e6) throw Error("\u8ACB\u90781MB\u5167\u7684\u4EBA\u5DE5\u8986\u6838\u5099\u4EFD");
         const b = JSON.parse(await file.text());
-        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32", "20261031-store-orders-r33", "20261031-store-orders-r34", "20261031-store-orders-r35", "20261031-store-orders-r36", "20261031-store-orders-r37", "20261031-store-orders-r38", "20261101-store-orders-r39", "20261101-store-orders-r40"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
+        if (![VERSION, "20261024-store-orders-r10", "20261024-store-orders-r11", "20261024-store-orders-r12", "20261024-store-orders-r13", "20261024-store-orders-r14", "20261025-store-orders-r15", "20261025-store-orders-r16", "20261029-store-orders-r17", "20261029-store-orders-r18", "20261029-store-orders-r19", "20261029-store-orders-r20", "20261029-store-orders-r21", "20261030-store-orders-r22", "20261030-store-orders-r23", "20261030-store-orders-r24", "20261030-store-orders-r25", "20261030-store-orders-r26", "20261031-store-orders-r27", "20261031-store-orders-r28", "20261031-store-orders-r29", "20261031-store-orders-r30", "20261031-store-orders-r31", "20261031-store-orders-r32", "20261031-store-orders-r33", "20261031-store-orders-r34", "20261031-store-orders-r35", "20261031-store-orders-r36", "20261031-store-orders-r37", "20261031-store-orders-r38", "20261101-store-orders-r39", "20261101-store-orders-r40", "20261101-store-orders-r41", "20261101-store-orders-r42"].includes(b.version)) throw Error("\u5099\u4EFD\u7248\u672C\u4E0D\u540C\uFF0C\u8ACB\u78BA\u8A8D\u4F86\u6E90\u7248\u672C");
         if (!cloudMode || b.original?.rows?.length) validateExtraction(b.original);
         if (!b.original.header || JSON.stringify(b.original) !== JSON.stringify(original)) throw Error("\u5099\u4EFD\u8207\u76EE\u524D\u539F\u59CB\u8FA8\u8B58\u4E0D\u540C\uFF0C\u8ACB\u5148\u8F09\u5165\u540C\u4EFD\u539F\u8FA8\u8B58JSON\u8207\u539F\u5716");
         const o = b.reviewedOrder;
@@ -1503,7 +1521,13 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
     head.append(node("span", "", "paper-grid-space"));
     for (const [k, label] of [["name", "\u59D3\u540D"], ["phone", "\u96FB\u8A71\uFF08\u4FDD\u7559\u524D\u5C0E0\uFF09"], ["address", "\u5730\u5740"]]) {
       const input = field(head, label, order.customer[k], (v) => order.customer[k] = v, { key: `customer.${k}` });
-      if (k === "address") input.parentElement.classList.add("wide");
+      if (k === "address") {
+        input.parentElement.classList.add("wide");
+        const hint = node("span", "", "muted");
+        hint.id = "review-address-hint";
+        input.setAttribute("aria-describedby", hint.id);
+        input.parentElement.append(hint);
+      }
     }
     form.append(node("p", `\u539F\u8FA8\u8B58\u65E5\u671F\uFF1A${original.header.businessDate || "\u672A\u8B80\u51FA"}\uFF1B\u7591\u7FA9\uFF1A${original.header.uncertainFields.join("\u3001") || "\u7121"}\u3002\u539F\u59CB\u8FA8\u8B58\u7D50\u679C\u4FDD\u7559\u65BC\u4E0B\u65B9\u8207\u5099\u4EFD\u4E2D\u3002`, "muted"));
     const scroll = node("div", "", "paper-table-scroll"), table = node("table", "", "paper-review-table"), thead = node("thead"), tr = node("tr");
@@ -2662,7 +2686,7 @@ async function invitations() {
   $("cloud-invites").replaceChildren();
   for (const invite of data.invites) {
     const row = node2("div", void 0, "item");
-    row.append(node2("p", `${invite.store_code}\u30FB\u5230\u671F${new Date(invite.expires_at).toLocaleString("zh-TW")}\u30FB\u4F7F\u7528${invite.uses}/${invite.max_uses}${invite.revoked_at ? "\u30FB\u5DF2\u505C\u7528" : ""}`));
+    row.append(node2("h4", `\u540D\u7A31\uFF1A${invite.label || "\u672A\u547D\u540D"}`), node2("p", `${invite.store_code}\u30FB\u5230\u671F${new Date(invite.expires_at).toLocaleString("zh-TW")}\u30FB\u4F7F\u7528${invite.uses}/${invite.max_uses}${invite.revoked_at ? "\u30FB\u5DF2\u505C\u7528" : ""}`));
     if (!invite.revoked_at) {
       const b = node2("button", "\u505C\u7528\u6B64\u9080\u8ACB\u78BC", "secondary");
       b.onclick = () => run(async () => {
@@ -2676,8 +2700,12 @@ async function invitations() {
   }
 }
 $("cloud-invite-create").onclick = () => run(async () => {
-  const result = await api("/guest-invites", "POST", { storeCode: store() });
+  const label = $("cloud-invite-label").value.trim();
+  const result = await api("/guest-invites", "POST", { storeCode: store(), label });
   $("cloud-invite-code").value = result.code;
+  $("cloud-invite-result-name").textContent = `\u672C\u6B21\u9080\u8ACB\u78BC\u540D\u7A31\uFF1A${result.label || label || "\u672A\u547D\u540D"}`;
+  $("cloud-invite-result-name").hidden = false;
+  $("cloud-invite-label").value = "";
   $("cloud-invite-result").hidden = false;
   await invitations();
   message("\u9080\u8ACB\u78BC\u53EA\u986F\u793A\u9019\u4E00\u6B21\u3002\u8ACB\u7531\u7E3D\u90E8\u81EA\u884C\u63D0\u4F9B\u7D66\u7576\u73ED\u540C\u4EC1\uFF0C\u4E0D\u8981\u516C\u958B\u5F35\u8CBC\u3002");
@@ -2712,6 +2740,9 @@ $("cloud-logout").onclick = () => run(async () => {
   state.masterIssue = false;
   state.masterSource = "";
   $("cloud-invite-code").value = "";
+  $("cloud-invite-label").value = "";
+  $("cloud-invite-result-name").textContent = "";
+  $("cloud-invite-result-name").hidden = true;
   $("cloud-master-file").value = "";
   $("cloud-upload").value = "";
   controls();

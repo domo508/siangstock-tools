@@ -7,6 +7,7 @@ const context={console,Uint8Array,ArrayBuffer,TextEncoder,TextDecoder};context.g
 export function example() {
   const o=C.newOrder("test-order-001","R00","2026-10-23");
   Object.assign(o,{paperNumber:"0000123",clerk:"合成測試人",status:"reviewed",reviewed:true,paperTotal:250,paperRowCount:2,masterVersion:"synthetic-v1",sources:[{fileId:"source-file-001",pages:1,verified:true}]});
+  o.customer.address="合成測試市測試路1號";
   o.items=[{sku:"00001",name:"合成商品",color:"白",size:"均碼",quantity:2,unitPrice:100,saleType:"銷貨",matchStatus:"unique"},{sku:"TEST02",name:"另一商品",color:"藍",size:"大",quantity:1,unitPrice:50,saleType:"訂貨",matchStatus:"unique"}];o.payments["現金"]=150;o.payments["中信信用卡"]=100;return o;
 }
 describe("門市訂單規則與POS真實格式往返",()=>{

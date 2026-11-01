@@ -1,4 +1,4 @@
-import * as C from './core.js?v=20261101-store-orders-r41';
+import * as C from './core.js?v=20261101-store-orders-r43';
 
 const counted=new Set(['reviewed','settled','exported','import_unknown','import_failed','erp_created']);
 const excluded=new Set(['pending','needs_info','cancelled']);
@@ -32,7 +32,7 @@ export function dailyReport(orders,{storeCode,businessDate,pendingSources=0,gene
   if(!o||ids.has(o.id)||o.storeCode!==storeCode||o.businessDate!==businessDate||(!counted.has(o.status)&&!excluded.has(o.status)))throw Error('每日訂單重複、狀態或範圍不符');
   ids.add(o.id);
   if(excluded.has(o.status)){result.excluded.push({id:o.id,paperNumber:C.text(o.paperNumber),status:o.status});continue;}
-  const errors=C.validateOrder(o,{complete:true}).errors;
+  const errors=C.validateOrder(o,{complete:true,checkDeliveryAddress:false}).errors;
   if(errors.length)throw Error(`訂單 ${o.paperNumber||o.id} 尚有資料錯誤：${errors.join('；')}；未產生部分總表`);
   const number=C.text(o.paperNumber);if(numbers.has(number))throw Error(`紙本單號 ${number} 重複，請確認後再下載每日總表`);numbers.add(number);
   const t=C.totals(o);for(const k of Object.keys(result.totals)){result.totals[k]+=t[k];if(!Number.isSafeInteger(result.totals[k]))throw Error('每日合計超過允許範圍');}

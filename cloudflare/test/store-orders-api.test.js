@@ -15,7 +15,7 @@ async function register(){file("source-file-001",config.stores.R00.pendingFolder
 async function save(o=order(),version=0,operationId=crypto.randomUUID()){return call("/orders",{order:o,expectedVersion:version,operationId});}
 async function settled(){await register();expect((await save()).status).toBe(200);const r=await call("/settle",{storeCode:"R00",businessDate:"2026-10-23",orders:[{id:"test-order-001",version:1}],confirmed:true,operationId:crypto.randomUUID()});expect(r.status).toBe(200);return r;}
 beforeEach(()=>{
- sql=new DatabaseSync(":memory:");sql.exec(readFileSync("worker/migrations/0042_store_orders.sql","utf8"));sql.exec(readFileSync("worker/migrations/0045_store_order_guests.sql","utf8"));files=new Map();serial=0;
+ sql=new DatabaseSync(":memory:");sql.exec(readFileSync("worker/migrations/0042_store_orders.sql","utf8"));sql.exec(readFileSync("worker/migrations/0045_store_order_guests.sql","utf8"));sql.exec(readFileSync("worker/migrations/0047_store_order_invite_labels.sql","utf8"));files=new Map();serial=0;
  env={DB:database(),ALLOWED_ORIGINS:"https://siangstock.com",STORE_ORDERS_CONFIG:JSON.stringify(config),STORE_ORDERS_SERVICE_ACCOUNT:JSON.stringify({client_email:"service@test.gserviceaccount.com",private_key:"test-not-a-key"}),ACCESS_AUD:"test",ACCESS_TEAM_DOMAIN:"test"};
  vi.spyOn(OrderDrive.prototype,"checkFolder").mockResolvedValue(undefined);vi.spyOn(OrderDrive.prototype,"checkPermissions").mockResolvedValue(undefined);
  vi.spyOn(OrderDrive.prototype,"meta").mockImplementation(async id=>{if(!files.has(id))throw Error("missing");const f=files.get(id);return {...f,size:String(JSON.stringify(f.content).length),md5Checksum:"stable-md5"};});
@@ -126,4 +126,19 @@ it('上傳操作重複檔案、不合法大小、舊版本與其他訪客均不�
  expect((await call('/upload-confirm',body)).status).toBe(409);expect((await call('/upload-confirm',{...body,size:0})).status).toBe(400);expect((await call('/upload-confirm',body,EMAIL,{'X-Store-Orders-Version':'old'})).status).toBe(409);
  const cookie=await guestLogin();expect((await guestCall(cookie,'/upload-confirm',body)).status).toBe(409);
  files.delete('duplicate-source-002');expect((await guestCall(cookie,'/upload-confirm',body)).status).toBe(403);
+});
+
+it('後端拒絕含訂貨卻無地址的已覆核提交，補址後才可保存；未完成草稿仍可暫存',async()=>{
+ await register();const o=order();o.customer.address=' 　';
+ const rejected=await save(o);expect(rejected.status).toBe(400);expect(rejected.body.error).toContain('地址');expect(sql.prepare('SELECT count(*) n FROM store_orders').get().n).toBe(0);
+ o.status='pending';o.reviewed=false;expect((await save(o)).status).toBe(200);
+ o.status='reviewed';o.reviewed=true;expect((await save(o,1)).status).toBe(400);
+ o.customer.address='合成測試市測試路1號';expect((await save(o,1)).status).toBe(200);
+});
+
+it('只有總部可產生及查看邀請碼名稱，且不改期限次數',async()=>{
+ env.STORE_ORDERS_GUEST_KEY='synthetic-guest-secret-64-characters-aaaaaaaaaaaaaaaaaaaa';
+ expect((await call('/guest-invites',{storeCode:'R00',label:'合成同仁'})).status).toBe(403);
+ const r=await call('/guest-invites',{storeCode:'R00',label:'  合成同仁／早班  '},HQ);expect(r.status).toBe(200);expect(r.body.label).toBe('合成同仁／早班');expect(r.body.maxUses).toBe(25);
+ const list=await call('/guest-invites',undefined,HQ);expect(list.body.invites[0].label).toBe(r.body.label);expect(JSON.stringify(list.body)).not.toContain(r.body.code);expect((await call('/guest-invites',{storeCode:'R00',label:'合成',days:1},HQ)).status).toBe(400);
 });

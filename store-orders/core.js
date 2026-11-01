@@ -1,5 +1,5 @@
 // Shared browser/Worker business rules. No customer data is persisted here.
-export const VERSION = "20261101-store-orders-r41";
+export const VERSION = "20261101-store-orders-r43";
 export const READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 export const WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 export const POS_HEADERS = Object.freeze(["單號", "結帳日期", "開單倉庫", "出貨倉庫", "取貨倉庫", "會員卡號", "銷別", "備註", "貨號", "顏色", "顏色編碼", "尺碼", "尺碼編碼", "是否贈品", "導購", "實收率", "數量", "中信信用卡", "現金", "百貨現金卷", "LinePay"]);
@@ -46,7 +46,9 @@ export function totals(order) {
   if (![quantity, amountCents, paidCents].every(Number.isSafeInteger)) throw new Error("合計超過允許範圍");
   return { orders: 1, rows: order.items.length, quantity, amountCents, paidCents, unpaidCents: cents(order.unpaid) };
 }
-export function validateOrder(order, { complete = false } = {}) {
+export function requiresDeliveryAddress(order) { return Array.isArray(order?.items) && order.items.some(item => item?.saleType === "訂貨"); }
+export const DELIVERY_ADDRESS_ERROR = "本單含訂貨商品，請填寫客戶地址後再完成覆核";
+export function validateOrder(order, { complete = false, checkDeliveryAddress = true } = {}) {
   const errors = [], warnings = [];
   if(order?.priceBasis!==undefined&&!["unit","line_total","unknown"].includes(order.priceBasis))errors.push("價格計算方式無效");
   if(complete&&order?.priceBasis==="unknown")errors.push("請確認價格是單件單價或本列商品總金額");
@@ -60,6 +62,7 @@ export function validateOrder(order, { complete = false } = {}) {
   if (!Number.isSafeInteger(order.pageCount) || order.pageCount < 1 || order.pageCount > 30) errors.push("總頁數須為1至30頁");
   if(order.headerRecognition){const h=order.headerRecognition;if(typeof h!=="object"||Array.isArray(h)||typeof h.confirmed!=="boolean"||typeof h.rawDate!=="string"||h.rawDate.length>100||!Array.isArray(h.uncertainFields)||h.uncertainFields.length>30||h.uncertainFields.some(v=>typeof v!=="string"||v.length>100))errors.push("表頭辨識覆核資料格式錯誤");}
   if (complete) {
+    if (checkDeliveryAddress && requiresDeliveryAddress(order) && !text(order.customer?.address)) errors.push(DELIVERY_ADDRESS_ERROR);
     if(order.headerRecognition){if(order.headerRecognition.confirmed!==true)errors.push("完整單表頭與收款辨識尚未人工確認");if(!Number.isSafeInteger(order.headerRecognition.pageNumber)||order.headerRecognition.pageNumber<1||order.headerRecognition.pageNumber>order.pageCount)errors.push("請確認來源頁碼與總頁數");}
     if (!text(order.paperNumber) || !text(order.clerk)) errors.push("請填紙本單號與經手人");
     if (!order.items.length) errors.push("至少需有一筆商品");

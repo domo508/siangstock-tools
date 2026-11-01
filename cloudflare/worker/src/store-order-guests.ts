@@ -8,11 +8,12 @@ const cookie=(token:string,seconds:number)=>`__Secure-so_guest=${token}; Path=/a
 export const GUEST_INVITE_DAYS=20;
 export const GUEST_INVITE_USES=25;
 export async function issueGuestInvite(env:GuestEnv,actor:string,storeCode:string,options:Record<string,unknown>={}){
- key(env);if(Object.keys(options).length)fail('每組邀請碼固定20天及25次登入，不接受自訂期限或次數');
+ key(env);if(Object.keys(options).some(k=>k!=='label'))fail('每組邀請碼固定20天及25次登入，不接受自訂期限或次數');
+ const raw=options.label;if(raw!==undefined&&(typeof raw!=='string'||raw.length>80||/[\u0000-\u001f\u007f]/.test(raw)))fail('邀請碼名稱須為80字內的單行文字');const label=typeof raw==='string'?raw.trim():'';
  const maxUses=GUEST_INVITE_USES;
  const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',code=[...crypto.getRandomValues(new Uint8Array(20))].map(v=>alphabet[v&31]).join(''),id=crypto.randomUUID(),at=new Date().toISOString(),expires=new Date(Date.now()+GUEST_INVITE_DAYS*86400000).toISOString();
- await env.DB.prepare('INSERT INTO store_order_invites(id,store_code,code_hash,expires_at,max_uses,uses,created_at,created_by,version) VALUES (?,?,?,?,?,0,?,?,1)').bind(id,storeCode,await digest(code),expires,maxUses,at,actor).run();
- return {id,code:code.match(/.{5}/g)!.join('-'),storeCode,expiresAt:expires,maxUses,version:1};
+ await env.DB.prepare('INSERT INTO store_order_invites(id,store_code,code_hash,expires_at,max_uses,uses,created_at,created_by,version,label) VALUES (?,?,?,?,?,0,?,?,1,?)').bind(id,storeCode,await digest(code),expires,maxUses,at,actor,label).run();
+ return {id,code:code.match(/.{5}/g)!.join('-'),storeCode,expiresAt:expires,maxUses,version:1,label};
 }
 export async function redeemGuestInvite(request:Request,env:GuestEnv,body:any,validStores:string[]){
  const secret=key(env),ip=request.headers.get('CF-Connecting-IP');if(!ip)fail('無法確認來源網路，請從公司正式訪客入口操作',403);
