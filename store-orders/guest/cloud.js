@@ -1,5 +1,5 @@
 // store-orders/core.js
-var VERSION = "20261101-store-orders-r45";
+var VERSION = "20261101-store-orders-r46";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -908,15 +908,34 @@ function allocateBundle(order, group) {
   if (lines.reduce((n, l) => n + l.amountCents, 0) !== Number(cents2)) throw Error("\u7D44\u5408\u62C6\u50F9\u91D1\u984D\u4E0D\u5B88\u6046");
   return { groupId: group.id, paperCode: group.paperCode || "", amountCents: Number(cents2), method: "cost-weighted-unit-integer-v1", lines };
 }
+function ordinaryERPLines(order, item, index) {
+  if (order.priceBasis !== "line_total") return [{ index, quantity: item.quantity, unitPrice: ordinaryERPPrice(order, item) }];
+  if (!Number.isSafeInteger(item.quantity) || item.quantity < 1 || item.quantity > 1e5) throw Error("\u6578\u91CF\u9808\u70BA1\u81F3100000\u7684\u6574\u6578");
+  const amount = cents(item.unitPrice);
+  if (amount % 100) throw Error("\u672C\u5217\u7E3D\u91D1\u984D\u542B\u5C0F\u6578\uFF0C\u7121\u6CD5\u4EE5\u6574\u5143ERP\u55AE\u50F9\u4FDD\u6301\u539F\u6210\u4EA4\u7E3D\u984D\uFF0C\u8ACB\u78BA\u8A8D\u50F9\u683C");
+  const total = amount / 100, low = Math.floor(total / item.quantity), highQuantity = total % item.quantity;
+  return highQuantity ? [{ index, quantity: highQuantity, unitPrice: low + 1 }, { index, quantity: item.quantity - highQuantity, unitPrice: low }] : [{ index, quantity: item.quantity, unitPrice: low }];
+}
 function resolvedERPPrices(order) {
-  const prices = /* @__PURE__ */ new Map(), groups = [];
-  for (const [i, item] of order.items.entries()) if (!totalOnlyGroup(order, item)) prices.set(i, ordinaryERPPrice(order, item));
+  const prices = /* @__PURE__ */ new Map(), groups = [], byItem = /* @__PURE__ */ new Map();
+  for (const [i, item] of order.items.entries()) if (!totalOnlyGroup(order, item)) try {
+    const plan = ordinaryERPLines(order, item, i);
+    byItem.set(i, plan);
+    if (plan.length === 1) prices.set(i, plan[0].unitPrice);
+  } catch (e) {
+    throw Error(`\u55AE\u865F ${order.paperNumber || "\u672A\u586B"} \u7B2C${i + 1}\u5217\uFF08${text(item.sku) || "\u8CA8\u865F\u672A\u586B"}\uFF09\uFF1A${e.message}`);
+  }
   for (const group of order.priceGroups || []) if (group.pricingMode === "total_only") {
     const allocation = allocateBundle(order, group);
     groups.push(allocation);
-    for (const line of allocation.lines) prices.set(line.index, line.unitPrice);
+    for (const line of allocation.lines) {
+      prices.set(line.index, line.unitPrice);
+      byItem.set(line.index, [{ index: line.index, quantity: line.quantity, unitPrice: line.unitPrice }]);
+    }
   }
-  return { prices, groups };
+  const lines = order.items.flatMap((_, i) => byItem.get(i) || []);
+  if (lines.length < order.items.length) throw Error("ERP\u62C6\u5217\u8A08\u756B\u7F3A\u5C11\u5546\u54C1");
+  return { prices, groups, lines };
 }
 
 // store-orders/pos-template.js
@@ -946,25 +965,27 @@ function revisedPOSRows(orders, profile2 = {}) {
     if (numbers.has(order.paperNumber)) throw Error("\u7D19\u672C\u55AE\u865F\u91CD\u8907\uFF0C\u5DF2\u505C\u6B62\u7522\u6A94");
     numbers.add(order.paperNumber);
     const resolved = resolvedERPPrices(order);
-    return order.items.map((item, i) => {
+    return resolved.lines.map((line, lineNo) => {
+      const i = line.index, item = order.items[i];
       const [billing, shipping, pickup] = warehouses(order.storeCode, item.saleType);
-      const value = { "\u55AE\u865F": order.paperNumber, "\u7D50\u5E33\u65E5\u671F": order.businessDate.replaceAll("-", "/"), "\u958B\u55AE\u5009\u5EAB": billing, "\u51FA\u8CA8\u5009\u5EAB": shipping, "\u53D6\u8CA8\u5009\u5EAB": pickup, "\u6703\u54E1\u7DE8\u865F": String(order.memberNumber ?? ""), "\u59D3\u540D": String(order.customer?.name ?? ""), "\u96FB\u8A71": String(order.customer?.phone ?? ""), "\u5730\u5740": String(order.customer?.address ?? ""), "\u5099\u8A3B": String(order.note ?? ""), "\u4E2D\u4FE1\u4FE1\u7528\u5361": i === 0 ? cents(order.payments["\u4E2D\u4FE1\u4FE1\u7528\u5361"]) / 100 : "", "\u73FE\u91D1": i === 0 ? cents(order.payments["\u73FE\u91D1"]) / 100 : "", "\u767E\u8CA8\u73FE\u91D1\u5377": i === 0 ? cents(order.payments["\u767E\u8CA8\u73FE\u91D1\u5377"]) / 100 : "", "LinePay": i === 0 ? cents(order.payments.LinePay) / 100 : "", "\u92B7\u5225": item.saleType, "\u8CA8\u865F": text(item.sku), "\u6578\u91CF": item.quantity, "\u984F\u8272": text(item.color), "\u8272\u865F": text(item.colorCode), "\u5C3A\u78BC": text(item.size), "\u78BC\u865F": text(item.sizeCode), "\u8D08\u54C1": "", "\u5C0E\u8CFC": "", "\u5BE6\u6536\u7387": 100, [profile2.template.priceHeader]: resolved.prices.get(i) };
+      const value = { "\u55AE\u865F": order.paperNumber, "\u7D50\u5E33\u65E5\u671F": order.businessDate.replaceAll("-", "/"), "\u958B\u55AE\u5009\u5EAB": billing, "\u51FA\u8CA8\u5009\u5EAB": shipping, "\u53D6\u8CA8\u5009\u5EAB": pickup, "\u6703\u54E1\u7DE8\u865F": String(order.memberNumber ?? ""), "\u59D3\u540D": String(order.customer?.name ?? ""), "\u96FB\u8A71": String(order.customer?.phone ?? ""), "\u5730\u5740": String(order.customer?.address ?? ""), "\u5099\u8A3B": String(order.note ?? ""), "\u4E2D\u4FE1\u4FE1\u7528\u5361": lineNo === 0 ? cents(order.payments["\u4E2D\u4FE1\u4FE1\u7528\u5361"]) / 100 : "", "\u73FE\u91D1": lineNo === 0 ? cents(order.payments["\u73FE\u91D1"]) / 100 : "", "\u767E\u8CA8\u73FE\u91D1\u5377": lineNo === 0 ? cents(order.payments["\u767E\u8CA8\u73FE\u91D1\u5377"]) / 100 : "", "LinePay": lineNo === 0 ? cents(order.payments.LinePay) / 100 : "", "\u92B7\u5225": item.saleType, "\u8CA8\u865F": text(item.sku), "\u6578\u91CF": line.quantity, "\u984F\u8272": text(item.color), "\u8272\u865F": text(item.colorCode), "\u5C3A\u78BC": text(item.size), "\u78BC\u865F": text(item.sizeCode), "\u8D08\u54C1": "", "\u5C0E\u8CFC": "", "\u5BE6\u6536\u7387": 100, [profile2.template.priceHeader]: line.unitPrice };
       return profile2.template.headers.map((h) => value[h]);
     });
   });
 }
 function assertRevisedPOSConservation(orders, rows, headers) {
-  const col = (h) => headers.indexOf(h), expectedRows = orders.reduce((n, o) => n + o.items.length, 0);
+  const col = (h) => headers.indexOf(h), expectedRows = orders.reduce((n, o) => n + resolvedERPPrices(o).lines.length, 0);
   if (rows.length !== expectedRows || rows.some((r) => r.length !== headers.length)) throw Error("\u65B0\u7248POS\u5217\u6578\u6216\u6B04\u6578\u4E0D\u5B88\u6046");
   for (const o of orders) {
     const actual = rows.filter((r) => r[col("\u55AE\u865F")] === o.paperNumber), t = totals(o);
     let qty = 0, amount = 0, paid = 0;
-    if (actual.length !== o.items.length) throw Error("\u65B0\u7248POS\u54C1\u9805\u5217\u6578\u4E0D\u5B88\u6046");
+    if (actual.length !== resolvedERPPrices(o).lines.length) throw Error("\u65B0\u7248POS\u62C6\u5217\u6578\u91CF\u4E0D\u5B88\u6046");
     const priceCol = headers.findIndex((h) => PRICE_HEADERS.includes(h)), resolved = resolvedERPPrices(o);
     for (const [i, r] of actual.entries()) {
-      const item = o.items[i];
+      const line = resolved.lines[i], item = o.items[line.index];
       if (r[col("\u6703\u54E1\u7DE8\u865F")] !== String(o.memberNumber ?? "")) throw Error("POS\u6703\u54E1\u7DE8\u865F\u8207\u8986\u6838\u5167\u5BB9\u4E0D\u4E00\u81F4");
-      if (r[col("\u8CA8\u865F")] !== text(item.sku) || r[col("\u6578\u91CF")] !== item.quantity || r[priceCol] !== resolved.prices.get(i) || r[col("\u92B7\u5225")] !== item.saleType || JSON.stringify(["\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB"].map((h) => r[col(h)])) !== JSON.stringify(warehouses(o.storeCode, item.saleType))) throw Error("\u65B0\u7248POS\u8CA8\u865F\u3001\u6578\u91CF\u3001\u50F9\u683C\u6216\u5009\u5EAB\u4E0D\u5B88\u6046");
+      if (r[col("\u8CA8\u865F")] !== text(item.sku) || r[col("\u6578\u91CF")] !== line.quantity || r[priceCol] !== line.unitPrice || r[col("\u92B7\u5225")] !== item.saleType || JSON.stringify(["\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB"].map((h) => r[col(h)])) !== JSON.stringify(warehouses(o.storeCode, item.saleType))) throw Error("\u65B0\u7248POS\u8CA8\u865F\u3001\u6578\u91CF\u3001\u50F9\u683C\u6216\u5009\u5EAB\u4E0D\u5B88\u6046");
+      for (const [h, k] of [["\u984F\u8272", "color"], ["\u8272\u865F", "colorCode"], ["\u5C3A\u78BC", "size"], ["\u78BC\u865F", "sizeCode"]]) if (r[col(h)] !== text(item[k])) throw Error("\u65B0\u7248POS\u984F\u8272\u6216\u5C3A\u78BC\u4E0D\u5B88\u6046");
       qty += r[col("\u6578\u91CF")];
       amount += r[col("\u6578\u91CF")] * cents(r[priceCol]);
       paid += ["\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"].reduce((n, h) => n + cents(r[col(h)] === "" ? 0 : r[col(h)]), 0);
@@ -988,7 +1009,7 @@ function buildRevisedPOS(orders, XLSX2, profile2 = {}) {
   ws["!merges"] = structuredClone(t.merges);
   let start = 2;
   for (const order of orders) {
-    const end = start + order.items.length - 1;
+    const end = start + resolvedERPPrices(order).lines.length - 1;
     for (let c = 0; c < 14; c++) {
       let first = start;
       for (let r = start + 1; r <= end + 1; r++) {
@@ -1023,8 +1044,9 @@ function assertMergedPOSConservation(orders, wb, XLSX2, headers) {
   const boundaries = [];
   let at = 2;
   for (const o of orders) {
-    boundaries.push({ start: at, end: at + o.items.length - 1 });
-    at += o.items.length;
+    const count = resolvedERPPrices(o).lines.length;
+    boundaries.push({ start: at, end: at + count - 1 });
+    at += count;
   }
   const covered = /* @__PURE__ */ new Set();
   for (const m of ws["!merges"] || []) {
@@ -1836,6 +1858,25 @@ var guestPage = location.pathname.startsWith("/store-orders/guest/");
 var apiPrefix = guestPage ? "/api/store-orders-guest" : "/api/store-orders";
 var state = { listCache: /* @__PURE__ */ new Map(), session: null, master: null, masterIssue: false, masterSource: "", current: null, base: "", sources: [], pages: [], urls: [], queue: [], busy: false, refreshSerial: 0, refreshing: false, selectedSources: /* @__PURE__ */ new Set(), incomingSignature: "", previewUrls: [], sourcePreviews: /* @__PURE__ */ new Map(), correction: false, settlement: null, aiOperation: null, batchView: null, batchSignature: "", batchSerial: 0 };
 var feedback = createFlowFeedback();
+var scopeKey = () => `store-orders-query:${state.session?.email || "disconnected"}`;
+function rememberScope() {
+  if (!hq()) return;
+  try {
+    localStorage.setItem(scopeKey(), JSON.stringify({ storeCode: store(), date: $("cloud-date").value }));
+  } catch {
+  }
+}
+function restoreScope() {
+  if (!hq()) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(scopeKey()) || "null");
+    if (saved && Object.hasOwn(state.session.stores, saved.storeCode) && validDate(saved.date)) {
+      $("cloud-store").value = saved.storeCode;
+      $("cloud-date").value = saved.date;
+    }
+  } catch {
+  }
+}
 var key = () => `store-orders-cloud:${state.session?.email || "disconnected"}`;
 var review = createReview($("cloud-review"), { cloudMode: true, requireVersion: () => guard.require(), context: () => ({ expectedStore: store(), existingNumbers: [], sourcePageCount: state.pages.length, guest: !!state.session?.guest }) });
 var profile = { get: builtInPOSProfile, setBlocked() {
@@ -1896,6 +1937,9 @@ function controls() {
   $("cloud-correct").hidden = !hq() || !state.current?.batchId || !["settled", "import_failed"].includes(state.current?.status);
   $("cloud-ai").disabled = disabled || locked || !state.master || !state.pages.length || !state.session?.recognitionReady;
   $("cloud-pos").hidden = !hq();
+  $("cloud-pos-date").value = $("cloud-date").value;
+  $("cloud-pos-date").disabled = disabled || !hq();
+  $("cloud-pos-scope").textContent = `\u9580\u5E02 ${store() || "\u5C1A\u672A\u9078\u64C7"}\uFF5C\u696D\u52D9\u65E5\u671F ${$("cloud-date").value || "\u5C1A\u672A\u9078\u64C7"}\uFF08\u8207\u6B65\u9A5F4\u540C\u6B65\uFF09`;
   $("cloud-pos-batch").disabled = disabled || !hq();
   $("cloud-pos-refresh").disabled = disabled || !hq() || !$("cloud-pos-batch").value;
   $("cloud-export").disabled = disabled || !hq() || !state.session?.productionExportEnabled || !state.batchView?.orders.length || state.batchView.downloaded && !$("cloud-pos-redownload").checked;
@@ -2140,6 +2184,7 @@ async function openOrder(id, discard = false) {
   feedback.guide("review", "\u4E0B\u4E00\u6B65\uFF1A\u6838\u5C0D\u9019\u5F35\u8A02\u55AE", "\u8ACB\u7531\u8868\u982D\u5F80\u4E0B\u6838\u5C0D\u5546\u54C1\u8207\u4ED8\u6B3E\uFF1B\u6B64\u52D5\u4F5C\u4E0D\u6703\u91CD\u65B0\u547C\u53EBAI\u3002", { scroll: true });
 }
 async function refresh() {
+  rememberScope();
   const serial = ++state.refreshSerial;
   const code = store(), date = $("cloud-date").value;
   if (!validStoreCode(code) || !validDate(date)) throw Error("\u8ACB\u9078\u64C7\u6709\u6548\u9580\u5E02\u8207\u65E5\u671F");
@@ -2202,6 +2247,7 @@ async function connect(resumed = null) {
   other.value = "__other__";
   $("cloud-store").append(other);
   if (Object.hasOwn(s.stores, "R14")) $("cloud-store").value = "R14";
+  restoreScope();
   $("cloud-session").textContent = `${s.email}\u30FB${hq() ? "\u7E3D\u90E8" : "\u9580\u5E02"}\u30FB${s.recognitionReady ? "AI\u8FA8\u8B58\u5DF2\u8A2D\u5B9A" : "AI\u672A\u8A2D\u5B9A\uFF0C\u53EF\u4EBA\u5DE5\u8986\u6838"}${s.guest && s.expiresAt ? "\u30FB\u767B\u5165\u6709\u6548\u81F3 " + new Date(s.expiresAt).toLocaleString("zh-TW") : ""}`;
   state.settlement = JSON.parse(sessionStorage.getItem(key() + ":settlement") || "null");
   if (!guestPage) configure(s.googleClientId);
@@ -2389,7 +2435,22 @@ async function filterDay() {
   await refresh();
   message(`\u5DF2\u66F4\u65B0 ${$("cloud-date").value} \u6E05\u55AE\uFF1B\u76EE\u524D\u8986\u6838\u4E2D\u7684\u8A02\u55AE\u53CA\u672A\u4FDD\u5B58\u4FEE\u6539\u4FDD\u6301\u539F\u6A23\u3002`);
 }
-$("cloud-date").onchange = () => run(filterDay, { area: "settlement", working: "\u6B63\u5728\u66F4\u65B0\u6240\u9078\u65E5\u671F\u6E05\u55AE\u2026" });
+$("cloud-pos-date").onchange = () => {
+  const date = $("cloud-pos-date").value;
+  if (!validDate(date)) {
+    controls();
+    return;
+  }
+  $("cloud-date").value = date;
+  state.batchView = null;
+  state.batchSignature = "";
+  void run(filterDay, { area: "pos", working: "\u6B63\u5728\u66F4\u65B0\u6240\u9078\u65E5\u671F\u7684\u7D50\u7B97\u6279\u6B21\u2026" });
+};
+$("cloud-date").onchange = () => {
+  state.batchView = null;
+  state.batchSignature = "";
+  void run(filterDay, { area: "settlement", working: "\u6B63\u5728\u66F4\u65B0\u6240\u9078\u65E5\u671F\u6E05\u55AE\u2026" });
+};
 $("cloud-list-refresh").onclick = () => run(filterDay, { area: "settlement", working: "\u6B63\u5728\u66F4\u65B0\u6240\u9078\u65E5\u671F\u6E05\u55AE\u2026" });
 $("cloud-ai").onclick = async () => {
   const status = $("cloud-ai-status");
@@ -2606,13 +2667,15 @@ async function loadBatch() {
   const view = await api("/batches/" + encodeURIComponent(id));
   if (serial !== state.batchSerial || code !== store() || date !== $("cloud-date").value || id !== $("cloud-pos-batch").value) return;
   if (view.batch.storeCode !== code || view.batch.businessDate !== date) throw Error("\u6279\u6B21\u9580\u5E02\u6216\u65E5\u671F\u4E0D\u540C\uFF0C\u8ACB\u91CD\u65B0\u8B80\u53D6");
+  const t = view.summary, posRows2 = view.orders.reduce((n, o) => n + resolvedERPPrices(o).lines.length, 0), parts = [node2("h3", `${code}\uFF5C${date}\uFF5C\u6279\u6B21 ${id}`), node2("p", `${t.orders}\u7B46\u8A02\u55AE\uFF0F\u539F\u55AE${t.rows}\u5217\uFF0FPOS ${posRows2}\u5217\uFF0F${t.quantity}\u4EF6\uFF5C\u5546\u54C1\u7E3D\u984D ${t.amountCents / 100} \u5143\uFF5C\u4ED8\u6B3E ${t.paidCents / 100} \u5143\uFF5C\u4F5C\u5EE2\u6392\u9664 ${view.excludedCount}\u7B46`)];
+  if (t.posRows !== void 0 && t.posRows !== posRows2) throw Error("POS\u62C6\u5217\u6458\u8981\u4E0D\u4E00\u81F4\uFF0C\u8ACB\u91CD\u65B0\u8B80\u53D6");
   state.batchView = view;
-  const t = view.summary, parts = [node2("h3", `${code}\uFF5C${date}\uFF5C\u6279\u6B21 ${id}`), node2("p", `${t.orders}\u7B46\u8A02\u55AE\uFF0F${t.rows}\u5217\uFF0F${t.quantity}\u4EF6\uFF5C\u5546\u54C1\u7E3D\u984D ${t.amountCents / 100} \u5143\uFF5C\u4ED8\u6B3E ${t.paidCents / 100} \u5143\uFF5C\u4F5C\u5EE2\u6392\u9664 ${view.excludedCount}\u7B46`)];
   const payments = PAYMENTS.map((k) => `${k} ${view.orders.reduce((n, o) => n + cents(o.payments[k]), 0) / 100} \u5143`).join("\uFF5C");
   parts.push(node2("p", payments));
   for (const o of view.orders) parts.push(node2("p", `\u55AE\u865F ${o.paperNumber}\uFF5C${o.items.length}\u5217\uFF5C${totals(o).amountCents / 100} \u5143`));
   if (view.downloaded) parts.push(node2("p", "\u6B64\u6279\u6B21\u5DF2\u7522\u6A94\u3002\u88DC\u4E0B\u8F09\u4E0D\u6703\u5EFA\u7ACB\u65B0\u7248\u672C\uFF1B\u532F\u5165\u524D\u52D9\u5FC5\u78BA\u8A8DERP\u5C1A\u672A\u5EFA\u55AE\u3002", "warning"));
   if (!state.session.productionExportEnabled) parts.push(node2("p", "\u6B63\u5F0FPOS\u7522\u6A94\u5C1A\u672A\u958B\u653E\uFF1B\u6279\u6B21\u6458\u8981\u53EF\u5148\u6838\u5C0D\uFF0C\u958B\u653E\u5F8C\u5373\u53EF\u4E0B\u8F09\u3002", "warning"));
+  if (posRows2 > t.rows) parts.push(node2("p", "\u90E8\u5206\u5546\u54C1\u7E3D\u50F9\u7121\u6CD5\u6574\u9664\u6578\u91CF\uFF0CPOS\u5DF2\u6309\u540C\u4E00\u8CA8\u865F\u62C6\u70BA\u76F8\u9130\u6574\u6578\u55AE\u50F9\uFF1B\u4EF6\u6578\u3001\u6210\u4EA4\u7E3D\u984D\u8207\u4ED8\u6B3E\u4FDD\u6301\u4E00\u81F4\u3002", "notice"));
   $("cloud-pos-summary").replaceChildren(...parts);
   $("cloud-pos-redownload-label").hidden = !view.downloaded;
   controls();
@@ -2738,6 +2801,10 @@ $("cloud-invite-create").onclick = () => run(async () => {
 $("cloud-invite-refresh").onclick = () => run(invitations);
 $("cloud-logout").onclick = () => run(async () => {
   if (guestPage) await api("/logout", "POST", {});
+  try {
+    localStorage.removeItem(scopeKey());
+  } catch {
+  }
   sessionStorage.removeItem(key());
   sessionStorage.removeItem(key() + ":settlement");
   clear();

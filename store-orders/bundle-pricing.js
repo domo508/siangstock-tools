@@ -1,4 +1,4 @@
-import * as C from './core.js?v=20261101-store-orders-r45';
+import * as C from './core.js?v=20261101-store-orders-r46';
 const abs=x=>x<0n?-x:x;
 function gcd(a,b){while(b)[a,b]=[b,a%b];return a;}
 function egcd(a,b){let x=1n,y=0n,u=0n,v=1n;while(b){const q=a/b;[a,b]=[b,a%b];[x,u]=[u,x-q*u];[y,v]=[v,y-q*v];}return {g:a,x,y};}
@@ -24,4 +24,18 @@ export function allocateBundle(order,group){
  const lines=entries.map(({item,index},i)=>({index,sku:item.sku,quantity:item.quantity,unitCost:String(item.costSnapshot.value),costField:item.costSnapshot.field,masterVersion:item.costSnapshot.masterVersion,unitPrice:Number(prices[i]),amountCents:Number(prices[i]*quantities[i]*100n),weightShare:Number(costs[i]*quantities[i])/Number(weight)}));
  if(lines.reduce((n,l)=>n+l.amountCents,0)!==Number(cents))throw Error('組合拆價金額不守恆');return {groupId:group.id,paperCode:group.paperCode||'',amountCents:Number(cents),method:'cost-weighted-unit-integer-v1',lines};
 }
-export function resolvedERPPrices(order){const prices=new Map(),groups=[];for(const [i,item] of order.items.entries())if(!C.totalOnlyGroup(order,item))prices.set(i,C.ordinaryERPPrice(order,item));for(const group of order.priceGroups||[])if(group.pricingMode==='total_only'){const allocation=allocateBundle(order,group);groups.push(allocation);for(const line of allocation.lines)prices.set(line.index,line.unitPrice);}return {prices,groups};}
+// Only the export expands a paper row. The saved quantity and line total never change.
+export function ordinaryERPLines(order,item,index){
+ if(order.priceBasis!=='line_total')return [{index,quantity:item.quantity,unitPrice:C.ordinaryERPPrice(order,item)}];
+ if(!Number.isSafeInteger(item.quantity)||item.quantity<1||item.quantity>100000)throw Error('數量須為1至100000的整數');
+ const amount=C.cents(item.unitPrice);if(amount%100)throw Error('本列總金額含小數，無法以整元ERP單價保持原成交總額，請確認價格');
+ const total=amount/100,low=Math.floor(total/item.quantity),highQuantity=total%item.quantity;
+ return highQuantity?[{index,quantity:highQuantity,unitPrice:low+1},{index,quantity:item.quantity-highQuantity,unitPrice:low}]:[{index,quantity:item.quantity,unitPrice:low}];
+}
+export function resolvedERPPrices(order){
+ const prices=new Map(),groups=[],byItem=new Map();
+ for(const [i,item] of order.items.entries())if(!C.totalOnlyGroup(order,item))try{const plan=ordinaryERPLines(order,item,i);byItem.set(i,plan);if(plan.length===1)prices.set(i,plan[0].unitPrice);}catch(e){throw Error(`單號 ${order.paperNumber||'未填'} 第${i+1}列（${C.text(item.sku)||'貨號未填'}）：${e.message}`);}
+ for(const group of order.priceGroups||[])if(group.pricingMode==='total_only'){const allocation=allocateBundle(order,group);groups.push(allocation);for(const line of allocation.lines){prices.set(line.index,line.unitPrice);byItem.set(line.index,[{index:line.index,quantity:line.quantity,unitPrice:line.unitPrice}]);}}
+ const lines=order.items.flatMap((_,i)=>byItem.get(i)||[]);if(lines.length<order.items.length)throw Error('ERP拆列計畫缺少商品');
+ return {prices,groups,lines};
+}

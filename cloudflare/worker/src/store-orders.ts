@@ -303,7 +303,7 @@ async function batchExportView(env:OrdersEnv,who:Actor,c:Config,drive:OrderDrive
   const rows=(await env.DB.prepare("SELECT * FROM store_orders WHERE batch_id=? ORDER BY id").bind(id).all<IndexRow>()).results;
   const active=rows.filter(r=>r.status!=="cancelled");
   if(active.length>100)fail("批次超過100筆，請聯絡總部",409);
-  const orders=[];
+  const orders=[];let posRows=0;
   for(const row of active){
     visible(who,row,c);
     if(row.store_code!==batch.store_code||row.business_date!==batch.business_date)fail("批次門市或日期不一致",409);
@@ -311,11 +311,11 @@ async function batchExportView(env:OrdersEnv,who:Actor,c:Config,drive:OrderDrive
     if(!["settled","exported"].includes(row.status))fail("此舊批次含匯入結果狀態或部分產檔，請總部核對，不可整批重產",409);
     const o=await snapshot(env,drive,row),check=validateOrder(o,{complete:true});
     if(check.errors.length)fail(check.errors.join("；"));
-    try{resolvedERPPrices(o);}catch(e){fail(e instanceof Error?e.message:"組合價格未通過");}
+    try{posRows+=resolvedERPPrices(o).lines.length;}catch(e){fail(e instanceof Error?e.message:"組合價格未通過");}
     orders.push(o);
   }
   if(new Set(active.map(r=>r.status)).size>1)fail("批次只有部分訂單已產檔，禁止混合重產",409);
-  const summary=settlementSummary(orders.map(o=>({...o,status:"reviewed"})));
+  const summary={...settlementSummary(orders.map(o=>({...o,status:"reviewed"}))),posRows};
   return {batch:{id:batch.id,storeCode:batch.store_code,businessDate:batch.business_date},orders,summary,excludedCount:rows.length-active.length,downloaded:active.length>0&&active.every(r=>r.status==="exported")};
 }
 async function exportBatch(request:Request,env:OrdersEnv,who:Actor,c:Config,drive:OrderDrive,id:string){
