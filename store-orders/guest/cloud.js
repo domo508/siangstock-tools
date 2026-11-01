@@ -1,5 +1,5 @@
-// store-orders/core.js
-var VERSION = "20261101-store-orders-r47";
+// .local-context/work/store-orders-release-20261030/store-orders/core.js
+var VERSION = "20261101-store-orders-r48";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -315,7 +315,7 @@ function buildPOS(orders, XLSX2, options) {
   return wb;
 }
 
-// store-orders/order-list.js
+// .local-context/work/store-orders-release-20261030/store-orders/order-list.js
 async function listSummaries(rows, { storeCode, businessDate, actor, cache, read }) {
   const out = [];
   for (let i = 0; i < rows.length; i += 3) {
@@ -351,7 +351,7 @@ function voidSavedOrder(order, reason) {
   return { ...structuredClone(order), status: "cancelled", exceptionReason: text(reason) };
 }
 
-// store-orders/daily-report.js
+// .local-context/work/store-orders-release-20261030/store-orders/daily-report.js
 var counted = /* @__PURE__ */ new Set(["reviewed", "settled", "exported", "import_unknown", "import_failed", "erp_created"]);
 var excluded = /* @__PURE__ */ new Set(["pending", "needs_info", "cancelled"]);
 var signature = (rows) => JSON.stringify(rows.map((r) => [r.id, r.version, r.status, r.batch_id || null, r.store_code, r.business_date]).sort((a, b) => a[0].localeCompare(b[0])));
@@ -465,7 +465,7 @@ function dailyWorkbook(report, XLSX2) {
   return book;
 }
 
-// store-orders/source-group.js
+// .local-context/work/store-orders-release-20261030/store-orders/source-group.js
 async function loadSourceGroup(ids, { register, read, decode, existingSources = [] }) {
   if (!ids.length) throw Error("\u8ACB\u5148\u9078\u53D6\u540C\u4E00\u8A02\u55AE\u7684\u7167\u7247");
   if (new Set(ids).size !== ids.length) throw Error("\u7167\u7247\u4E0D\u53EF\u91CD\u8907\u9078\u53D6");
@@ -488,7 +488,7 @@ async function loadSourceGroup(ids, { register, read, decode, existingSources = 
   return { sources, pages };
 }
 
-// store-orders/flow-feedback.js
+// .local-context/work/store-orders-release-20261030/store-orders/flow-feedback.js
 function createFlowFeedback(doc = document) {
   const areas = { session: "cloud-status", master: "cloud-master-feedback", receipt: "cloud-receipt-status", incoming: "cloud-incoming-status", ai: "cloud-ai-status", review: "cloud-review-status", save: "cloud-save-status", settlement: "cloud-settlement-status", hq: "cloud-hq-status", pos: "cloud-pos-status" };
   const anchors = { session: "cloud-login", master: "cloud-master-zone", receipt: "cloud-receipt", incoming: "cloud-incoming-heading", ai: "cloud-ai-zone", review: "cloud-review", save: "cloud-save-zone", settlement: "cloud-settlement", hq: "cloud-hq", pos: "cloud-pos", version: "version-warning" };
@@ -589,7 +589,7 @@ function createFlowFeedback(doc = document) {
   return { begin, finish, show, guide, failure, go };
 }
 
-// store-orders/google.js
+// .local-context/work/store-orders-release-20261030/store-orders/google.js
 var token = "";
 var client = null;
 var expiresAt = 0;
@@ -670,7 +670,7 @@ async function latestMaster(folderId) {
   return { blob: await download(files[0].id), version: `${files[0].id}:${files[0].modifiedTime}` };
 }
 
-// store-orders/source-upload.js
+// .local-context/work/store-orders-release-20261030/store-orders/source-upload.js
 function createSourceUploader({ api: api2, upload: upload2 }) {
   const attempts = /* @__PURE__ */ new Map();
   async function send(file, storeCode, progress = () => {
@@ -706,7 +706,7 @@ function createSourceUploader({ api: api2, upload: upload2 }) {
   return { send, clear: () => attempts.clear() };
 }
 
-// store-orders/runtime.js
+// .local-context/work/store-orders-release-20261030/store-orders/runtime.js
 var VersionGuard = class {
   constructor(fetcher = (...args) => fetch(...args)) {
     this.fetcher = fetcher;
@@ -733,7 +733,7 @@ var VersionGuard = class {
   }
 };
 
-// store-orders/media.js
+// .local-context/work/store-orders-release-20261030/store-orders/media.js
 var BASE = `${typeof location !== "undefined" && location.pathname.startsWith("/store-orders/guest/") ? "/store-orders/guest" : "/store-orders"}/vendor/${VERSION}/`;
 async function pagesFor(file) {
   if (file.size > 2e7) throw Error("\u6BCF\u500B\u6A94\u6848\u6700\u591A20MB\uFF0C\u8ACB\u5206\u9801\u62CD\u651D\u6216\u58D3\u7E2E");
@@ -784,7 +784,7 @@ async function pagesFor(file) {
   return [file];
 }
 
-// store-orders/image-input.js
+// .local-context/work/store-orders-release-20261030/store-orders/image-input.js
 var BAND_RANGES = [[0, 0.36], [0.28, 0.74], [0.66, 1]];
 function imagePlan(width, height, { full = true } = {}) {
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || width * height > 4e7) throw Error("\u5716\u7247\u5C3A\u5BF8\u7121\u6548\u6216\u904E\u5927");
@@ -814,7 +814,7 @@ function prepareImageInput(image, { left = 0, right = 100, top = 0, bottom = 100
   return { preview: encode(0, 0, plan.width, plan.height), image: encode(0, 0, plan.width, plan.height, plan.overview.width, plan.overview.height), detailImages: plan.bands.map((b) => encode(b.x, b.y, b.width, b.height)), plan };
 }
 
-// store-orders/bundle-pricing.js
+// .local-context/work/store-orders-release-20261030/store-orders/bundle-pricing.js
 var abs = (x) => x < 0n ? -x : x;
 function gcd(a, b) {
   while (b) [a, b] = [b, a % b];
@@ -938,7 +938,7 @@ function resolvedERPPrices(order) {
   return { prices, groups, lines };
 }
 
-// store-orders/pos-template.js
+// .local-context/work/store-orders-release-20261030/store-orders/pos-template.js
 var BASE_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u7DE8\u865F", "\u59D3\u540D", "\u96FB\u8A71", "\u5730\u5740", "\u5099\u8A3B", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay", "\u92B7\u5225", "\u8CA8\u865F", "\u6578\u91CF", "\u984F\u8272", "\u8272\u865F", "\u5C3A\u78BC", "\u78BC\u865F", "\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387"]);
 var PRICE_HEADERS = ["\u50F9\u683C"];
 var FINAL_HEADERS = Object.freeze([...BASE_HEADERS.slice(0, 17), "\u50F9\u683C", ...BASE_HEADERS.slice(17)]);
@@ -1077,7 +1077,7 @@ function assertMergedPOSConservation(orders, wb, XLSX2, headers) {
   return rows;
 }
 
-// store-orders/recognition.js
+// .local-context/work/store-orders-release-20261030/store-orders/recognition.js
 var EXTRACTION_SCHEMA = { type: "object", additionalProperties: false, required: ["rows", "sharedPrices", "warnings", "priceBasis"], properties: {
   priceBasis: { type: "string", enum: ["unit", "line_total", "unknown"] },
   rows: { type: "array", items: { type: "object", additionalProperties: false, required: ["row", "sku", "paperName", "quantity", "unitPrice", "saleType", "gift", "uncertain", "groupCode"], properties: { groupCode: { type: "string" }, row: { type: "integer" }, sku: { type: "string" }, paperName: { type: "string" }, quantity: { type: ["integer", "null"] }, unitPrice: { type: ["number", "null"] }, saleType: { type: "string", enum: ["\u92B7\u8CA8", "\u8A02\u8CA8", ""] }, gift: { type: "boolean" }, uncertain: { type: "boolean" } } } },
@@ -1214,7 +1214,7 @@ function validateFullExtraction(data) {
   return data;
 }
 
-// store-orders/review.js
+// .local-context/work/store-orders-release-20261030/store-orders/review.js
 function reviewDraft(raw, master2) {
   const o = useTotalOnlyGroups(extractionOrder(raw, master2));
   o.id = crypto.randomUUID();
@@ -1781,13 +1781,13 @@ function createReview(root, { requireVersion, context, exportProfile = () => nul
   }, refresh: refresh2 };
 }
 
-// store-orders/pos-built-in.js
+// .local-context/work/store-orders-release-20261030/store-orders/pos-built-in.js
 var template = { "headers": ["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u7DE8\u865F", "\u59D3\u540D", "\u96FB\u8A71", "\u5730\u5740", "\u5099\u8A3B", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay", "\u92B7\u5225", "\u8CA8\u865F", "\u6578\u91CF", "\u50F9\u683C", "\u984F\u8272", "\u8272\u865F", "\u5C3A\u78BC", "\u78BC\u865F", "\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387"], "priceHeader": "\u50F9\u683C", "cells": [{ "r": 0, "c": 0, "value": "POS\u55AE\u8CC7\u8A0A", "style": { "patternType": "none" }, "format": null }, { "r": 0, "c": 10, "value": "\u6536\u6B3E\u65B9\u5F0F", "style": { "patternType": "none" }, "format": null }, { "r": 0, "c": 14, "value": "\u8CA8\u54C1\u8CC7\u8A0A", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 0, "value": "\u55AE\u865F", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 1, "value": "\u7D50\u5E33\u65E5\u671F", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 2, "value": "\u958B\u55AE\u5009\u5EAB", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 3, "value": "\u51FA\u8CA8\u5009\u5EAB", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 4, "value": "\u53D6\u8CA8\u5009\u5EAB", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 5, "value": "\u6703\u54E1\u7DE8\u865F", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 6, "value": "\u59D3\u540D", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 7, "value": "\u96FB\u8A71", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 8, "value": "\u5730\u5740", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 9, "value": "\u5099\u8A3B", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 10, "value": "\u4E2D\u4FE1\u4FE1\u7528\u5361", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 11, "value": "\u73FE\u91D1", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 12, "value": "\u767E\u8CA8\u73FE\u91D1\u5377", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 13, "value": "LinePay", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 14, "value": "\u92B7\u5225", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 15, "value": "\u8CA8\u865F", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 16, "value": "\u6578\u91CF", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 17, "value": "\u50F9\u683C", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 18, "value": "\u984F\u8272", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 19, "value": "\u8272\u865F", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 20, "value": "\u5C3A\u78BC", "style": { "patternType": "solid", "fgColor": { "rgb": "FFFF00" }, "bgColor": { "indexed": 64 } }, "format": null }, { "r": 1, "c": 21, "value": "\u78BC\u865F", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 22, "value": "\u8D08\u54C1", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 23, "value": "\u5C0E\u8CFC", "style": { "patternType": "none" }, "format": null }, { "r": 1, "c": 24, "value": "\u5BE6\u6536\u7387", "style": { "patternType": "solid", "fgColor": { "theme": 0 }, "bgColor": { "indexed": 64 } }, "format": null }], "merges": [{ "s": { "c": 10, "r": 0 }, "e": { "c": 13, "r": 0 } }, { "s": { "c": 0, "r": 0 }, "e": { "c": 9, "r": 0 } }, { "s": { "c": 14, "r": 0 }, "e": { "c": 24, "r": 0 } }], "format": "20261030-final" };
 function builtInPOSProfile() {
   return { template: structuredClone(template), paymentMappingConfirmed: true };
 }
 
-// store-orders/merge-pages.js
+// .local-context/work/store-orders-release-20261030/store-orders/merge-pages.js
 function mergeFullPages(input) {
   if (!Array.isArray(input) || !input.length || input.length > 30) throw Error("\u8ACB\u6536\u9F4A1\u81F330\u9801\u4F86\u6E90");
   const pages = input.map((p) => validateExtraction(p));
@@ -1858,7 +1858,7 @@ function mergeFullPages(input) {
   return validateExtraction(out);
 }
 
-// store-orders/cloud.js
+// .local-context/work/store-orders-release-20261030/store-orders/cloud.js
 var $ = (id) => document.getElementById(id);
 var guard = new VersionGuard();
 var guestPage = location.pathname.startsWith("/store-orders/guest/");
