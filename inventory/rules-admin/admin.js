@@ -58,6 +58,7 @@
   }
 
   async function publish() {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return;
     if (!dirty || !draftRules || !Number.isInteger(currentVersion)) return;
     publishButton.disabled = true; setFeedback("正在發布；不會傳送任何 Excel 或庫存資料……", "working");
     try {
@@ -69,7 +70,8 @@
     } catch (error) { publishButton.disabled = false; setFeedback(`${error.message || error}；畫面草稿仍保留。若是版本衝突，請先下載備份再重新載入。`, "error"); }
   }
 
-  function exportRules() {
+  async function exportRules() {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return;
     if (!draftRules) return;
     const blob = new Blob([window.InventoryCore.serializeRules(draftRules)], { type: "application/json;charset=utf-8" });
     const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `公司庫存規則_v${currentVersion || "草稿"}.json`; document.body.appendChild(anchor); anchor.click(); anchor.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -88,4 +90,12 @@
   Object.entries(editors).forEach(([key, editor]) => { editor.add.addEventListener("click", () => addRule(key)); editor.input.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); addRule(key); } }); });
   publishButton.addEventListener("click", publish); exportButton.addEventListener("click", exportRules); reloadButton.addEventListener("click", () => loadLatest(false)); restoreButton.addEventListener("click", restoreDefaults); importButton.addEventListener("click", () => rulesInput.click()); rulesInput.addEventListener("change", () => importRules(rulesInput.files[0]));
   if (!window.InventoryCore || !window.InventoryRulesClient || !window.INVENTORY_RULES) setFeedback("管理頁元件不完整，已禁止發布。", "error"); else loadLatest(true);
+
+  // Read-only readiness for the shared guide; no calculation or write is performed here.
+  globalThis.CompanyGuidance?.register({ statuses: '#rules-feedback', resolve() {
+    const S=globalThis.CompanyGuidance.step;
+    if (!draftRules) return S('先載入公司最新版規則', '請查看載入結果；未取得最新版時不要編輯或發布。', '#rules-feedback');
+    if (dirty) return S('核對草稿，再發布公司規則', '尚未發布的修改只在此頁；確認無誤後自行按發布，不會由指引代送。', '#publish-rules');
+    return S('查看或編輯分類規則', '目前沒有未發布修改；需要調整時再編輯，勿為了繼續而重複發布。', '#rules-title');
+  }});
 })();

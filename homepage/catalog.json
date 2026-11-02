@@ -1,5 +1,5 @@
 {
-  "version": "20261101-store-orders-entry-r2",
+  "version": "20261102-company-guidance-home-r1",
   "departments": [
     {
       "id": "admin",
@@ -33,7 +33,7 @@
       "name": "A、B庫存成本稽核分析",
       "primary": "admin",
       "collaborators": [],
-      "href": "/cost-analysis/",
+      "href": "/cost-analysis/?deploy=20261102-company-guidance-r1",
       "status": "立即使用",
       "description": "整合庫存、進貨與銷售，核對商品數量、成本及門市配對差異。",
       "data": "Excel 本機分析"
@@ -43,7 +43,7 @@
       "name": "財務供應商對帳比對",
       "primary": "admin",
       "collaborators": [],
-      "href": "/supplier-reconciliation/",
+      "href": "/supplier-reconciliation/?deploy=20261102-company-guidance-r1",
       "status": "立即使用",
       "description": "按月核對 ERP 收貨與供應商報表，追蹤跨月與單價差異。",
       "data": "Excel 本機比對"
@@ -53,7 +53,7 @@
       "name": "期初期末庫存資料整理",
       "primary": "admin",
       "collaborators": [],
-      "href": "/inventory/",
+      "href": "/inventory/?deploy=20261102-company-guidance-r1",
       "status": "立即使用",
       "description": "整理庫存 Excel、套用集中分類規則，保留原始資料並另存新檔。",
       "data": "Excel 本機整理"
@@ -63,7 +63,7 @@
       "name": "庫存採購規劃",
       "primary": "merch",
       "collaborators": [],
-      "href": "/procurement-planning/?deploy=20261028-google-sources-r1",
+      "href": "/procurement-planning/?deploy=20261102-company-guidance-r1",
       "status": "立即使用",
       "description": "從需求試算、分批覆核到採購核准，銜接公司額度與 ERP。",
       "data": "本機運算・共用批次"
@@ -75,7 +75,7 @@
       "collaborators": [
         "design"
       ],
-      "href": "/competitive-analysis/?deploy=20261024-competitive-analysis-r7",
+      "href": "/competitive-analysis/?deploy=20261102-company-guidance-r1",
       "status": "立即使用",
       "description": "整理商品規格、比較有來源的競品，試算定價與毛利情境。",
       "data": "雲端 AI 依工具同意設定"
@@ -87,7 +87,7 @@
       "collaborators": [
         "store"
       ],
-      "href": "/store-transfer/?deploy=20261028-transfer-sources-r1",
+      "href": "/store-transfer/?deploy=20261102-company-guidance-r1",
       "status": "立即使用",
       "description": "商控建立補貨建議，門市確認後送交核准，產生各店 ERP 調撥檔。",
       "data": "本機運算・共用批次"
@@ -99,7 +99,7 @@
       "collaborators": [
         "merch"
       ],
-      "href": "/store-orders/?deploy=20261101-store-orders-r49",
+      "href": "/store-orders/?deploy=20261102-store-orders-r50",
       "status": "立即使用",
       "description": "上傳手寫訂購單，AI辨識後人工覆核，結算並下載ERP POS檔。",
       "data": "公司雲端保存・AI辨識依工具授權"

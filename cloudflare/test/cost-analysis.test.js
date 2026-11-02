@@ -923,7 +923,7 @@ describe("庫存成本分析前台", () => {
     const home = readFileSync("../index.html", "utf8");
     const html = readFileSync("../cost-analysis/index.html", "utf8");
     const app = readFileSync("../cost-analysis/app.js", "utf8");
-    expect(home).toContain('href="/cost-analysis/"');
+    expect(home).toContain('href="/cost-analysis/?deploy=20261102-company-guidance-r1"');
     expect(home).toContain("<h3>A、B庫存成本稽核分析</h3>");
     expect(html).toContain("<title>A、B庫存成本稽核分析｜翔仔居家</title>");
     expect(html).toContain("翔仔居家・A、B庫存成本稽核分析");

@@ -370,6 +370,7 @@
   }
 
   analyzeButton.addEventListener("click", async () => {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return;
     analyzeButton.disabled = true;
     downloadButton.disabled = true;
     mainStatus.textContent = "正在確認公司最新版商品規則……";
@@ -444,6 +445,7 @@
   });
 
   downloadButton.addEventListener("click", async () => {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return;
     if (!state.outputWorkbook) return;
     const date = new Date();
     const stamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
@@ -477,4 +479,16 @@
   refreshRules("load").catch(() => {
     mainStatus.textContent = "公司集中規則服務目前無法使用；為避免誤用舊規則，本次禁止分析。";
   });
+
+  // Read-only readiness for the shared guide; no calculation or write is performed here.
+  globalThis.CompanyGuidance?.register({ statuses: '#main-status,[data-map-status],[data-file-name]', resolve() {
+    const S=globalThis.CompanyGuidance.step;
+    if (/^正在/.test(mainStatus.textContent) && analyzeButton.disabled) return S('處理中', '正在讀取或分析；請查看進度，暫時不要重複操作。', '#main-status');
+    if (!state.rulesReady) return S('先確認公司商品規則', '集中規則確認成功前不能分析，請查看規則服務訊息。', '#product-rules-title');
+    if (state.outputWorkbook && !downloadButton.disabled) return S('核對差異，再下載結果', '先看未解釋差異與分析範圍；完整明細會另存為 Excel。', '#result-panel');
+    const missing = [...requiredTypes].find(type => !state.sources[type]);
+    if (missing) return S('下一步：備妥必要報表', '請依卡片說明選擇報表；選填資料不必為了繼續而硬填。', '[data-type="'+missing+'"]');
+    if (analyzeButton.disabled) return S('確認欄位與分析範圍', '請查看各報表的欄位警示與必要設定，通過後才可分析。', '#upload-grid');
+    return S('下一步：開始成本分析', '確認月份、報表與總部／店倉範圍，再按開始分析。', '#analyze-button');
+  }});
 })();

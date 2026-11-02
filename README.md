@@ -524,3 +524,20 @@ r33正式入口驗證攔下index.html未同步新狀態元件的問題，已於�
 ## 門市訪客入口複製 r49（2026-11-01）
 
 使用者已授權部署。總部權限工具的邀請碼區在「開啟門市訪客入口」旁新增「一鍵複製」，只複製本站訪客入口網址，不含邀請碼；成功就地提示，拒絕或不支援時提供唯讀連結供手動複製。訪客隱藏、忙碌與版本不符停用。工具r49與首頁entry-r2同步。完整型別、48份736項、dry-run與200筆vendor SHA通過；1280／390／320px、拒絕備援、訪客／舊版停用及首頁導覽通過。四種合成POS流程維持2單8件、1400／1450元，補下載相同，零真實業務寫入與付費AI。PDF手冊未改動，日常位置為最下方總部權限工具的邀請碼區。回復基準bc27984、Worker8e0fe817-6eef-4d52-911f-ab9433ddc17b，需成對回復版本且保留業務資料。
+
+
+## 2026-11-02 公司工具即時操作指引（已完成本機驗證，待部署）
+
+依使用者要求，所有公司工具的互動頁納入依真實狀態及角色更新的「即時操作指引」。六支主工具（庫存資料整理、成本稽核、供應商對帳、競品分析、採購規劃、週補貨調撥）新增共用指引，三個規則管理頁及門市訂單最高權限設定頁一併接上，共10頁；門市訂單總部／訪客主流程保留既有原生指引。列印紙本及純閱讀手冊免加操作導引；首頁同步各入口版本，不新增多餘業務流程。
+
+指引在麵包屑下方並隨捲動顯示當前狀態、下一步與前往位置；按前往只展開必要區塊、捲動與聚焦，不代點分析、儲存、核准、下載、Google授權或付費AI。新增收合的「指引怎麼用？」說明，操作進度／錯誤依原狀態於原區塊與指引回饋；跨區狀態另顯示在原按鈕附近，不清除未保存內容、不自動重送。開啟對話框時導引留在視窗內，角色隱藏區不展開。
+
+版本確認失敗或不符即停止操作並提供手動更新。供應商對帳原本connect-src none保持原樣，改用原已允許的同源靜態version.js探測，不傳送Excel或業務資料。其他工具使用同源no-store版本資訊。原有Cloudflare Access、OAuth、角色、JWT、CSP與後端驗證不放寬，沒有資料庫遷移。
+
+核心原則已寫入根AGENTS.md、集中.local-context/skills/siangstock-company-tools/SKILL.md及CIS；未來新增／修改互動工具均須納入狀態、就地錯誤、導航、角色、手機與版本保護驗收。操作說明亦見live-guidance/README.md。
+
+實作從正式33fe8ea建立隔離checkout `.local-context/work/company-live-guidance-20261102`，分支codex/company-live-guidance-20261102；根工作區其他開發完整保留，沒有將其混入。待發布：共用指引／六支主頁及三個規則管理頁20261102-company-guidance-r1；門市訂單20261102-store-orders-r50（業務程式僅版本同步，另新增設定頁指引）；首頁20261102-company-guidance-home-r1。正式仍33fe8ea／訂單r49，發布checkout乾淨；本輪沒有commit、push、部署或正式業務寫入。
+
+三道門檻：完整型別、49檔739項及Worker dry-run通過；共用／各頁HTML、manifest、資產query、首頁及Worker門檻同步；8份其他工具核心／台帳程式逐位元相同，門市訂單核心計價／辨識／報表／POS除版本字串外相同，200筆vendor SHA通過。瀏覽器以真實合成xlsx完成庫存3列守恆、分類4頁籤下載、錯誤阻擋、成本4份必要報表與分析、對帳A/B檔與日期、競品內建範例及本機報告；1280／390／320px指引不溢出、鍵盤收合、即時定位、管理草稿、門市／總部隔離、視窗內導航、處理中、衝突、保留未保存欄位、版本不符／離線及嚴格CSP探測失敗均通過。四種本機門市POS流程2單8件、原6列／POS6或8列、1400／1450元與付款守恆，補下載相同。零真實API寫入、零付費AI。
+
+驗證證據：/private/tmp/company-guidance-verified-{types,tests,dry}.log、company-guidance-complete-browser.log、company-guidance-orders-pos.log與company-guidance-conservation.json。本機預覽artifacts/company-live-guidance-preview.png、手機artifacts/company-live-guidance-mobile.png。正式站驗收尚未進行；若後續授權部署，須協調前端與Worker版本一起更新，再核對各正式HTML／manifest快取及新舊分頁，不可只發布部分工具。PDF教學手冊本輪未重製。

@@ -14,7 +14,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261028-google-sources-r1";
+  const APP_VERSION = "20261102-company-guidance-r1";
   const state = {
     shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -111,6 +111,7 @@
     elements.googleConnect.textContent = pending ? `立即授權（${pending}筆待寄）` : "公司 Google 授權";
   }
   async function checkRuntimeVersion() {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return false;
     if (state.runtimeOutdated) return false;
     try {
       const response = await fetch(`version.json?check=${Date.now()}`, { cache: "no-store", credentials: "same-origin" });
@@ -309,7 +310,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261028-google-sources-r1");
+        const worker = new Worker("inventory-reader-worker.js?v=20261102-company-guidance-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1074,7 +1075,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261028-google-sources-r1");
+      const worker = new Worker("seasonal-model-worker.js?v=20261102-company-guidance-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -2026,7 +2027,7 @@
       if (!(await checkRuntimeVersion())) return;
       const source = structuredClone(transferActivitySource());
       for (const month of source.months) if(!(month.retailTarget>0)) throw new Error(`${month.month}沒有可提供的實體門市需求，請先確認目標及歷史資料。`);
-      const send=async body=>fetch("/api/store-transfer/activity-plans", { method:"POST", cache:"no-store", headers:{Accept:"application/json","Content-Type":"application/json","X-Store-Transfer-Version":"20261028-transfer-sources-r1"},body:JSON.stringify(body) });
+      const send=async body=>fetch("/api/store-transfer/activity-plans", { method:"POST", cache:"no-store", headers:{Accept:"application/json","Content-Type":"application/json","X-Store-Transfer-Version":"20261102-company-guidance-r1"},body:JSON.stringify(body) });
       let response=await send({source}), result=await response.json();
       if(response.status===409 && result.existingId && confirm(`${result.error}\n\n確認更新此活動來源？`)) {response=await send({source,expectedRevision:result.existingRevision});result=await response.json();}
       if (!response.ok) throw new Error(result.error || "提供活動草稿失敗；須具備週調撥總部權限。");
@@ -3897,4 +3898,24 @@
     finally { elements.restoreReportFile.value = ""; }
   });
   setInitialDates(); renderChannels(); renderBudget(); renderModelStatus(); updateModelControls(); updateReadyState(); checkRuntimeVersion(); hydrateCachedModel(); hydrateWorkflowDrafts(); loadConfig();
+
+  // Read-only readiness for the shared guide; no calculation or write is performed here.
+  globalThis.CompanyGuidance?.register({ statuses: '#main-status,#source-status,#workflow-status,#special-workflow-status,#model-run-status,#store-shortage-status,#budget-plan-status,#month-end-status', resolve() {
+    const S=globalThis.CompanyGuidance.step;
+    if (!state.config) return S('先確認公司登入與權限', '請查看帳號與載入訊息；授權未確認前不會引導你核准。', '#account-badge');
+    if (state.approved) return S('下一步：核對並下載 ERP 採購檔', '核對已核准批次與摘要狀態，再依既有流程下載；不要重複核准。', '#workflow-panel');
+    if (state.review) return S('下一步：核對回匯與核准狀態', '請看覆核差異、阻擋與權限。需要核准者操作時，先交由核准者處理。', '#workflow-panel');
+    if (state.firstReview) return S('第一次覆核後，確認是否需異動', '全部沿用可送出待核准；需修改時回匯有異動的覆核表，勿重填整份。', '#workflow-panel');
+    if (state.returnScope) return S('下一步：第一次人工回匯', '已下載的本批報表由人工確認後，回匯同一批資料並產生覆核表。', '#review-file-label');
+    if (state.monthEndWorkbook) return S('核對月底驗證結果', '請查看月底驗證摘要、警示與原有下載／確認操作。', '#month-end-panel');
+    if (state.analysis) return S('下一步：選擇分批審核單位', '核對建議後，複選本批供應商／分類再下載；只篩選畫面不等於選取下載。', '#work-unit-title');
+    if (!elements.month.value || !elements.orderDate.value) return S('下一步：確認月份與時點', '請先確認分析月份、使用時點與下單日期。', '#analysis-month');
+    if (!(state.masterFile || state.masterWorkbook)) return S('下一步：取得商品主檔與來源', '可完成公司 Google 授權後自動取得，或依原流程使用手動備援。', '#source-title');
+    if (!state.inventoryFile) return S('下一步：選擇最新庫存', '確認資料截止日，再選擇公司最新庫存 Excel。', '#inventory-file');
+    if (!state.pendingFiles.length) return S('下一步：選擇全部狀態採購單', '可複選檔案，請保留原流程要求的完整狀態。', '#pending-files');
+    if (!state.transferFile) return S('下一步：選擇期間調撥單', '依原資料範圍選檔並確認截止日。', '#transfer-file');
+    if (!state.salesFiles.length) return S('下一步：選擇銷售明細', '請依頁面當前月初／月中／月底模式提供對應期間。', '#sales-files');
+    if (elements.analyze.disabled) return S('確認必要來源與計算基準', '請查看日期、行銷策略、季節模型與來源警示；不把缺少資料當成零。', '#source-title');
+    return S('下一步：產生建議或月底驗證', '依目前使用時點，確認來源與額度後再按原本的執行按鈕。', '#analyze-button');
+  }});
 })();

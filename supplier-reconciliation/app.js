@@ -405,6 +405,7 @@
   }
 
   analyzeButton.addEventListener("click", async () => {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return;
     analyzeButton.disabled = true;
     downloadButton.disabled = true;
     mainStatus.textContent = "正在逐筆分配A、B明細數量並核對跨月差異……";
@@ -443,6 +444,7 @@
   });
 
   downloadButton.addEventListener("click", async () => {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return;
     if (!state.outputWorkbook) return;
     const original = downloadButton.textContent;
     downloadButton.disabled = true;
@@ -532,4 +534,15 @@
   document.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => applyFilter(button.dataset.filter)));
   renderLocalLedgerStatus();
   updateAvailability();
+
+  // Read-only readiness for the shared guide; no calculation or write is performed here.
+  globalThis.CompanyGuidance?.register({ statuses: '#main-status,#name-mapping-status,#local-ledger-status,[data-mapping-status],.file-name', resolve() {
+    const S=globalThis.CompanyGuidance.step;
+    if (/^正在/.test(mainStatus.textContent) && analyzeButton.disabled) return S('處理中', '正在比對或建立輸出，請保留此頁並查看進度。', '#main-status');
+    if (state.outputWorkbook && !downloadButton.disabled) return S('核對帳款差異，再下載', '查看跨月、單邊與差額明細；下載結果留存，台帳只在此瀏覽器保存。', '#result-panel');
+    if (!periodMonth.value || !cutoffDate.value) return S('下一步：設定對帳期間', '請確認對帳月份與跨月補收截止日，再選擇報表。', '#period-month');
+    for (const type of ['a','b']) if (!state.sources[type]) return S('下一步：選擇'+type.toUpperCase()+'表', '依資料來源卡片選擇對帳報表；上期台帳與品名對照依實際需要提供。', '#'+type+'-file');
+    if (analyzeButton.disabled) return S('修正報表或欄位警示', '請查看來源卡片與對照表訊息，必要欄位確認後才能比對。', '#main-status');
+    return S('下一步：開始比對', '兩份報表已就緒，請確認月份與台帳來源後開始比對。', '#analyze-button');
+  }});
 })();

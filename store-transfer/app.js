@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261028-transfer-sources-r1";
+  const APP_VERSION = "20261102-company-guidance-r1";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -20,6 +20,7 @@
   }
 
   async function checkRuntimeVersion() {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return false;
     if (state.runtimeOutdated) return false;
     try {
       const response = await fetch(`version.json?check=${Date.now()}`, { cache: "no-store", credentials: "same-origin" });
@@ -1548,4 +1549,19 @@
     if (event.target.matches('[data-sku-filter-scope="calculation"]')) applySkuFilter("calculation", event.target.value);
   });
   start();
+
+  // Read-only readiness for the shared guide; no calculation or write is performed here.
+  globalThis.CompanyGuidance?.register({ statuses: '#hq-status,#source-status,#display-exception-dialog-status,#display-exception-page-status,#batch-detail [role="status"],#collaboration-detail [role="status"]', resolve() {
+    const S=globalThis.CompanyGuidance.step;
+    if (!state.config) return S('先確認公司帳號', '正在取得角色與可查看門市；失敗時請看帳號訊息。', '#account-badge');
+    if ($('display-exception-dialog').open) return S('設定本店展示例外', '確認貨號、展示數量與原因，再自行儲存；不會變更其他門市。', '#display-exception-form');
+    if ($('batch-dialog').open) return S('核對目前調撥批次', '依本批狀態核對數量、原因及可用操作；確認、核准與下載仍須自行按下。', '#batch-detail');
+    if ($('collaboration-dialog').open) return S('核對 A/B 協作內容', '請先核對差異與人工決策，再依原有權限操作。', '#collaboration-detail');
+    if (state.config.role==='store') return S('下一步：查看本店待確認批次', '開啟本店批次核對建議；如需更改數量，填寫原因後再自行送出。', '#store-batches');
+    if (!$('display-exceptions-panel').hidden) return S('管理本店展示設定', '核對目前門市、貨號與原因；只操作有權限的例外資料。', '#display-exception-rows');
+    if (state.calculation) return S('核對建議，再建立確認批次', '請先檢查一般補貨、活動與缺貨未配；A/B模式另依協作流程操作。', '#calculation-results');
+    if (!state.files.master || !state.files.marketing) return S('下一步：取得兩項固定來源', '完成公司 Google 授權再自動取得；也可依原流程手動備援。', '#fixed-source-title');
+    for(const id of ['inventory-file','sales-files','transfer-file']) if (!$(id).files.length) return S('下一步：備妥本次必要資料', '請依卡片說明提供最新庫存、近12週銷售及期間調撥單。', '#'+id);
+    return S('下一步：產生本週調撥建議', '確認門市、模式及日期後，再按原本的產生建議按鈕。', '#calculate-button');
+  }});
 })();

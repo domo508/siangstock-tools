@@ -148,6 +148,7 @@
   }
 
   async function analyzeSelectedFile() {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return;
     if (!selectedFile) return;
     analyzeButton.disabled = true;
     downloadButton.disabled = true;
@@ -180,7 +181,8 @@
     return `公司庫存規則_v${rulesVersion}_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}.json`;
   }
 
-  function exportRules() {
+  async function exportRules() {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return;
     if (!activeRules) return;
     const blob = new Blob([window.InventoryCore.serializeRules(activeRules)], { type: "application/json;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -193,7 +195,8 @@
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  function downloadResult() {
+  async function downloadResult() {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return;
     if (!outputWorkbook || !selectedFile) return;
     try {
       const outputName = window.InventoryCore.safeOutputFilename(selectedFile.name);
@@ -225,4 +228,14 @@
   } else {
     refreshRules("page").then(() => setStatus("已取得公司最新規則。請選擇要分析的 Excel。", "success")).catch(() => {});
   }
+
+  // Read-only readiness for the shared guide; no calculation or write is performed here.
+  globalThis.CompanyGuidance?.register({ statuses: '#status-box,#rules-feedback', resolve() {
+    const S=globalThis.CompanyGuidance.step;
+    if (statusBox.classList.contains('working') && analyzeButton.disabled) return S('處理中', '正在讀取或分析，請保留此頁並查看進度。', '#status-box');
+    if (!rulesReady) return S('先確認集中規則', '規則確認成功前不能分析；失敗時請查看原因或聯絡管理者。', '#rules-feedback');
+    if (outputWorkbook && !downloadButton.disabled) return S('核對分類統計，再下載', '請核對列數與待人工確認品項；下載另存新檔，不修改原檔。', '#results');
+    if (!selectedFile) return S('下一步：選擇庫存 Excel', '可選檔或拖入 .xlsx；取得檔案後再開始分析。', '#choose-file');
+    return S('下一步：開始分析', '檔案已選擇，請按原本的開始分析按鈕，結果仍須核對。', '#analyze-file');
+  }});
 })();

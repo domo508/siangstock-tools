@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261024-competitive-analysis-r7";
+  const APP_VERSION = "20261102-company-guidance-r1";
   const core = globalThis.CompetitiveAnalysisCore;
   const $ = (id) => document.getElementById(id);
   const state = { competitors: [], excludedCompetitors: [], profile: null, file: null, previewUrl: "", visualFile: null, visualPreviewUrl: "", result: null, aiSummary: "", aiSearchNotes: [], dirtyFields: new Set(), runtimeOutdated: false, latestRuntimeVersion: "" };
@@ -31,6 +31,7 @@
   }
 
   async function checkRuntimeVersion() {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return false;
     if (state.runtimeOutdated) return false;
     try {
       const response = await fetch(`version.json?check=${Date.now()}`, { cache: "no-store", credentials: "same-origin" });
@@ -238,7 +239,7 @@
     const button = $("prefill-button");
     button.disabled = true;
     try {
-      const { extractTextLocally } = await import("./document-reader.mjs?v=20261024-competitive-analysis-r7");
+      const { extractTextLocally } = await import("./document-reader.mjs?v=20261102-company-guidance-r1");
       const extraction = await extractTextLocally(state.file, prefillProgress);
       $("prefill-status").textContent = "文字已在本機擷取，正在交由 AI 整理欄位……";
       const response = await fetch("/api/competitive-analysis/prefill", {
@@ -431,4 +432,16 @@
   renderCompetitors();
   renderSearchCompleteness();
   void checkRuntimeVersion();
+
+  // Read-only readiness for the shared guide; no calculation or write is performed here.
+  globalThis.CompanyGuidance?.register({ statuses: '#file-status,#prefill-status,#ai-search-status,#analysis-status', resolve() {
+    const S=globalThis.CompanyGuidance.step;
+    if ($('prefill-button').disabled && /正在/.test($('prefill-status').textContent)) return S('工單辨識處理中', '請看辨識進度；不會自動重新送出或增加費用。', '#prefill-status');
+    if ($('ai-search-button').disabled) return S('AI 搜尋處理中', '正在核對公開商品來源，請等待結果，不要重複送出。', '#ai-search-status');
+    if (state.result) return S('核對報告，再匯出', '逐項核對來源、相似度與價格；結果是決策參考，匯出前仍須人工確認。', '#report');
+    const item=product();
+    if (!item.name || !item.category || !item.materials || !item.techniques) return S('下一步：填寫或覆核商品規格', '可由工單預填，也能人工填寫。AI 僅在你明確同意並按原按鈕後執行。', '#product-form');
+    if (!state.competitors.some(c=>c.included!==false && c.similarity>=60)) return S('下一步：確認競品來源', '可使用 AI 搜尋或人工新增；先覆核內容並勾選納入，至少一筆可用競品才能分析。', '#market-title');
+    return S('下一步：試算與產生報告', '確認成本、費用及納入競品，再按原本的產生分析報告。', '#pricing-title');
+  }});
 })();

@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const APP_VERSION = "20261027-procurement-admin-r15";
+  const APP_VERSION = "20261102-company-guidance-r1";
   const state = { config: null, version: 0, rules: null, dirty: false, googleTokenClient: null, googleAccessToken: "", masterBySku: null, runtimeOutdated: false, latestRuntimeVersion: "" };
   const GOOGLE_READ_SCOPE = "openid email https://www.googleapis.com/auth/drive.readonly";
   const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -31,6 +31,7 @@
   };
 
   async function checkRuntimeVersion() {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return false;
     if (state.runtimeOutdated) return false;
     try {
       const response = await fetch(`version.json?check=${Date.now()}`, { cache: "no-store", credentials: "same-origin" });
@@ -52,7 +53,7 @@
 
   function configureReturnPath() {
     if (new URLSearchParams(location.search).get("from") !== "store-transfer") return;
-    const target = "../../store-transfer/?deploy=20261028-transfer-sources-r1";
+    const target = "../../store-transfer/?deploy=20261102-company-guidance-r1";
     const source = get("#source-tool-link"); const back = get("#source-back-link"); const brand = get("#tool-brand-link");
     source.href = target; source.textContent = "門市週補貨與調撥";
     back.href = target; back.textContent = "← 返回週調撥工具";
@@ -362,4 +363,13 @@
   window.setInterval(checkRuntimeVersion, 5 * 60 * 1000);
   elements.blacklist.addEventListener("input", markDirty); elements.holidays.addEventListener("input", markDirty); elements.save.addEventListener("click", saveRules); elements.saveAccess.addEventListener("click", saveAccessSettings); init();
   Object.values(elements.arrivals).forEach((control) => control.addEventListener("change", markDirty));
+
+  // Read-only readiness for the shared guide; no calculation or write is performed here.
+  globalThis.CompanyGuidance?.register({ statuses: '#page-status,#save-status,#access-status', resolve() {
+    const S=globalThis.CompanyGuidance.step;
+    if (state.config && !state.config.permissions?.canManageRules) return S('目前帳號無規則管理權限', '請查看權限訊息；需要修改時由有權限的同仁處理。', '#page-status');
+    if (!state.config || !state.rules) return S('先確認規則與權限', '請查看公司規則載入訊息；載入失敗不使用舊規則。', '#page-status');
+    if (state.dirty) return S('核對修改並填寫原因', '確認供應商、採購或庫存規則後，填原因再自行儲存；指引不會變更權限。', '#change-reason');
+    return S('查看採購規則', '沒有尚未儲存的規則變更；請依需要選擇功能區，權限與通知只供最高權限使用。', '#supplier-title');
+  }});
 })();

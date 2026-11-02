@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const APP_VERSION = "20261015-transfer-applicability-r2";
+  const APP_VERSION = "20261102-company-guidance-r1";
   const GOOGLE_READ_SCOPE = "openid email https://www.googleapis.com/auth/drive.readonly";
   const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   const STORE_ORDER = ["R00", "R01", "R03", "R06", "R07", "R10"];
@@ -16,6 +16,7 @@
   }
 
   async function checkRuntimeVersion() {
+    if (!globalThis.CompanyGuidance || !(await globalThis.CompanyGuidance.ensureCurrent())) return false;
     if (state.runtimeOutdated) return false;
     try {
       const response = await fetch(`version.json?check=${Date.now()}`, { cache: "no-store", credentials: "same-origin" });
@@ -252,4 +253,13 @@
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkRuntimeVersion(); }); window.addEventListener("focus", checkRuntimeVersion); window.setInterval(checkRuntimeVersion, 5 * 60 * 1000);
   window.addEventListener("beforeunload", (event) => { if (!state.dirty) return; event.preventDefault(); event.returnValue = ""; });
   init();
+
+  // Read-only readiness for the shared guide; no calculation or write is performed here.
+  globalThis.CompanyGuidance?.register({ statuses: '#page-status,#form-status,#save-status', resolve() {
+    const S=globalThis.CompanyGuidance.step;
+    if (state.config?.role==='store') return S('目前帳號無總部規則管理權限', '請返回本店調撥流程；共用規則由總部處理。', '#page-status');
+    if (!state.config) return S('先確認規則與權限', '請查看公司規則載入訊息。', '#page-status');
+    if (state.dirty) return S('核對待存規則與修改原因', '加入規則不代表已保存；請檢查適用門市、期間及原因，再自行儲存。', '#change-reason');
+    return S('查找商品，再確認規則範圍', '需要新增時先確認命中商品；無修改時不需重複儲存。', '#new-rule-title');
+  }});
 })();

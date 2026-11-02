@@ -415,7 +415,7 @@ describe("財務供應商對帳前台", () => {
     const html = readFileSync("../supplier-reconciliation/index.html", "utf8");
     const manual = readFileSync("../supplier-reconciliation/manual.html", "utf8");
     const app = readFileSync("../supplier-reconciliation/app.js", "utf8");
-    expect(home).toContain('href="/supplier-reconciliation/"');
+    expect(home).toContain('href="/supplier-reconciliation/?deploy=20261102-company-guidance-r1"');
     expect(html).toContain("公司工具首頁");
     expect(html).toContain("← 返回公司工具首頁");
     expect(html).toContain("原始Excel不保存、不上傳");
@@ -442,7 +442,7 @@ describe("財務供應商對帳前台", () => {
     expect(html).toContain('class="guide-link"');
     expect(html).toContain("操作手冊");
     expect(html).not.toContain("manual-entry-icon");
-    expect(html).toContain("20260828-browser-ledger-r11");
+    expect(html).toContain("20261102-company-guidance-r1");
     expect(manual).toContain("六步完成對帳");
     expect(manual).toContain("三家供應商注意事項");
     expect(manual).toContain("九個頁籤怎麼看");

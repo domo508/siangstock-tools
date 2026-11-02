@@ -48,3 +48,10 @@ build/
 !store-orders/version.json
 !store-orders/guest/version.json
 !store-orders/vendor/SHA256.json
+
+# 同源操作指引及既有工具的版本資訊（無公司資料）
+!live-guidance/version.json
+!inventory/version.json
+!inventory/rules-admin/version.json
+!cost-analysis/version.json
+!supplier-reconciliation/version.json
