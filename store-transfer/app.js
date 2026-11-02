@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261102-company-guidance-r1";
+  const APP_VERSION = "20261102-transfer-activity-auto-r2";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -51,17 +51,22 @@
     if ((options.method || "GET") !== "GET" && !(await checkRuntimeVersion())) throw new Error("已有新版工具，請先重新載入最新版。");
     const init = { method: options.method || "GET", headers: { Accept: "application/json", "X-Store-Transfer-Version":APP_VERSION, ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.googleAccessToken ? { "X-Google-Access-Token": options.googleAccessToken } : {}) }, cache: "no-store" };
     if (options.body) init.body = JSON.stringify(options.body);
-    const response = await fetch(`/api/store-transfer${path}`, init);
-    const contentType = response.headers.get("Content-Type") || "";
-    const payload = /application\/json/i.test(contentType) ? await response.json().catch(() => ({})) : {};
-    if (!response.ok) {
-      const message = payload.error || (response.status === 401
-        ? "登入已失效，請重新登入或切換至本店被指派的公司帳號。"
-        : `處理失敗（HTTP ${response.status}）`);
-      throw new Error(message);
-    }
-    if (!/application\/json/i.test(contentType)) throw new Error("登入已失效，請重新登入或切換至本店被指派的公司帳號。");
-    return payload;
+    const controller = options.timeoutMs ? new AbortController() : null;
+    if (controller) init.signal = controller.signal;
+    const timer = controller ? setTimeout(() => controller.abort(), options.timeoutMs) : null;
+    try {
+      const response = await fetch(`/api/store-transfer${path}`, init);
+      const contentType = response.headers.get("Content-Type") || "";
+      const payload = /application\/json/i.test(contentType) ? await response.json().catch(() => ({})) : {};
+      if (!response.ok) {
+        const message = payload.error || (response.status === 401
+          ? "登入已失效，請重新登入或切換至本店被指派的公司帳號。"
+          : `處理失敗（HTTP ${response.status}）`);
+        throw new Error(message);
+      }
+      if (!/application\/json/i.test(contentType)) throw new Error("登入已失效，請重新登入或切換至本店被指派的公司帳號。");
+      return payload;
+    } finally { if (timer) clearTimeout(timer); }
   }
 
   function accountRecovery(error) {
@@ -69,26 +74,108 @@
     return `<div class="auth-recovery" role="alert"><strong>無法完成公司帳號驗證</strong><p>${escapeHtml(detail)}</p><p>按下方按鈕會先清除目前公司工具登入狀態；完成後請重新開啟週調撥，並選擇本店被指派的公司 Google 帳號。</p><a class="primary-button" href="/cdn-cgi/access/logout">重新登入／切換帳號</a></div>`;
   }
 
+  function activityMessage(message, kind = "info") {
+    for (const id of ["activity-plan-status", "activity-save-status"]) {
+      const element = $(id);
+      if (element) { element.textContent = message; element.dataset.kind = kind; element.classList?.toggle("error", kind === "error"); }
+    }
+  }
+
+  function activityOptions(plans) {
+    $("activity-plan-select").innerHTML = '<option value="">查看其它活動／分配</option>' + plans.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}・${escapeHtml(p.startDate)}～${escapeHtml(p.endDate)}・${escapeHtml(p.status === "confirmed" ? "已確認" : p.status === "cancelled" ? "已取消" : "待總部確認")} v${Number(p.revision)}</option>`).join("");
+  }
+
   async function loadActivityPlans() {
-    const payload = await api("/activity-plans");
-    $("activity-plan-select").innerHTML = '<option value="">未選擇活動</option>' + payload.plans.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}・${escapeHtml(p.startDate)}～${escapeHtml(p.endDate)}・${escapeHtml(p.status === "confirmed" ? "已確認" : p.status === "cancelled" ? "已取消" : "待總部確認")} v${Number(p.revision)}</option>`).join("");
-    state.activityPlan = null; $("activity-plan-editor").hidden=true; $("use-activity-plan").checked=false;
-    $("activity-plan-status").textContent = `共${payload.plans.length}筆活動；選擇後查看及確認分配。`;
+    if (state.activitySaving) throw new Error("活動正在儲存，請等待結果後再重新讀取。");
+    if (state.activitySaveCheck) {
+      const check = state.activitySaveCheck;
+      const current = {startProposalDate:$("activity-start-proposal").value,reason:$("activity-confirm-reason").value.trim(),targets:{}};
+      $("activity-plan-editor").querySelectorAll("[data-activity-target]").forEach(field=>{current.targets[field.dataset.month] ||= {};current.targets[field.dataset.month][field.dataset.store]=globalThis.StoreTransferActivity.parseTarget(field.value);});
+      const rounded = globalThis.StoreTransferActivity.roundConfig(check.source,current);
+      if (!globalThis.StoreTransferActivity.configMatches(check.source,rounded,check.config)) throw new Error("上次儲存後又修改了輸入，請先保留內容並另開頁面核對活動；不會覆蓋目前編輯。");
+      const recovered = (await api(`/activity-plans/${encodeURIComponent(check.id)}`, {timeoutMs:15000})).plan;
+      if (!recovered || recovered.id !== check.id || recovered.revision !== check.revision || recovered.status !== check.status || recovered.settingsOutdated || !globalThis.StoreTransferActivity.configMatches(check.source,recovered.config,check.config)) throw new Error("仍未核對到本次儲存版本；目前輸入保留，請稍後再重新讀取確認，不要重複儲存。");
+      state.activityPlan = recovered; state.activitySaveCheck = null;
+      renderActivityPlan();
+      activityMessage(`已核對上次儲存成功（v${recovered.revision}），沒有重送。`, "success");
+    }
+    if (state.activityPlanDirty) throw new Error("活動分配有未儲存修改；請先儲存確認，或自行保留內容後重新開頁，不會自動覆蓋。");
+    const sequence = state.activityResolveSeq = (state.activityResolveSeq || 0) + 1;
+    const proposal = $("proposal-date").value, approval = $("lock-at").value.slice(0,10), mode = calculationMode();
+    try {
+      const payload = await api("/activity-plans", { timeoutMs:15000 });
+      if (sequence !== state.activityResolveSeq || proposal !== $("proposal-date").value || approval !== $("lock-at").value.slice(0,10) || mode !== calculationMode() || state.activityPlanDirty) throw new Error("日期、模式或分配已變更，請重新讀取活動後再計算。");
+      if (payload.hasMore || !Array.isArray(payload.plans)) throw new Error("活動清單不完整，請總部核對後再計算；不會略過活動。");
+      state.activitySummaries = payload.plans;
+      activityOptions(payload.plans);
+      $("activity-plan-select").value = state.activityPlan?.id || "";
+      const chosen = globalThis.StoreTransferActivity.choosePlanForDate(payload.plans, proposal, state.config.storeInventoryRules?.config || {}, mode, approval);
+      let plan = null;
+      if (chosen) {
+        plan = (await api(`/activity-plans/${encodeURIComponent(chosen.id)}`, { timeoutMs:15000 })).plan;
+        if (!plan || plan.id !== chosen.id || plan.revision !== chosen.revision || plan.status !== "confirmed" || plan.settingsOutdated) throw new Error("活動已由同仁更新或尚未確認，請重新讀取活動。");
+        globalThis.StoreTransferActivity.validatePlan(plan);
+      }
+      if (sequence !== state.activityResolveSeq || proposal !== $("proposal-date").value || approval !== $("lock-at").value.slice(0,10) || mode !== calculationMode() || state.activityPlanDirty) throw new Error("日期、模式或分配已變更，請重新讀取活動後再計算。");
+      const changed = state.activityPlan?.id !== plan?.id || state.activityPlan?.revision !== plan?.revision || state.activityResolvedDate !== proposal || state.activityResolvedApproval !== approval || state.activityResolvedMode !== mode;
+      state.activitySummaries = payload.plans;
+      activityOptions(payload.plans);
+      $("activity-plan-select").value = plan?.id || "";
+      state.activityPlan = plan;
+      state.activityResolvedDate = proposal; state.activityResolvedApproval = approval; state.activityResolvedMode = mode;
+      state.activityAutoError = "";
+      $("use-activity-plan").checked = !!plan;
+      if (changed) { state.calculation = null; $("calculation-results").hidden = true; $("activity-prior-reconciled").checked = false; $("activity-prior-batches").textContent = ""; }
+      if (plan) {
+        renderActivityPlan();
+        if (!state.activityPlanDirty) activityMessage(`本輪${proposal}已自動納入「${plan.source.name}」已確認v${plan.revision}，不需再次選擇或儲存；請核對本次庫存與前批配量。`, "success");
+      } else {
+        $("activity-plan-editor").hidden = true;
+        activityMessage(mode === "comparison" ? "A/B測試不納入大活動分配；切回正式補貨會依日期自動判斷。" : `本輪${proposal}沒有適用的大活動，依一般周調撥流程操作。`);
+      }
+      return plan;
+    } catch (error) {
+      if (sequence === state.activityResolveSeq) {
+        state.activityAutoError = error.message; $("use-activity-plan").checked = false;
+        state.calculation = null; $("calculation-results").hidden = true;
+        activityMessage(`活動尚未確認可用：${error.message}`, "error");
+      }
+      throw error;
+    }
   }
 
   function renderActivityPlan() {
     state.activityPlanDirty = false;
     const plan = state.activityPlan, source = plan.source;
-    const config = Object.keys(plan.config || {}).length ? plan.config : globalThis.StoreTransferActivity.draftConfig(source,state.config.storeInventoryRules?.config || {});
+    const originalConfig = Object.keys(plan.config || {}).length ? plan.config : globalThis.StoreTransferActivity.draftConfig(source,state.config.storeInventoryRules?.config || {});
+    const config = globalThis.StoreTransferActivity.roundConfig(source, originalConfig);
+    state.activityPlanDirty = source.months.some(m => globalThis.StoreTransferActivity.STORES.some(s => config.targets[m.month][s] !== originalConfig.targets[m.month][s]));
     const names = state.config.stores;
     $("activity-plan-editor").hidden=false;
-    $("activity-plan-editor").innerHTML = `<p>${escapeHtml(source.name)}・版本${plan.revision}・來源銷售截止${escapeHtml(source.asOfDate)}</p>${source.months.map(m => `<fieldset><legend>${escapeHtml(m.month)}・實體六店目標${Number(m.retailTarget).toLocaleString("zh-TW")}元；線上／其他${Number(m.onlineAndOtherTarget).toLocaleString("zh-TW")}元</legend><div class="period-grid">${globalThis.StoreTransferActivity.STORES.map(s => `<label><span>${escapeHtml(s)} ${escapeHtml(names[s]?.name || "")}整月目標</span><input data-activity-target data-month="${m.month}" data-store="${s}" type="number" min="0" step="0.01" value="${Number(config.targets[m.month][s])}"><small>${escapeHtml(m.weekdayBasis?.[s] || "每日分布待確認")}</small></label>`).join("")}</div><p>各店加總須等於實體六店目標；未參與門市填0，並調整其他店分配。缺歷史店不可直接放大。</p></fieldset>`).join("")}<div class="period-grid"><label><span>開始備貨週的星期一</span><input id="activity-start-proposal" type="date" value="${escapeHtml(config.startProposalDate)}"></label><label><span>確認／修改原因（必填）</span><textarea id="activity-confirm-reason" class="reason-input" rows="2" maxlength="300">${escapeHtml(config.reason)}</textarea></label></div><div id="activity-week-preview" class="status-line"></div><div class="detail-actions"><button id="confirm-activity-plan" type="button" class="secondary-button">儲存並確認分配</button><button id="cancel-activity-plan" type="button" class="secondary-button">取消此活動計畫</button></div>`;
+    $("activity-plan-editor").innerHTML = `<p>${escapeHtml(source.name)}・版本${plan.revision}・來源銷售截止${escapeHtml(source.asOfDate)}</p>${source.months.map(m => `<fieldset><legend>${escapeHtml(m.month)}・實體六店目標${Number(m.retailTarget).toLocaleString("zh-TW")}元；線上／其他${Number(m.onlineAndOtherTarget).toLocaleString("zh-TW")}元</legend><div class="period-grid">${globalThis.StoreTransferActivity.STORES.map(s => `<label><span>${escapeHtml(s)} ${escapeHtml(names[s]?.name || "")}整月目標</span><input data-activity-target data-month="${m.month}" data-store="${s}" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" value="${globalThis.StoreTransferActivity.formatTarget(config.targets[m.month][s])}"><small>${escapeHtml(m.weekdayBasis?.[s] || "每日分布待確認")}</small></label>`).join("")}</div><p>各店加總須等於實體六店目標；未參與門市填0，並調整其他店分配。缺歷史店不可直接放大。</p></fieldset>`).join("")}<div class="period-grid"><label><span>開始備貨週的星期一</span><input id="activity-start-proposal" type="date" value="${escapeHtml(config.startProposalDate)}"></label><label><span>確認／修改原因（必填）</span><textarea id="activity-confirm-reason" class="reason-input" rows="2" maxlength="300">${escapeHtml(config.reason)}</textarea></label></div><div id="activity-week-preview" class="status-line"></div><div class="detail-actions"><button id="confirm-activity-plan" type="button" class="secondary-button">儲存並確認分配</button><button id="cancel-activity-plan" type="button" class="secondary-button">取消此活動計畫</button></div>`;
+    $("activity-plan-editor").querySelectorAll("[data-activity-target]").forEach(field => {
+      field.addEventListener("focus", () => {
+        const value = globalThis.StoreTransferActivity.parseTarget(field.value);
+        if (Number.isFinite(value)) field.value = String(value);
+      });
+      field.addEventListener("blur", () => {
+        const value = globalThis.StoreTransferActivity.parseTarget(field.value);
+        if (Number.isFinite(value)) field.value = globalThis.StoreTransferActivity.formatTarget(value);
+      });
+    });
+    const roundingHelp = document.createElement("p");
+    roundingHelp.textContent = "門市目標以整數元及千分位顯示，例如129,000,000；點入欄位可編輯，離開後自動補上千分位。四捨五入尾差由系統自動校正，六店加總維持原總目標。人工調整仍須維持加總一致；儲存並確認後生效。";
+    $("activity-plan-editor").prepend(roundingHelp);
+    const saveStatus = document.createElement("p");
+    saveStatus.id = "activity-save-status"; saveStatus.className = "status-line activity-feedback";
+    saveStatus.setAttribute("role", "status"); saveStatus.setAttribute("aria-live", "polite");
+    $("activity-plan-editor").append(saveStatus);
     renderActivityWeeks();
     $("activity-start-proposal").addEventListener("change",renderActivityWeeks);
     $("confirm-activity-plan").addEventListener("click",()=>saveActivityPlan("confirmed"));
     $("cancel-activity-plan").addEventListener("click",()=>saveActivityPlan("cancelled"));
     $("confirm-activity-plan").disabled=!!plan.settingsOutdated;$("cancel-activity-plan").disabled=!!plan.settingsOutdated;
-    $("activity-plan-status").textContent=plan.settingsOutdated?"主採購活動設定已有新版；請先重新產生並發布門市來源，再由總部確認。既有批次保留原快照。":`${plan.status === "confirmed" ? "總部已確認，可勾選納入本次正式補貨。" : "請確認分配後再納入補貨。"}共用版本${plan.revision}；多人修改時不覆蓋他人版本。`;
+    $("activity-plan-status").textContent=plan.settingsOutdated?"主採購活動設定已有新版；請先重新產生並發布門市來源，再由總部確認。既有批次保留原快照。":`${state.activityPlanDirty ? "原小數分配已轉為整數並校正尾差，請儲存並確認後再納入補貨。" : plan.status === "confirmed" ? "總部已確認；適用開單日由系統自動納入正式補貨。" : "請確認分配後再納入補貨。"}共用版本${plan.revision}；多人修改時不覆蓋他人版本。`;
   }
 
   function renderActivityWeeks() {
@@ -104,25 +191,54 @@
   }
 
   async function saveActivityPlan(status) {
+    if (state.activitySaving) return;
+    state.activitySaving = true;
+    let writeStarted = false, acceptedRevision = null;
+    const controls = [...$("activity-plan-editor").querySelectorAll("input,textarea,button"), $("activity-plan-select"), $("refresh-activity-plans")];
+    const disabled = controls.map(control => control.disabled);
     try {
-      const plan=state.activityPlan, config={startProposalDate:$("activity-start-proposal").value,reason:$("activity-confirm-reason").value.trim(),targets:{}};
-      $("activity-plan-editor").querySelectorAll("[data-activity-target]").forEach(field=>{config.targets[field.dataset.month] ||= {};config.targets[field.dataset.month][field.dataset.store]=Number(field.value);});
+      const plan=state.activityPlan;
+      if (state.activitySaveCheck) throw new Error("上次儲存結果待核對，請按「重新讀取活動」確認；不會重複送出。");
+      if (!plan || plan.settingsOutdated) throw new Error("活動不存在或已有新版，請重新讀取後確認。");
+      if (!$("activity-confirm-reason").value.trim()) throw new Error("請填寫「確認／修改原因（必填）」後再儲存。");
+      let config={startProposalDate:$("activity-start-proposal").value,reason:$("activity-confirm-reason").value.trim(),targets:{}};
+      $("activity-plan-editor").querySelectorAll("[data-activity-target]").forEach(field=>{config.targets[field.dataset.month] ||= {};config.targets[field.dataset.month][field.dataset.store]=globalThis.StoreTransferActivity.parseTarget(field.value);});
+      config=globalThis.StoreTransferActivity.roundConfig(plan.source,config);
       globalThis.StoreTransferActivity.validatePlan({...plan,config});
-      await api(`/activity-plans/${plan.id}`,{method:"PUT",body:{expectedRevision:plan.revision,status,config}});
-      state.activityPlan=(await api(`/activity-plans/${plan.id}`)).plan;
+      controls.forEach(control => { control.disabled = true; });
+      activityMessage("正在儲存並核對活動分配，請稍候，勿重複點擊。", "pending");
+      writeStarted = true;
+      state.activitySaveCheck = {id:plan.id,revision:plan.revision+1,status,source:plan.source,config};
+      const accepted = await api(`/activity-plans/${plan.id}`,{method:"PUT",timeoutMs:20000,body:{expectedRevision:plan.revision,status,config}});
+      acceptedRevision = accepted.revision;
+      const saved=(await api(`/activity-plans/${plan.id}`, {timeoutMs:15000})).plan;
+      if (!saved || saved.id !== plan.id || saved.revision !== acceptedRevision || saved.status !== status || saved.settingsOutdated || !globalThis.StoreTransferActivity.configMatches(plan.source,saved.config,config)) throw new Error("回讀版本、狀態或分配與本次儲存不一致，請重新讀取核對。");
+      state.activityPlan=saved;
+      state.activitySaveCheck = null;
       state.calculation=null; $("calculation-results").hidden=true;
-      if(status==="cancelled") $("use-activity-plan").checked=false;
+      $("activity-prior-reconciled").checked=false;
       renderActivityPlan();
-    } catch(error) {$("activity-plan-status").textContent=error.message;}
+      const summary = {id:saved.id,revision:saved.revision,status:saved.status,name:saved.source.name,startDate:saved.source.startDate,endDate:saved.source.endDate,startProposalDate:saved.config.startProposalDate};
+      state.activitySummaries = [...(state.activitySummaries || []).filter(p=>p.id!==saved.id),summary];
+      activityOptions(state.activitySummaries); $("activity-plan-select").value = saved.id;
+      $("use-activity-plan").checked = false;
+      try { $("use-activity-plan").checked = globalThis.StoreTransferActivity.choosePlanForDate(state.activitySummaries,$("proposal-date").value,state.config.storeInventoryRules?.config || {},calculationMode(),$("lock-at").value.slice(0,10))?.id === saved.id; } catch { /* next calculation rechecks the complete live list */ }
+      activityMessage(status === "confirmed" ? `已成功儲存並確認分配（v${saved.revision}）。同仁後續操作適用週次會自動帶入，不需重複確認。` : `已成功取消活動計畫（v${saved.revision}）；後續不再自動納入。`, "success");
+    } catch(error) {
+      const prefix = acceptedRevision != null ? `服務已接受儲存v${acceptedRevision}，但尚未完成回讀核對，請重新讀取活動確認，勿重複儲存。` : writeStarted ? "尚未確認儲存結果，請先重新讀取活動核對，勿直接重送。" : "尚未儲存：";
+      activityMessage(`${prefix} ${error.message}`, "error");
+    } finally {
+      controls.forEach((control,i) => { if (control.isConnected) control.disabled = disabled[i]; });
+      state.activitySaving = false;
+    }
   }
 
   async function currentActivityPlan() {
-    if (!$("use-activity-plan").checked) return null;
+    if (state.activitySaving) throw new Error("活動分配正在儲存，請等待結果後再計算。");
+    if (calculationMode() === "comparison") return null;
     if (state.activityPlanDirty) throw new Error("活動分配尚有未儲存修改，請先儲存並確認分配，再重新計算。");
-    const p=state.activityPlan;
-    if (!p || p.status!=="confirmed") throw new Error("請先讀取並由總部確認活動分配。");
-    const latest=(await api(`/activity-plans/${p.id}`)).plan;
-    if(latest.revision!==p.revision || latest.status!=="confirmed") throw new Error("活動已由同仁修改或取消，請重新讀取並重新計算。");
+    const p=await loadActivityPlans();
+    if (state.activityPlanDirty) throw new Error("原小數分配已轉為整數，請總部儲存確認一次後再計算，之後同仁即可自動沿用。");
     return p;
   }
 
@@ -869,9 +985,9 @@
 
   async function publish() {
     if (!state.calculation) return;
-    const selectedActivity=await currentActivityPlan();
     const calculatedActivity=Object.values(state.calculation.scheduleByStore).find(s=>s.activityPlanId);
-    if(calculatedActivity && (!selectedActivity || selectedActivity.id!==calculatedActivity.activityPlanId || selectedActivity.revision!==calculatedActivity.activityPlanRevision)) throw new Error("活動設定已改變，請重新計算後建立批次。");
+    const selectedActivity=await currentActivityPlan();
+    if(!state.calculation || !!selectedActivity !== !!calculatedActivity || (calculatedActivity && (selectedActivity.id!==calculatedActivity.activityPlanId || selectedActivity.revision!==calculatedActivity.activityPlanRevision))) throw new Error("活動設定已改變，請重新計算後建立批次。");
     if (state.calculation.calculationMode === "comparison") throw new Error("A/B測試比對只能預覽，請切回正式補貨並重新計算後再建立批次。");
     const weekKey = $("week-key").value, proposalDate = $("proposal-date").value, localLock = $("lock-at").value;
     if (!weekKey || !proposalDate || !localLock) throw new Error("請填妥週次、建議產生日與鎖定時間。");
@@ -1420,6 +1536,7 @@
       }
       else {
         $("hq-panel").hidden = false; renderStores(); defaults();
+        await loadActivityPlans().catch(error => activityMessage(`活動尚未確認可用：${error.message}`, "error"));
         if (state.config.permissions?.canManageRules) { $("rules-link").hidden = false; $("transfer-rules-link").hidden = false; }
         if (!state.config.googleOAuthClientId) { $("google-connect-button").disabled = true; $("source-status").textContent = "正式環境尚未設定 Google OAuth，用手動備援仍可操作。"; }
       }
@@ -1438,13 +1555,16 @@
   window.addEventListener("focus", checkRuntimeVersion);
   window.setInterval(checkRuntimeVersion, 5 * 60 * 1000);
   $("refresh-button").addEventListener("click", () => loadBatches().catch((error) => { $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; }));
-  $("refresh-activity-plans").addEventListener("click",()=>loadActivityPlans().catch(e=>{$("activity-plan-status").textContent=e.message;}));
+  $("refresh-activity-plans").addEventListener("click",()=>loadActivityPlans().catch(e=>activityMessage(e.message,"error")));
   $("activity-plan-select").addEventListener("change",async e=>{
+    if (state.activitySaving || state.activityPlanDirty) { e.target.value=state.activityPlan?.id || ""; activityMessage("分配正在儲存或有未儲存修改，請先完成確認，不會切換並覆蓋內容。","error"); return; }
+    state.activityResolveSeq=(state.activityResolveSeq || 0)+1;
     state.calculation=null; $("calculation-results").hidden=true; $("use-activity-plan").checked=false;$("activity-prior-reconciled").checked=false;
-    try {if(!e.target.value) {state.activityPlan=null;$("activity-plan-editor").hidden=true;return;} state.activityPlan=(await api(`/activity-plans/${e.target.value}`)).plan;renderActivityPlan();} catch(error){$("activity-plan-status").textContent=error.message;}
+    const sequence=state.activityResolveSeq;
+    try {if(!e.target.value) {await loadActivityPlans();return;} const plan=(await api(`/activity-plans/${encodeURIComponent(e.target.value)}`,{timeoutMs:15000})).plan;if(sequence!==state.activityResolveSeq)return;state.activityPlan=plan;renderActivityPlan();activityMessage("目前為查看／編輯活動分配；計算時仍依開單日自動核對適用活動，不能藉切換略過。" );} catch(error){activityMessage(error.message,"error");}
   });
   $("activity-plan-panel").addEventListener("input",e=>{if(e.target.closest("#activity-plan-editor")) state.activityPlanDirty=true;state.calculation=null;$("calculation-results").hidden=true;});
-  ["week-key","proposal-date","lock-at"].forEach(id=>$(id).addEventListener("change",()=>{state.calculation=null;$("calculation-results").hidden=true;$("activity-prior-reconciled").checked=false;}));
+  ["week-key","proposal-date","lock-at"].forEach(id=>$(id).addEventListener("change",()=>{state.calculation=null;$("calculation-results").hidden=true;$("activity-prior-reconciled").checked=false;if(id!=="week-key" && state.config?.role!=="store")void loadActivityPlans().catch(e=>activityMessage(e.message,"error"));}));
   $("calculate-button").addEventListener("click", () => calculate().catch((error) => { $("hq-status").textContent = error.message; $("calculate-button").disabled = false; }));
   $("publish-button").addEventListener("click", () => publish().catch((error) => { $("hq-status").textContent = error.message; }));
   $("publish-collaboration-button").addEventListener("click", () => publishCollaboration().catch((error) => { $("hq-status").textContent = error.message; }));
@@ -1464,8 +1584,9 @@
     const toggle = event.target.closest("[data-toggle-display-exception]");
     if (toggle) toggleDisplayException(toggle.dataset.toggleDisplayException).catch((error) => { $("display-exception-page-status").textContent = error.message; });
   });
-  $("week-key").addEventListener("change", () => applyScheduleForWeek($("week-key").value));
+  $("week-key").addEventListener("change", () => {applyScheduleForWeek($("week-key").value);if(state.config?.role!=="store")void loadActivityPlans().catch(e=>activityMessage(e.message,"error"));});
   document.querySelectorAll('input[name="calculation-mode"]').forEach((input) => input.addEventListener("change", () => {
+    if (state.config?.role!=="store") void loadActivityPlans().catch(e=>activityMessage(e.message,"error"));
     if (!state.calculation) return;
     state.calculation = null; state.formalCalculation = null;
     $("calculation-results").hidden = true;
@@ -1552,7 +1673,7 @@
   start();
 
   // Read-only readiness for the shared guide; no calculation or write is performed here.
-  globalThis.CompanyGuidance?.register({ statuses: '#hq-status,#source-status,#display-exception-dialog-status,#display-exception-page-status,#batch-detail [role="status"],#collaboration-detail [role="status"]', resolve() {
+  globalThis.CompanyGuidance?.register({ statuses: '#hq-status,#source-status,#activity-plan-status,#activity-save-status,#display-exception-dialog-status,#display-exception-page-status,#batch-detail [role="status"],#collaboration-detail [role="status"]', resolve() {
     const S=globalThis.CompanyGuidance.step;
     if (!state.config) return S('先確認公司帳號', '正在取得角色與可查看門市；失敗時請看帳號訊息。', '#account-badge');
     if ($('display-exception-dialog').open) return S('設定本店展示例外', '確認貨號、展示數量與原因，再自行儲存；不會變更其他門市。', '#display-exception-form');

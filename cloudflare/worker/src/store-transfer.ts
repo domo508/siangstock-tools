@@ -1397,11 +1397,11 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
       if (!row) throw new RequestValidationError("找不到活動。",404);
       return json({ plan:await currentActivityRecord(env,row) });
     }
-    const rows = await env.DB.prepare("SELECT id,revision,status,json_extract(source,'$.name') name,json_extract(source,'$.startDate') startDate,json_extract(source,'$.endDate') endDate,source,config,updated_at,updated_by FROM store_transfer_activity_plans ORDER BY updated_at DESC LIMIT 100").all();
-    return json({ plans:await Promise.all(rows.results.map(async raw=>{const row=raw as Record<string,unknown>,current=await currentActivityRecord(env,row);const {source,config,...metadata}=row;return {...metadata,status:current.status,...("settingsOutdated" in current?{settingsOutdated:true}:{})};})) });
+    const rows = await env.DB.prepare("SELECT id,revision,status,json_extract(source,'$.name') name,json_extract(source,'$.startDate') startDate,json_extract(source,'$.endDate') endDate,source,config,updated_at,updated_by FROM store_transfer_activity_plans ORDER BY updated_at DESC LIMIT 101").all();
+    return json({ hasMore:rows.results.length>100, plans:await Promise.all(rows.results.slice(0,100).map(async raw=>{const row=raw as Record<string,unknown>,current=await currentActivityRecord(env,row);const {source,config,...metadata}=row;return {...metadata,status:current.status,startProposalDate:current.config.startProposalDate || "",...("settingsOutdated" in current?{settingsOutdated:true}:{})};})) });
   }
   requireSameOrigin(request,env);
-  if(request.headers.get("X-Store-Transfer-Version") !== "20261102-company-guidance-r1") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
+  if(request.headers.get("X-Store-Transfer-Version") !== "20261102-transfer-activity-auto-r2") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
   const body = await readBody(request,3_000_000), now = new Date().toISOString();
   if (request.method === "POST" && !id) {
     const source = activitySource(body.source), planId = crypto.randomUUID();
@@ -1439,6 +1439,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
     targets[m] = {};
     for (const store of Object.keys(STORES)) {
       targets[m][store] = nonnegativeNumber(month[store],"門市目標",1e12);
+      if (!Number.isSafeInteger(targets[m][store])) throw new RequestValidationError(`${m}門市目標須為整數元，請先由新版前台校正四捨五入尾差。`);
       if (targets[m][store]>0 && !(sourceTargets[store]>0)) throw new RequestValidationError(`${store}缺可用歷史，不能直接分配業績。`);
     }
     if (Math.abs(Object.values(targets[m]).reduce((a,b)=>a+b,0)-Number(rawMonth.retailTarget))>0.01) throw new RequestValidationError(`${m}門市目標加總不守恆。`);

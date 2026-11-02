@@ -5,6 +5,11 @@ html, body { max-width: 100%; overflow-x: clip; }
 .compact-hero h1 { max-width: 13em; font-size: clamp(2.15rem, 4vw, 3.7rem); }
 .panel { margin-top: 1.5rem; }
 .period-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+.activity-feedback { padding:.8rem 1rem; border:1px solid #c9d8e2; border-radius:10px; background:#f4f9fa; white-space:normal; overflow-wrap:anywhere; line-height:1.65; }
+.activity-feedback:empty { display:none; }
+.activity-feedback[data-kind="success"] { color:#2f725b; background:#e8f4ed; border-color:#b9ddd1; }
+.activity-feedback[data-kind="error"] { color:#a44235; background:#fff0ed; border-color:#e0b6af; }
+.activity-feedback[data-kind="pending"] { color:#153f63; background:#eaf5f7; }
 .period-grid label { display: grid; gap: .5rem; font-weight: 700; color: #233d52; }
 .period-grid input, #activity-plan-panel select, #activity-plan-panel textarea { width:100%; min-width:0; min-height: 46px; padding: .7rem .85rem; border: 1px solid #c9d8e2; border-radius: 10px; background:#fff; font: inherit; }
 #activity-plan-panel fieldset { min-width:0; border:1px solid #d8e4e8; border-radius:12px; margin:1rem 0; }
