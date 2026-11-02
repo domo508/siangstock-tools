@@ -1424,7 +1424,7 @@ describe("採購建議第二階段", () => {
     expect(report["前次春節備貨未交量"]).toBe(350);
   });
 
-  it("貨品狀態空白仍顯示試算建議，但第一次回匯必須明確填量與原因", () => {
+  it("貨品狀態空白僅提示主檔待補，未改量或留白可回匯且不需原因", () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
       ["貨號", "品名", "供應商貨號", "供應商簡稱", "進貨價", "最小配貨數", "貨品狀態", "已下架"],
@@ -1447,13 +1447,10 @@ describe("採購建議第二階段", () => {
     const output = core.buildRecommendationWorkbook(recommendations, XLSX);
     const sheet = output.Sheets["03B1_普優瑪_天絲"];
     const firstRow = XLSX.utils.sheet_to_json(sheet, { defval: "" })[0];
-    expect(firstRow).toMatchObject({ "貨品狀態": "空白（待人工確認）", "人工確認要求": "必須明確填寫採購量與原因" });
+    expect(firstRow).toMatchObject({ "貨品狀態": "空白（待人工確認）", "人工確認要求": "主檔貨品狀態待補；未改量不需原因" });
     const baselineBySku = new Map(recommendations.rows.map((item) => [item.sku, item]));
     const blockedReview = core.reviewReturnedWorkbook(output, XLSX, { asOfDate: "2026-08-28", orderDate: "2026-09-20", baselineBySku });
-    expect(blockedReview.errors.map((error) => error.message)).toEqual(expect.arrayContaining([
-      expect.stringContaining("必須明確填寫人工確認採購量"),
-      expect.stringContaining("人工調整原因必填")
-    ]));
+    expect(blockedReview.errors).toHaveLength(0);
 
     const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })[0];
     sheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("人工確認採購量") })] = { t: "n", v: row.suggestedPurchaseQty };

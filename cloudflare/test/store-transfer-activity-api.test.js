@@ -13,10 +13,30 @@ function source(){return {version:1,name:"合成活動",scope:"all",asOfDate:"20
 function config(){return {startProposalDate:"2026-11-02",reason:"同仁共同確認分配",targets:{"2026-11":source().months[0].targets}};}
 beforeEach(()=>{sql=new DatabaseSync(":memory:");sql.exec("CREATE TABLE procurement_settings(id INTEGER,store_transfer_hq_emails TEXT); INSERT INTO procurement_settings VALUES(1,'[\"hq@siangapato.com.tw\"]');");sql.exec(readFileSync("worker/migrations/0043_store_transfer_activity_plans.sql","utf8"));sql.exec(readFileSync("worker/migrations/0048_procurement_activities.sql","utf8"));const db={prepare(query){let args=[];return {bind(...a){args=a;return this;},async first(){return sql.prepare(query).get(...args)||null;},async all(){return {results:sql.prepare(query).all(...args)};},async run(){const result=sql.prepare(query).run(...args);return {meta:{changes:Number(result.changes)}};}};}};env={DB:db,ALLOWED_ORIGINS:"https://siangstock.com"};});
 afterEach(()=>{vi.useRealTimers();sql.close();});
-async function call(path="",method="GET",body,email="hq@siangapato.com.tw",headers={}){const r=new Request(`https://siangstock.com/api/store-transfer/activity-plans${path}`,{method,headers:{Origin:"https://siangstock.com","Content-Type":"application/json","X-Store-Transfer-Version":"20261102-company-guidance-r1","X-Test-Email":email,...headers},...(body?{body:JSON.stringify(body)}:{})});return storeTransferRoute(r,env);}
+async function call(path="",method="GET",body,email="hq@siangapato.com.tw",headers={}){const r=new Request(`https://siangstock.com/api/store-transfer/activity-plans${path}`,{method,headers:{Origin:"https://siangstock.com","Content-Type":"application/json","X-Store-Transfer-Version":"20261102-transfer-same-day-r1","X-Test-Email":email,...headers},...(body?{body:JSON.stringify(body)}:{})});return storeTransferRoute(r,env);}
 it("主採購提供草稿→總部確認→共同讀取→新版衝突不覆蓋，歷史與設定原子一致",async()=>{const response=await call("","POST",{source:source()});const created=await response.json();expect(response.status).toBe(201);expect((await (await call()).json()).plans).toHaveLength(1);expect((await (await call(`/${created.id}`)).json()).plan.status).toBe("draft");const updated=await call(`/${created.id}`,"PUT",{expectedRevision:1,status:"confirmed",config:config()});expect(updated.status).toBe(200);const plan=(await(await call(`/${created.id}`)).json()).plan;expect(plan).toMatchObject({revision:2,status:"confirmed",config:{startProposalDate:"2026-11-02"}});expect(sql.prepare("SELECT COUNT(*) n FROM store_transfer_activity_plan_history").get().n).toBe(2);await expect(call(`/${created.id}`,"PUT",{expectedRevision:1,status:"confirmed",config:config()})).rejects.toThrow(/其他同仁/);expect(sql.prepare("SELECT revision FROM store_transfer_activity_plans").get().revision).toBe(2);});
+it("自動帶入使用共用確認的備貨起日，跨帳號唯讀不新增版本",async()=>{
+ const{id}=await(await call("","POST",{source:source()})).json();await call(`/${id}`,"PUT",{expectedRevision:1,status:"confirmed",config:config()});
+ const before=sql.prepare("SELECT COUNT(*) n FROM store_transfer_activity_plan_history").get().n;
+ const list=await(await call()).json();expect(list.hasMore).toBe(false);expect(list.plans[0]).toMatchObject({id,revision:2,status:"confirmed",startProposalDate:"2026-11-02"});
+ expect(list.plans[0]).not.toHaveProperty("source");expect(list.plans[0]).not.toHaveProperty("config");
+ await call(`/${id}`);expect(sql.prepare("SELECT COUNT(*) n FROM store_transfer_activity_plan_history").get().n).toBe(before);
+});
 it("門市／非指派帳號無法讀寫全店分配，跨來源與舊版寫入拒絕",async()=>{for(const email of ["tpzssa@siangapato.com.tw","nobody@siangapato.com.tw"])await expect(call("","GET",undefined,email)).rejects.toThrow(/總部|尚未指派/);await expect(call("","POST",{source:source()},undefined,{Origin:"https://evil.example"})).rejects.toThrow(/不允許/);await expect(call("","POST",{source:source()},undefined,{"X-Store-Transfer-Version":"old"})).rejects.toThrow(/新版/);});
 it("來源與確認的目標不守恆、每日權重異常、重複品號皆無法繞過前台",async()=>{const s=source();s.months[0].retailTarget=999;await expect(call("","POST",{source:s})).rejects.toThrow(/守恆/);s.months[0].retailTarget=1000;s.months[0].weights.R00[0]=2;await expect(call("","POST",{source:s})).rejects.toThrow();const duplicate=source();duplicate.rows.push(duplicate.rows[0]);await expect(call("","POST",{source:duplicate})).rejects.toThrow(/重複/);const{id}=await(await call("","POST",{source:source()})).json();const c=config();c.targets["2026-11"].R00=0;await expect(call(`/${id}`,"PUT",{expectedRevision:1,status:"confirmed",config:c})).rejects.toThrow(/守恆/);expect(sql.prepare("SELECT COUNT(*) n FROM store_transfer_activity_plan_history").get().n).toBe(1);});
+it("整數分配保存並回讀守恆，直接寫入小數被拒絕且歷史不變",async()=>{
+ const s=source();s.months[0].targets.R00=500.5;s.months[0].targets.R01=499.5;
+ const{id}=await(await call("","POST",{source:s})).json();
+ const raw={...config(),targets:{"2026-11":s.months[0].targets}};
+ await expect(call(`/${id}`,"PUT",{expectedRevision:1,status:"confirmed",config:raw})).rejects.toThrow(/整數元/);
+ expect(sql.prepare("SELECT COUNT(*) n FROM store_transfer_activity_plan_history").get().n).toBe(1);
+ const normalized={...raw,targets:{"2026-11":{...s.months[0].targets,R00:500,R01:500}}};
+ expect((await call(`/${id}`,"PUT",{expectedRevision:1,status:"confirmed",config:normalized})).status).toBe(200);
+ const saved=(await(await call(`/${id}`)).json()).plan;
+ expect(Object.values(saved.config.targets["2026-11"]).reduce((a,b)=>a+b,0)).toBe(1000);
+ expect(saved.source.months[0].targets.R00).toBe(500.5);
+ expect(Object.values(saved.config.targets["2026-11"]).every(Number.isSafeInteger)).toBe(true);
+});
 it("取消與人工歸零分配保留歷史；未知欄位／檔名／交易資料不保存",async()=>{const s=source();s.fileName="不可保存.xlsx";s.customer="不得保存";const{id}=await(await call("","POST",{source:s})).json();expect(sql.prepare("SELECT source FROM store_transfer_activity_plans").get().source).not.toContain("不可保存");const r=await call(`/${id}`,"PUT",{expectedRevision:1,status:"cancelled",config:config()});expect(r.status).toBe(200);expect((await(await call(`/${id}`)).json()).plan.status).toBe("cancelled");});
 it("相同來源重試不重複活動，更新來源需明確版本並重新確認分配",async()=>{const first=await(await call("","POST",{source:source()})).json();const retry=await(await call("","POST",{source:source()})).json();expect(retry.id).toBe(first.id);const s=source();s.rows[0].quantities['2026-11']=30;const conflict=await call("","POST",{source:s});expect(conflict.status).toBe(409);const r=await call("","POST",{source:s,expectedRevision:1});expect(r.status).toBe(200);const p=(await(await call(`/${first.id}`)).json()).plan;expect(p).toMatchObject({status:'draft',revision:2,config:{}});expect(sql.prepare('SELECT COUNT(*) n FROM store_transfer_activity_plans').get().n).toBe(1);});
 it("完整活動流程：建立→門市暫存及送出→總部核准→ERP紀錄；後週須核對前批",async()=>{
@@ -34,6 +54,7 @@ it("完整活動流程：建立→門市暫存及送出→總部核准→ERP紀�
  expect((await batchCall('/batches/TR-SYNTH-W45/stores/R00/save','PUT',{items:storeItems},'tpzssa@siangapato.com.tw')).status).toBe(200);
  expect((await batchCall('/batches/TR-SYNTH-W45/stores/R00/submit','PUT',{items:storeItems},'tpzssa@siangapato.com.tw')).status).toBe(200);
  const approvedItems=[{...storeItems[0],approvedQuantity:3}];
+ vi.setSystemTime(new Date('2026-11-01T02:00:00Z'));
  await expect(batchCall('/batches/TR-SYNTH-W45/approve','POST',{items:approvedItems})).rejects.toThrow(/實際核准日/);
  vi.setSystemTime(new Date('2026-11-03T02:00:00Z'));
  expect((await batchCall('/batches/TR-SYNTH-W45/approve','POST',{items:approvedItems})).status).toBe(200);

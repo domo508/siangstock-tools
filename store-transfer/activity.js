@@ -41,12 +41,73 @@
     }
     return plan;
   }
+  // Round each store first, then reconcile only rounding differences. Never
+  // silently rebalance an incorrectly entered budget or give a zero store money.
+  function roundTargets(targets, total) {
+    const integerTotal = Math.round(total);
+    if (!Number.isFinite(total) || !Number.isSafeInteger(integerTotal) || total < 0 || Math.abs(total-integerTotal) > 1e-6) throw new Error("實體六店總目標須為整數元，請先回主採購確認總目標。");
+    total = integerTotal; // tolerate floating-point summation noise, not cents
+    if (STORES.some(s => !Number.isFinite(targets?.[s]) || targets[s] < 0)) throw new Error("逐店業績目標不完整，請填寫非負數金額。");
+    if (Math.abs(STORES.reduce((sum,s) => sum + targets[s], 0) - total) > 0.01) throw new Error("逐店目標加總須等於實體門市目標；僅四捨五入尾差會自動校正。");
+    const rounded = Object.fromEntries(STORES.map(s => [s, Math.round(targets[s])]));
+    let delta = total - STORES.reduce((sum,s) => sum + rounded[s], 0);
+    const eligible = STORES.filter(s => targets[s] > 0 && (delta > 0 || rounded[s] > 0))
+      .sort((a,b) => delta > 0 ? (targets[b]-rounded[b])-(targets[a]-rounded[a]) : (rounded[b]-targets[b])-(rounded[a]-targets[a]));
+    for (const store of eligible) {
+      if (!delta) break;
+      rounded[store] += delta > 0 ? 1 : -1;
+      delta += delta > 0 ? -1 : 1;
+    }
+    if (delta || STORES.reduce((sum,s) => sum + rounded[s], 0) !== total) throw new Error("門市整數目標尾差校正失敗，請重新核對分配。");
+    return rounded;
+  }
+  function parseTarget(value) {
+    const text = String(value ?? "").normalize("NFKC").trim();
+    if (!/^(?:\d+(?:\.\d*)?|\.\d+|\d{1,3}(?:,\d{3})+(?:\.\d*)?)$/.test(text)) return NaN;
+    const number = Number(text.replace(/,/g, ""));
+    return Number.isFinite(number) ? number : NaN;
+  }
+  function formatTarget(value) {
+    return Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString("en-US") : String(value ?? "");
+  }
+  function roundConfig(source, config) {
+    return { ...config, targets: Object.fromEntries(source.months.map(m => [m.month, roundTargets(config.targets?.[m.month], m.retailTarget)])) };
+  }
+  function configMatches(source, actual, expected) {
+    if (!actual || actual.reason !== expected.reason || actual.startProposalDate !== expected.startProposalDate) return false;
+    const months = source.months.map(m=>m.month).sort();
+    if (JSON.stringify(Object.keys(actual.targets || {}).sort()) !== JSON.stringify(months)) return false;
+    return months.every(m => JSON.stringify(Object.keys(actual.targets[m] || {}).sort()) === JSON.stringify([...STORES].sort()) && STORES.every(s => actual.targets[m][s] === expected.targets[m][s]));
+  }
+  function firstProposalDate(startDate, rules = {}) {
+    if (!validDate(startDate)) throw new Error("活動開始日無效，請重新讀取活動。");
+    let proposal = startDate;
+    while (new Date(`${proposal}T00:00:00Z`).getUTCDay() !== 1) proposal = add(proposal, -1);
+    while (schedule(proposal, rules).usableDate >= startDate) proposal = add(proposal, -7);
+    return proposal;
+  }
+  function choosePlanForDate(plans, proposalDate, rules = {}, mode = "formal", approvalDate = "") {
+    if (mode === "comparison") return null;
+    if (!Array.isArray(plans) || !validDate(proposalDate)) throw new Error("無法判斷本輪活動，請確認開單日期及重新讀取活動。");
+    const timing = schedule(proposalDate, rules, approvalDate);
+    const matches = plans.filter(plan => {
+      if (plan.status === "cancelled") return false;
+      if (!validDate(plan.startDate) || !validDate(plan.endDate) || plan.endDate < plan.startDate) throw new Error("活動日期資料異常，請由總部核對後再計算。");
+      if (timing.arrivalDate > plan.endDate) return false;
+      const first = plan.startProposalDate || (plan.status !== "confirmed" ? firstProposalDate(plan.startDate, rules) : "");
+      if (!validDate(first)) throw new Error("已確認活動缺少備貨開始日，請由總部重新確認。");
+      return proposalDate >= first;
+    });
+    if (matches.length > 1) throw new Error("本輪同時適用多個活動，請總部確認活動範圍；不可自行合併或略過。");
+    if (!matches.length) return null;
+    const plan = matches[0];
+    if (plan.status !== "confirmed" || plan.settingsOutdated) throw new Error("本輪活動尚未確認或主採購已有新版，請總部重新確認後再產生補貨。");
+    return plan;
+  }
   function draftConfig(source, rules = {}) {
     validateSource(source);
-    let proposal = source.startDate;
-    while (new Date(`${proposal}T00:00:00Z`).getUTCDay() !== 1) proposal = add(proposal, -1);
-    while (schedule(proposal, rules).usableDate >= source.startDate) proposal = add(proposal, -7);
-    return { startProposalDate: proposal, targets: Object.fromEntries(source.months.map(m => [m.month, { ...m.targets }])), reason: "" };
+    const proposal = firstProposalDate(source.startDate, rules);
+    return roundConfig(source, { startProposalDate: proposal, targets: Object.fromEntries(source.months.map(m => [m.month, { ...m.targets }])), reason: "" });
   }
   function schedule(proposalDate, rules = {}, approvalDate = "") {
     if (!validDate(proposalDate) || (approvalDate && (!validDate(approvalDate) || approvalDate<proposalDate))) throw new Error("活動調撥日期無效。");
@@ -96,5 +157,5 @@
     }
     return `至少可售至${usage.at(-1)[0]}（本輪保障範圍）`;
   }
-  root.StoreTransferActivity = { BUFFER_DAYS, STORES, add, validDate, validateSource, validatePlan, draftConfig, schedule, prepare, projection };
+  root.StoreTransferActivity = { BUFFER_DAYS, STORES, add, validDate, validateSource, validatePlan, roundTargets, parseTarget, formatTarget, roundConfig, configMatches, firstProposalDate, choosePlanForDate, draftConfig, schedule, prepare, projection };
 })(typeof globalThis !== "undefined" ? globalThis : window);

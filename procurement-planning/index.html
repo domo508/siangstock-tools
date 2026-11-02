@@ -472,7 +472,7 @@
       <div id="result-alert" class="result-alert" role="status"></div>
       <details id="excluded-result-panel" class="excluded-result-panel" hidden>
         <summary><span>未列入自動建議／需人工確認</span><strong id="excluded-result-count">0項</strong></summary>
-        <p>這些品項仍保留在稽核中；貨品狀態空白者會顯示試算建議量，但第一次回匯必須明確填量與原因，覆核通過後才可送出待核准。</p>
+        <p>這些品項仍保留在稽核中；貨品狀態空白只提示主檔待補，保留試算建議量，未改量不強制填量或原因。實際改量、人工新增及S品例外仍須原因。</p>
         <div class="result-table-wrap">
           <table class="procurement-table compact-table">
             <thead><tr><th>供應商</th><th>ERP品號</th><th>商品品名</th><th>未進位缺口</th><th>試算建議量</th><th>處理狀態</th></tr></thead>
@@ -637,7 +637,7 @@
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
   <script src="google-sources.js?v=20261102-procurement-series-r6"></script>
   <script src="../store-transfer/core.js?v=20261027-activity-transfer-r6"></script>
-  <script src="../store-transfer/activity.js?v=20261027-activity-transfer-r6"></script>
+  <script src="../store-transfer/activity.js?v=20261102-transfer-same-day-r1"></script>
   <script src="activity-planning.js?v=20261102-procurement-series-r6"></script>
   <script src="shortage-batch.js?v=20261102-procurement-series-r6"></script>
   <script src="activity-period.js?v=20261102-procurement-series-r6"></script>

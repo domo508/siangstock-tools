@@ -87,7 +87,7 @@
       "collaborators": [
         "store"
       ],
-      "href": "/store-transfer/?deploy=20261102-company-guidance-r1",
+      "href": "/store-transfer/?deploy=20261102-transfer-same-day-r1",
       "status": "立即使用",
       "description": "商控建立補貨建議，門市確認後送交核准，產生各店 ERP 調撥檔。",
       "data": "本機運算・共用批次"
