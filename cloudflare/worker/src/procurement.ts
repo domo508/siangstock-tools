@@ -1629,7 +1629,11 @@ async function notify(request: Request, env: ProcurementEnv, batchId: string): P
 // Read the current formal ledger in one database snapshot. Drafts never reserve stock.
 async function consignmentReservations(request: Request, env: ProcurementEnv): Promise<Response> {
   await verifyCompanyUser(request, procurementAccess(env));
-  const requestedSuppliers = new URL(request.url).searchParams.getAll("supplier");
+  const params = new URL(request.url).searchParams;
+  const requestedSuppliers = params.getAll("supplier");
+  const purpose = params.get("purpose");
+  if (purpose && purpose !== "planning") throw new RequestValidationError("寄庫核對用途無效。");
+  const planning = purpose === "planning";
   if (requestedSuppliers.length > 100 || requestedSuppliers.some((value) => !value || value.length > 120)) throw new RequestValidationError("寄庫核對供應商範圍無效。");
   const result = await env.DB.prepare(`SELECT b.id batch_id, b.supplier_summary, b.approved_amount batch_amount,
     b.revision, b.approved_at, i.sku, i.supplier, i.approved_quantity, i.approved_amount item_amount,
@@ -1644,6 +1648,7 @@ async function consignmentReservations(request: Request, env: ProcurementEnv): P
     batches.get(id)!.push(row);
   }
   const reservations: Record<string, unknown>[] = [];
+  const issues: Record<string, unknown>[] = [];
   for (const [batchId, rows] of batches) {
     const suppliers = parseJsonText(String(rows[0].supplier_summary || "[]"));
     if (!Array.isArray(suppliers) || !suppliers.every((value) => typeof value === "string")) {
@@ -1655,7 +1660,11 @@ async function consignmentReservations(request: Request, env: ProcurementEnv): P
     const total = rows.reduce((sum, row) => sum + Number(row.item_amount || 0), 0);
     if (Math.abs(total - Number(rows[0].batch_amount)) >= 0.05
       || (Number(rows[0].batch_amount) > 0 && suppliers.filter(isConsignment).some((supplier) => !rows.some((row) => row.supplier === supplier && row.sku)))) {
-      throw new RequestValidationError(`批次${batchId}缺少完整核准逐品項明細，已停止寄庫核對；請先補齊正式台帳。`, 409);
+      if (!planning) throw new RequestValidationError(`批次${batchId}缺少完整核准逐品項明細，已停止寄庫核對；請先補齊正式台帳。`, 409);
+      const affectedSuppliers = [...new Set([...suppliers, ...rows.map(row => String(row.supplier || ""))])].filter(isConsignment);
+      issues.push({ code: "incomplete_approved_detail", batchId, suppliers: affectedSuppliers,
+        message: `批次${batchId}缺少完整核准逐品項明細；${affectedSuppliers.join("、")}寄庫預留未確認。採購需求可試算，寄庫可拉量須補齊台帳後確認。` });
+      continue;
     }
     for (const row of rows) {
       if (!row.sku || !isConsignment(row.supplier) || row.erp_status === "erp_created" || (requestedSuppliers.length && !requestedSuppliers.includes(String(row.supplier)))) continue;
@@ -1668,7 +1677,7 @@ async function consignmentReservations(request: Request, env: ProcurementEnv): P
         revision: Number(row.revision), approvedAt: row.approved_at, status: "approved" });
     }
   }
-  return json({ version: 1, source: "approved_not_erp", reservations });
+  return json({ version: 1, source: "approved_not_erp", reservations, ...(planning ? { purpose: "planning", verified: issues.length === 0, issues } : {}) });
 }
 
 export async function procurementRoute(request: Request, env: ProcurementEnv): Promise<Response | null> {

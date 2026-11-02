@@ -77,3 +77,24 @@ it("legacy approved missing detail fails closed, scoped review does not require 
   const data=await(await call(true,`?supplier=${encodeURIComponent("普優瑪寢具有限公司")}`)).json();
   expect(data.reservations).toEqual([expect.objectContaining({batchId:"scoped",quantity:10})]);
 });
+
+it("planning warns for incomplete legacy detail while preserving valid reservations; strict review still stops", async () => {
+  sql.exec("UPDATE procurement_batches SET status='approved' WHERE id='HIST-202609-LIRONG-0911'");
+  batch("valid");
+  const data=await(await call(true,"?purpose=planning")).json();
+  expect(data).toMatchObject({purpose:"planning",verified:false,issues:[{code:"incomplete_approved_detail",batchId:"HIST-202609-LIRONG-0911",suppliers:["力榮"]}]});
+  expect(data.reservations).toEqual([expect.objectContaining({batchId:"valid",quantity:10})]);
+  await expect(call()).rejects.toThrow(/缺少完整/);
+  const scoped=await(await call(true,`?purpose=planning&supplier=${encodeURIComponent("普優瑪")}`)).json();
+  expect(scoped).toMatchObject({verified:true,issues:[],reservations:[]});
+});
+it("planning does not downgrade auth, database, invalid quantity or unknown supplier scope errors",async()=>{
+  await expect(call(false,"?purpose=planning")).rejects.toThrow(/登入/);
+  await expect(call(true,"?purpose=anything")).rejects.toThrow(/用途/);
+  batch("invalid");sql.exec("UPDATE procurement_batch_items SET remaining_quantity=11");
+  await expect(call(true,"?purpose=planning")).rejects.toThrow(/數量無效/);
+  sql.exec("UPDATE procurement_batches SET supplier_summary='{}'");
+  await expect(call(true,"?purpose=planning")).rejects.toThrow(/供應商基準/);
+  sql.exec("DROP TABLE procurement_batch_items");
+  await expect(call(true,"?purpose=planning")).rejects.toThrow();
+});

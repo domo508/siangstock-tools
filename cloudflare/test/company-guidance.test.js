@@ -27,7 +27,8 @@ describe('公司工具即時指引整合契約',()=>{
     expect(code).toContain(`const VERSION = '${version}'`);
     expect(code).toContain("credentials: 'same-origin'");
     expect(code).toContain("cache: 'no-store'");
-    expect(code).toContain("guard = 'blocked'");
+    expect(code).toContain("latestVersion === VERSION ? 'ready' : 'blocked'");
+    expect(code).toContain("guard = 'unavailable'");
     expect(code).not.toMatch(/localStorage|sessionStorage|sendBeacon|XMLHttpRequest|\.innerHTML\s*=/);
     for(const path of ['live-guidance/version.json','inventory/version.json','cost-analysis/version.json','supplier-reconciliation/version.json','inventory/rules-admin/version.json']){
       expect(existsSync('../'+path)).toBe(true);

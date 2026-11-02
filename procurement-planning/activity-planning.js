@@ -236,6 +236,8 @@
     const candidates = new Set();
     for (const [key, series] of index.sku) { const sku = key.split("\t")[0], master = input.master.bySku.get(sku); if (master && scopeApplies(settings.scope, { supplier: master.supplier, purchaseTab: core().classifyPuyoumaPurchaseTab(master, master.name) }) && settings.months.some(m => sum(series, `${shiftMonth(m, -12)}-01`, monthEnd(shiftMonth(m, -12)), 0) > 0)) candidates.add(sku); }
     const result = baseBuilder({ ...input, activityCandidateSkus: candidates, activityDemand: { enabled: false } });
+    result.consignmentReservationIssues = input.reservedConsignmentBySku?.issues || [];
+    for (const issue of result.consignmentReservationIssues) context.notes.add(issue.message);
     const purchaseDate = date(input.orderDate) || input.asOfDate;
     if (purchaseDate < input.asOfDate) throw new Error("預計下單日不能早於活動需求資料截止日。");
     const readyBy = add(settings.startDate, -1), rows = result.rows;

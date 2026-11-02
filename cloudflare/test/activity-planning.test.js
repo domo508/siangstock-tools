@@ -306,3 +306,28 @@ describe("跨月活動備貨與供貨", () => {
   const a=review(original),b=review(linked);expect(b.errors).toEqual(a.errors);expect(b.totals).toEqual(a.totals);
   expect(XLSX.utils.sheet_to_json(core.buildErpPurchaseWorkbook(b,writer,{approved:true}).Sheets["通用貨品數量"],{header:1})).toEqual(XLSX.utils.sheet_to_json(core.buildErpPurchaseWorkbook(a,writer,{approved:true}).Sheets["通用貨品數量"],{header:1}));
  });
+
+it("historical reservation uncertainty preserves ordinary demand but never invents verified stock, production or activity readiness; XLSX retains warning",()=>{
+  const known=run();
+  const reservations=new Map();reservations.unverifiedSupplierGroups=new Set(["puyouma"]);
+  reservations.issues=[{code:"incomplete_approved_detail",batchId:"SYNTH-LEGACY",suppliers:["普優瑪"],message:"SYNTH-LEGACY：普優瑪寄庫預留未確認"}];
+  const result=run({reservedConsignmentBySku:reservations});
+  const ordinary=known.rows.find(r=>r.sku==="A1"),row=result.rows.find(r=>r.sku==="A1");
+  expect(row.suggestedPurchaseQty).toBe(ordinary.suggestedPurchaseQty);
+  expect(row.suggestedPurchaseAmount).toBe(ordinary.suggestedPurchaseAmount);
+  expect(row.activityPlanning.netNeed).toBe(ordinary.activityPlanning.netNeed);
+  expect(row.consignmentDataAvailable).toBe(false);
+  expect(row.consignmentCurrentQty).toBeNull();
+  expect(row.suggestedConsignmentQty).toBe(0);
+  expect(row.activityPlanning).toMatchObject({verified:false,pullQty:null,shortage:null,productionNeed:null,availableConsignment:null,status:"寄庫資料未驗證"});
+  expect(result.rows.find(r=>r.sku==="A3").suggestedPurchaseQty).toBe(0);
+  expect(result.rows.find(r=>r.sku==="A2")).toEqual(known.rows.find(r=>r.sku==="A2"));
+  expect(JSON.parse(JSON.stringify(result)).consignmentReservationIssues).toEqual(reservations.issues);
+  const reread=roundtrip(core.buildRecommendationWorkbook(result,writer));
+  const summary=XLSX.utils.sheet_to_json(reread.Sheets["01_採購摘要"],{header:1});
+  expect(JSON.stringify(summary)).toContain("SYNTH-LEGACY");
+  const activityRows=XLSX.utils.sheet_to_json(reread.Sheets["10_活動備貨檢查"],{header:1});
+  expect(JSON.stringify(activityRows)).toContain("未驗證");
+  expect(result.totals.suggestedPurchaseQty).toBe(result.suggestedRows.reduce((s,r)=>s+r.suggestedPurchaseQty,0));
+  expect(result.totals.suggestedPurchaseAmount).toBe(result.suggestedRows.reduce((s,r)=>s+r.suggestedPurchaseAmount,0));
+});

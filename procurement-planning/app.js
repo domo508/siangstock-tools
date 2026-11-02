@@ -14,7 +14,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261102-procurement-progress-r2";
+  const APP_VERSION = "20261102-procurement-consignment-r4";
   const state = {
     importProgress: null, shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -116,10 +116,11 @@
     if (state.runtimeOutdated) return false;
     try {
       const response = await fetch(`version.json?check=${Date.now()}`, { cache: "no-store", credentials: "same-origin" });
-      if (!response.ok) return true;
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const manifest = await response.json();
       const latestVersion = String(manifest?.version || "").trim();
-      if (!latestVersion || latestVersion === APP_VERSION) return true;
+      if (!/^[A-Za-z0-9-]{1,100}$/.test(latestVersion)) throw new Error("版本資訊格式異常");
+      if (latestVersion === APP_VERSION) return true;
       state.runtimeOutdated = true;
       state.latestRuntimeVersion = latestVersion;
       elements.versionWarning.hidden = false;
@@ -128,7 +129,8 @@
       updateReadyState();
       return false;
     } catch (_) {
-      return true;
+      setStatus("暫時無法確認主採購工具版本；本頁資料保留，請稍候重新操作。未確認前不產生或寫入新結果。", "warning");
+      return false;
     }
   }
   function setWorkflowStatus(message, type = "") { elements.workflowStatus.textContent = message; elements.workflowStatus.className = `main-status ${type}`.trim(); }
@@ -311,7 +313,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261102-procurement-progress-r2");
+        const worker = new Worker("inventory-reader-worker.js?v=20261102-procurement-consignment-r4");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1077,7 +1079,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261102-procurement-progress-r2");
+      const worker = new Worker("seasonal-model-worker.js?v=20261102-procurement-consignment-r4");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -2939,7 +2941,9 @@
       ? "本次未啟用大活動需求。"
       : `大活動「${activityRule.name}」採${activityRule.methodLabel}${activityRule.method === "monthly-target" ? "（不另加乘）" : `、${Number(activityRule.multiplier || 1).toFixed(2)}倍`}，影響${formatNumber(analysis.totals.activityDemandSkuCount || 0)}個SKU、增加建議${formatNumber(analysis.totals.activityDemandAdditionalSuggestedQty || 0)}件。`;
     elements.resultAlert.textContent = `${analysis.validation.dateCheck.message} ${styleNote} ${activityNote} 上林採28天檢視；普優瑪與力榮採購／寄庫分頁處理。`;
-    elements.resultAlert.className = `result-alert ${analysis.validation.dateCheck.status === "PASS" && consignmentSource.styleAudit.pinkDetected ? "" : "warn"}`.trim();
+    const reservationIssues = analysis.consignmentReservationIssues || [];
+    if (reservationIssues.length) elements.resultAlert.textContent += ` 寄庫預留待確認：${reservationIssues.map(issue => issue.message).join("；")}`;
+    elements.resultAlert.className = `result-alert ${analysis.validation.dateCheck.status === "PASS" && consignmentSource.styleAudit.pinkDetected && !reservationIssues.length ? "" : "warn"}`.trim();
     renderSupplierFilters(analysis);
     renderActivityStock(analysis);
     renderWorkUnitDashboard();
@@ -3116,7 +3120,7 @@
       const uncoveredStoreShortageNeeds = selectedStoreShortageNeeds.map((row) => ({ ...row, unfilledQuantity: Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.covered_quantity || 0)) }));
       const activity = activitySettings();
       const activityHistory = activity.enabled ? await loadActivityHistory(salesReports) : null;
-      const reservedConsignmentBySku = activity.enabled ? await activeConsignmentReservations() : new Map();
+      const reservedConsignmentBySku = activity.enabled ? await activeConsignmentReservations([], { planning: true }) : new Map();
       const analysis = core.buildProcurementRecommendations({ master, inventory, pendingReports, transferReports: [transferReport], inventoryDate: elements.inventoryDate.value, consignment, lirongConsignment, salesReports, model,
         blacklist: blacklistEntries(), asOfDate: elements.salesDate.value, checkpoint: elements.checkpoint.value,
         analysisMonth: elements.month.value, orderDate: elements.orderDate.value, activityDemand: activity, activityHistory, reservedConsignmentBySku,
@@ -3154,6 +3158,7 @@
           lirong: state.sourceMetadata.lirongMetadata?.sha256 || "unavailable"
         } : {}
       };
+      if (!(await checkRuntimeVersion())) throw new Error("本機計算已結束，但版本尚未確認或已有新版，結果未採用且尚未寫入台帳。請先確認上方版本訊息。");
       await sharedActivity.verify(activityToken);
       state.analysis = analysis; state.baseAnalysis = analysis; state.workflowType = state.shortageRunMode === "new_order" ? "store_shortage_replenishment" : "system_recommendation";
       state.transferParentContext=null;state.transferPeriodError=false;state.transferPeriodSyncing=false;
@@ -3461,10 +3466,11 @@
     await persistWorkflowDraft("downloaded");
   }
 
-  async function activeConsignmentReservations(suppliers = []) {
+  async function activeConsignmentReservations(suppliers = [], { planning = false } = {}) {
     const query = new URLSearchParams();
     [...new Set(suppliers)].filter((supplier) => /普優[瑪碼]|力榮/.test(supplier)).forEach((supplier) => query.append("supplier", supplier));
     if (suppliers.length && !query.size) return new Map();
+    if (planning) query.set("purpose", "planning");
     const response = await fetch(`/api/procurement/consignment-reservations?${query}`, {
       headers: { Accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(30000)
     });
@@ -3474,6 +3480,16 @@
     }
     const reservations = new Map();
     reservations.sourcesBySku = new Map();
+    reservations.issues = [];
+    reservations.unverifiedSupplierGroups = new Set();
+    if (planning) {
+      if (result.purpose !== "planning" || !Array.isArray(result.issues) || typeof result.verified !== "boolean" || result.verified !== (result.issues.length === 0)) throw new Error("公司寄庫預留核對狀態不完整，請確認最新版後重試。");
+      for (const issue of result.issues) {
+        if (issue.code !== "incomplete_approved_detail" || !issue.batchId || typeof issue.message !== "string" || !Array.isArray(issue.suppliers) || !issue.suppliers.length || !issue.suppliers.every(s => typeof s === "string" && /普優[瑪碼]|力榮/.test(s))) throw new Error("公司寄庫預留警示範圍無法確認，已停止核對。");
+        reservations.issues.push(issue);
+        issue.suppliers.forEach(s => reservations.unverifiedSupplierGroups.add(/力榮/.test(s) ? "lirong" : "puyouma"));
+      }
+    }
     const seen = new Set();
     for (const row of result.reservations) {
       const sku = core.normalizeSku(row.sku);

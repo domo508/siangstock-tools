@@ -1628,7 +1628,7 @@
     const deliveryAfterProductionDays = Math.max(0, Number(lirongRules.deliveryAfterProductionDays ?? PROCUREMENT_POLICY.lirongDeliveryAfterProductionDays));
     const earliestDeliveryDays = productionDays + deliveryAfterProductionDays;
     const targetRules = lirongRules.targetDays || PROCUREMENT_POLICY.lirongFactoryTargetDays;
-    return recommendations.rows.filter((row) => /力榮/.test(row.supplier)).map((row) => {
+    return recommendations.rows.filter((row) => /力榮/.test(row.supplier) && row.consignmentDataAvailable !== false).map((row) => {
       const packSize = purchaseUnitFromRules("力榮", row, row.masterName || row.name || "", options.purchaseUnitRules);
       const consignment = lirongConsignment.bySku.get(row.sku);
       const currentQty = consignment?.currentQty || 0;
@@ -3199,9 +3199,10 @@
       const supplier = row.masterRecord?.supplier || "未辨識供應商";
       const purchaseTab = classifyPuyoumaPurchaseTab(row.masterRecord, row.demand.name);
       const supplierConsignment = /力榮/.test(normalizeText(supplier)) ? resolvedLirongConsignment : resolvedConsignment;
-      const consignmentDataAvailable = /力榮/.test(normalizeText(supplier))
+      const reservationUnverified = input.reservedConsignmentBySku?.unverifiedSupplierGroups?.has(/力榮/.test(supplier) ? "lirong" : /普優[瑪碼]/.test(supplier) ? "puyouma" : "other");
+      const consignmentDataAvailable = !reservationUnverified && (/力榮/.test(normalizeText(supplier))
         ? input.lirongConsignment?.dataAvailable !== false && !input.lirongConsignment?.unavailable
-        : input.consignment?.dataAvailable !== false && !input.consignment?.unavailable;
+        : input.consignment?.dataAvailable !== false && !input.consignment?.unavailable);
       const supplierRule = findSupplierRule(supplier, input.supplierRules || []);
       const supplyProfile = resolveSupplyProfile(supplier, input.supplierRules || [], row.tier);
       const supplierLeadDays = supplyProfile.leadDays;
@@ -3427,7 +3428,7 @@
       const supplierAutomaticBlocked = supplierRule?.automaticPurchase === false;
       const masterDataIncomplete = !row.masterRecord?.supplier || !(Number(row.masterRecord?.unitCost) > 0) || !(Number(row.masterRecord?.moq) > 0);
       const productStatusPendingReview = !String(row.masterRecord?.productStatus || "").trim();
-      const consignment = supplierConsignment.bySku.get(row.demand.sku);
+      const consignment = consignmentDataAvailable ? supplierConsignment.bySku.get(row.demand.sku) : null;
       const sellThroughConsignmentAvailableQty = sellThroughStop && consignment
         ? Math.max(0, Number(consignment.currentQty || 0) - pendingQty)
         : 0;
@@ -4923,6 +4924,7 @@
         ...recommendations.appliedRules.activityDemand.monthlyForecasts.map(month => ["活動月份目標／資料推估", month.month, month.target, month.forecast]),
         ...(recommendations.appliedRules.activityDemand.notes || []).map(note => ["活動備貨提醒", note])
       ] : []),
+      ...(recommendations.consignmentReservationIssues || []).map(issue => ["寄庫預留待確認", issue.batchId, issue.message]),
       ["大活動適用期間／範圍", recommendations.appliedRules?.activityDemand?.enabled === false ? "—" : `${recommendations.appliedRules?.activityDemand?.startDate || ""}～${recommendations.appliedRules?.activityDemand?.endDate || ""}・${recommendations.appliedRules?.activityDemand?.scopeLabel || ""}`],
       ["大活動影響SKU", selectedTotals.activityDemandSkuCount],
       ["大活動增加建議量", selectedTotals.activityDemandAdditionalSuggestedQty],

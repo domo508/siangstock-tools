@@ -2,14 +2,14 @@
  * Navigation opens details and moves focus; it never clicks a business action. */
 (function () {
   'use strict';
-  const VERSION = '20261102-guidance-progress-r3';
+  const VERSION = '20261102-guidance-version-r4';
   const script = document.currentScript;
   const base = new URL('.', script.src);
   const main = document.querySelector('main');
   if (!main) return;
   const feedbacks = new WeakMap();
   const progressTracker = globalThis.CompanyGuidanceProgress.create();
-  let provider, pending, frame, lastAction, latestMessage, latestStatus, nextTarget, guard = 'checking', latestVersion = '';
+  let provider, pending, frame, lastAction, latestMessage, latestStatus, nextTarget, guard = 'checking', latestVersion = '', versionFailure = '';
   const box = document.createElement('aside');
   box.id = 'company-live-guide'; box.className = 'company-live-guide';
   box.setAttribute('aria-label', '即時操作指引');
@@ -64,14 +64,19 @@
   }
   function render() {
     freeze();
+    box.dataset.versionState = guard; box.dataset.versionExpected = VERSION; box.dataset.versionObserved = latestVersion;
     const modal = document.querySelector('dialog[open]:not(#version-warning)');
     if (modal && !modal.contains(box)) modal.prepend(box);
     else if (!modal && box.previousSibling !== home) home.after(box);
     if (guard !== 'ready') {
-      put(title, guard === 'checking' ? '正在確認工具版本' : '請重新載入最新版');
-      put(hint, guard === 'checking' ? '確認完成後顯示下一步；請稍候。' : '目前操作已停止。未保存內容請先保留，再重新載入；不會自動重整或沿用舊版。');
-      progress.hidden = true; meter.hidden = true; updated.hidden = true; waiting.hidden = true;
-      live.hidden = true; go.hidden = false; go.disabled = guard === 'checking'; put(go, '重新載入最新版');
+      const unavailable = guard === 'unavailable';
+      put(title, guard === 'checking' ? '正在確認工具版本' : unavailable ? '暫時無法確認工具版本' : '請重新載入最新版');
+      put(hint, guard === 'checking' ? '確認期間暫停新操作；進行中的本機處理未被取消。' : unavailable ? `${versionFailure} 本頁選檔與輸入保留；新操作暫停，請按「重新確認版本」，不需重整。` : '已偵測到不同版本，新操作已停止；進行中的本機處理未被取消。請先保留未保存內容，再重新載入。');
+      // The version probe cannot cancel a running local calculation. Keep its
+      // real progress visible instead of claiming all processing has stopped.
+      renderProgress();
+      live.hidden = !latestMessage; if (latestMessage) put(live, '本機處理訊息：' + latestMessage);
+      go.hidden = false; go.disabled = guard === 'checking'; put(go, unavailable ? '重新確認版本' : guard === 'checking' ? '正在確認版本' : '重新載入最新版');
       return;
     }
     let step;
@@ -104,6 +109,7 @@
   }
   go.addEventListener('click', () => {
     if (guard === 'checking') return;
+    if (guard === 'unavailable') { void ensureCurrent(); return; }
     if (guard === 'blocked') {
       const url = new URL(location.href); url.searchParams.set('deploy', latestVersion || VERSION);
       url.searchParams.set('reload', String(Date.now())); location.assign(url.href); return;
@@ -143,14 +149,19 @@
         if (script.dataset.versionTransport === 'script') manifest = await versionViaScript(controller.signal);
         else {
           const response = await fetch(new URL('version.json?check=' + Date.now(), base), { cache: 'no-store', credentials: 'same-origin', signal: controller.signal });
-          if (!response.ok) throw Error('version unavailable');
+          if (!response.ok) throw Error(`HTTP ${response.status}`);
           manifest = await response.json();
         }
-        if (typeof manifest.version !== 'string' || !/^[A-Za-z0-9-]{1,100}$/.test(manifest.version)) throw Error('invalid version');
+        if (typeof manifest?.version !== 'string' || !/^[A-Za-z0-9-]{1,100}$/.test(manifest.version)) throw Error('invalid version');
         latestVersion = manifest.version;
-        guard = latestVersion === VERSION ? 'ready' : 'blocked';
-      } catch { guard = 'blocked'; }
+        guard = latestVersion === VERSION ? 'ready' : 'blocked'; versionFailure = '';
+      } catch (error) {
+        guard = 'unavailable';
+        versionFailure = controller.signal.aborted ? '版本查詢逾時，尚未確認是否有新版。' : /^HTTP (401|403)$/.test(error.message) ? '版本查詢的登入驗證未通過。' : /^HTTP \d{3}$/.test(error.message) ? `版本服務暫時無法回應（${error.message}）。` : error instanceof SyntaxError || error.message === 'invalid version' ? '版本資訊格式異常，尚未確認是否有新版。' : '版本查詢連線未完成，尚未確認是否有新版。';
+      }
       finally { clearTimeout(timeout); pending = null; schedule(); }
+      if (guard === 'ready') replayPendingFileChanges();
+      else if (guard === 'blocked') pendingFileInputs.clear();
       return guard === 'ready';
     })();
     return pending;
@@ -163,25 +174,27 @@
   });
   // Returning from the native file picker can refocus the page before change
   // arrives. Keep the user's selection pending until that version check succeeds.
-  const pendingFileChanges = new WeakMap();
+  const pendingFileChanges = new WeakMap(), pendingFileInputs = new Set();
+  function replayPendingFileChanges() {
+    if (guard !== 'ready') return;
+    for (const input of [...pendingFileInputs]) {
+      const selection = pendingFileChanges.get(input);
+      pendingFileInputs.delete(input); pendingFileChanges.delete(input);
+      if (!input.isConnected || input.disabled || input.files !== selection) continue;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
   function deferFileChange(event) {
     const input = event.target;
-    const selection = input.files;
-    const token = {};
-    pendingFileChanges.set(input, token);
+    pendingFileChanges.set(input, input.files); pendingFileInputs.add(input);
     event.stopImmediatePropagation();
-    void ensureCurrent().then(current => {
-      if (pendingFileChanges.get(input) !== token) return;
-      pendingFileChanges.delete(input);
-      if (!current || guard !== 'ready' || !input.isConnected || input.disabled || input.files !== selection) return;
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    void ensureCurrent();
   }
   for (const event of ['click', 'change', 'submit']) document.addEventListener(event, e => {
     if (box.contains(e.target)) return;
     if (event === 'change' && e.target.matches('input[type="file"]')) {
       if (guard === 'checking') { deferFileChange(e); return; }
-      pendingFileChanges.delete(e.target);
+      pendingFileChanges.delete(e.target); pendingFileInputs.delete(e.target);
     }
     if (guard !== 'ready' && e.target.closest('button,input,select,textarea,form') && !e.target.closest('#version-warning')) {
       e.preventDefault(); e.stopImmediatePropagation(); schedule(); return;
