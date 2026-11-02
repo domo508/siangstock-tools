@@ -19,7 +19,7 @@ function workflow() {
     renderGoogleAuthorizationStatus: () => {}, updateModelControls: () => {},
     checkRuntimeVersion: async () => controls.version,
     loadApprovedSeasonalModel: async () => { calls.push("model"); },
-    loadLedger: async () => {}, persistWorkflowDraft: async () => {}, saveCostSnapshot: async () => {},
+    loadLedger: async () => { state.ledger = { batches: [{ id: "shared", status: "pending_approval", warning_summary: "無" }] }; }, persistWorkflowDraft: async () => {}, saveCostSnapshot: async () => {},
     setWorkflowStatus: message => { calls.push(message); }, setWorkflowStep: () => {},
     postJson: async url => { calls.push(url); if (controls.expireOnSend && url.endsWith("/notify")) { controls.expireOnSend = false; throw Object.assign(new Error("授權已過期"), { status: 401 }); } return { status: "sent" }; }
   };

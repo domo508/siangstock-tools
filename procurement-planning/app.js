@@ -14,7 +14,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261102-procurement-per-store-r2";
+  const APP_VERSION = "20261102-procurement-review-fallback-r1";
   const state = {
     importProgress: null, shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -313,7 +313,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261102-procurement-per-store-r2");
+        const worker = new Worker("inventory-reader-worker.js?v=20261102-procurement-review-fallback-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1079,7 +1079,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261102-procurement-per-store-r2");
+      const worker = new Worker("seasonal-model-worker.js?v=20261102-procurement-review-fallback-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -1671,6 +1671,13 @@
     let approved = false;
     try {
       if (!await checkRuntimeVersion() || !await checkSummaryAuthorization({ run: () => approveQueuedBatch(batchId, button), isCurrent: () => true })) return;
+      await loadLedger();
+      const queuedBatch = state.ledger?.batches?.find(item => item.id === batchId);
+      if (!queuedBatch || queuedBatch.status !== "pending_approval") throw new Error("待核准批次狀態無法確認，請重新整理清單。");
+      if (/寄庫資料未取得\d+項/.test(String(queuedBatch.warning_summary || "")) && !globalThis.confirm(`批次${batchId}：${queuedBatch.warning_summary}\n數量不代表已確認寄庫現貨。總部是否已確認供貨並繼續核准？`)) {
+        setWorkflowStatus("已取消核准；請先確認寄庫供貨，原待核准批次保留。", "warning");
+        return;
+      }
       setWorkflowStatus(`正在核准批次${batchId}…`);
       await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/approve`, { idempotencyKey: `${batchId}:approve` });
       approved = true;
@@ -2580,7 +2587,7 @@
       elements.consignmentFileName.textContent = puyouma.unavailable ? `未驗證：${puyouma.unavailableReason}` : `自動：庫存+下單／庫存布，共${puyouma.records.length}列・${sourceProof(sources.puyoumaMetadata.spreadsheetId, sources.puyoumaMetadata)}`;
       elements.lirongConsignmentFileName.textContent = lirong.unavailable ? `未驗證：${lirong.unavailableReason}` : `自動：${sources.lirongMetadata.selectedSheet || lirong.sheetName || "力榮寄庫"}，共${lirong.records.length}列・${sourceProof(sources.lirongMetadata.spreadsheetId, sources.lirongMetadata)}`;
       const validationMessage = masterValidation.invalidCount
-        ? `固定 Google 資料源已完成格式檢核；${masterValidation.hardInvalidCount}列缺供應商、正數進貨價或MOQ並停止自動採購，${masterValidation.statusReviewCount}列貨品狀態空白仍顯示試算建議，但第一次回匯必須明確填量與原因。`
+        ? `固定 Google 資料源已完成格式檢核；${masterValidation.hardInvalidCount}列缺供應商、正數進貨價或MOQ並停止自動採購，${masterValidation.statusReviewCount}列貨品狀態空白仍顯示試算建議；僅提示主檔待補，未改量不需原因。`
         : "固定 Google 資料源已完成格式檢核；本次採用自動來源。";
       elements.sourceStatus.textContent = optionalWarnings.length
         ? `${validationMessage} 寄庫來源警示：${[...new Set(optionalWarnings.map((item) => `${item.sourceLabel || "寄庫表"}－${item.message}`))].join("；")}。一般採購建議仍可產生，但寄庫現貨、缺口、可拉貨量及寄庫建議標示為未驗證，不會把缺值當成0。`
@@ -2891,7 +2898,7 @@
     const scopeNames = [...state.selectedSuppliers];
     const missingPayment = payments.reviewSuppliers.length ? `；${payments.reviewSuppliers.join("、")}付款規則待確認` : "";
     elements.supplierScopeStatus.textContent = scopeNames.length
-      ? `目前查看：${state.activeWorkUnit?.label || scopeNames.join("、")}；請在下方複選要合併審核的單位並直接下載${statusReviewRows.length ? `；其中${statusReviewRows.length}項貨品狀態空白須明確人工確認` : ""}${missingPayment}。`
+      ? `目前查看：${state.activeWorkUnit?.label || scopeNames.join("、")}；請在下方複選要合併審核的單位並直接下載${statusReviewRows.length ? `；其中${statusReviewRows.length}項貨品狀態空白僅提示主檔待補，未改量不需原因` : ""}${missingPayment}。`
       : "尚未選擇供應商；請至少勾選一家後再下載。";
     elements.supplierScopeStatus.className = `supplier-scope-status ${scopeNames.length && !payments.reviewSuppliers.length ? "" : "warn"}`.trim();
     renderExcludedRows();
@@ -3649,6 +3656,8 @@
     if (purchaseUnitExceptionCount) warningParts.push(`箱數例外${purchaseUnitExceptionCount}項（已確認仍採用人工量）`);
     const activityRiskCount = state.review.rows.filter(row => row.activityPlanning && (row.activityPlanning.approvedShortage == null || row.activityPlanning.approvedShortage > 0)).length;
     if (activityRiskCount) warningParts.push(`活動前供貨仍缺或未驗證${activityRiskCount}項，請核對活動備貨明細`);
+    const unverifiedSupplyCount = state.review.rows.filter(row => row.finalQty > 0 && row.consignmentSupplyUnverified).length;
+    if (unverifiedSupplyCount) warningParts.push(`寄庫資料未取得${unverifiedSupplyCount}項；數量依原建議，供貨尚待總部確認`);
     return {
       ...((state.baseAnalysis||state.analysis)?.appliedRules?.activityDemand?.activityId?{activityId:(state.baseAnalysis||state.analysis).appliedRules.activityDemand.activityId,activityRevision:(state.baseAnalysis||state.analysis).appliedRules.activityDemand.activityRevision}:{}),
       batchId: state.batchId, analysisMonth: elements.month.value, checkpoint: elements.checkpoint.value,
@@ -3701,6 +3710,11 @@
     try {
       if (!await checkRuntimeVersion() || !await checkSummaryAuthorization(action)) return;
       if (!action.isCurrent()) { setWorkflowStatus("批次或回匯內容已變更，請確認後重新核准。", "warning"); return; }
+      const unverifiedSupply = (state.review?.rows || []).filter(row => row.finalQty > 0 && row.consignmentSupplyUnverified);
+      if (unverifiedSupply.length && !globalThis.confirm(`本批有${unverifiedSupply.length}項寄庫資料未取得，尚未確認供貨：\n${unverifiedSupply.slice(0, 12).map(row => `${row.sku}：${row.finalQty}件`).join("\n")}\n${unverifiedSupply.length > 12 ? "另有其它品項，請核對覆核表。\n" : ""}數量依原建議及人工確認，不代表寄庫現貨。總部是否已確認供貨並繼續核准？`)) {
+        setWorkflowStatus("已取消核准；請先確認寄庫供貨，原數量及待核准批次保留。", "warning");
+        return;
+      }
       setWorkflowStatus("正在正式核准並建立通知工作…");
       await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/approve`, { idempotencyKey: `${state.batchId}:approve` });
       state.approved = true; elements.erp.disabled = false;

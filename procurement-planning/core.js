@@ -346,18 +346,16 @@
         const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
         const consignmentSupplier = /普優[瑪碼]|力榮/.test(normalizeText(supplier)) || consignmentAvailableQty > 0;
         const newProductWorkflow = options.workflowType === "new_product" || sheetName === "05_新品採購建議";
-        const defaultQty = newProductWorkflow
+        const defaultQty = newProductWorkflow || consignmentAvailableQty == null
           ? suggestedQty
           : (consignmentSupplier ? Math.min(Math.max(0, Number(suggestedQty || 0)), reviewConsignmentAvailableQty({ baseline, source })) : suggestedQty);
         const changed = !manualBlank && manualQty !== defaultQty;
-        const pendingStatus = Boolean(baseline?.productStatusPendingReview);
         const sellThroughException = Boolean(baseline?.sellThroughStop && Number(manualQty || 0) > consignmentAvailableQty);
         const optionalLegacyReason = LEGACY_OPTIONAL_MANUAL_REASONS.has(reasonInput.category || reasonInput.legacy);
-        if (!changed && !manuallyAdded && !pendingStatus && !sellThroughException && (!reasonInput.reason || optionalLegacyReason)) continue;
+        if (!changed && !manuallyAdded && !sellThroughException && (!reasonInput.reason || optionalLegacyReason)) continue;
         let type = "已填原因";
         if (manuallyAdded) type = "人工新增品項";
         else if (sellThroughException) type = "S品人工例外";
-        else if (pendingStatus) type = "貨品狀態待確認";
         else if (manualQty > suggestedQty) type = "數量增加";
         else if (manualQty < suggestedQty) type = "數量降低";
         rows.push({
@@ -452,7 +450,11 @@
   }
 
   function reviewConsignmentAvailableQty({ baseline, source, reservedQty = 0 }) {
-    const currentQty = Math.max(0, Number(baseline?.consignmentCurrentQty ?? source?.["寄倉現貨"] ?? 0));
+    if (baseline?.consignmentDataAvailable === false) return null;
+    const rawCurrent = baseline?.consignmentCurrentQty ?? source?.["寄倉現貨"];
+    const parsedCurrent = rawCurrent === "" || rawCurrent == null ? null : parseNumber(rawCurrent);
+    if (parsedCurrent == null || !Number.isFinite(parsedCurrent) || parsedCurrent < 0) return null;
+    const currentQty = parsedCurrent;
     const pendingOccupancy = Math.max(0, Number(baseline?.pendingQty ?? source?.["已採購未到貨"] ?? 0));
     return Math.max(0, currentQty - pendingOccupancy - Math.max(0, Number(reservedQty || 0)));
   }
@@ -3445,7 +3447,7 @@
           action: masterDataIncomplete
             ? "列入待人工確認；補齊供應商、正數進貨價與MOQ前不自動採購"
             : (productStatusPendingReview
-              ? "保留試算建議量；第一次回匯必須明確填寫採購量與原因，覆核通過後才能送出待核准"
+              ? "保留試算建議量；主檔貨品狀態待補；未改量不需原因，不阻擋回匯"
               : (isGift ? "排除總部一般自動採購；活動需求另行管理" : `${supplierRule.exclusionReason}；只追蹤人工下單`))
         });
       }
@@ -3538,7 +3540,7 @@
       } else if (masterDataIncomplete) {
         supplyStatus = "待人工確認：商品主檔缺供應商、正數進貨價或MOQ；本次不自動採購";
       } else if (productStatusPendingReview) {
-        supplyStatus = "待人工確認：貨品狀態空白；已保留試算建議量，第一次回匯須明確填量與原因";
+        supplyStatus = "主檔提醒：貨品狀態空白；已保留試算建議量，未改量不需原因";
       } else if (manualSupplierReview) {
         supplyStatus = "檢視期未定：保留需求與缺貨風險，採購量由人工判斷";
       } else if (consignment) {
@@ -4047,7 +4049,7 @@
         factoryTargetQty: Number(existing?.factoryTargetQty || 0),
         suggestedConsignmentQty: workflowType === "new_product" ? Number(existing?.suggestedConsignmentQty || 0) : 0,
         supplyStatus: productStatusPendingReview
-          ? "待人工確認：貨品狀態空白；已保留試算建議量，第一次回匯須明確填量與原因"
+          ? "主檔提醒：貨品狀態空白；已保留試算建議量，未改量不需原因"
           : (workflowType === "new_product"
             ? (newProductReference.sampleCount
               ? `新品首批：系統依${newProductReference.label}估算30天需求${requestedQty}件；${source.channels || "通路待確認"}`
@@ -4544,7 +4546,7 @@
       "商品品名": row.name,
       "商品狀態": row.tier,
       "貨品狀態": row.productStatus || "空白（待人工確認）",
-      "人工確認要求": row.productStatusPendingReview ? "必須明確填寫採購量與原因" : "依一般回匯規則",
+      "人工確認要求": row.productStatusPendingReview ? "主檔貨品狀態待補；未改量不需原因" : "依一般回匯規則",
       "ABC": row.abcClass,
       "XYZ": row.xyzClass,
       "近6週淨需求": row.recent6Qty,
@@ -4633,7 +4635,7 @@
       "寄倉現貨": row.consignmentDataAvailable === false ? "資料未取得" : row.consignmentCurrentQty,
       "粉紅排程": row.consignmentDataAvailable === false ? "資料未取得" : row.consignmentScheduledQty,
       "寄倉缺口": row.consignmentDataAvailable === false ? "未驗證" : Math.max(row.suggestedPurchaseQty - row.consignmentCurrentQty - row.consignmentScheduledQty, 0),
-      "目前實際可採購量": row.consignmentDataAvailable === false ? "待寄庫資料恢復後確認" : /普優[瑪碼]|力榮/.test(row.supplier)
+      "目前實際可採購量": row.consignmentDataAvailable === false ? row.suggestedPurchaseQty : /普優[瑪碼]|力榮/.test(row.supplier)
         ? Math.min(row.suggestedPurchaseQty, Math.max(Number(row.consignmentCurrentQty || 0) - Number(row.pendingQty || 0), 0))
         : row.suggestedPurchaseQty,
       "人工確認採購量": row.initialManualQty ?? "",
@@ -4935,7 +4937,7 @@
       ["去年同期資料不足SKU", selectedTotals.seasonalFallbackSkuCount],
       ["品名結尾(S)停止外採SKU", selectedTotals.sellThroughStopExcludedCount],
       ["貨品狀態空白待人工確認SKU", selectedTotals.productStatusPendingCount],
-      ["貨品狀態空白試算金額", selectedTotals.productStatusPendingAmount, "尚未核准；第一次回匯須明確填量與原因"],
+      ["貨品狀態空白試算金額", selectedTotals.productStatusPendingAmount, "主檔待補；未改量不需原因，不阻擋回匯"],
       ["寬沐45%管理目標", recommendations.totals.kuanMuManagementTargetAmount || 0, "只作管理參考，未加入基本採購建議"],
       ["寬沐營運需求估算", recommendations.totals.kuanMuOperationalDemandAmount || 0],
       ["寬沐管理差額", recommendations.totals.kuanMuManagementGapAmount || 0, "需另行人工決定，不自動分配到SKU"],
@@ -4945,7 +4947,7 @@
       ["② 填0", "本次不採購"],
       ["③ 填正整數", "改採填入數量"],
       ["④ 禁止負數或文字", "若有人工修改，人工調整原因必填"],
-      ["⑤ 貨品狀態空白", "不得沿用空白欄自動通過；必須明確填寫採購量與人工調整原因"]
+      ["⑤ 貨品狀態空白", "僅提示商品主檔待補；未改量不強制填量或原因，實際改量仍須原因。寄庫未取得時數量依原建議，供貨核准前由總部確認。"]
     ];
     if (budget) {
       summaryRows.push(
@@ -5230,7 +5232,7 @@
         const consignmentAvailableQty = reviewConsignmentAvailableQty({ baseline, source, reservedQty: reservedConsignmentQty });
         const consignmentSupplier = /普優[瑪碼]|力榮/.test(normalizeText(supplier)) || consignmentAvailableQty > 0;
         const newProductWorkflow = options.workflowType === "new_product" || sheetName === "05_新品採購建議";
-        const defaultConfirmedQty = newProductWorkflow
+        const defaultConfirmedQty = newProductWorkflow || consignmentAvailableQty == null
           ? Math.max(0, Number(suggestedQty || 0))
           : (consignmentSupplier
             ? Math.min(Math.max(0, Number(suggestedQty || 0)), reviewConsignmentAvailableQty({ baseline, source }))
@@ -5253,11 +5255,9 @@
           if (Math.abs(Number(suggestedQty || 0) - Number(baseline.suggestedPurchaseQty || 0)) >= 0.01) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: "系統建議量已被修改，請只填人工欄位。" });
         }
         if (confirmedQty == null || confirmedQty < 0 || !Number.isInteger(confirmedQty)) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: "人工確認採購量必須為0或正整數。" });
-        const reasonRequired = manuallyAdded || (!manualBlank && confirmedQty !== defaultConfirmedQty) || productStatusPendingReview;
+        const reasonRequired = manuallyAdded || (!manualBlank && confirmedQty !== defaultConfirmedQty);
         if (manuallyAdded && !reason) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: "人工新增品項必須填寫新增原因。" });
         if (!manualBlank && confirmedQty !== defaultConfirmedQty && !reason) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: "修改採購量時必須填人工調整原因。" });
-        if (productStatusPendingReview && manualBlank) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: "貨品狀態空白，必須明確填寫人工確認採購量，不能直接沿用系統試算。" });
-        if (productStatusPendingReview && !reason) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: "貨品狀態空白，人工調整原因必填，確認後才能完成第一次覆核。" });
         validateStructuredManualReason(reasonInput, errors, { sheetName, sourceRow: (source.__rowNum__ + 1), sku }, reasonRequired ? "請從固定選項填寫人工調整原因類別。" : "");
         const sellThroughConsignmentAllowed = Boolean(baseline?.sellThroughStop && consignmentAvailableQty > 0);
         const sellThroughRestartException = Boolean(
@@ -5276,10 +5276,16 @@
         const existingSellThroughConsignmentPull = Boolean(baseline?.sellThroughStop && consignmentAvailableQty > 0 && confirmedQty > 0 && confirmedQty <= consignmentAvailableQty);
         if (fullConsignmentReturnRequested && confirmedQty !== consignmentAvailableQty) errors.push({
           sheetName, sourceRow: (source.__rowNum__ + 1), sku,
-          message: `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，人工量必須等於扣除正式未到貨與其他有效批次占用後的可清回量${consignmentAvailableQty}件。`
+          message: consignmentAvailableQty == null
+            ? `寄庫資料未取得，無法核實可清回量，不可使用「${FULL_CONSIGNMENT_RETURN_REASON}」。`
+            : `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，人工量必須等於扣除正式未到貨與其他有效批次占用後的可清回量${consignmentAvailableQty}件。`
         });
         const consignmentReservationSources = options.reservedConsignmentBySku?.sourcesBySku?.get?.(sku) || [];
-        if (consignmentSupplier && reservedConsignmentQty > 0 && Number(confirmedQty || 0) > consignmentAvailableQty) warnings.push({
+        if (consignmentSupplier && consignmentAvailableQty == null && confirmedQty > 0) warnings.push({
+          type: "consignment_supply_unverified", sheetName, sourceRow: source.__rowNum__ + 1, sku,
+          message: `${sku}：寄庫資料未取得；人工量${confirmedQty}件尚未確認供貨。${reservedConsignmentQty > 0 ? `另有已核准預留${reservedConsignmentQty}件，來源：${consignmentReservationSources.map(item => item.batchId).join("、") || "已核准台帳"}。` : ""}核准前須由總部確認，系統不自動改量。`
+        });
+        if (consignmentSupplier && consignmentAvailableQty != null && reservedConsignmentQty > 0 && Number(confirmedQty || 0) > consignmentAvailableQty) warnings.push({
           type: "consignment_reservation_conflict", sheetName, sourceRow: source.__rowNum__ + 1, sku,
           quantity: confirmedQty, availableQty: consignmentAvailableQty, sources: consignmentReservationSources,
           message: `${sku}：原人工量${confirmedQty}件；扣除公司已核准預留${reservedConsignmentQty}件後，寄庫可拉${consignmentAvailableQty}件。來源：${consignmentReservationSources.map((item) => `${item.batchId}（${item.quantity}件）`).join("、") || "已核准台帳"}。請另行確認供貨，系統不自動改量。`
@@ -5324,9 +5330,11 @@
           availableTo, aiJudgment, productStatusPendingReview, manuallyAdded,
           sellThroughConsignmentAllowed, sellThroughRestartException,
           demandSummary: manuallyAdded ? `總部需求${Number(baseline?.hqDemandQty || 0).toFixed(2)}；門市需求${Number(baseline?.storeDemandQty || 0).toFixed(2)}` : "",
-          consignmentCurrentQty: Math.max(0, Number(baseline?.consignmentCurrentQty ?? source["寄倉現貨"] ?? 0)),
-          consignmentScheduledQty: Math.max(0, Number(baseline?.consignmentScheduledQty ?? source["粉紅排程"] ?? 0)),
-          currentAvailableQty: /普優[瑪碼]|力榮/.test(supplier) ? consignmentAvailableQty : Math.max(0, Number(source["目前實際可採購量"] || finalQty)),
+          consignmentDataAvailable: consignmentSupplier ? consignmentAvailableQty != null : baseline?.consignmentDataAvailable,
+          consignmentSupplyUnverified: consignmentSupplier && consignmentAvailableQty == null,
+          consignmentCurrentQty: consignmentAvailableQty == null ? null : Math.max(0, Number(baseline?.consignmentCurrentQty ?? source["寄倉現貨"] ?? 0)),
+          consignmentScheduledQty: consignmentAvailableQty == null ? null : Math.max(0, Number(baseline?.consignmentScheduledQty ?? source["粉紅排程"] ?? 0)),
+          currentAvailableQty: /普優[瑪碼]|力榮/.test(supplier) ? (consignmentAvailableQty ?? Math.max(0, Number(suggestedQty || 0))) : Math.max(0, Number(source["目前實際可採購量"] || finalQty)),
           reservedConsignmentQty, consignmentReservationSources, consignmentReservationConfirmed: false, fullConsignmentReturn: tailBoxException, packSize,
           purchaseUnitException, purchaseUnitExceptionConfirmed: false,
           purchaseUnitExceptionConfirmedBy: "", purchaseUnitExceptionConfirmedAt: ""
@@ -5376,13 +5384,13 @@
       "商品品名": row.name, "原始採購建議量": row.suggestedQty, "第一次人工回匯量": row.confirmedQty,
       "第一次人工調整原因類別": row.reasonCategory || row.reason, "第一次人工調整補充說明": row.reasonDetail || "",
       "第一次覆核可核准量": row.finalQty, "第二次異動採購量": "", "第二次異動原因類別": "", "第二次異動補充說明": "",
-      "人工確認要求": row.sellThroughRestartException ? "S品已用人工例外原因放寬本批；仍須完成正式核准" : (row.productStatusPendingReview ? "貨品狀態空白，已明確人工確認" : "一般回匯"), "規則阻擋原因": row.blockedReason,
+      "人工確認要求": row.sellThroughRestartException ? "S品已用人工例外原因放寬本批；仍須完成正式核准" : (row.productStatusPendingReview ? "主檔貨品狀態待補；未改量不需原因" : "一般回匯"), "規則阻擋原因": row.blockedReason,
       "進貨價": row.unitCost, "人工回匯金額": row.manualAmount, "規則阻擋金額": row.blockedAmount,
       "最終可核准金額": row.approvedAmount, "全公司人工確認後可售至": row.availableTo, "AI判斷": row.aiJudgment,
       ...(row.activityPlanning ? { "活動前仍缺（覆核後）": row.activityPlanning.approvedShortage ?? "未驗證" } : {}),
       "預估日需求": row.forecastDaily, "可用公司庫存": row.inventoryQty, "門市可售庫存": row.storeInventoryQty, "已採購未到貨": row.pendingQty,
       "本次人工新增": row.manuallyAdded ? "是；資料已由本次計算批次補回" : "否", "需求摘要": row.demandSummary || "",
-      "寄倉現貨": row.consignmentCurrentQty || 0, "粉紅排程": row.consignmentScheduledQty || 0,
+      "寄倉現貨": row.consignmentSupplyUnverified ? "資料未取得" : row.consignmentCurrentQty || 0, "粉紅排程": row.consignmentSupplyUnverified ? "資料未取得" : row.consignmentScheduledQty || 0,
       "目前實際可採購量": row.currentAvailableQty, "箱入／採購單位": row.packSize,
       "箱數例外": row.purchaseUnitException ? "仍採用人工量" : "",
       "箱數例外確認者": row.purchaseUnitExceptionConfirmedBy || "",
@@ -5450,18 +5458,19 @@
         if (Math.abs(Number(unitCost || 0) - Number(baseline.unitCost || 0)) >= 0.01) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: "進貨價與第一次覆核結果不同，禁止修改。" });
         if (Math.abs(firstFinalQty - Number(baseline.finalQty || 0)) >= 0.01 || blockedReason !== String(baseline.blockedReason || "")) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: "第一次覆核結果欄位已被修改，請重新下載確認版。" });
       }
-      if (baseline?.productStatusPendingReview && !firstReason) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: "貨品狀態空白品項缺少第一次人工確認原因，請重新由第一次回匯產生確認版。" });
       validateStructuredManualReason(secondReasonInput, errors, { sheetName, sourceRow: (source.__rowNum__ + 1), sku }, !confirmationBlank && finalQty !== firstFinalQty ? "第二次異動數量時必須填寫第二次異動原因類別。" : "");
       if (finalQty == null || finalQty < 0 || !Number.isInteger(finalQty)) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: "第二次異動採購量必須為0或正整數。" });
       const packSize = Math.max(1, Number(baseline?.packSize || source["採購單位"] || source["箱入／採購單位"] || (/力榮/.test(supplier) ? 10 : 1)));
       const fullConsignmentReturnRequested = isFullConsignmentReturnReason(reason);
       const automaticTailBoxException = isAutomaticConsignmentTailBox({
-        suggestedQty, availableQty: Number(baseline?.currentAvailableQty || 0), packSize, confirmedQty: finalQty
+        suggestedQty, availableQty: baseline?.consignmentSupplyUnverified ? 0 : Number(baseline?.currentAvailableQty || 0), packSize, confirmedQty: finalQty
       });
       const tailBoxException = Boolean(automaticTailBoxException || (fullConsignmentReturnRequested && Number(baseline?.currentAvailableQty || 0) > 0 && finalQty === Number(baseline.currentAvailableQty)));
-      if (fullConsignmentReturnRequested && finalQty !== Number(baseline?.currentAvailableQty || 0)) errors.push({
+      if (fullConsignmentReturnRequested && (baseline?.consignmentSupplyUnverified || finalQty !== Number(baseline?.currentAvailableQty || 0))) errors.push({
         sheetName, sourceRow: (source.__rowNum__ + 1), sku,
-        message: `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，第二次異動量必須維持第一次覆核確認的可清回量${Number(baseline?.currentAvailableQty || 0)}件。`
+        message: baseline?.consignmentSupplyUnverified
+          ? `寄庫資料未取得，無法核實可清回量，不可使用「${FULL_CONSIGNMENT_RETURN_REASON}」。`
+          : `選擇「${FULL_CONSIGNMENT_RETURN_REASON}」時，第二次異動量必須維持第一次覆核確認的可清回量${Number(baseline?.currentAvailableQty || 0)}件。`
       });
       const existingSellThroughConsignmentPull = Boolean(baseline?.sellThroughConsignmentAllowed && finalQty > 0 && finalQty <= Number(baseline.currentAvailableQty || 0));
       const purchaseUnitException = Boolean(finalQty != null && finalQty > 0 && finalQty % packSize !== 0 && !tailBoxException && !existingSellThroughConsignmentPull);
@@ -5476,6 +5485,10 @@
         message: `${supplier || "此供應商"}的本品號採購單位為${packSize}件，本次人工量為${finalQty}件；確認後可仍採用人工量。`
       });
       const sameReservationConfirmation = Boolean(baseline?.consignmentReservationConfirmed && Number(finalQty) === Number(baseline.finalQty));
+      if (baseline?.consignmentSupplyUnverified && finalQty > 0) warnings.push({
+        type: "consignment_supply_unverified", sheetName, sourceRow: source.__rowNum__ + 1, sku,
+        message: `${sku}：寄庫資料未取得；人工量${finalQty}件尚未確認供貨。核准前須由總部確認，系統不自動改量。`
+      });
       if (Number(baseline?.reservedConsignmentQty || 0) > 0 && Number(finalQty || 0) > Number(baseline.currentAvailableQty || 0) && !sameReservationConfirmation) warnings.push({
         type: "consignment_reservation_conflict", sheetName, sourceRow: source.__rowNum__ + 1, sku,
         message: `${sku}：人工量${finalQty}件，第一次覆核核對的寄庫可拉量${baseline.currentAvailableQty}件；已核准預留來源：${(baseline.consignmentReservationSources || []).map((item) => `${item.batchId}（${item.quantity}件）`).join("、") || "已核准台帳"}。請另行確認供貨，系統不自動改量。`
@@ -5503,6 +5516,10 @@
         blockedAmount: blockedReason ? firstConfirmedQty * Math.max(0, Number(unitCost || 0)) : 0,
         approvedAmount: Math.max(0, Number(finalQty || 0)) * Math.max(0, Number(unitCost || 0)), forecastDaily, inventoryQty, storeInventoryQty, pendingQty,
         availableTo, aiJudgment, currentAvailableQty: Math.max(0, Number(baseline?.currentAvailableQty ?? source["目前實際可採購量"] ?? finalQty ?? 0)),
+        consignmentDataAvailable: baseline?.consignmentDataAvailable,
+        consignmentSupplyUnverified: Boolean(baseline?.consignmentSupplyUnverified),
+        consignmentCurrentQty: baseline?.consignmentSupplyUnverified ? null : baseline?.consignmentCurrentQty,
+        consignmentScheduledQty: baseline?.consignmentSupplyUnverified ? null : baseline?.consignmentScheduledQty,
         reservedConsignmentQty: Number(baseline?.reservedConsignmentQty || 0), consignmentReservationSources: baseline?.consignmentReservationSources || [],
         consignmentReservationConfirmed: sameReservationConfirmation,
         consignmentReservationConfirmedAt: sameReservationConfirmation ? baseline.consignmentReservationConfirmedAt : "",
