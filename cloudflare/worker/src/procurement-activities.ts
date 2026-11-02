@@ -1,5 +1,5 @@
 import { RequestValidationError } from './schema';
-export const ACTIVITY_VERSION = '20261102-procurement-series-r6';
+export const ACTIVITY_VERSION = '20261102-procurement-context-r7';
 type Env = { DB: D1Database };
 type Hooks = { read: () => Promise<unknown>; write: () => Promise<{email:string}>; origin: () => void; body: () => Promise<Record<string,unknown>> };
 const scopes=new Set(['all','puyouma-tencel','puyouma-long-staple','puyouma-no-size','supplier-lirong','supplier-shanglin','supplier-runtai','supplier-taineng']);

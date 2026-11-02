@@ -38,3 +38,9 @@ describe('版本查詢暫時失敗可恢復且不清除選檔',()=>{
  it('真正不同版本保持鎖定，不得用重新確認繞過',async()=>{const p=page(),i=p.input();p.fire(i);await p.finish('future-version');expect(await p.api.ensureCurrent()).toBe(false);expect(p.requests).toHaveLength(0);expect(i.handled).toBe(0);});
  it('重試成功仍不得復用已變更的選取或自動點擊業務操作',async()=>{const p=page(),i=p.input();p.fire(i);p.requests.shift().reject(Error('offline'));await p.flush();i.files=[{}];p.retry();await p.finish();expect(i.handled).toBe(0);});
 });
+
+// Context hooks observe focus only; they do not replay or trigger business actions.
+it('切換操作卡片只通知情境，不送出業務請求',async()=>{
+ const p=page();await p.finish();const calls=[];p.api.register({context(target){calls.push(target);return 'activity-settings';},resolve(){return {title:'活動設定'};}});
+ const field=p.input();p.fire(field,'focusin');expect(calls).toEqual([field]);expect(field.handled).toBe(0);expect(p.requests).toHaveLength(0);
+});

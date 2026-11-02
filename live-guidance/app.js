@@ -2,7 +2,7 @@
  * Navigation opens details and moves focus; it never clicks a business action. */
 (function () {
   'use strict';
-  const VERSION = '20261102-guidance-version-r4';
+  const VERSION = '20261102-guidance-context-r5';
   const script = document.currentScript;
   const base = new URL('.', script.src);
   const main = document.querySelector('main');
@@ -44,6 +44,15 @@
       if (!box.contains(el) && !el.closest('#version-warning') && !el.disabled) el.disabled = true;
     });
   }
+  let activeContext = '';
+  function enterContext(target) {
+    if (box.contains(target)) return;
+    const context = provider?.context?.(target);
+    if (context != null && context !== activeContext) {
+      activeContext=context;latestMessage=null;latestStatus=null;lastAction=null;progressTracker.reset();
+    }
+  }
+  document.addEventListener('focusin', e => { enterContext(e.target); schedule(); }, true);
   function renderProgress() {
     let details;
     try { details = provider?.progress?.(); } catch { /* No fabricated totals. */ }
@@ -85,9 +94,9 @@
     if (latestMessage && latestStatus && visible(latestStatus)) {
       const fileLabel = latestStatus.matches('.file-name,[data-file-name]');
       const failed = fileLabel ? !!latestStatus.closest('.error') : latestStatus.matches('.error,.danger,.bad') || /失敗|無法|錯誤|無權|未授權|衝突/.test(latestMessage);
-      if (failed) {
+      if (failed && !step.keepState) {
         step = { title: '這一步尚未完成', hint: '請查看下方原因並修正；未確認成功前，不要重複儲存、核准或送出 AI。', target: latestStatus, label: '查看原因' };
-      } else if (lastAction?.disabled && /^正在|處理中|分析中|計算中/.test(latestMessage)) {
+      } else if (!step.busy && lastAction?.disabled && /^正在|處理中|分析中|計算中/.test(latestMessage)) {
         step = { title: '處理中', hint: '請保留此頁並等待原操作結果；指引不會重複送出請求。', target: latestStatus, label: '查看進度' };
       }
     }
@@ -192,6 +201,7 @@
   }
   for (const event of ['click', 'change', 'submit']) document.addEventListener(event, e => {
     if (box.contains(e.target)) return;
+    enterContext(e.target);
     if (event === 'change' && e.target.matches('input[type="file"]')) {
       if (guard === 'checking') { deferFileChange(e); return; }
       pendingFileChanges.delete(e.target); pendingFileInputs.delete(e.target);
@@ -206,7 +216,7 @@
     }
     schedule();
   }, true);
-  document.addEventListener('input', () => { progressTracker.reset(); latestMessage = null; document.querySelectorAll('[data-company-feedback]').forEach(el => { el.hidden = true; }); schedule(); });
+  document.addEventListener('input', e => { enterContext(e.target); progressTracker.reset(); latestMessage = null; document.querySelectorAll('[data-company-feedback]').forEach(el => { el.hidden = true; }); schedule(); });
   document.addEventListener('toggle', schedule, true);
   const observer = new MutationObserver(records => {
     const external = records.filter(r => !box.contains(r.target) && !r.target.closest?.('[data-company-feedback]'));
@@ -214,7 +224,7 @@
     for (const r of external) {
       const el = r.target.nodeType === Node.TEXT_NODE ? r.target.parentElement : r.target;
       const status = el.closest?.(provider?.statuses || '[data-no-guidance-status]');
-      if (!status || !visible(status)) continue;
+      if (!status || !visible(status) || provider?.acceptStatus?.(status) === false) continue;
       const scope = lastAction?.closest('section');
       if (scope?.querySelector(provider?.statuses || '[data-no-guidance-status]') && !scope.contains(status)) continue;
       const message = status.textContent.trim().replace(/\s+/g, ' ').slice(0, 320);

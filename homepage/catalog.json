@@ -1,5 +1,5 @@
 {
-  "version": "20261102-series-entry-r6",
+  "version": "20261102-context-entry-r7",
   "departments": [
     {
       "id": "admin",
@@ -63,7 +63,7 @@
       "name": "庫存採購規劃",
       "primary": "merch",
       "collaborators": [],
-      "href": "/procurement-planning/?deploy=20261102-procurement-series-r6",
+      "href": "/procurement-planning/?deploy=20261102-procurement-context-r7",
       "status": "立即使用",
       "description": "從需求試算、分批覆核到採購核准，銜接公司額度與 ERP。",
       "data": "本機運算・共用批次"

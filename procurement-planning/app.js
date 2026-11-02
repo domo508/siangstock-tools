@@ -14,7 +14,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261102-procurement-series-r6";
+  const APP_VERSION = "20261102-procurement-context-r7";
   const state = {
     importProgress: null, shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -313,7 +313,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261102-procurement-series-r6");
+        const worker = new Worker("inventory-reader-worker.js?v=20261102-procurement-context-r7");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1079,7 +1079,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261102-procurement-series-r6");
+      const worker = new Worker("seasonal-model-worker.js?v=20261102-procurement-context-r7");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -3947,23 +3947,23 @@
   });
   setInitialDates(); renderChannels(); renderBudget(); renderModelStatus(); updateModelControls(); updateReadyState(); checkRuntimeVersion(); hydrateCachedModel(); hydrateWorkflowDrafts(); loadConfig();
 
-  // Read-only readiness for the shared guide; no calculation or write is performed here.
-  globalThis.CompanyGuidance?.register({ progress() { if (state.importProgress) return {...state.importProgress,message:`必要檔案：已讀取 ${state.importProgress.current}／${state.importProgress.total} 份（不含後續計算）`}; const current=[state.inventoryFile,state.pendingFiles.length>0,state.transferFile,state.salesFiles.length>0].filter(Boolean).length; return {current,total:4,message:`必要來源：已選妥 ${current}／4 類（選檔完成不代表解析完成）`}; }, statuses: '#main-status,#source-status,#workflow-status,#special-workflow-status,#model-run-status,#store-shortage-status,#budget-plan-status,#month-end-status,#transfer-activity-status,#activity-registry-status,#inventory-file-name,#pending-files-name,#transfer-file-name,#sales-files-name', resolve() {
-    const S=globalThis.CompanyGuidance.step;
-    if (!state.config) return S('先確認公司登入與權限', '請查看帳號與載入訊息；授權未確認前不會引導你核准。', '#account-badge');
-    if (state.approved) return S('下一步：核對並下載 ERP 採購檔', '核對已核准批次與摘要狀態，再依既有流程下載；不要重複核准。', '#workflow-panel');
-    if (state.review) return S('下一步：核對回匯與核准狀態', '請看覆核差異、阻擋與權限。需要核准者操作時，先交由核准者處理。', '#workflow-panel');
-    if (state.firstReview) return S('第一次覆核後，確認是否需異動', '全部沿用可送出待核准；需修改時回匯有異動的覆核表，勿重填整份。', '#workflow-panel');
-    if (state.returnScope) return S('下一步：第一次人工回匯', '已下載的本批報表由人工確認後，回匯同一批資料並產生覆核表。', '#review-file-label');
-    if (state.monthEndWorkbook) return S('核對月底驗證結果', '請查看月底驗證摘要、警示與原有下載／確認操作。', '#month-end-panel');
-    if (state.analysis) return S('下一步：選擇分批審核單位', '核對建議後，複選本批供應商／分類再下載；只篩選畫面不等於選取下載。', '#work-unit-title');
-    if (!elements.month.value || !elements.orderDate.value) return S('下一步：確認月份與時點', '請先確認分析月份、使用時點與下單日期。', '#analysis-month');
-    if (!(state.masterFile || state.masterWorkbook)) return S('下一步：取得商品主檔與來源', '可完成公司 Google 授權後自動取得，或依原流程使用手動備援。', '#source-title');
-    if (!state.inventoryFile) return S('下一步：選擇最新庫存', '確認資料截止日，再選擇公司最新庫存 Excel。', '#inventory-file');
-    if (!state.pendingFiles.length) return S('下一步：選擇全部狀態採購單', '可複選檔案，請保留原流程要求的完整狀態。', '#pending-files');
-    if (!state.transferFile) return S('下一步：選擇期間調撥單', '依原資料範圍選檔並確認截止日。', '#transfer-file');
-    if (!state.salesFiles.length) return S('下一步：選擇銷售明細', '請依頁面當前月初／月中／月底模式提供對應期間。', '#sales-files');
-    if (elements.analyze.disabled) return S('確認必要來源與計算基準', '請查看日期、行銷策略、季節模型與來源警示；不把缺少資料當成零。', '#source-title');
-    return S('下一步：產生建議或月底驗證', '依目前使用時點，確認來源與額度後再按原本的執行按鈕。', '#analyze-button');
-  }});
+  // Guide snapshots contain readiness only; no quantities, amounts or source contents.
+  let guidanceContext = '';
+  function guidanceSnapshot() {
+    const registry=sharedActivity?.guidance?.() || {};
+    let activityValid=false;try{globalThis.ProcurementActivityPlanning.normalize(activitySettings(),elements.salesDate.value || today());activityValid=true;}catch{}
+    const forecastKeys=state.revenueChannels.map(row=>`${row.company}::${String(row.channel||'').trim().toLocaleLowerCase('zh-TW')}`);
+    const forecastComplete=state.revenueChannels.length>0 && state.revenueChannels.every(row=>['寬承','寬沐'].includes(row.company)&&String(row.channel||'').trim()&&row.amount!=null&&row.amount!==''&&Number.isFinite(Number(row.amount))&&Number(row.amount)>=0) && new Set(forecastKeys).size===forecastKeys.length;
+    return {monthStart:elements.checkpoint.value==='month-start',forecastSaved:!!state.monthPlan && state.monthPlan.analysisMonth===elements.month.value,forecastDirty:!!state.budgetDirty,forecastComplete,canManageBudget:!!state.config?.permissions?.canManageBudget,historyMode:!!state.historyMode,context:guidanceContext,loggedIn:!!state.config,approved:!!state.approved,batch:!!state.batchId,review:!!state.review,firstReview:!!state.firstReview,returnScope:!!state.returnScope,reviewErrors:!!state.review?.errors?.length,analysis:!!state.analysis,monthEnd:!!state.monthEndWorkbook,summaryBusy:!!state.summaryActionBusy,canApprove:!!state.config?.permissions?.canApprove,
+      activityEnabled:!!elements.activityEnabled.checked,activityBusy:!!registry.busy,activityAvailable:!!registry.available,activityDirty:!!registry.dirty,activitySelected:!!registry.selected,canManageActivities:!!registry.canWrite,activityReason:!!get('#activity-registry-reason')?.value.trim(),activityValid,
+      transferBusy:!!state.transferActionBusy,transferSyncing:!!state.transferPeriodSyncing,transferError:!!state.transferPeriodError,transferAvailable:!!transferAnalysis()?.appliedRules?.activityDemand && transferAnalysis().appliedRules.activityDemand.enabled!==false && transferAnalysis().appliedRules.activityDemand.method==='monthly-target',transferDraft:!!state.transferDraft,transferDirty:!!state.transferDraftDirty,canSaveTransfer:!get('#save-transfer-activity-draft').disabled,canPublishTransfer:!get('#publish-transfer-activity').disabled,
+      dates:!!(elements.month.value&&elements.orderDate.value),master:!!(state.masterFile||state.masterWorkbook),inventory:!!state.inventoryFile,pending:!!state.pendingFiles.length,transfer:!!state.transferFile,sales:!!state.salesFiles.length,analyzeReady:!elements.analyze.disabled,importProgress:state.importProgress,fileCount:[state.inventoryFile,state.pendingFiles.length>0,state.transferFile,state.salesFiles.length>0].filter(Boolean).length};
+  }
+  globalThis.CompanyGuidance?.register({
+    context(target){const area=target.closest?.('#activity-transfer-result,#activity-demand-card,#workflow-panel,#source-title,#source-panel,#manual-source-title,#analyze-button,#result-panel,#budget-panel');if(area){guidanceContext=area.id==='activity-transfer-result'?'activity-handoff':area.id==='activity-demand-card'?'activity-settings':area.id==='workflow-panel'?'workflow':area.id==='result-panel'?'results':area.id==='budget-panel'?'budget':'sources';}return guidanceContext;},
+    acceptStatus(status){if(state.summaryActionBusy)return !!status.closest('#workflow-panel');if(guidanceContext==='activity-settings')return !!status.closest('#activity-demand-card');if(guidanceContext==='activity-handoff')return !!status.closest('#activity-transfer-result');if(guidanceContext==='budget')return ['budget-plan-status','cost-snapshot-status'].includes(status.id);if(guidanceContext==='workflow')return !!status.closest('#workflow-panel');if(guidanceContext==='sources')return ['main-status','source-status','model-run-status','inventory-file-name','pending-files-name','transfer-file-name','sales-files-name'].includes(status.id);if(guidanceContext==='results')return ['main-status','month-end-status'].includes(status.id);return true;},
+    progress(){return globalThis.ProcurementGuidance.progress(guidanceSnapshot());},
+    statuses:'#main-status,#source-status,#workflow-status,#special-workflow-status,#model-run-status,#store-shortage-status,#budget-plan-status,#cost-snapshot-status,#month-end-status,#transfer-activity-status,#activity-registry-status,#inventory-file-name,#pending-files-name,#transfer-file-name,#sales-files-name',
+    resolve(){return globalThis.ProcurementGuidance.resolve(guidanceSnapshot());}
+  });
 })();
