@@ -4505,6 +4505,26 @@
     return workbook;
   }
 
+  // Display order only: never change quantities, financial values or review identity.
+  function purchaseReportOrder(row) {
+    const name = String(row["商品品名"] || "").normalize("NFKC").trim().replace(/\s*[（(]S[)）]\s*$/i, "");
+    const towel = name.match(/^(?:FINESPUN\s*)?([^\[\]［］]+?)[-－—]\s*((?:超大|加大|小)?(?:浴巾|毛巾|方巾|擦手巾|手巾))(?=\s|\[|［|$)/i);
+    if (towel) {
+      const color = name.match(/[\[［]([^\]］]+)[\]］]/)?.[1]?.trim() || "";
+      return [towel[1].trim(), towel[2], color, String(row["小類（尺寸）"] || ""), String(row["ERP品號"] || "")];
+    }
+    // Retain established grouping where a series cannot be identified reliably.
+    return [String(row["大類（花色／同品項）"] || ""), String(row["中類（品項）"] || ""), "", String(row["小類（尺寸）"] || ""), String(row["ERP品號"] || "")];
+  }
+  function comparePurchaseReportRows(left, right) {
+    const a = purchaseReportOrder(left), b = purchaseReportOrder(right);
+    for (let i = 0; i < a.length; i += 1) {
+      const difference = a[i].localeCompare(b[i], "zh-Hant", { numeric: true });
+      if (difference) return difference;
+    }
+    return 0;
+  }
+
   function recommendationSheetRows(rows, asOfDate, { compactActivity = false } = {}) {
     const reportRows = rows.map((row) => {
       const storeInventoryQty = Object.values(row.storeInventoryByCode || {})
@@ -4670,12 +4690,7 @@
         : "公司協作草稿（不保存原始檔名）"
       };
     });
-    return reportRows.sort((left, right) => (
-      String(left["大類（花色／同品項）"] || "").localeCompare(String(right["大類（花色／同品項）"] || ""), "zh-Hant", { numeric: true })
-      || String(left["中類（品項）"] || "").localeCompare(String(right["中類（品項）"] || ""), "zh-Hant", { numeric: true })
-      || String(left["小類（尺寸）"] || "").localeCompare(String(right["小類（尺寸）"] || ""), "zh-Hant", { numeric: true })
-      || String(left["ERP品號"] || "").localeCompare(String(right["ERP品號"] || ""), "zh-Hant", { numeric: true })
-    ));
+    return reportRows.sort(comparePurchaseReportRows);
   }
 
   function appendJsonSheet(workbook, XLSX, sheetName, rows, widths) {

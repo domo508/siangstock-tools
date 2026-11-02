@@ -2986,3 +2986,45 @@ describe("寄庫回匯：原報表基準與正式預留分開", () => {
     expect(review.errors).toEqual([]);expect(review.rows[1]).toMatchObject({sourceRow:4,finalQty:0,reasonDetail:"合成調整"});
   });
 });
+
+describe("毛浴巾採購報表依系列、品項、花色及尺寸排列", () => {
+  function fixture(names) {
+    const result=core.buildProcurementRecommendations({master:makeMaster(),inventory:makeInventory(),pendingReports:[makePending()],consignment:makeConsignment(),salesReports:[makeSales()],model:makeForecastModel(),blacklist:[],asOfDate:"2026-08-28"});
+    const base=result.rows[0];
+    result.rows=names.map((name,i)=>({...base,sku:`SERIES${i}`,supplierSku:`V${i}`,supplier:"家禾",purchaseTab:"其它",mainCategory:"毛巾",name,masterName:name,size:"50×90公分",sizeGroup:"50×90公分",suggestedPurchaseQty:10+i*10,suggestedPurchaseAmount:(10+i*10)*base.unitCost,productStatusPendingReview:false,scheduleNotes:[],sourceFiles:[]}));
+    result.suggestedRows=result.rows;result.consignmentRows=[];
+    result.totals={...result.totals,suggestedSkuCount:result.rows.length,suggestedPurchaseQty:result.rows.reduce((s,r)=>s+r.suggestedPurchaseQty,0),suggestedPurchaseAmount:result.rows.reduce((s,r)=>s+r.suggestedPurchaseAmount,0)};
+    return result;
+  }
+  function output(result) {
+    const book=core.buildRecommendationWorkbook(result,XLSX);
+    const bytes=XLSX.write(book,{type:"array",bookType:"xlsx"});
+    const reread=XLSX.read(bytes,core.ACTIVITY_HISTORY_READ_OPTIONS);
+    return {book:reread,rows:XLSX.utils.sheet_to_json(reread.Sheets["03D_其它供應商"],{defval:""})};
+  }
+  it("水立方、精紡紗各自集中，同系列同品項不被另一系列或花色打斷，並保留黃底與逐品項金額",()=>{
+    const result=fixture(["FINESPUN精紡紗-浴巾[石榴-粉]","FINESPUN水立方-毛巾[松石-綠]","FINESPUN水立方-浴巾[石榴-粉]","FINESPUN精紡紗-毛巾[石榴-粉]","FINESPUN水立方-浴巾[松石-綠]"]);
+    result.rows[2].recommendationSource="蝦皮3件保護";
+    const before=JSON.stringify(result),{rows,book}=output(result);
+    const names=rows.map(r=>r["商品品名"]),water=names.map((n,i)=>n.includes("水立方")?i:-1).filter(i=>i>=0);
+    expect(water[2]-water[0]).toBe(2);
+    const bath=names.map((n,i)=>n.includes("水立方-浴巾")?i:-1).filter(i=>i>=0);expect(bath[1]-bath[0]).toBe(1);
+    expect(new Set(rows.map(r=>r["ERP品號"])).size).toBe(result.rows.length);
+    for(const row of rows){const original=result.rows.find(r=>r.sku===row["ERP品號"]);expect(row["建議採購量"]).toBe(original.suggestedPurchaseQty);expect(row["建議採購金額"]).toBe(original.suggestedPurchaseAmount);}
+    expect(JSON.stringify(result)).toBe(before);
+    const sheet=book.Sheets["03D_其它供應商"],headers=XLSX.utils.sheet_to_json(sheet,{header:1})[0];
+    const protectedIndex=rows.findIndex(r=>r["ERP品號"]==="SERIES2");
+    expect(sheet[XLSX.utils.encode_cell({r:protectedIndex+1,c:headers.indexOf("商品品名")})].s?.fgColor?.rgb).toBe("FFF2CC");
+    const review=core.reviewReturnedWorkbook(book,XLSX,{asOfDate:"2026-08-28",orderDate:"2026-09-20",baselineBySku:new Map(result.rows.map(r=>[r.sku,r]))});
+    expect(review.errors).toEqual([]);
+    expect(review.totals.approvedAmount).toBe(result.totals.suggestedPurchaseAmount);
+    const reverse={...result,rows:[...result.rows].reverse(),suggestedRows:[...result.rows].reverse()};
+    expect(output(reverse).rows.map(r=>r["ERP品號"])).toEqual(rows.map(r=>r["ERP品號"]));
+  });
+  it("品牌大小寫、全形括號及破折號相容；未知系列仍保留既有分類且不丟列",()=>{
+    const result=fixture(["finespun水立方－浴巾［石榴-粉］","FINESPUN精紡紗—浴巾[石榴-粉]","舒眠護頸 記憶枕(門市販售)","衛浴門口地墊[抹綠]"]);
+    const {rows}=output(result);expect(rows).toHaveLength(4);
+    expect(rows.map(r=>r["ERP品號"]).sort()).toEqual(result.rows.map(r=>r.sku).sort());
+    expect(rows.reduce((s,r)=>s+Number(r["建議採購量"]),0)).toBe(result.totals.suggestedPurchaseQty);
+  });
+});
