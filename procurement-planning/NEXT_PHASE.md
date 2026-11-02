@@ -2,13 +2,15 @@
 
 ## 2026-11-02 周調撥逐店核准／勾選ERP下載（已授權部署，發布中）
 
+發布驗收補充：部分門市已核准歸零後，其它店送出時，摘要列數也須沿用總部核准量優先的同一解析規則，不得把該0回退成門市量。已加此回歸斷言，ERP量與格式未變。最終版本統一為周調撥20261102-transfer-per-store-r2、主採購20261102-procurement-per-store-r2、首頁20261102-per-store-entry-r2；r1是本輪中間發布紀錄，以r2為最終驗收基準。
+
 使用者已明確授權「可部署」，範圍限本輪逐店核准／勾選ERP功能與必要版本同步。發布前唯讀核對正式分支feature/company-tools-static-site仍為5b1cb7c8588d5a7e5049f59145adba84865961a4；以同基準乾淨發布checkout只整合本次差異，根工作區既有程式與其他待辦不混入。無資料表遷移、不代核准／產檔／重跑正式批次。
 
 新增總部逐店核准入口及已核准門市勾選下載，每店維持原ERP格式。只核准已送出且未核准門市，未核准店繼續送審；原整批按鈕保留並說明不隨篩選縮小範圍。已核准店鎖定，後店處理不覆寫先店內容、日期或ERP；依實際逐店核准日＋2天到貨，既有活動版本／日期／緩衝驗證保留。沿用現有狀態與台帳，僅核准店回拋缺貨；全部店完成後才結束整批。部分核准的同週批次不能被重建取代。
 
 匯出先重新讀取逐店狀態／批次revision，逐品號核對ERP與核准量，再原子記錄勾選門市、最後發起下載；混入未核准店、未存修改、總倉不足或版本衝突均阻擋。產檔記錄不代表ERP已匯入或瀏覽器確實下載，需人工核對；多檔被擋可逐店重新下載。已核准量保留供應占用，明確0不回退；D1同交易revision CHECK守門，失敗全筆回滾。無資料表遷移、不擴權、不寄信、不讀寫正式批次。
 
-三道門檻：完整型別及58份840項自動化、Worker dry-run打包通過；隔離預備版本周調撥20261102-transfer-per-store-r1、主採購20261102-procurement-per-store-r1、首頁20261102-per-store-entry-r1及相關資產／入口／管理頁／Worker同步，全域有效入口無舊版殘留，正式新舊頁與快取待獲准部署後驗證；原ERP實際XLSX往返與逐店未改量／人工改量／歸零／人工新增、跨店／缺貨台帳／競爭回滾測試通過。store-transfer/core.js、procurement-planning/core.js、store-orders/core.js、Worker procurement.ts及store-orders.ts與5b1cb7c位元完全相同。Chrome本機合成頁執行實際新增render／handler／匯出函式，驗證單店核准、未勾選阻擋、下載回饋與桌機／390／320px新操作區；它不是正式完整頁面或正式交易驗收。證據與本機harness僅在私有隔離區，發布時不得帶入。未commit、push或部署。
+三道門檻：完整型別及58份840項自動化、Worker dry-run打包通過；隔離預備版本周調撥20261102-transfer-per-store-r2、主採購20261102-procurement-per-store-r2、首頁20261102-per-store-entry-r2及相關資產／入口／管理頁／Worker同步，全域有效入口無舊版殘留，正式新舊頁與快取待獲准部署後驗證；原ERP實際XLSX往返與逐店未改量／人工改量／歸零／人工新增、跨店／缺貨台帳／競爭回滾測試通過。store-transfer/core.js、procurement-planning/core.js、store-orders/core.js、Worker procurement.ts及store-orders.ts與5b1cb7c位元完全相同。Chrome本機合成頁執行實際新增render／handler／匯出函式，驗證單店核准、未勾選阻擋、下載回饋與桌機／390／320px新操作區；它不是正式完整頁面或正式交易驗收。證據與本機harness僅在私有隔離區，發布時不得帶入。未commit、push或部署。
 
 ## 2026-11-02 歷史寄庫警示、指定舊帳撤銷及版本重試已部署
 

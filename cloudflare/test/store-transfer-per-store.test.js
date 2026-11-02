@@ -12,7 +12,7 @@ const id = 'TR-PER-STORE';
 const hq = 'siang01@siangapato.com.tw';
 const email = { R00: 'tpzssa@siangapato.com.tw', R01: 'txg_sianga_pato@siangapato.com.tw' };
 async function call(path, method = 'GET', body, actor = hq) {
-  return storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer${path}`, { method, headers: { Origin: 'https://siangstock.com', 'Content-Type': 'application/json', 'X-Test-Email': actor, 'X-Store-Transfer-Version': '20261102-transfer-per-store-r1' }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
+  return storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer${path}`, { method, headers: { Origin: 'https://siangstock.com', 'Content-Type': 'application/json', 'X-Test-Email': actor, 'X-Store-Transfer-Version': '20261102-transfer-per-store-r2' }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
 }
 const detail = async () => (await call(`/batches/${id}`)).json();
 const items = store => ['PASS', 'EDIT', 'ZERO'].map(sku => ({storeCode:store,sku,productName:`合成${sku}`,suggestedQuantity:2,itemType:'regular',calculationDate:'2026-11-04',decisionSnapshot:{hqAvailable:20,hqReleasable:20,hqSupplyCeiling:20}}));
@@ -55,6 +55,7 @@ for (const changed of [false,true]) it(`逐店流程${changed?'含改量與明�
   vi.setSystemTime(new Date('2026-11-03T02:00:00Z'));
   // HQ can assist after the store deadline, without changing the first store.
   expect((await call(`/batches/${id}/stores/R01/submit`,'PUT',{items:storeRows('R01')})).status).toBe(200);
+  expect((await detail()).batch.item_count).toBe(changed?5:6);
   expect((await approve('R01')).status).toBe(200); p=await detail();
   expect(p.batch.status).toBe('approved');
   expect(JSON.stringify(p.items.filter(i=>i.store_code==='R00'))).toBe(exported);
