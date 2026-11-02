@@ -8,7 +8,7 @@ describe('公司工具即時指引整合契約',()=>{
     expect(catalog.tools.filter(t=>t.href)).toHaveLength(7);
     for(const tool of catalog.tools.filter(t=>t.href)){
       const html=read(tool.id+'/index.html');
-      expect(html.includes('company-guidance') || html.includes('cloud-next-step'),tool.id).toBe(true);
+      expect(html.includes('/live-guidance/app.js?v=') || html.includes('cloud-next-step'),tool.id).toBe(true);
     }
     const guest=read('store-orders/guest/index.html');
     expect(guest).toContain('cloud-next-step');

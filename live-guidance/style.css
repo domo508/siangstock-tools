@@ -3,3 +3,5 @@
 .company-guide-help{margin-top:8px;font-size:.85rem}.company-guide-help summary{cursor:pointer;color:#176b87}.company-guide-help summary:focus-visible{outline:3px solid #153f63;outline-offset:3px}.company-guide-help p{max-width:60em}
 @media(max-width:600px){.company-live-guide{top:4px;gap:10px;padding:12px;border-radius:14px;align-items:flex-start}.company-live-guide strong{font-size:.95rem}.company-live-guide p{font-size:.85rem;line-height:1.45}.company-live-guide button{max-width:110px;white-space:normal;padding:9px 10px;font-size:.88rem}.company-guide-message{max-height:4.4em;overflow:auto}}
 @media print{.company-live-guide,.company-operation-feedback{display:none!important}}
+
+.company-live-guide progress{display:block;width:min(100%,360px);height:10px;accent-color:#176b87;margin-top:8px}.company-live-guide [hidden]{display:none!important}.company-guide-progress{font-weight:600}.company-guide-updated{font-size:.8rem;color:#64778a}.company-guide-wait{font-size:.85rem;color:#725b29}

@@ -2,12 +2,13 @@
  * Navigation opens details and moves focus; it never clicks a business action. */
 (function () {
   'use strict';
-  const VERSION = '20261102-company-guidance-r1';
+  const VERSION = '20261102-guidance-progress-r3';
   const script = document.currentScript;
   const base = new URL('.', script.src);
   const main = document.querySelector('main');
   if (!main) return;
   const feedbacks = new WeakMap();
+  const progressTracker = globalThis.CompanyGuidanceProgress.create();
   let provider, pending, frame, lastAction, latestMessage, latestStatus, nextTarget, guard = 'checking', latestVersion = '';
   const box = document.createElement('aside');
   box.id = 'company-live-guide'; box.className = 'company-live-guide';
@@ -18,11 +19,15 @@
   const hint = document.createElement('p');
   const live = document.createElement('p'); live.className = 'company-guide-message';
   live.setAttribute('role', 'status'); live.setAttribute('aria-live', 'polite');
+  const progress = document.createElement('p'); progress.id = 'company-guide-progress'; progress.className = 'company-guide-progress';
+  const updated = document.createElement('p'); updated.id = 'company-guide-updated'; updated.className = 'company-guide-updated';
+  const waiting = document.createElement('p'); waiting.id = 'company-guide-wait'; waiting.className = 'company-guide-wait'; waiting.setAttribute('role', 'status');
+  const meter = document.createElement('progress'); meter.id = 'company-guide-meter'; meter.setAttribute('aria-label', '目前步驟完成進度');
   const go = document.createElement('button'); go.type = 'button';
-  const content = document.createElement('div'); content.append(caption, title, hint, live);
+  const content = document.createElement('div'); content.append(caption, title, hint, live, progress, meter, updated, waiting);
   const help = document.createElement('details'); help.className = 'company-guide-help';
   const summary = document.createElement('summary'); summary.textContent = '指引怎麼用？';
-  const explanation = document.createElement('p'); explanation.textContent = '這裡會依目前資料與狀態提示下一步。按「前往」只展開區塊、移動畫面與焦點；分析、儲存、核准及AI仍要由你按原本按鈕。請以原操作的成功訊息為準，指引不代表已保存或已核准。';
+  const explanation = document.createElement('p'); explanation.textContent = '這裡會依目前資料與狀態提示下一步。按「前往」只展開區塊、移動畫面與焦點；分析、儲存、核准及AI仍要由你按原本按鈕。進度與最後更新時間只依實際訊息變化更新；30秒沒有新進度會提示等待，不代表失敗。百分比只在有實際總量時顯示。請以原操作的成功訊息為準，指引不代表已保存或已核准。';
   help.append(summary, explanation); content.append(help);
   box.append(content, go);
   const nav = main.querySelector('nav.breadcrumb,nav.breadcrumbs,nav.page-navigation');
@@ -39,6 +44,24 @@
       if (!box.contains(el) && !el.closest('#version-warning') && !el.disabled) el.disabled = true;
     });
   }
+  function renderProgress() {
+    let details;
+    try { details = provider?.progress?.(); } catch { /* No fabricated totals. */ }
+    const record = progressTracker.view();
+    const text = details?.message || '';
+    put(progress, text); progress.hidden = !text;
+    const current = details?.current, total = details?.total;
+    const measured = Number.isFinite(current) && Number.isFinite(total) && total > 0 && current >= 0 && current <= total;
+    meter.hidden = !measured;
+    if (measured) { meter.max = total; meter.value = current; meter.setAttribute('aria-valuetext', `${current}／${total}`); }
+    updated.hidden = !record;
+    if (record) put(updated, `最後進度更新：${new Date(record.updatedAt).toLocaleTimeString('zh-TW', {timeZone:'Asia/Taipei',hour12:false})}（台北時間）`);
+    waiting.hidden = !record || !['processing', 'authorization', 'error'].includes(record.status);
+    if (record?.stalled) put(waiting, `${record.elapsedSeconds} 秒沒有新進度；仍在等待處理結果，尚未判定失敗。請勿重複送出。`);
+    else if (record?.status === 'processing') put(waiting, '正在處理；取得新的步驟或完成量時，更新時間才會改變。');
+    else if (record?.status === 'authorization') put(waiting, '等待授權，請依原操作區提示完成登入。');
+    else if (record?.status === 'error') put(waiting, '此步驟已失敗或停止，請查看原因；不會自動重試。');
+  }
   function render() {
     freeze();
     const modal = document.querySelector('dialog[open]:not(#version-warning)');
@@ -47,6 +70,7 @@
     if (guard !== 'ready') {
       put(title, guard === 'checking' ? '正在確認工具版本' : '請重新載入最新版');
       put(hint, guard === 'checking' ? '確認完成後顯示下一步；請稍候。' : '目前操作已停止。未保存內容請先保留，再重新載入；不會自動重整或沿用舊版。');
+      progress.hidden = true; meter.hidden = true; updated.hidden = true; waiting.hidden = true;
       live.hidden = true; go.hidden = false; go.disabled = guard === 'checking'; put(go, '重新載入最新版');
       return;
     }
@@ -69,7 +93,7 @@
     if (ownWarning && visible(ownWarning) && (!ownWarning.matches('dialog') || ownWarning.open)) {
       step = { title: '請重新載入最新版', hint: '此工具已停止操作，請依版本提示更新。', target: '#version-warning', label: '前往版本提示' };
     }
-    put(title, step.title); put(hint, step.hint);
+    put(title, step.title); put(hint, step.hint); renderProgress();
     live.hidden = !latestMessage; if (latestMessage) put(live, '目前訊息：' + latestMessage);
     const destination = node(step.target);
     // Hidden parent details may be opened, but role-hidden sections are never exposed.
@@ -132,23 +156,44 @@
     return pending;
   }
   globalThis.CompanyGuidance = Object.freeze({
-    version: VERSION, ensureCurrent,
+    version: VERSION, ensureCurrent, refresh: schedule,
+    reportProgress(record) { progressTracker.report(record); schedule(); },
     register(value) { provider = value; schedule(); },
     step(title, hint, target, label) { return { title, hint, target, label }; }
   });
+  // Returning from the native file picker can refocus the page before change
+  // arrives. Keep the user's selection pending until that version check succeeds.
+  const pendingFileChanges = new WeakMap();
+  function deferFileChange(event) {
+    const input = event.target;
+    const selection = input.files;
+    const token = {};
+    pendingFileChanges.set(input, token);
+    event.stopImmediatePropagation();
+    void ensureCurrent().then(current => {
+      if (pendingFileChanges.get(input) !== token) return;
+      pendingFileChanges.delete(input);
+      if (!current || guard !== 'ready' || !input.isConnected || input.disabled || input.files !== selection) return;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
   for (const event of ['click', 'change', 'submit']) document.addEventListener(event, e => {
     if (box.contains(e.target)) return;
+    if (event === 'change' && e.target.matches('input[type="file"]')) {
+      if (guard === 'checking') { deferFileChange(e); return; }
+      pendingFileChanges.delete(e.target);
+    }
     if (guard !== 'ready' && e.target.closest('button,input,select,textarea,form') && !e.target.closest('#version-warning')) {
       e.preventDefault(); e.stopImmediatePropagation(); schedule(); return;
     }
-    if (event === 'click' && e.target.closest('button')) lastAction = e.target.closest('button');
+    if (event === 'click' && e.target.closest('button')) { lastAction = e.target.closest('button'); latestMessage = null; latestStatus = null; progressTracker.reset(); }
     if (event === 'change') {
-      latestMessage = null;
+      progressTracker.reset(); latestMessage = null;
       document.querySelectorAll('[data-company-feedback]').forEach(el => { el.hidden = true; });
     }
     schedule();
   }, true);
-  document.addEventListener('input', () => { latestMessage = null; document.querySelectorAll('[data-company-feedback]').forEach(el => { el.hidden = true; }); schedule(); });
+  document.addEventListener('input', () => { progressTracker.reset(); latestMessage = null; document.querySelectorAll('[data-company-feedback]').forEach(el => { el.hidden = true; }); schedule(); });
   document.addEventListener('toggle', schedule, true);
   const observer = new MutationObserver(records => {
     const external = records.filter(r => !box.contains(r.target) && !r.target.closest?.('[data-company-feedback]'));
@@ -162,6 +207,8 @@
       const message = status.textContent.trim().replace(/\s+/g, ' ').slice(0, 320);
       if (!message) continue;
       latestMessage = message; latestStatus = status;
+      const failed = status.matches('.error,.danger,.bad') || (status.matches('.file-name,[data-file-name]') && !!status.closest('.error'));
+      progressTracker.report({id:status.id || '',message,status:globalThis.CompanyGuidanceProgress.classify(message, failed)});
       // Keep feedback near the action even when the original status lives far away.
       if (lastAction?.isConnected && !lastAction.closest('dialog') && !lastAction.parentElement.contains(status)) {
         const row = lastAction.parentElement;
@@ -173,6 +220,7 @@
     schedule();
   });
   observer.observe(main, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'hidden', 'class', 'open', 'aria-busy'] });
+  setInterval(() => { if (progressTracker.view()?.status === 'processing') schedule(); }, 5000);
   window.addEventListener('focus', ensureCurrent);
   setInterval(ensureCurrent, 60000);
   void ensureCurrent(); schedule();

@@ -14,9 +14,9 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261102-company-guidance-r1";
+  const APP_VERSION = "20261102-procurement-progress-r2";
   const state = {
-    shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
+    importProgress: null, shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
     salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, reviewWorkbook: null, manualReasonCandidates: [], firstReview: null,
     secondReviewFile: null, review: null, ledger: null, monthPlan: null, procurementRules: null, revenueChannels: [], budgetDirty: false, sourceMetadata: null, modelMetadata: null, batchId: "", approved: false, erpDownloaded: false,
@@ -311,7 +311,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261102-company-guidance-r1");
+        const worker = new Worker("inventory-reader-worker.js?v=20261102-procurement-progress-r2");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1077,7 +1077,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261102-company-guidance-r1");
+      const worker = new Worker("seasonal-model-worker.js?v=20261102-procurement-progress-r2");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -1206,6 +1206,7 @@
     setWorkflowStatus(message);
   }
   function invalidateAnalysis() {
+    state.importProgress = null;
     state.pendingSummaryAction = null;
     state.transferDraft=null;state.transferSourceAnalysis=null;state.transferRestoredDraft=null;state.transferCorrection=null;state.transferDraftDirty=false;state.transferParentContext=null;state.transferPeriodGeneration=(state.transferPeriodGeneration || 0)+1;state.transferPeriodSyncing=false;state.transferPeriodError=false;
     state.analysis = null; state.baseAnalysis = null; state.parsedSources = null; state.workflowType = "system_recommendation"; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null; state.purchaseStatusSummary = null; state.costSummary = null; state.monthEndWorkbook = null; state.monthEndReportBytes = null; state.monthEndSummary = null; state.draftId = ""; state.draftStage = ""; state.sharedDraftId = ""; state.sharedDraftRevision = 0; state.parentBatchId = ""; state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set();
@@ -1806,9 +1807,10 @@
       label.append(title, input, source); fragment.appendChild(label);
       const retailLabel=document.createElement("label"),retailTitle=document.createElement("span"),retailInput=document.createElement("input"),retailHint=document.createElement("small");
       retailLabel.className="activity-target-field";retailTitle.textContent=`${month}其中實體六店目標（元，已含活動）`;
-      retailInput.type="number";retailInput.min="0";retailInput.step="0.01";retailInput.value=current.retailAmount==null?"":String(current.retailAmount);retailInput.placeholder="留白由歷史分配，提供草稿前核對";
+      retailInput.type="text";retailInput.inputMode="decimal";retailInput.setAttribute("aria-label",`${month}實體六店目標`);const formatRetailAmount=value=>value==null?"":new Intl.NumberFormat("zh-TW",{maximumFractionDigits:2}).format(value);retailInput.value=formatRetailAmount(current.retailAmount);retailInput.placeholder="留白由歷史分配，提供草稿前核對";
       retailHint.textContent="其餘為線上／其他；此設定同時納入主採購計算及門市活動草稿。";
-      retailInput.addEventListener("input",()=>{state.legacyActivity=null;state.activityTargets[month]={...state.activityTargets[month],source:"本次活動草稿",retailAmount:retailInput.value===""?null:Number(retailInput.value)};if(state.analysis)invalidateAnalysis();});
+      retailInput.addEventListener("input",()=>{retailInput.value=retailInput.value.replace(/,/g,"");state.legacyActivity=null;state.activityTargets[month]={...state.activityTargets[month],source:"本次活動草稿",retailAmount:retailInput.value===""?null:Number(retailInput.value)};if(state.analysis)invalidateAnalysis();renderActivityControls();});
+      retailInput.addEventListener("blur",()=>{retailInput.value=formatRetailAmount(state.activityTargets[month]?.retailAmount);});
       retailLabel.append(retailTitle,retailInput,retailHint);fragment.appendChild(retailLabel);
     }
     elements.activityMonthlyTargets.replaceChildren(fragment);
@@ -3061,16 +3063,19 @@
     let activityToken=null;
     try{if(elements.activityEnabled.checked && elements.checkpoint.value!=="month-end")activityToken=await sharedActivity.assertReady();}catch(error){setStatus(error.message,"error");return;}
     elements.analyze.disabled = true; elements.download.disabled = true; setStatus("正在以大型檔專用模式預檢庫存；門市店倉會完整保留…");
+    const importProgress = state.importProgress = {current:0,total:2+state.pendingFiles.length+state.salesFiles.length};
+    const markFileRead = () => { if (state.importProgress === importProgress && !importProgress.stopped) { importProgress.current++; globalThis.CompanyGuidance?.reportProgress({id:"required-file-read",message:`必要檔案已讀取 ${importProgress.current}／${importProgress.total} 份`,status:"processing",current:importProgress.current,total:importProgress.total}); } };
+    const readRequired = async file => { const workbook = await readWorkbook(file); markFileRead(); return workbook; };
     try {
       const monthEndMode = elements.checkpoint.value === "month-end";
-      const inventory = await parseInventoryFile(state.inventoryFile);
+      const inventory = await parseInventoryFile(state.inventoryFile); markFileRead();
       setStatus("庫存預檢完成，正在解析其它資料並套用正式採購、寄庫與付款規則…");
       const [masterWorkbook, transferWorkbook, consignmentWorkbook, lirongWorkbook, modelWorkbook, pendingWorkbooks, salesWorkbooks] = await Promise.all([
-        resolveWorkbook(state.masterFile, state.masterWorkbook), readWorkbook(state.transferFile),
+        resolveWorkbook(state.masterFile, state.masterWorkbook), readRequired(state.transferFile),
         state.consignmentFile || state.consignmentWorkbook ? resolveWorkbook(state.consignmentFile, state.consignmentWorkbook) : Promise.resolve(null),
         monthEndMode && !(state.lirongConsignmentFile || state.lirongConsignmentWorkbook) ? Promise.resolve(null) : resolveWorkbook(state.lirongConsignmentFile, state.lirongConsignmentWorkbook),
         monthEndMode && !state.modelFile ? Promise.resolve(null) : readWorkbook(state.modelFile),
-        Promise.all(state.pendingFiles.map(readWorkbook)), Promise.all(state.salesFiles.map(readWorkbook))
+        Promise.all(state.pendingFiles.map(readRequired)), Promise.all(state.salesFiles.map(readRequired))
       ]);
       const master = core.parseProductMasterWorkbook(masterWorkbook, XLSX, { fileName: "本次商品主檔" });
       const transferReport = core.parseTransferWorkbook(transferWorkbook, XLSX, { fileName: state.transferFile.name || "期間調撥單" });
@@ -3177,7 +3182,7 @@
       renderBudget(); updateSpecialWorkflowReady(); elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
       state.analysis = null; elements.resultPanel.hidden = true; setStatus(`無法完成：${error.message || "請確認檔案格式"}`, "error");
-    } finally { elements.analyze.disabled = !requirementsReady(); }
+    } finally { importProgress.stopped = true; elements.analyze.disabled = !requirementsReady(); }
   }
   function activateSpecialAnalysis(analysis, label) {
     state.analysis = analysis;
@@ -3913,7 +3918,7 @@
   setInitialDates(); renderChannels(); renderBudget(); renderModelStatus(); updateModelControls(); updateReadyState(); checkRuntimeVersion(); hydrateCachedModel(); hydrateWorkflowDrafts(); loadConfig();
 
   // Read-only readiness for the shared guide; no calculation or write is performed here.
-  globalThis.CompanyGuidance?.register({ statuses: '#main-status,#source-status,#workflow-status,#special-workflow-status,#model-run-status,#store-shortage-status,#budget-plan-status,#month-end-status', resolve() {
+  globalThis.CompanyGuidance?.register({ progress() { if (state.importProgress) return {...state.importProgress,message:`必要檔案：已讀取 ${state.importProgress.current}／${state.importProgress.total} 份（不含後續計算）`}; const current=[state.inventoryFile,state.pendingFiles.length>0,state.transferFile,state.salesFiles.length>0].filter(Boolean).length; return {current,total:4,message:`必要來源：已選妥 ${current}／4 類（選檔完成不代表解析完成）`}; }, statuses: '#main-status,#source-status,#workflow-status,#special-workflow-status,#model-run-status,#store-shortage-status,#budget-plan-status,#month-end-status,#transfer-activity-status,#activity-registry-status,#inventory-file-name,#pending-files-name,#transfer-file-name,#sales-files-name', resolve() {
     const S=globalThis.CompanyGuidance.step;
     if (!state.config) return S('先確認公司登入與權限', '請查看帳號與載入訊息；授權未確認前不會引導你核准。', '#account-badge');
     if (state.approved) return S('下一步：核對並下載 ERP 採購檔', '核對已核准批次與摘要狀態，再依既有流程下載；不要重複核准。', '#workflow-panel');
