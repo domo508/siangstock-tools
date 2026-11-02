@@ -28,6 +28,12 @@ function input(row, manual = '', reason = '') {
 const options = row => ({ baselineBySku: new Map([[row.sku, row]]), asOfDate: '2026-11-02', orderDate: '2026-11-02' });
 
 describe('主檔空白與缺寄庫回匯相容／輸出守恆', () => {
+  it('跨工具與巢狀規則頁同步採購核心資產版本，不沿用舊快取網址', () => {
+    const version = JSON.parse(readFileSync('../procurement-planning/version.json', 'utf8')).version;
+    for (const file of ['../store-transfer/index.html', '../store-transfer/rules/index.html', '../procurement-planning/rules-admin/index.html']) {
+      expect(readFileSync(file, 'utf8')).toContain(`core.js?v=${version}`);
+    }
+  });
   it.each(['', 20])('舊檔缺寄庫、狀態空白，人工量%s仍保留建議且不用原因', manual => {
     const row = base(), workbook = input(row, manual), opts = options(row);
     expect(core.listManualReasonCandidates(workbook, XLSX, opts)).toHaveLength(0);
