@@ -87,7 +87,8 @@
     $("activity-start-proposal").addEventListener("change",renderActivityWeeks);
     $("confirm-activity-plan").addEventListener("click",()=>saveActivityPlan("confirmed"));
     $("cancel-activity-plan").addEventListener("click",()=>saveActivityPlan("cancelled"));
-    $("activity-plan-status").textContent=`${plan.status === "confirmed" ? "總部已確認，可勾選納入本次正式補貨。" : "請確認分配後再納入補貨。"}共用版本${plan.revision}；多人修改時不覆蓋他人版本。`;
+    $("confirm-activity-plan").disabled=!!plan.settingsOutdated;$("cancel-activity-plan").disabled=!!plan.settingsOutdated;
+    $("activity-plan-status").textContent=plan.settingsOutdated?"主採購活動設定已有新版；請先重新產生並發布門市來源，再由總部確認。既有批次保留原快照。":`${plan.status === "confirmed" ? "總部已確認，可勾選納入本次正式補貨。" : "請確認分配後再納入補貨。"}共用版本${plan.revision}；多人修改時不覆蓋他人版本。`;
   }
 
   function renderActivityWeeks() {

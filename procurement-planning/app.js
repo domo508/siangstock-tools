@@ -29,6 +29,7 @@
     activityTargets: {}, activityTargetSignature: "", activityPlanRequests: new Map(), legacyActivity: null, runtimeOutdated: false, latestRuntimeVersion: "", history: null, historyMode: false
   };
 
+  let sharedActivity;
   const get = (selector) => document.querySelector(selector);
   const elements = {
     versionWarning: get("#version-warning"), reloadLatest: get("#reload-latest-button"),
@@ -74,7 +75,7 @@
     historyModeBanner: get("#history-mode-banner"), historyPanel: get("#history-panel"), historyStatus: get("#history-status"), historySummary: get("#history-summary"), historyBatches: get("#history-batches"), historyOpenOrders: get("#history-open-orders")
   };
 
-  function today() { return new Date().toISOString().slice(0, 10); }
+  function today() { return new Date(Date.now()+8*3600000).toISOString().slice(0, 10); }
   function setInitialDates() { const value = today(); elements.month.value = value.slice(0, 7); elements.orderDate.value = value; }
   function fileLabel(files) {
     if (!files.length) return "尚未選擇";
@@ -576,6 +577,7 @@
       if (target && value) target.value = value;
     });
     const activity = draft.controls?.activityDemand || draft.analysis?.appliedRules?.activityDemand;
+    sharedActivity?.restore(activity);
     if (activity) {
       elements.activityEnabled.checked = activity.enabled !== false;
       elements.activityName.value = activity.name || "";
@@ -1784,7 +1786,7 @@
   }
   function activitySettings() {
     if (state.legacyActivity && elements.activityEnabled.checked) return { ...state.legacyActivity };
-    return { enabled: Boolean(elements.activityEnabled.checked), name: elements.activityName.value.trim(), startDate: elements.activityStartDate.value, endDate: elements.activityEndDate.value, scope: elements.activityScope.value, method: "monthly-target", monthlyTargets: structuredClone(state.activityTargets) };
+    return { enabled: Boolean(elements.activityEnabled.checked), name: elements.activityName.value.trim(), startDate: elements.activityStartDate.value, endDate: elements.activityEndDate.value, scope: elements.activityScope.value, method: "monthly-target", monthlyTargets: structuredClone(state.activityTargets),...sharedActivity?.metadata() };
   }
   function activityMonthList() { return globalThis.ProcurementActivityPlanning.months(elements.activityStartDate.value, elements.activityEndDate.value); }
   function renderActivityTargets(force = false) {
@@ -1936,6 +1938,7 @@
     const original=transferAnalysis() || analysis,rule=original?.appliedRules?.activityDemand,panel=get("#activity-transfer-result");
     panel.hidden=!rule || rule.enabled===false || rule.method!=="monthly-target";
     if(panel.hidden)return;
+    get("#activity-backfill-targets").closest("details").hidden=!!rule.activityId;
     if(state.transferSourceAnalysis!==original){
       get("#activity-rebuild-status").hidden=true;
       if(state.transferSourceAnalysis && !state.transferRestoredDraft)state.transferCorrection=null;
@@ -2026,6 +2029,7 @@
     try {
       if (!(await checkRuntimeVersion())) return;
       const source = structuredClone(transferActivitySource());
+      source.originParentId=state.parentBatchId;
       for (const month of source.months) if(!(month.retailTarget>0)) throw new Error(`${month.month}沒有可提供的實體門市需求，請先確認目標及歷史資料。`);
       const send=async body=>fetch("/api/store-transfer/activity-plans", { method:"POST", cache:"no-store", headers:{Accept:"application/json","Content-Type":"application/json","X-Store-Transfer-Version":"20261102-company-guidance-r1"},body:JSON.stringify(body) });
       let response=await send({source}), result=await response.json();
@@ -2258,6 +2262,7 @@
       [elements.forecastRevenue, elements.releasedBudget, elements.budgetSourceNote].forEach((element) => { element.disabled = !canManageBudget; });
       await Promise.all([loadProcurementRules(), loadLedger(), loadMonthPlan(), loadStoreShortageNeeds(), loadSharedWorkflowDrafts(), loadHistory()]);
       await loadCostSnapshot();
+      await sharedActivity.configure(state.config);
     } catch (error) {
       state.config = null; elements.accountBadge.textContent = "公司登入驗證失敗";
       elements.sourceStatus.textContent = error.message; elements.sourceStatus.classList.add("error");
@@ -3053,6 +3058,8 @@
     if (!requirementsReady()) return;
     if (elements.activityEnabled.checked && state.legacyActivity) { setStatus("請重新設定新版活動月份目標，再產生新的母批次；舊批次可直接續作與下載。", "warning"); return; }
     if (elements.activityEnabled.checked && elements.checkpoint.value !== "month-end") { try { globalThis.ProcurementActivityPlanning.normalize(activitySettings(), elements.salesDate.value); } catch (error) { setStatus(error.message, "error"); return; } }
+    let activityToken=null;
+    try{if(elements.activityEnabled.checked && elements.checkpoint.value!=="month-end")activityToken=await sharedActivity.assertReady();}catch(error){setStatus(error.message,"error");return;}
     elements.analyze.disabled = true; elements.download.disabled = true; setStatus("正在以大型檔專用模式預檢庫存；門市店倉會完整保留…");
     try {
       const monthEndMode = elements.checkpoint.value === "month-end";
@@ -3142,6 +3149,7 @@
           lirong: state.sourceMetadata.lirongMetadata?.sha256 || "unavailable"
         } : {}
       };
+      await sharedActivity.verify(activityToken);
       state.analysis = analysis; state.baseAnalysis = analysis; state.workflowType = state.shortageRunMode === "new_order" ? "store_shortage_replenishment" : "system_recommendation";
       state.transferParentContext=null;state.transferPeriodError=false;state.transferPeriodSyncing=false;
       state.parentBatchId = newParentBatchId(); state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set(); state.draftId = state.parentBatchId;
@@ -3621,6 +3629,7 @@
     const activityRiskCount = state.review.rows.filter(row => row.activityPlanning && (row.activityPlanning.approvedShortage == null || row.activityPlanning.approvedShortage > 0)).length;
     if (activityRiskCount) warningParts.push(`活動前供貨仍缺或未驗證${activityRiskCount}項，請核對活動備貨明細`);
     return {
+      ...((state.baseAnalysis||state.analysis)?.appliedRules?.activityDemand?.activityId?{activityId:(state.baseAnalysis||state.analysis).appliedRules.activityDemand.activityId,activityRevision:(state.baseAnalysis||state.analysis).appliedRules.activityDemand.activityRevision}:{}),
       batchId: state.batchId, analysisMonth: elements.month.value, checkpoint: elements.checkpoint.value,
       parentBatchId: state.parentBatchId, workUnitIds: core.procurementWorkUnitIdsForReview(state.review.rows, analysisBaselineRows()),
       supplierSummary: [...new Set(state.review.rows.filter((row) => row.finalQty > 0).map((row) => row.supplier))],
@@ -3896,6 +3905,10 @@
       setWorkflowStatus("已從先前下載的採購建議報表恢復批次。", "success");
     } catch (error) { setWorkflowStatus(`無法從報表恢復：${error.message}`, "error"); }
     finally { elements.restoreReportFile.value = ""; }
+  });
+  sharedActivity=globalThis.ProcurementActivityRegistry.create({version:checkRuntimeVersion,today:()=>new Date(Date.now()+8*3600000).toISOString().slice(0,10),read:activitySettings,
+    apply(activity){if(state.analysis)invalidateAnalysis();elements.activityEnabled.checked=true;elements.activityName.value=activity.name||"";elements.activityStartDate.value=activity.startDate||"";elements.activityEndDate.value=activity.endDate||"";elements.activityScope.value=activity.scope||"all";state.activityTargets=Object.fromEntries(Object.entries(activity.monthlyTargets||{}).map(([m,t])=>[m,{...t,source:"本次活動草稿"}]));state.activityTargetSignature="";state.legacyActivity=null;renderActivityControls();},
+    warning(){return "供貨交期可能趕不上活動，請及早用最新庫存、全部狀態採購及寄庫資料重新評估。";}
   });
   setInitialDates(); renderChannels(); renderBudget(); renderModelStatus(); updateModelControls(); updateReadyState(); checkRuntimeVersion(); hydrateCachedModel(); hydrateWorkflowDrafts(); loadConfig();
 

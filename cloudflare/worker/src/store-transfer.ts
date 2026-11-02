@@ -1,5 +1,6 @@
 import { verifyCompanyUser, type AccessConfig } from "./access";
 import { RequestValidationError } from "./schema";
+import { assertCurrentActivity } from "./procurement-activities";
 import { FIXED_SOURCES } from "./fixed-sources";
 
 type StoreTransferEnv = AccessConfig & { DB: D1Database; ALLOWED_ORIGINS: string; GOOGLE_OAUTH_CLIENT_ID?: string; PROCUREMENT_ACCESS_AUD?: string };
@@ -785,8 +786,9 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   for(const raw of Object.values(JSON.parse(arrivalSchedule))) {
     const s=activityObject(raw);
     if(!s.activityPlanId) continue;
-    const plan=await env.DB.prepare("SELECT revision,status FROM store_transfer_activity_plans WHERE id=?").bind(s.activityPlanId).first<Record<string,unknown>>();
+    const plan=await env.DB.prepare("SELECT revision,status,source FROM store_transfer_activity_plans WHERE id=?").bind(s.activityPlanId).first<Record<string,unknown>>();
     if(!plan || plan.status!=="confirmed" || Number(plan.revision)!==Number(s.activityPlanRevision) || s.activityBufferDays!==2) throw new RequestValidationError("活動版本已變更或未確認，請重新計算。",409);
+    await assertCurrentActivity(env,JSON.parse(String(plan.source)));
     const prior=await activityCommitments(env,String(s.activityPlanId),weekKey);
     if(prior.some(b=>Number(b.all_exported)!==1)) throw new RequestValidationError("前週活動批次尚未完成ERP產檔，請先完成並更新調撥資料。",409);
     if(prior.length && input.activityReconciled!==true) throw new RequestValidationError("請確認前批活動調撥已反映在最新庫存及期間調撥單，再建立批次。",409);
@@ -1119,8 +1121,9 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
     const s=value as Record<string,unknown>;
     if(s.activityPlanId && s.activityApprovalDate!==taipeiDate(new Date())) throw new RequestValidationError("活動批次實際核准日已與預估不同；為保護到店＋2日緩衝，請以最新日期及庫存重算批次。",409);
     if(s.activityPlanId) {
-      const plan=await env.DB.prepare("SELECT revision,status FROM store_transfer_activity_plans WHERE id=?").bind(s.activityPlanId).first<Record<string,unknown>>();
+      const plan=await env.DB.prepare("SELECT revision,status,source FROM store_transfer_activity_plans WHERE id=?").bind(s.activityPlanId).first<Record<string,unknown>>();
       if(!plan || plan.status!=="confirmed" || Number(plan.revision)!==Number(s.activityPlanRevision)) throw new RequestValidationError("活動分配已修改或取消，請核對新版並重算。",409);
+      await assertCurrentActivity(env,JSON.parse(String(plan.source)));
     }
   }
   const now = new Date().toISOString();
@@ -1363,7 +1366,14 @@ function activitySource(raw: unknown): Record<string, unknown> {
     return { storeCode, sku, quantities };
   });
   for(let d=startDate;d<=endDate;d=addCalendarDays(d,1)) if(!monthsSeen.has(d.slice(0,7))) throw new RequestValidationError("活動跨月目標不完整。");
-  return { version:1, name:text(source.name,"活動名稱",80), scope:text(source.scope || "all","活動範圍",80), startDate,endDate,asOfDate,months,rows };
+  let identity={};
+  if(source.activityId){if(!/^ACT-[a-f0-9-]{36}$/.test(String(source.activityId))||!Number.isSafeInteger(source.activityRevision)||Number(source.activityRevision)<1)throw new RequestValidationError("共用活動身分或版本無效。");identity={activityId:source.activityId,activityRevision:source.activityRevision};}
+  if(source.originParentId && !/^[a-zA-Z0-9_-]{1,100}$/.test(String(source.originParentId)))throw new RequestValidationError("活動原母批次身分無效。");
+  return { ...identity,...(source.originParentId?{originParentId:source.originParentId}:{}), version:1, name:text(source.name,"活動名稱",80), scope:text(source.scope || "all","活動範圍",80), startDate,endDate,asOfDate,months,rows };
+}
+
+async function currentActivityRecord(env:StoreTransferEnv,row:Record<string,unknown>){
+  const record=activityRecord(row);try{await assertCurrentActivity(env,record.source);return record;}catch{return {...record,status:"draft",settingsOutdated:true};}
 }
 
 function activityRecord(row: Record<string,unknown>) {
@@ -1385,32 +1395,42 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
     if (id) {
       const row = await env.DB.prepare("SELECT * FROM store_transfer_activity_plans WHERE id = ?").bind(id).first<Record<string,unknown>>();
       if (!row) throw new RequestValidationError("找不到活動。",404);
-      return json({ plan:activityRecord(row) });
+      return json({ plan:await currentActivityRecord(env,row) });
     }
-    const rows = await env.DB.prepare("SELECT id,revision,status,json_extract(source,'$.name') name,json_extract(source,'$.startDate') startDate,json_extract(source,'$.endDate') endDate,updated_at,updated_by FROM store_transfer_activity_plans ORDER BY updated_at DESC LIMIT 100").all();
-    return json({ plans:rows.results });
+    const rows = await env.DB.prepare("SELECT id,revision,status,json_extract(source,'$.name') name,json_extract(source,'$.startDate') startDate,json_extract(source,'$.endDate') endDate,source,config,updated_at,updated_by FROM store_transfer_activity_plans ORDER BY updated_at DESC LIMIT 100").all();
+    return json({ plans:await Promise.all(rows.results.map(async raw=>{const row=raw as Record<string,unknown>,current=await currentActivityRecord(env,row);const {source,config,...metadata}=row;return {...metadata,status:current.status,...("settingsOutdated" in current?{settingsOutdated:true}:{})};})) });
   }
   requireSameOrigin(request,env);
   if(request.headers.get("X-Store-Transfer-Version") !== "20261102-company-guidance-r1") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
   const body = await readBody(request,3_000_000), now = new Date().toISOString();
   if (request.method === "POST" && !id) {
     const source = activitySource(body.source), planId = crypto.randomUUID();
-    const existing=await env.DB.prepare("SELECT id,revision,status,source FROM store_transfer_activity_plans WHERE json_extract(source,'$.name')=? AND json_extract(source,'$.startDate')=? AND json_extract(source,'$.endDate')=? AND json_extract(source,'$.scope')=?").bind(source.name,source.startDate,source.endDate,source.scope).first<Record<string,unknown>>();
+    const registry=await assertCurrentActivity(env,source);
+    if(!source.activityId && source.originParentId){const linked=await env.DB.prepare("SELECT id FROM procurement_activities WHERE origin_parent_id=?").bind(source.originParentId).first();if(linked)throw new RequestValidationError("此活動已建立共用新版，請從當月沿用既有活動並重新產生門市草稿，不能由舊母批次覆蓋。",409);}
+    const existing=registry?(registry.transfer_plan_id?await env.DB.prepare("SELECT id,revision,status,source FROM store_transfer_activity_plans WHERE id=?").bind(registry.transfer_plan_id).first<Record<string,unknown>>():await env.DB.prepare("SELECT id,revision,status,source FROM store_transfer_activity_plans WHERE json_extract(source,'$.activityId')=?").bind(source.activityId).first<Record<string,unknown>>()):await env.DB.prepare("SELECT id,revision,status,source FROM store_transfer_activity_plans WHERE json_extract(source,'$.name')=? AND json_extract(source,'$.startDate')=? AND json_extract(source,'$.endDate')=? AND json_extract(source,'$.scope')=?").bind(source.name,source.startDate,source.endDate,source.scope).first<Record<string,unknown>>();
+    if(registry?.transfer_plan_id && !existing)throw new RequestValidationError("原週調撥活動不存在，已停止建立重複活動。",409);
     if(existing) {
       if(String(existing.source)===JSON.stringify(source) && existing.status!=="cancelled") return json({id:existing.id,revision:existing.revision,reused:true});
-      if(body.expectedRevision!==existing.revision) return json({error:"已有同名同期間活動；更新來源會清除分配確認，要求總部重新確認，既有批次保留原快照。",existingId:existing.id,existingRevision:existing.revision},409);
-      const updated=await env.DB.prepare("UPDATE store_transfer_activity_plans SET source=?,config='{}',status='draft',revision=revision+1,updated_at=?,updated_by=? WHERE id=? AND revision=?").bind(JSON.stringify(source),now,who.email,existing.id,existing.revision).run();
+      if(body.expectedRevision!==existing.revision) return json({error:"已有對應活動；更新來源會清除分配確認，要求總部重新確認，既有批次保留原快照。",existingId:existing.id,existingRevision:existing.revision},409);
+      const updated=await env.DB.prepare("UPDATE store_transfer_activity_plans SET source=?,config='{}',status='draft',revision=revision+1,updated_at=?,updated_by=? WHERE id=? AND revision=? AND (? IS NULL OR EXISTS(SELECT 1 FROM procurement_activities WHERE id=? AND revision=?))").bind(JSON.stringify(source),now,who.email,existing.id,existing.revision,source.activityId||null,source.activityId||null,source.activityRevision||0).run();
       if(Number(updated.meta.changes)!==1) throw new RequestValidationError("活動已由其他同仁更新，請重新讀取。",409);
       return json({id:existing.id,revision:Number(existing.revision)+1});
     }
-    await env.DB.prepare("INSERT INTO store_transfer_activity_plans(id,status,source,created_at,created_by,updated_at,updated_by) VALUES (?,'draft',?,?,?,?,?)").bind(planId,JSON.stringify(source),now,who.email,now,who.email).run();
+    if(registry){
+      const changes=await env.DB.batch([
+        env.DB.prepare("INSERT INTO store_transfer_activity_plans(id,status,source,created_at,created_by,updated_at,updated_by) SELECT ?,'draft',?,?,?,?,? FROM procurement_activities WHERE id=? AND revision=? AND transfer_plan_id IS NULL").bind(planId,JSON.stringify(source),now,who.email,now,who.email,source.activityId,source.activityRevision),
+        env.DB.prepare("UPDATE procurement_activities SET transfer_plan_id=? WHERE id=? AND revision=? AND transfer_plan_id IS NULL AND EXISTS(SELECT 1 FROM store_transfer_activity_plans WHERE id=?)").bind(planId,source.activityId,source.activityRevision,planId)
+      ]);if(Number(changes[0].meta.changes)!==1||Number(changes[1].meta.changes)!==1)throw new RequestValidationError("活動已更新或已發布，請重新讀取後確認。",409);
+    }else await env.DB.prepare("INSERT INTO store_transfer_activity_plans(id,status,source,created_at,created_by,updated_at,updated_by) VALUES (?,'draft',?,?,?,?,?)").bind(planId,JSON.stringify(source),now,who.email,now,who.email).run();
     return json({ id:planId, revision:1 },201);
   }
   const row = await env.DB.prepare("SELECT * FROM store_transfer_activity_plans WHERE id = ?").bind(id).first<Record<string,unknown>>();
   if (!row) throw new RequestValidationError("找不到活動。",404);
   const revision = quantity(body.expectedRevision,"活動版本");
   if (Number(row.revision)!==revision) throw new RequestValidationError("活動已由其他同仁更新，請重新讀取後確認。",409);
-  const source = activitySource(JSON.parse(String(row.source))), configRaw = activityObject(body.config);
+  const source = activitySource(JSON.parse(String(row.source)));
+  await assertCurrentActivity(env,source);
+  const configRaw = activityObject(body.config);
   const startProposalDate = activityDate(configRaw.startProposalDate), reason = text(configRaw.reason,"確認／修改原因",300);
   if (new Date(`${startProposalDate}T00:00:00Z`).getUTCDay()!==1 || startProposalDate > String(source.endDate)) throw new RequestValidationError("開始備貨日須為活動結束前的星期一。");
   const targetsRaw = activityObject(configRaw.targets), targets: Record<string,Record<string,number>> = {};
