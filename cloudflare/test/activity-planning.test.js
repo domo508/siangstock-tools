@@ -297,3 +297,12 @@ describe("跨月活動備貨與供貨", () => {
     }
   });
 });
+
+ it("共用活動身分與版本只增加追溯資訊，不改原採購、回匯與ERP數量金額",()=>{
+  const original=run(),linked=run({activityDemand:{...fixture.activityDemand,activityId:"ACT-00000000-0000-0000-0000-000000000001",activityRevision:2}});
+  expect(linked.rows).toEqual(original.rows);expect(linked.totals).toEqual(original.totals);
+  expect(linked.appliedRules.activityDemand.activityRevision).toBe(2);expect(linked.activityTransferSource.activityId).toBe("ACT-00000000-0000-0000-0000-000000000001");
+  const review=result=>core.reviewReturnedWorkbook(roundtrip(core.buildRecommendationWorkbook(result,writer)),XLSX,{baselineBySku:new Map(result.rows.map(r=>[r.sku,r]))});
+  const a=review(original),b=review(linked);expect(b.errors).toEqual(a.errors);expect(b.totals).toEqual(a.totals);
+  expect(XLSX.utils.sheet_to_json(core.buildErpPurchaseWorkbook(b,writer,{approved:true}).Sheets["通用貨品數量"],{header:1})).toEqual(XLSX.utils.sheet_to_json(core.buildErpPurchaseWorkbook(a,writer,{approved:true}).Sheets["通用貨品數量"],{header:1}));
+ });

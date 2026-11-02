@@ -1,5 +1,6 @@
 import { verifyAdmin, verifyCompanyUser, type AccessConfig } from "./access";
 import { RequestValidationError } from "./schema";
+import { activityRegistryRoute } from "./procurement-activities";
 import { FIXED_SOURCES } from "./fixed-sources";
 
 type ProcurementEnv = AccessConfig & { DB: D1Database; ALLOWED_ORIGINS: string; GOOGLE_OAUTH_CLIENT_ID?: string; PROCUREMENT_ACCESS_AUD?: string };
@@ -447,7 +448,7 @@ async function config(request: Request, env: ProcurementEnv): Promise<Response> 
     notification: role === "admin"
       ? { recipient: settings.notificationRecipient, retentionMonths: settings.retentionMonths, events: settings.notificationEvents }
       : { enabled: true, recipient: settings.notificationRecipient },
-    permissions: { canApprove: role === "admin" || role === "approver", canManageRules: role === "admin" || role === "approver", canManageAccess: role === "admin", canManageBudget: role === "admin" || role === "approver", canManageCollaborationDrafts: role === "admin" || role === "approver" }
+    permissions: { canApprove: role === "admin" || role === "approver", canManageRules: role === "admin" || role === "approver", canManageAccess: role === "admin", canManageBudget: role === "admin" || role === "approver", canManageActivities: role !== "operator", canManageCollaborationDrafts: role === "admin" || role === "approver" }
   });
 }
 
@@ -1326,13 +1327,21 @@ function initialRecognitionStatements(
 async function submit(request: Request, env: ProcurementEnv): Promise<Response> {
   requireSameOrigin(request, env);
   const actor = await verifyCompanyUser(request, procurementAccess(env));
-  const item = validatedBatch(await body(request), actor);
+  const input=await body(request),item = validatedBatch(input, actor);
+  const activityMapping:D1PreparedStatement[]=[];
+  if(input.activityId){
+    if(!/^ACT-[a-f0-9-]{36}$/.test(String(input.activityId))||!Number.isSafeInteger(input.activityRevision)||Number(input.activityRevision)<1)throw new RequestValidationError("活動版本無效，請恢復原批次。");
+    const version=await env.DB.prepare("SELECT revision FROM procurement_activity_history WHERE activity_id=? AND revision=?").bind(input.activityId,input.activityRevision).first();
+    if(!version)throw new RequestValidationError("此批次活動版本不存在，已停止送出。",409);
+    activityMapping.push(env.DB.prepare("INSERT INTO procurement_activity_batches(batch_id,activity_id,activity_revision) VALUES (?,?,?)").bind(item.id,input.activityId,input.activityRevision));
+  }
   try {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO procurement_batches (id, analysis_month, checkpoint, parent_batch_id, work_unit_ids, workflow_type, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, updated_at, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(item.id, item.analysisMonth, item.checkpoint, item.parentBatchId, item.workUnitIds, item.workflowType, item.supplierSummary, item.suggested, item.manual, item.blocked, item.approved, item.adjustment, item.budget, item.currentPayment, item.futurePayments, item.paymentSchedule, item.warning, item.now, actor, item.now, item.idempotencyKey),
       env.DB.prepare("INSERT INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) VALUES (?, 'submitted', 0, ?, ?, '第二次回匯完成，待正式核准', ?, ?, ?)")
         .bind(item.id, item.approved, item.approved, item.now, actor, `${item.idempotencyKey}:event`),
+      ...activityMapping,
       ...item.storeNeeds.map((row) => env.DB.prepare("INSERT INTO procurement_batch_store_needs (batch_id, store_code, sku, covered_quantity, created_at) VALUES (?, ?, ?, ?, ?)").bind(item.id, row.storeCode, row.sku, row.quantity, item.now)),
       ...item.approvedItems.map((row) => env.DB.prepare("INSERT INTO procurement_batch_items (batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, remaining_quantity, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(item.id, row.sku, row.name, row.supplier, row.quantity, row.unitCost, row.amount, row.quantity, item.now))
     ]);
@@ -1663,6 +1672,7 @@ async function consignmentReservations(request: Request, env: ProcurementEnv): P
 }
 
 export async function procurementRoute(request: Request, env: ProcurementEnv): Promise<Response | null> {
+  if(new URL(request.url).pathname.startsWith("/api/procurement/activities"))return activityRegistryRoute(request,env,{read:()=>verifyCompanyUser(request,procurementAccess(env)),write:()=>verifyApprover(request,env),origin:()=>requireSameOrigin(request,env),body:()=>body(request)});
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/procurement")) return null;
   if (url.pathname === "/api/procurement/config" && request.method === "GET") return config(request, env);

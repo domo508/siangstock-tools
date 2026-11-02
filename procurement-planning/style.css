@@ -1171,3 +1171,11 @@ body.history-readonly .stage-two, body.history-readonly .stage-three, body.histo
 #summary-auth[hidden] { display: none; }
 #summary-auth p { margin-top: 0; overflow-wrap: anywhere; }
 @media (max-width: 640px) { #summary-auth .primary-button { width: 100%; } }
+
+.activity-registry { padding:20px; border:1px solid var(--line); border-radius:16px; background:#fff; display:grid; gap:12px; min-width:0; margin-bottom:18px; }
+.activity-registry h4,.activity-registry p { margin:0; overflow-wrap:anywhere; }
+.activity-registry label { display:grid; gap:6px; min-width:0; }
+.activity-registry input,.activity-registry select { box-sizing:border-box; width:100%; min-width:0; padding:10px; border:1px solid var(--line); border-radius:10px; font:inherit; color:var(--ink); background:white; }
+.activity-registry-actions { display:flex; flex-wrap:wrap; gap:10px; }
+.activity-registry button { max-width:100%; white-space:normal; overflow-wrap:anywhere; }
+@media(max-width:600px){.activity-registry {padding:14px}.activity-registry-actions button {width:100%}}

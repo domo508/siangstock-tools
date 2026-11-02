@@ -55,7 +55,7 @@
         if (Object.values(quantities).some(q => q > 0)) transferRows.push({ storeCode: store, sku: row.sku, quantities });
       }
     }
-    result.activityTransferSource = { version: 1, name: settings.name, startDate: settings.startDate, endDate: settings.endDate, asOfDate: input.asOfDate, scope: settings.scope, months: transferMonths, rows: transferRows };
+    result.activityTransferSource = { ...(settings.activityId?{activityId:settings.activityId,activityRevision:settings.activityRevision}:{}), version: 1, name: settings.name, startDate: settings.startDate, endDate: settings.endDate, asOfDate: input.asOfDate, scope: settings.scope, months: transferMonths, rows: transferRows };
     return result;
   }
   function normalize(settings, asOfDate) {
@@ -76,7 +76,8 @@
       if(retailAmount!=null && (!Number.isFinite(retailAmount) || retailAmount<0 || retailAmount>amount)) throw new Error(`${month}實體六店目標不可超過全通路目標。`);
       monthlyTargets[month] = { amount, retailAmount, source: String(source?.source || "本次活動草稿"), updatedAt: String(source?.updatedAt || "") };
     }
-    return { enabled: true, name: String(settings.name).trim(), method: "monthly-target", methodLabel: "整月目標分配（已含活動）", startDate, endDate, scope: settings.scope || "all", monthlyTargets, months: list };
+    if(settings.activityId && (!/^ACT-[a-f0-9-]{36}$/.test(settings.activityId)||!Number.isSafeInteger(settings.activityRevision)||settings.activityRevision<1))throw new Error("共用活動版本無效，請重新帶入。");
+    return { ...(settings.activityId?{activityId:settings.activityId,activityRevision:settings.activityRevision}:{}), enabled: true, name: String(settings.name).trim(), method: "monthly-target", methodLabel: "整月目標分配（已含活動）", startDate, endDate, scope: settings.scope || "all", monthlyTargets, months: list };
   }
 
   // Identity keys remain in worker memory only. The returned history contains no order IDs or customer fields.
