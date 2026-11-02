@@ -12,7 +12,7 @@ const id = 'TR-PER-STORE';
 const hq = 'siang01@siangapato.com.tw';
 const email = { R00: 'tpzssa@siangapato.com.tw', R01: 'txg_sianga_pato@siangapato.com.tw' };
 async function call(path, method = 'GET', body, actor = hq) {
-  return storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer${path}`, { method, headers: { Origin: 'https://siangstock.com', 'Content-Type': 'application/json', 'X-Test-Email': actor, 'X-Store-Transfer-Version': '20261102-transfer-per-store-r2' }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
+  return storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer${path}`, { method, headers: { Origin: 'https://siangstock.com', 'Content-Type': 'application/json', 'X-Test-Email': actor, 'X-Store-Transfer-Version': '20261102-transfer-same-day-r1' }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
 }
 const detail = async () => (await call(`/batches/${id}`)).json();
 const items = store => ['PASS', 'EDIT', 'ZERO'].map(sku => ({storeCode:store,sku,productName:`合成${sku}`,suggestedQuantity:2,itemType:'regular',calculationDate:'2026-11-04',decisionSnapshot:{hqAvailable:20,hqReleasable:20,hqSupplyCeiling:20}}));
@@ -33,6 +33,47 @@ beforeEach(async () => {
   expect(response.status).toBe(201);
 });
 afterEach(()=>{vi.useRealTimers();sql.close();});
+
+function activityFixture(expectedDate = '2026-11-03') {
+  sql.prepare("INSERT INTO store_transfer_activity_plans(id,revision,status,source,config,created_at,created_by,updated_at,updated_by) VALUES('SYNTH-ACTIVITY',2,'confirmed','{}','{}','2026-11-02',?,'2026-11-02',?)").run(hq,hq);
+  const schedule=Object.fromEntries(['R00','R01'].map(store=>[store,{storeCode:store,currentArrivalDate:'2026-11-05',nextArrivalDate:'2026-11-12',activityPlanId:'SYNTH-ACTIVITY',activityPlanRevision:2,activityApprovalDate:expectedDate,activityBufferDays:2}]));
+  sql.prepare('UPDATE store_transfer_batches SET arrival_schedule=? WHERE id=?').run(JSON.stringify(schedule),id);
+  return schedule;
+}
+for (const day of ['2026-11-02','2026-11-03']) it(`活動單店可於${day}核准並匯出，預估日／緩衝／其他店不改`,async()=>{
+  const schedule=activityFixture();await submit('R00');const before=await detail();
+  vi.setSystemTime(new Date(`${day}T02:00:00Z`));
+  expect((await approve('R00',true)).status).toBe(200);
+  const p=await detail(),saved=JSON.parse(p.batch.arrival_schedule);
+  expect(saved.R00.activityApprovalDate).toBe('2026-11-03');expect(saved.R00.activityBufferDays).toBe(2);
+  expect(saved.R00.currentArrivalDate).toBe(day==='2026-11-02'?'2026-11-04':'2026-11-05');
+  expect(saved.R01).toEqual(schedule.R01);expect(p.batch.lock_at).toBe(before.batch.lock_at);
+  expect(p.items.filter(i=>i.store_code==='R01')).toEqual(before.items.filter(i=>i.store_code==='R01'));
+  const file=browser.StoreTransferWorkflow.prepareExports(p,['R00'],browser.StoreTransferCore,browser.XLSX)[0];
+  const bytes=browser.XLSX.write(file.workbook,{type:'array',bookType:'xlsx'});
+  const wb=browser.XLSX.read(bytes,{type:'array',cellDates:true,cellStyles:true,nodim:true});
+  expect(Object.fromEntries(browser.XLSX.utils.sheet_to_json(wb.Sheets['通用貨品數量']).map(r=>[r.貨號,r.數量]))).toEqual({PASS:2,EDIT:3});
+  expect((await call(`/batches/${id}/erp-created`,'POST',{storeCodes:['R00'],expectedRevision:p.batch.revision})).status).toBe(200);
+  expect((await detail()).storeStatuses.find(s=>s.store_code==='R01').erp_created_at).toBe(null);
+});
+for(const expected of ['2026-11-03','',null])it(`其他日期或缺預估日${expected}仍阻擋，無核准／ERP副作用`,async()=>{
+  activityFixture(expected);await submit('R00');const before=await detail();
+  vi.setSystemTime(new Date(`${expected==='2026-11-03'?'2026-11-04':'2026-11-02'}T02:00:00Z`));
+  await expect(approve('R00')).rejects.toThrow(/實際核准日/);
+  const p=await detail();expect(p.items).toEqual(before.items);expect(p.events).toEqual(before.events);expect(p.batch).toEqual(before.batch);
+});
+it('活動開單當日整批核准可用，活動改版／取消仍拒絕單店核准',async()=>{
+  activityFixture();await submit('R00');
+  sql.exec("UPDATE store_transfer_activity_plans SET status='cancelled' WHERE id='SYNTH-ACTIVITY'");
+  await expect(approve('R00')).rejects.toThrow(/修改或取消/);
+  sql.exec("UPDATE store_transfer_activity_plans SET status='confirmed',revision=3 WHERE id='SYNTH-ACTIVITY'");
+  await expect(approve('R00')).rejects.toThrow(/修改或取消/);
+  sql.exec("UPDATE store_transfer_activity_plans SET revision=2 WHERE id='SYNTH-ACTIVITY'");
+  await submit('R01');const p=await detail();
+  const rows=p.items.map(i=>({storeCode:i.store_code,sku:i.sku,itemType:i.item_type,approvedQuantity:2,reason:''}));
+  expect((await call(`/batches/${id}/approve`,'POST',{expectedRevision:p.batch.revision,items:rows})).status).toBe(200);
+  expect((await detail()).batch.approved_quantity).toBe(12);
+});
 
 for (const changed of [false,true]) it(`逐店流程${changed?'含改量與明確歸零':'未改量'}：一家核准匯出、另一家仍可送審，最後整批完成`,async()=>{
   await submit('R00'); const before=await detail();

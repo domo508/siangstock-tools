@@ -1119,7 +1119,7 @@ async function openApprovedCorrection(request: Request, env: StoreTransferEnv, b
 async function approveBatch(request: Request, env: StoreTransferEnv, batchId: string, saveOnly = false, requestedStore?: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261102-transfer-per-store-r2") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
+  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261102-transfer-same-day-r1") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
   const batch = await env.DB.prepare("SELECT status, revision, proposal_date, arrival_schedule FROM store_transfer_batches WHERE id = ? AND deleted_at IS NULL").bind(batchId).first<Record<string, unknown>>();
   if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
   if (!["open", "review"].includes(String(batch.status))) throw new RequestValidationError("此批次目前不可核准。", 409);
@@ -1153,7 +1153,13 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   if(!saveOnly) for(const [store, value] of Object.entries(schedule)) {
     if (requestedStore && store !== requestedStore || stateByStore.get(store)?.status === "approved") continue;
     const s=value as Record<string,unknown>;
-    if(s.activityPlanId && s.activityApprovalDate!==taipeiDate(new Date())) throw new RequestValidationError("活動批次實際核准日已與預估不同；為保護到店＋2日緩衝，請以最新日期及庫存重算批次。",409);
+    const approvalDate = taipeiDate(new Date());
+    // Only add the explicitly permitted proposal-day approval. Do not widen
+    // late approval, change the estimated date, or skip current activity checks.
+    const proposalDayApproval = String(batch.proposal_date) === approvalDate
+      && /^\d{4}-\d{2}-\d{2}$/.test(String(s.activityApprovalDate || ""))
+      && String(s.activityApprovalDate) > approvalDate;
+    if(s.activityPlanId && s.activityApprovalDate!==approvalDate && !proposalDayApproval) throw new RequestValidationError("活動批次實際核准日不在開單當日或預估核准日；為保護到店＋2日緩衝，請以最新日期及庫存重算批次。",409);
     if(s.activityPlanId) {
       const plan=await env.DB.prepare("SELECT revision,status,source FROM store_transfer_activity_plans WHERE id=?").bind(s.activityPlanId).first<Record<string,unknown>>();
       if(!plan || plan.status!=="confirmed" || Number(plan.revision)!==Number(s.activityPlanRevision)) throw new RequestValidationError("活動分配已修改或取消，請核對新版並重算。",409);
@@ -1503,7 +1509,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
     return json({ hasMore:rows.results.length>100, plans:await Promise.all(rows.results.slice(0,100).map(async raw=>{const row=raw as Record<string,unknown>,current=await currentActivityRecord(env,row);const {source,config,...metadata}=row;return {...metadata,status:current.status,startProposalDate:current.config.startProposalDate || "",...("settingsOutdated" in current?{settingsOutdated:true}:{})};})) });
   }
   requireSameOrigin(request,env);
-  if(request.headers.get("X-Store-Transfer-Version") !== "20261102-transfer-per-store-r2") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
+  if(request.headers.get("X-Store-Transfer-Version") !== "20261102-transfer-same-day-r1") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
   const body = await readBody(request,3_000_000), now = new Date().toISOString();
   if (request.method === "POST" && !id) {
     const source = activitySource(body.source), planId = crypto.randomUUID();
