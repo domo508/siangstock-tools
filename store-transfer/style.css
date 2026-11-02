@@ -355,3 +355,14 @@ html, body { max-width: 100%; overflow-x: clip; }
   .version-warning .primary-button { width: 100%; }
 }
 .heading-rule-links { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .55rem; }
+/* Per-store actions are additive; existing workflow tables retain their CIS. */
+.per-store-actions { margin: 20px 0; padding: 20px; border: 1px solid #c9e0e7; border-radius: 18px; background: #f3fafb; min-width: 0; }
+.per-store-actions p, .per-store-actions label { overflow-wrap: anywhere; }
+.per-store-approve, .per-store-export-options { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; margin: 14px 0; }
+.per-store-approve label { display: grid; gap: 8px; flex: 1 1 260px; min-width: 0; }
+.per-store-actions fieldset { min-width: 0; border: 1px solid #d8e4e8; border-radius: 12px; margin-top: 16px; }
+.per-store-export-options label { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; }
+.per-store-export-options input { width: auto; flex: 0 0 auto; }
+.per-store-actions select, .per-store-actions button { max-width: 100%; white-space: normal; }
+.per-store-actions select { width: 100%; min-width: 0; min-height: 46px; padding: .7rem .85rem; border: 1px solid #c9d8e2; border-radius: 10px; background: #fff; color: #17324d; font: inherit; }
+@media (max-width: 600px) { .per-store-actions { padding: 12px; } .per-store-approve button, .per-store-actions fieldset > button { width: 100%; } }

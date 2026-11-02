@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261102-transfer-activity-auto-r2";
+  const APP_VERSION = "20261102-transfer-per-store-r1";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -1153,14 +1153,14 @@
     const ownState = payload.storeStatuses.find((row) => row.store_code === state.config.storeCode);
     const ownStatus = ownState?.status;
     const returnedForStoreEdit = ownState?.correction_mode === "store";
-    const editable = state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && ownStatus !== "submitted" && (Date.now() < Date.parse(payload.batch.lock_at) || returnedForStoreEdit);
+    const editable = state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && !["submitted", "approved", "closed"].includes(ownStatus) && (Date.now() < Date.parse(payload.batch.lock_at) || returnedForStoreEdit);
     const hqEditable = state.config.role !== "store" && ["open", "review"].includes(payload.batch.status);
     const correctionStores = new Set(payload.storeStatuses.filter((row) => row.correction_mode).map((row) => row.store_code));
     const correctionOpen = correctionStores.size > 0;
     const canChangeItems = editable || hqEditable;
     const table = (items, title, note = "") => items.length ? `<section class="result-section" data-store-section><h3>${title}</h3>${note ? `<p>${note}</p>` : ""}<p class="decision-table-note">判斷依據預設收合；需要時點選每列最左側的＋展開，主要確認與覆核不需展開。</p><div class="result-table-wrap"><table class="transfer-table workflow-table">${workflowColgroup(canChangeItems)}<thead><tr><th class="decision-toggle-cell" aria-label="判斷依據"></th>${state.config.role !== "store" ? "<th>門市</th>" : ""}<th>ERP品號／品名</th><th>系統建議</th><th>門市確認</th><th>門市調整原因</th>${state.config.role !== "store" ? "<th>總部核准</th><th>總部調整原因</th>" : ""}${canChangeItems ? "<th>品項操作</th>" : ""}</tr></thead><tbody>${items.map((item) => {
       const step = item.item_type === "consumable" ? 100 : 1;
-      const rowHqEditable = hqEditable && (!correctionOpen || correctionStores.has(item.store_code));
+      const rowHqEditable = hqEditable && payload.storeStatuses.find(row => row.store_code === item.store_code)?.status !== "approved" && (!correctionOpen || correctionStores.has(item.store_code));
       const confirmed = item.store_confirmed_quantity ?? item.suggested_quantity;
       const approved = item.hq_approved_quantity ?? confirmed;
       const manual = Number(item.suggested_quantity) === 0 && /人工新增/.test(String(item.rule_summary || ""));
@@ -1203,7 +1203,7 @@
       const columns = (state.config.role !== "store" ? 7 : 4) + (canChangeItems ? 1 : 0) + 1;
       return `<tr class="${changeClass.trim()}" data-store-row data-store="${item.store_code}" data-sku="${escapeHtml(item.sku)}" data-suggested="${Number(item.suggested_quantity || 0)}" data-review-base="${reviewBase}" data-saved-quantity="${reviewQuantity}" data-saved-reason="${escapeHtml(state.config.role === "store" ? item.store_reason || "" : item.hq_reason || "")}" data-auto-excluded="${autoExcluded ? "true" : "false"}" data-supply-known="${supplyKnown ? "true" : "false"}" data-supply-ceiling="${supplyCeiling}" data-other-allocated="${otherAllocated}" data-allocation-row data-allocation-quantity="${approved}" data-product-name="${escapeHtml(item.product_name)}" data-item-type="${item.item_type || "regular"}" data-calculation-date="${escapeHtml(item.calculation_date)}" data-base="${Number(item.base_quantity || 0)}" data-daily="${Number(item.daily_usage || 0)}" data-display-gap="${Number(item.display_gap || 0)}" data-system-projection="${escapeHtml(item.system_projection || "")}" data-system-reason="${escapeHtml(systemReason)}" data-manual="${manual ? "true" : "false"}"><td class="decision-toggle-cell" data-label="判斷依據">${detailButton(id)}</td>${state.config.role !== "store" ? `<td data-label="門市"><strong>${escapeHtml(item.store_code)}</strong><small>${escapeHtml(state.config.stores[item.store_code]?.name || "")}</small></td>` : ""}<td data-label="品項">${identity}</td><td data-label="系統建議" class="decision-stage-cell">${systemCell}</td><td data-label="門市確認" class="decision-stage-cell">${confirmedCell}</td><td data-label="門市原因"><textarea data-reason class="reason-input" rows="2" maxlength="300" ${editable ? "" : "disabled"} placeholder="未調整可留白">${escapeHtml(item.store_reason || "")}</textarea></td>${state.config.role !== "store" ? `<td data-label="總部核准" class="decision-stage-cell">${approvedCell}</td><td data-label="總部原因"><textarea data-hq-reason class="reason-input" rows="2" maxlength="300" ${rowHqEditable ? "" : "disabled"} placeholder="未調整可留白">${escapeHtml(item.hq_reason || "")}</textarea></td>` : ""}${canChangeItems ? `<td data-label="品項操作">${editable || rowHqEditable ? `<button class="secondary-button compact remove-item-button" type="button" data-remove-item data-mode="${state.config.role === "store" ? "store" : "hq"}">${removed ? "恢復此品項" : "移除此品項"}</button>` : "—"}</td>` : ""}</tr>${warningRow(id, columns)}${detailRow(id, columns, evidenceContent)}`;
     }).join("")}</tbody></table></div></section>` : "";
-    const storeOptions = payload.storeStatuses.filter((row) => !correctionOpen || correctionStores.has(row.store_code)).map((row) => `<option value="${row.store_code}">${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</option>`).join("");
+    const storeOptions = payload.storeStatuses.filter((row) => row.status !== "approved" && (!correctionOpen || correctionStores.has(row.store_code))).map((row) => `<option value="${row.store_code}">${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</option>`).join("");
     const manualForm = canChangeItems ? `<section class="result-section manual-item-section"><h3>人工新增品項</h3><p>輸入完整ERP品號後，系統會帶入品名、「系統未建議原因」與「申請後預估可售至」。推估沿用本批次建立時的門市庫存、待發貨／在途及近42天現場銷售基準；送出後總部覆核會看到相同欄位。移除既有品項仍會保留稽核紀錄。</p><div class="manual-item-form">${state.config.role !== "store" ? `<label><span>門市</span><select data-manual-store>${storeOptions}</select></label>` : ""}<label><span>品項類型</span><select data-manual-type><option value="regular">一般必要補貨</option><option value="special_stock">建議調撥</option><option value="activity_gift">活動／贈品</option><option value="consumable">提袋耗材</option></select></label><label><span>ERP品號</span><input data-manual-sku maxlength="80" autocomplete="off"></label><label><span>品名（自動帶入）</span><input data-manual-name maxlength="300" readonly></label><label><span>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</span><input data-manual-quantity type="number" min="1" step="1"></label><label><span>${state.config.role === "store" ? "申請後" : "核准後"}預估可售至</span><output data-manual-projection>請先輸入品號與數量</output></label><label class="manual-system-reason-field"><span>系統未建議原因</span><output data-manual-system-reason>請先輸入品號</output></label><label class="manual-reason-field"><span>新增原因</span><textarea data-manual-reason class="reason-input" rows="2" maxlength="300" autocomplete="off"></textarea></label><button class="secondary-button" type="button" data-local-action="add-item">加入確認清單</button></div><p class="manual-supply-warning" data-manual-supply-warning role="alert" hidden></p><p class="status-line" data-manual-status></p><div class="result-table-wrap"><table class="transfer-table manual-item-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>類型</th><th>系統建議</th><th>系統未建議原因</th><th>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</th><th>${state.config.role === "store" ? "申請後" : "核准後"}預估可售至</th><th>原因</th><th>操作</th></tr></thead><tbody data-manual-rows></tbody></table></div></section>` : "";
     const shortages = payload.shortages || [];
     const shortageTable = shortages.length ? `<section class="result-section shortage-section" data-store-section><h3>缺貨未配與後續補貨狀態</h3><p>這些數量不會加入門市確認量或ERP檔；用來說明總倉為何未能配足，並保留後續回拋主採購的狀態。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>需求量</th><th>已配量</th><th>未配不足量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody>${shortages.map((row) => `<tr data-store-row data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"><td>${escapeHtml(row.store_code)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${row.demand_quantity}</td><td>${row.allocated_quantity}</td><td>${row.unfilled_quantity}</td><td>${escapeHtml(state.config.role === "store" ? storeFacingSystemReason(row.reason, row.allocated_quantity) : row.reason)}</td><td>${escapeHtml(row.follow_up_status)}</td></tr>`).join("")}</tbody></table></div></section>` : "";
@@ -1418,7 +1418,7 @@
   }
 
   function approvedCorrectionPanel(payload) {
-    if (state.config.role === "store" || payload.batch.status !== "approved") return "";
+    if (state.config.role === "store" || !["open", "review", "approved"].includes(payload.batch.status)) return "";
     const eligible = payload.storeStatuses.filter((row) => row.status === "approved" && !row.erp_created_at);
     if (!eligible.length) return "";
     const options = eligible.map((row) => `<option value="${row.store_code}">${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</option>`).join("");
@@ -1429,7 +1429,7 @@
     const ownState = payload.storeStatuses.find((row) => row.store_code === state.config.storeCode);
     const ownStatus = ownState?.status;
     if (state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && ownStatus === "submitted" && Date.now() < Date.parse(payload.batch.lock_at)) return '<button class="secondary-button" type="button" data-action="withdraw">撤回修改</button>';
-    if (state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && ownStatus !== "submitted" && (Date.now() < Date.parse(payload.batch.lock_at) || ownState?.correction_mode === "store")) return '<button class="secondary-button" type="button" data-action="save">暫存</button><button class="primary-button" type="button" data-action="submit">送出總部覆核</button>';
+    if (state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && !["submitted", "approved", "closed"].includes(ownStatus) && (Date.now() < Date.parse(payload.batch.lock_at) || ownState?.correction_mode === "store")) return '<button class="secondary-button" type="button" data-action="save">暫存</button><button class="primary-button" type="button" data-action="submit">送出總部覆核</button>';
     if (state.config.role !== "store" && ["open", "review"].includes(payload.batch.status)) return '<button class="secondary-button" type="button" data-action="hq-save">暫存覆核</button><button class="primary-button" type="button" data-action="approve">核准本週調撥</button>';
     if (state.config.role !== "store" && ["approved", "erp_created"].includes(payload.batch.status)) {
       const erpButtons = [...new Set(payload.items.map((item) => item.store_code))].map((store) => { const done = payload.storeStatuses.find((row) => row.store_code === store)?.erp_created_at; return `<button class="secondary-button" type="button" data-action="erp" data-store="${store}">${done ? "重新下載" : "下載"}${store} ERP檔</button>`; }).join("");
@@ -1445,6 +1445,44 @@
     return `<section class="store-status-overview"><h3>門市回覆與ERP狀態</h3><p>可直接點選門市卡片，只查看該店調撥內容。</p><div class="status-grid">${payload.storeStatuses.map((row) => { const correctionLabel = row.correction_mode === "store" ? "總部退回・待門市修改" : row.correction_mode === "hq" ? "總部更正中" : labels[row.status] || row.status; return `<button class="store-status-card" type="button" data-store-status="${row.store_code}" data-store-filter="${row.store_code}" data-store-filter-scope="batch"><strong>${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</strong><span>${escapeHtml(correctionLabel)}</span><small>${row.erp_created_at ? `ERP已產生・${escapeHtml(row.erp_created_at)}` : "ERP尚未產生"}</small></button>`; }).join("")}</div></section>`;
   }
 
+  function perStoreActions(payload) {
+    if (state.config.role === "store") return "";
+    const approval = window.StoreTransferWorkflow.approvalStores(payload);
+    const exports = window.StoreTransferWorkflow.exportStores(payload);
+    if (!approval.length && !exports.length) return "";
+    const label = row => `${escapeHtml(row.store_code)} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}`;
+    return `<section class="per-store-actions" aria-labelledby="per-store-title"><h3 id="per-store-title">逐店核准與ERP下載</h3><p>只處理選定門市，其它門市可繼續確認。已核准門市鎖定數量，未產生ERP前可由總部開啟更正；不會自動核准其他店。下方「核准本週調撥」仍為原整批操作，不隨畫面篩選縮小範圍。</p>${approval.length ? `<div class="per-store-approve"><label><span>已送出、待核准門市</span><select data-approve-store>${approval.map(row => `<option value="${row.store_code}">${label(row)}</option>`).join("")}</select></label><button class="primary-button" type="button" data-action="approve-store">核准此門市</button></div>` : ""}${exports.length ? `<fieldset><legend>勾選已核准門市下載（每店一份ERP檔）</legend><div class="per-store-export-options">${exports.map(row => `<label><input type="checkbox" data-export-store value="${row.store_code}"><span>${label(row)}${row.erp_created_at ? "・可重新下載" : ""}</span></label>`).join("")}</div><button class="secondary-button" type="button" data-action="erp-selected">下載勾選門市ERP檔</button></fieldset>` : ""}<p class="status-line" data-per-store-status role="status" aria-live="polite"></p></section>`;
+  }
+
+  function dialogHasChanges(exceptStore = "") {
+    return [...$("batch-detail").querySelectorAll("tr[data-item-type]")].some(row => {
+      if (row.dataset.store === exceptStore) return false;
+      const quantity = row.querySelector("[data-approved]");
+      return quantity && (row.dataset.savedQuantity === "" || Number(quantity.value) !== Number(row.dataset.savedQuantity) || (row.querySelector("[data-hq-reason]")?.value || "") !== row.dataset.savedReason);
+    });
+  }
+
+  async function downloadApprovedStores(stores) {
+    if (dialogHasChanges()) throw new Error("目前有尚未暫存的覆核內容，請先暫存或重新開啟批次後再下載。");
+    if (!(await checkRuntimeVersion())) throw new Error("請先重新載入最新版再匯出ERP調撥檔。");
+    const batch = state.activeBatch;
+    const latest = await api(`/batches/${encodeURIComponent(batch.batch.id)}`);
+    if (Number(latest.batch.revision) !== Number(batch.batch.revision)) throw new Error("批次已由其他同事更新，請重新開啟批次核對後再下載。");
+    const files = window.StoreTransferWorkflow.prepareExports(latest, stores, transferCore, outputXlsx);
+    // Check all files and commit the exact revision before any download. A stale
+    // approval/correction can never produce a file from the old cached dialog.
+    try { await api(`/batches/${encodeURIComponent(batch.batch.id)}/erp-created`, { method: "POST", body: { storeCodes: stores, expectedRevision: latest.batch.revision } }); }
+    catch (error) { throw new Error(`產檔記錄未能確認，尚未開始下載；請重新開啟批次核對後重試。${error.message}`); }
+    try {
+      for (const file of files) outputXlsx.writeFile(file.workbook, file.filename, { compression: true });
+    } catch {
+      throw new Error("核准版本已記錄產檔，但下載未完成；請重新開啟批次並重新下載，不需再次核准。");
+    }
+    $("batch-dialog").close(); await openBatch(batch.batch.id); await loadBatches();
+    const status = $("batch-detail").querySelector("[data-per-store-status]") || $("dialog-status");
+    status.textContent = `${stores.join("、")} ERP已產檔並發起下載；請確認下載資料夾。多檔下載若被瀏覽器阻擋，可逐店重新下載。調出／調入倉仍在ERP人工指定。`;
+  }
+
   async function openBatch(id) {
     const query = state.config.storeCode ? `?store=${state.config.storeCode}` : "";
     state.activeBatch = await api(`/batches/${encodeURIComponent(id)}${query}`);
@@ -1458,6 +1496,7 @@
     const activeCorrection = p.storeStatuses.find((row) => row.correction_mode);
     const correctionNotice = activeCorrection ? `<p class="result-alert warn"><strong>${activeCorrection.correction_mode === "store" ? "已退回門市修改" : "總部更正中"}：</strong>${escapeHtml(activeCorrection.store_code)}・第${escapeHtml(activeCorrection.correction_revision)}版・${escapeHtml(activeCorrection.correction_reason || "未填原因")}。原核准內容已保留，重新核准後才可產生ERP。</p>` : "";
     $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${correctionNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${skuFilterBar("batch", state.batchSku)}${approvedCorrectionPanel(p)}${statusOverview(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
+    $("batch-detail").querySelector(".detail-actions").insertAdjacentHTML("beforebegin", perStoreActions(p));
     $("batch-detail").querySelectorAll("textarea.reason-input").forEach(autoSizeReasonField);
     $("batch-dialog").showModal();
     applyStoreFilter("batch", state.batchStore);
@@ -1469,6 +1508,7 @@
   }
 
   async function handleDialog(event) {
+    if (state.dialogBusy) return;
     const detailToggle = event.target.closest("[data-detail-target]");
     if (detailToggle) { toggleDecisionDetail(detailToggle); return; }
     const filterButton = event.target.closest('[data-store-filter-scope="batch"]');
@@ -1487,21 +1527,35 @@
     const removeItem = event.target.closest("[data-remove-item]");
     if (removeItem) { removeDialogItem(removeItem); return; }
     const button = event.target.closest("[data-action]"); if (!button) return;
+    if (state.dialogBusy) return;
     const action = button.dataset.action, batch = state.activeBatch; button.disabled = true;
+    state.dialogBusy = true;
+    const controls = [...$("batch-detail").querySelectorAll("input,textarea,select,button")].map(control => [control, control === button ? false : control.disabled]);
+    controls.forEach(([control]) => { control.disabled = true; });
+    const status = $("batch-detail").querySelector("[data-per-store-status]") || $("dialog-status");
+    status.textContent = "處理中，請勿重複操作…";
     try {
-      if (action === "save" || action === "submit") await api(`/batches/${encodeURIComponent(batch.batch.id)}/stores/${state.config.storeCode}/${action}`, { method: "PUT", body: { items: rowsFromDialog(action) } });
+      if (action === "save" || action === "submit") await api(`/batches/${encodeURIComponent(batch.batch.id)}/stores/${state.config.storeCode}/${action}`, { method: "PUT", body: { expectedRevision: batch.batch.revision, items: rowsFromDialog(action) } });
       else if (action === "withdraw") await api(`/batches/${encodeURIComponent(batch.batch.id)}/stores/${state.config.storeCode}/withdraw`, { method: "POST", body: {} });
-      else if (action === "hq-save") await api(`/batches/${encodeURIComponent(batch.batch.id)}/hq-save`, { method: "PUT", body: { items: rowsFromDialog("approve") } });
-      else if (action === "approve") {
-        try { await api(`/batches/${encodeURIComponent(batch.batch.id)}/approve`, { method: "POST", body: { items: rowsFromDialog("approve") } }); }
-        catch (error) { if (!/尚未送出/.test(error.message) || !confirm(`${error.message}\n\n是否以目前資料繼續核准？`)) throw error; await api(`/batches/${encodeURIComponent(batch.batch.id)}/approve`, { method: "POST", body: { items: rowsFromDialog("approve"), confirmPendingStores: true } }); }
+      else if (action === "hq-save") await api(`/batches/${encodeURIComponent(batch.batch.id)}/hq-save`, { method: "PUT", body: { expectedRevision: batch.batch.revision, items: rowsFromDialog("approve") } });
+      else if (action === "approve-store") {
+        const store = $("batch-detail").querySelector("[data-approve-store]")?.value;
+        if (!store) throw new Error("請選擇已送出的門市。");
+        if (dialogHasChanges(store)) throw new Error("其它門市有未暫存的覆核內容，請先暫存，避免切換時遺失。");
+        if (!confirm(`確定核准 ${store}？只核准此門市，其它門市繼續確認。`)) { status.textContent = "已取消核准，尚未寫入。"; return; }
+        await api(`/batches/${encodeURIComponent(batch.batch.id)}/stores/${store}/approve`, { method: "POST", body: { expectedRevision: batch.batch.revision, items: rowsFromDialog("approve").filter(row => row.storeCode === store) } });
+        $("batch-dialog").close(); await openBatch(batch.batch.id); await loadBatches();
+        ($("batch-detail").querySelector("[data-per-store-status]") || $("dialog-status")).textContent = `${store}已核准，可單獨或勾選下載ERP；其它門市狀態不變。`;
+        return;
+      } else if (action === "erp-selected") {
+        const stores = [...$("batch-detail").querySelectorAll("[data-export-store]:checked")].map(input => input.value);
+        if (!stores.length) throw new Error("請先勾選要下載的門市。");
+        await downloadApprovedStores(stores); return;
+      } else if (action === "approve") {
+        try { await api(`/batches/${encodeURIComponent(batch.batch.id)}/approve`, { method: "POST", body: { expectedRevision: batch.batch.revision, items: rowsFromDialog("approve") } }); }
+        catch (error) { if (!/尚未送出/.test(error.message) || !confirm(`${error.message}\n\n是否以目前資料繼續核准？`)) throw error; await api(`/batches/${encodeURIComponent(batch.batch.id)}/approve`, { method: "POST", body: { expectedRevision: batch.batch.revision, items: rowsFromDialog("approve"), confirmPendingStores: true } }); }
       } else if (action === "erp") {
-        if (!(await checkRuntimeVersion())) throw new Error("已有新版工具，請先重新載入最新版再匯出ERP調撥檔。");
-        const store = button.dataset.store, wb = transferCore.buildErpWorkbook(batch.items, outputXlsx, store);
-        outputXlsx.writeFile(wb, `${batch.batch.week_key}_${store}_ERP調撥單.xlsx`, { compression: true });
-        await api(`/batches/${encodeURIComponent(batch.batch.id)}/erp-created`, { method: "POST", body: { storeCode: store } });
-        $("dialog-status").textContent = `${store} ERP調撥檔已下載並記錄；調出與調入倉請在ERP下拉選單人工指定。`;
-        $("batch-dialog").close(); await openBatch(batch.batch.id); await loadBatches(); return;
+        await downloadApprovedStores([button.dataset.store]); return;
       } else if (action === "close") {
         await api(`/batches/${encodeURIComponent(batch.batch.id)}/close`, { method: "POST", body: {} });
       } else if (action === "open-hq-correction" || action === "return-store") {
@@ -1513,13 +1567,13 @@
         await api(`/batches/${encodeURIComponent(batch.batch.id)}/corrections/open`, { method: "POST", body: { storeCode, mode: action === "return-store" ? "store" : "hq", reason } });
       }
       $("batch-dialog").close(); await loadBatches();
-    } catch (error) { $("dialog-status").textContent = error.message; } finally { button.disabled = false; }
+    } catch (error) { const message = $("batch-detail").querySelector("[data-per-store-status]") || $("dialog-status"); message.textContent = error.message; } finally { state.dialogBusy = false; controls.forEach(([control, disabled]) => { if (control.isConnected) control.disabled = disabled; }); }
   }
 
   async function start() {
     try {
       if (!(await checkRuntimeVersion())) return;
-      if (!inputXlsx || !outputXlsx || !parser || !transferCore || !googleSources || !xlsxPreflight) throw new Error("工具元件載入失敗，請重新整理頁面。");
+      if (!inputXlsx || !outputXlsx || !parser || !transferCore || !googleSources || !xlsxPreflight || !window.StoreTransferWorkflow) throw new Error("工具元件載入失敗，請重新整理頁面。");
       state.config = await api("/config");
       $("account-badge").textContent = `${state.config.email}・${state.config.role === "store" ? state.config.storeCode : state.config.role === "admin" ? "最高權限" : "總部"}`;
       $("refresh-button").disabled = false;
