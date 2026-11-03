@@ -36,6 +36,6 @@ const {chromium}=require(path.join(require('node:os').homedir(),'.cache/codex-ru
  await p.locator('#cloud-pos-redownload').check();pending=p.waitForEvent('download');await p.locator('#cloud-export').click();download=await pending;await download.saveAs(out+'.again.xlsx');await p.locator('#cloud-pos-status').filter({hasText:'整批POS已下載'}).waitFor();assert.equal(exports,2);assert(fs.readFileSync(out).equals(fs.readFileSync(out+'.again.xlsx')));assert(orders.every(o=>o.version===3));
  await p.setViewportSize({width:390,height:844});await p.locator('#cloud-pos').scrollIntoViewIfNeeded();assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await p.screenshot({path:'/private/tmp/store-orders-r47-live-mobile-'+scenario+'.png'});assert.deepEqual(errors,[]);
  console.log(JSON.stringify({passed:true,actualPublicAssets:true,version:C.VERSION,scenario,orders:2,paperRows:6,posRows:rowCount,quantity:8,amount:total,payments:[edited?1050:1000,400],noSingleOrderOpening:true,noTemplateUpload:true,noERPResults:true,redownloadIdentical:true,realAPIWrites:0,paidAI:0}));
- }finally{await ctx.close();}
+ }catch(error){console.error(JSON.stringify({scenario,failed:true,exports,errors,status:await p.locator('#cloud-pos-status').textContent(),versionWarning:await p.locator('#version-warning').textContent()}));await p.screenshot({path:'/private/tmp/store-orders-formal-failure-'+scenario+'.png'});throw error;}finally{await ctx.close();}
  }}finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
