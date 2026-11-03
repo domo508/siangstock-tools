@@ -2,7 +2,7 @@
  * Navigation opens details and moves focus; it never clicks a business action. */
 (function () {
   'use strict';
-  const VERSION = '20261102-guidance-context-r5';
+  const VERSION = '20261103-guidance-compact-r6';
   const script = document.currentScript;
   const base = new URL('.', script.src);
   const main = document.querySelector('main');
@@ -24,12 +24,24 @@
   const waiting = document.createElement('p'); waiting.id = 'company-guide-wait'; waiting.className = 'company-guide-wait'; waiting.setAttribute('role', 'status');
   const meter = document.createElement('progress'); meter.id = 'company-guide-meter'; meter.setAttribute('aria-label', '目前步驟完成進度');
   const go = document.createElement('button'); go.type = 'button';
-  const content = document.createElement('div'); content.append(caption, title, hint, live, progress, meter, updated, waiting);
+  const content = document.createElement('div'); content.className = 'company-guide-heading'; content.append(caption, title);
+  const detail = document.createElement('div'); detail.id = 'company-guide-detail'; detail.className = 'company-guide-detail'; detail.hidden = true; detail.tabIndex = 0; detail.setAttribute('role','region'); detail.setAttribute('aria-label','指引詳細說明');
+  detail.append(hint, live, progress, meter, updated, waiting);
+  const toggle = document.createElement('button'); toggle.type = 'button'; toggle.id = 'company-guide-toggle'; toggle.className = 'company-guide-toggle';
+  toggle.setAttribute('aria-controls', detail.id);
+  const notice = document.createElement('p'); notice.className = 'company-guide-notice'; notice.setAttribute('role','status'); notice.hidden = true;
+  function setExpanded(expanded) {
+    box.dataset.expanded = String(expanded); detail.hidden = !expanded;
+    toggle.setAttribute('aria-expanded',String(expanded)); toggle.textContent = expanded ? '收合說明' : '展開說明';
+  }
+  setExpanded(false);
+  toggle.addEventListener('click', () => setExpanded(detail.hidden));
   const help = document.createElement('details'); help.className = 'company-guide-help';
   const summary = document.createElement('summary'); summary.textContent = '指引怎麼用？';
-  const explanation = document.createElement('p'); explanation.textContent = '這裡會依目前資料與狀態提示下一步。按「前往」只展開區塊、移動畫面與焦點；分析、儲存、核准及AI仍要由你按原本按鈕。進度與最後更新時間只依實際訊息變化更新；30秒沒有新進度會提示等待，不代表失敗。百分比只在有實際總量時顯示。請以原操作的成功訊息為準，指引不代表已保存或已核准。';
-  help.append(summary, explanation); content.append(help);
-  box.append(content, go);
+  const explanation = document.createElement('p'); explanation.textContent = '預設窄列只顯示目前步驟；按「展開說明」查看詳細提示及進度，可隨時收合。這裡會依目前資料與狀態提示下一步。按「前往」只展開區塊、移動畫面與焦點；分析、儲存、核准及AI仍要由你按原本按鈕。進度與最後更新時間只依實際訊息變化更新；30秒沒有新進度會提示等待，不代表失敗。百分比只在有實際總量時顯示。請以原操作的成功訊息為準，指引不代表已保存或已核准。';
+  help.append(summary, explanation); detail.append(help);
+  const actions = document.createElement('div'); actions.className = 'company-guide-actions'; actions.append(toggle,go);
+  box.append(content, actions, notice, detail);
   const nav = main.querySelector('nav.breadcrumb,nav.breadcrumbs,nav.page-navigation');
   const header = main.querySelector('header');
   if (nav) nav.after(box); else if (header) header.after(box); else main.prepend(box);
@@ -85,6 +97,7 @@
       // real progress visible instead of claiming all processing has stopped.
       renderProgress();
       live.hidden = !latestMessage; if (latestMessage) put(live, '本機處理訊息：' + latestMessage);
+      box.dataset.attention = guard === 'checking' ? 'checking' : 'warning'; notice.hidden = guard === 'checking'; put(notice, '新操作暫停；請先保留未保存內容，再依版本提示處理。');
       go.hidden = false; go.disabled = guard === 'checking'; put(go, unavailable ? '重新確認版本' : guard === 'checking' ? '正在確認版本' : '重新載入最新版');
       return;
     }
@@ -107,7 +120,10 @@
     if (ownWarning && visible(ownWarning) && (!ownWarning.matches('dialog') || ownWarning.open)) {
       step = { title: '請重新載入最新版', hint: '此工具已停止操作，請依版本提示更新。', target: '#version-warning', label: '前往版本提示' };
     }
-    put(title, step.title); put(hint, step.hint); renderProgress();
+    const attention = /未完成|阻擋|失敗|重新載入|錯誤|無法|等待.*授權/.test(step.title) || progressTracker.view()?.status === 'error' || (latestMessage && /失敗|無法|錯誤|衝突/.test(latestMessage));
+    box.dataset.attention = attention ? 'warning' : 'normal'; notice.hidden = !attention;
+    put(notice, '有需要處理的提示，請展開說明查看原因。');
+    put(title, step.title); title.setAttribute('title',step.title); put(hint, step.hint); renderProgress();
     live.hidden = !latestMessage; if (latestMessage) put(live, '目前訊息：' + latestMessage);
     const destination = node(step.target);
     // Hidden parent details may be opened, but role-hidden sections are never exposed.
@@ -123,6 +139,7 @@
       const url = new URL(location.href); url.searchParams.set('deploy', latestVersion || VERSION);
       url.searchParams.set('reload', String(Date.now())); location.assign(url.href); return;
     }
+    setExpanded(false);
     const el = nextTarget;
     if (!el || el.closest('[hidden], [inert]')) return;
     for (let parent = el.parentElement; parent; parent = parent.parentElement) if (parent.matches('details')) parent.open = true;

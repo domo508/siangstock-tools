@@ -19,7 +19,7 @@ function page(){
  const input=()=>({files:[{}],isConnected:true,disabled:false,handled:0,matches:s=>s==='input[type="file"]',closest:s=>s==='#version-warning'?null:({}),dispatchEvent(e){fire(this,e.type)}});
  const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve()};
  const finish=async(v=version)=>{requests.shift().resolve({ok:true,json:async()=>({version:v})});await flush()};
- return {input,fire,focus,requests,finish,flush,api:ctx.CompanyGuidance,retry:()=>nodes.find(n=>n.tag==='button').listeners.click()};
+ return {nodes,input,fire,focus,requests,finish,flush,api:ctx.CompanyGuidance,retry:()=>nodes.find(n=>n.tag==='button').listeners.click()};
 }
 describe('原生選檔返回與版本檢查時序',()=>{
  it('初始版本確認中保留四類選檔，成功後各處理一次',async()=>{const p=page();const fields=Array.from({length:4},p.input);for(const i of fields){expect(p.fire(i).stopped).toBe(true);expect(i.handled).toBe(0)}expect(p.requests).toHaveLength(1);await p.finish();expect(fields.map(i=>i.handled)).toEqual([1,1,1,1]);});
@@ -43,4 +43,18 @@ describe('版本查詢暫時失敗可恢復且不清除選檔',()=>{
 it('切換操作卡片只通知情境，不送出業務請求',async()=>{
  const p=page();await p.finish();const calls=[];p.api.register({context(target){calls.push(target);return 'activity-settings';},resolve(){return {title:'活動設定'};}});
  const field=p.input();p.fire(field,'focusin');expect(calls).toEqual([field]);expect(field.handled).toBe(0);expect(p.requests).toHaveLength(0);
+});
+
+
+describe('窄列指引的說明收合',()=>{
+ it('預設收合；展開與收合保留選檔且不請求、重送或完成任何業務操作',async()=>{
+  const p=page();await p.finish();const input=p.input(),files=input.files;
+  const detail=p.nodes.find(n=>n.id==='company-guide-detail'),toggle=p.nodes.find(n=>n.id==='company-guide-toggle');
+  expect(detail.hidden).toBe(true);toggle.listeners.click();expect(detail.hidden).toBe(false);toggle.listeners.click();expect(detail.hidden).toBe(true);
+  expect(input.files).toBe(files);expect(input.handled).toBe(0);expect(p.requests).toHaveLength(0);
+ });
+ it('版本過期仍可看詳細說明；展開不能解除選檔與一般操作阻擋',async()=>{
+  const p=page();await p.finish('future-version');p.nodes.find(n=>n.id==='company-guide-toggle').listeners.click();expect(p.nodes.find(n=>n.id==='company-guide-detail').hidden).toBe(false);
+  const input=p.input();expect(p.fire(input).stopped).toBe(true);expect(input.handled).toBe(0);expect(await p.api.ensureCurrent()).toBe(false);expect(p.requests).toHaveLength(0);
+ });
 });
