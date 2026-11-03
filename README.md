@@ -776,3 +776,5 @@ r33正式入口驗證攔下index.html未同步新狀態元件的問題，已於�
 - PDF手冊已本機同步r51附加兩頁，訪客14頁／總部23頁，原功能截圖保留，新增頁已渲染檢查；PDF與私有證據不納入網站封裝。正式部署結果及識別另補記。
 
 參考：[OpenAI背景模式](https://developers.openai.com/api/docs/guides/background)、[Cloudflare執行限制](https://developers.cloudflare.com/workers/platform/limits/)。回復基準：static265cbe4、Worker9aa8d213-667e-4fa4-93d9-4ee229d2752a；需成對回復且保留D1與Drive紀錄，存在未完成照片操作時先由總部完成或接續，不刪表／紀錄。
+
+r51發布前補驗：新版不可變OCR worker另補同原版的最小CSP路徑，不放寬安全指令；舊路徑保留。新增標頭回歸後完整型別及62份926項通過，POS與Worker邏輯不變。

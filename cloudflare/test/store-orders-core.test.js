@@ -77,3 +77,9 @@ it("發布版本與資產雜湊JSON必須明確允許提交，不能被通用資
 it("全新人工訂單初始化空組合清單，未辨識也可直接新增商品",()=>{const o=C.newOrder("manual-draft-001","R14","2026-10-30");expect(o.priceGroups).toEqual([]);o.items.push({sku:"A103088",quantity:1,unitPrice:100,saleType:"銷貨"});expect(o.priceGroups.find(g=>g.id===o.items[0].priceGroupId)).toBeUndefined();expect(C.totals(o).amountCents).toBe(10000);});
 
 it('門市只有代號時不重複顯示，已確認名稱才接在代號後',()=>{for(const name of ['R14',' R14 ','',undefined])expect(C.storeLabel('R14',name)).toBe('R14');expect(C.storeLabel('R01','台中北屯門市')).toBe('R01・台中北屯門市');});
+
+it('目前版本的本機OCR worker保留相同最小CSP，不因換版遺漏巢狀資產標頭',()=>{
+ const headers=readFileSync('../_headers','utf8'),path=`/store-orders/vendor/${C.VERSION}/ocr/worker.min.js`;
+ const block=headers.split('\n\n').find(b=>b.startsWith(path+'\n'));
+ expect(block).toContain("script-src 'self' 'wasm-unsafe-eval'");expect(block).toContain("connect-src 'self'; worker-src 'none'");expect(block).not.toContain("'unsafe-eval'");
+});
