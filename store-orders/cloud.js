@@ -1,20 +1,20 @@
-import {recognitionQuery,waitRecognition,collectRecognition} from './recognition-job.js?v=20261103-store-orders-r52';
-import {createSourceRemovalUI} from './source-removal-ui.js?v=20261103-store-orders-r52';
-import {listSummaries,canVoidOrder,voidSavedOrder} from './order-list.js?v=20261103-store-orders-r52';
-import {collectDailyReport,dailyWorkbook} from './daily-report.js?v=20261103-store-orders-r52';
-import {loadSourceGroup} from './source-group.js?v=20261103-store-orders-r52';
-import {createFlowFeedback} from './flow-feedback.js?v=20261103-store-orders-r52';
-import * as C from './core.js?v=20261103-store-orders-r52';
-import * as G from './google.js?v=20261103-store-orders-r52';
-import {createSourceUploader} from './source-upload.js?v=20261103-store-orders-r52';
-import {VersionGuard} from './runtime.js?v=20261103-store-orders-r52';
-import {pagesFor} from './media.js?v=20261103-store-orders-r52';
-import {prepareImageInput} from './image-input.js?v=20261103-store-orders-r52';
-import {createReview,reviewErrors,confirmReview} from './review.js?v=20261103-store-orders-r52';
-import {builtInPOSProfile} from './pos-built-in.js?v=20261103-store-orders-r52';
-import {buildRevisedPOS,TEMPLATE_WRITE_OPTIONS,revisedPOSErrors} from './pos-template.js?v=20261103-store-orders-r52';
-import {costUnits,resolvedERPPrices} from './bundle-pricing.js?v=20261103-store-orders-r52';
-import {mergeFullPages} from './merge-pages.js?v=20261103-store-orders-r52';
+import {recognitionQuery,waitRecognition,collectRecognition} from './recognition-job.js?v=20261103-store-orders-r53';
+import {createSourceRemovalUI} from './source-removal-ui.js?v=20261103-store-orders-r53';
+import {listSummaries,canVoidOrder,voidSavedOrder} from './order-list.js?v=20261103-store-orders-r53';
+import {collectDailyReport,dailyWorkbook} from './daily-report.js?v=20261103-store-orders-r53';
+import {loadSourceGroup} from './source-group.js?v=20261103-store-orders-r53';
+import {createFlowFeedback} from './flow-feedback.js?v=20261103-store-orders-r53';
+import * as C from './core.js?v=20261103-store-orders-r53';
+import * as G from './google.js?v=20261103-store-orders-r53';
+import {createSourceUploader} from './source-upload.js?v=20261103-store-orders-r53';
+import {VersionGuard} from './runtime.js?v=20261103-store-orders-r53';
+import {pagesFor} from './media.js?v=20261103-store-orders-r53';
+import {prepareImageInput} from './image-input.js?v=20261103-store-orders-r53';
+import {createReview,reviewErrors,confirmReview} from './review.js?v=20261103-store-orders-r53';
+import {builtInPOSProfile} from './pos-built-in.js?v=20261103-store-orders-r53';
+import {buildRevisedPOS,TEMPLATE_WRITE_OPTIONS,revisedPOSErrors} from './pos-template.js?v=20261103-store-orders-r53';
+import {costUnits,resolvedERPPrices} from './bundle-pricing.js?v=20261103-store-orders-r53';
+import {mergeFullPages} from './merge-pages.js?v=20261103-store-orders-r53';
 const $=id=>document.getElementById(id),guard=new VersionGuard(),guestPage=location.pathname.startsWith('/store-orders/guest/');
 const apiPrefix=guestPage?'/api/store-orders-guest':'/api/store-orders';
 const state={listCache:new Map(),session:null,master:null,masterIssue:false,masterSource:"",current:null,base:'',sources:[],pages:[],urls:[],queue:[],busy:false,refreshSerial:0,refreshing:false,selectedSources:new Set(),incomingSignature:'',previewUrls:[],sourcePreviews:new Map(),correction:false,settlement:null,aiOperation:null,batchView:null,batchSignature:'',batchSerial:0};
@@ -45,7 +45,7 @@ function adopt(order){state.current=structuredClone(order);$('cloud-page-summary
 function blankRaw(order){return {header:{paperNumber:order.paperNumber,storeCode:order.storeCode,businessDate:order.businessDate,clerk:order.clerk,pageNumber:1,pageCount:order.pageCount,paperRowCount:order.paperRowCount,customer:structuredClone(order.customer),note:order.note,uncertainFields:[]},paperTotal:order.paperTotal||null,payments:structuredClone(order.payments),rows:[],sharedPrices:[],warnings:[]};}
 function newDraft(sources){const o=C.newOrder(crypto.randomUUID(),store(),'');o.priceBasis="line_total";o.memberNumber="";o.sources=sources;o.pageCount=sources.reduce((n,s)=>n+s.pages,0);o.originalExtraction=blankRaw(o);o.headerRecognition={pageNumber:1,confirmed:false,uncertainFields:[],rawDate:o.businessDate,synthetic:false};o.reviewEdits=[];o.recognizedPages=[];o.recognition=null;return o;}
 async function registerSource(fileId){const r=await api('/sources','POST',{storeCode:store(),fileId});if(r.orderId)return {existing:r.orderId};if(r.duplicate)throw Error('此照片與已上傳原圖重複，請開啟原來的單據');return {id:r.fileId};}
-function groupControls(){const count=state.selectedSources.size,available=state.sources.filter(f=>!f.orderId),sequence=[...state.selectedSources].map(id=>'照片'+(available.findIndex(f=>f.id===id)+1)).join(' → ');$('cloud-group-count').textContent=`已勾選${count}個檔案；${count?'頁面順序：'+sequence:'同一訂單請依頁面順序勾選。'}`;$('cloud-group-open').disabled=state.busy||guard.blocked||count<2;$('cloud-group-separate').disabled=state.busy||guard.blocked||!count;document.querySelectorAll('[data-append-source]').forEach(b=>{b.disabled=state.busy||guard.blocked||!state.current||!!state.current.batchId;});}
+function groupControls(){const count=state.selectedSources.size,available=state.sources.filter(f=>!f.orderId),sequence=[...state.selectedSources].map(id=>'照片'+(available.findIndex(f=>f.id===id)+1)).join(' → ');$('cloud-group-count').textContent=`已勾選${count}個檔案；${count?'頁面順序：'+sequence:'同一訂單請依頁面順序勾選。'}`;$('cloud-group-open').disabled=state.busy||guard.blocked||count<2;$('cloud-group-separate').disabled=state.busy||guard.blocked||!count;document.querySelectorAll('[data-append-source]').forEach(b=>{b.disabled=b.dataset.duplicate==='true'||state.busy||guard.blocked||!state.current||!!state.current.batchId;});}
 async function openSources(ids,append=false){
  if(!append)checkLeave();
  if(append&&(!state.current||state.current.batchId))throw Error('請先開啟尚未結算的訂單，再追加頁數');
@@ -69,11 +69,12 @@ function renderIncoming(files){
  $('cloud-incoming').dataset.storeCode=store();
  const available=files.filter(f=>!f.orderId),signature=JSON.stringify([store(),available,[...(state.lastUploads||[])]]);
  if(signature===state.incomingSignature)return;state.incomingSignature=signature;
- for(const id of state.selectedSources)if(!available.some(f=>f.id===id))state.selectedSources.delete(id);
+ for(const id of state.selectedSources)if(!available.some(f=>f.id===id&&!f.duplicate))state.selectedSources.delete(id);
  state.previewUrls.forEach(URL.revokeObjectURL);state.previewUrls=[];for(const id of state.sourcePreviews.keys())if(!available.some(f=>f.id===id))state.sourcePreviews.delete(id);$('cloud-incoming').replaceChildren();
  for(const [index,f] of available.entries()){
  const row=node('div',undefined,'item'),label=node('p',`照片${index+1}・${new Date(f.createdTime).toLocaleString('zh-TW')}・${f.mimeType}`),open=node('button','開啟為新訂單'),append=node('button','追加頁數','secondary'),select=node('input'),choice=node('label',undefined,'check'),preview=node('button','預覽照片','secondary'),image=node('img');
- row.dataset.sourceId=f.id;append.dataset.appendSource=f.id;select.type='checkbox';select.dataset.selectSource=f.id;select.checked=state.selectedSources.has(f.id);choice.append(select,document.createTextNode(`選取照片${index+1}（同單頁面依序勾選）`));image.hidden=true;image.className='source-thumbnail';image.alt=`照片${index+1}第一頁預覽`;image.loading='lazy';if(state.sourcePreviews.has(f.id)){const url=URL.createObjectURL(state.sourcePreviews.get(f.id));state.previewUrls.push(url);image.src=url;image.hidden=false;preview.textContent='收合／展開預覽';}
+ if(f.duplicate){label.append(document.createTextNode('・重傳副本（請總部核對移除）'));open.disabled=true;select.disabled=true;append.disabled=true;}
+ row.dataset.sourceId=f.id;append.dataset.appendSource=f.id;select.type='checkbox';select.dataset.selectSource=f.id;if(f.duplicate){select.dataset.duplicate='true';append.dataset.duplicate='true';open.dataset.duplicate='true';}select.checked=state.selectedSources.has(f.id);choice.append(select,document.createTextNode(`選取照片${index+1}（同單頁面依序勾選）`));image.hidden=true;image.className='source-thumbnail';image.alt=`照片${index+1}第一頁預覽`;image.loading='lazy';if(state.sourcePreviews.has(f.id)){const url=URL.createObjectURL(state.sourcePreviews.get(f.id));state.previewUrls.push(url);image.src=url;image.hidden=false;preview.textContent='收合／展開預覽';}
  select.onchange=()=>{if(select.checked)state.selectedSources.add(f.id);else state.selectedSources.delete(f.id);groupControls();};
  preview.onclick=()=>run(async()=>{if(image.src){image.hidden=!image.hidden;return;}const pages=await pagesFor(await getFile(f.id));if(!pages.length)throw Error('原圖無可預覽頁面');if(!row.isConnected)return;const url=URL.createObjectURL(pages[0]);state.previewUrls.push(url);image.src=url;image.hidden=false;message(`照片${index+1}共${pages.length}頁，已顯示第一頁預覽。`);},{area:'incoming',working:'正在載入照片預覽…'});
  if(state.lastUploads?.has(f.id)){row.classList.add('flow-new-source');row.prepend(node('strong','本次上傳'));}

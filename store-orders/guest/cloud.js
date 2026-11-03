@@ -36,9 +36,10 @@ function createSourceRemovalUI({ container, api: api2, canChange, canRestore, in
     if (cls) e.className = cls;
     return e;
   };
-  const details = node3("details", void 0, "source-removed-tools"), summary = node3("summary", "\u5DF2\u79FB\u9664\u7167\u7247\uFF0F\u64CD\u4F5C\u672A\u5B8C\u6210"), list = node3("div"), listStatus = node3("p");
+  const details = node3("details", void 0, "source-removed-tools"), summary = node3("summary", "\u5DF2\u79FB\u9664\u7167\u7247\uFF0F\u64CD\u4F5C\u672A\u5B8C\u6210"), list = node3("div"), listStatus = node3("p"), help = node3("p", "\u7E3D\u90E8\u53EF\u5728\u6B64\u6838\u5C0D\u91CD\u8907\u7167\u7247\u8207\u539F\u6A94\u5DF2\u79FB\u8D70\u7684\u4F86\u6E90\uFF1B\u505C\u7528\u820A\u4F86\u6E90\u4E0D\u6703\u522A\u9664\u6216\u642C\u52D5\u96F2\u7AEF\u539F\u6A94\u3002\u8ACB\u52FF\u76F4\u63A5\u5F9EDrive\u522A\u9664\u5F85\u6536\u539F\u5716\u3002"), reload = node3("button", "\u66F4\u65B0\u79FB\u9664\u7D00\u9304\u8207\u4F86\u6E90\u7570\u5E38", "secondary");
+  reload.type = "button";
   listStatus.setAttribute("role", "status");
-  details.append(summary, listStatus, list);
+  details.append(summary, help, reload, listStatus, list);
   container.after(details);
   const dialog = node3("dialog", void 0, "source-removal-dialog");
   dialog.setAttribute("aria-labelledby", "source-remove-title");
@@ -87,14 +88,21 @@ function createSourceRemovalUI({ container, api: api2, canChange, canRestore, in
     title.textContent = action === "restore" ? "\u5FA9\u539F\u5F85\u6536\u7167\u7247\uFF1F" : "\u79FB\u9664\u9019\u5F35\u5F85\u6536\u7167\u7247\uFF1F";
     identity.textContent = item.label || `\u7167\u7247\u8B58\u5225\uFF1A${item.fileId.slice(-8)}`;
     description.textContent = action === "restore" ? "\u5FA9\u539F\u5F8C\u6703\u56DE\u5230\u539F\u9580\u5E02\u7684\u5F85\u6536\u6E05\u55AE\uFF0C\u53EF\u80FD\u518D\u6B21\u963B\u64CB\u65E5\u7D50\u3002\u8ACB\u78BA\u8A8D\u4ECD\u9700\u8655\u7406\u9019\u5F35\u7167\u7247\u3002" : "\u539F\u5716\u6703\u79FB\u81F3\u7E3D\u90E8\u53EF\u5FA9\u539F\u5340\uFF0C\u5B8C\u6210\u5F8C\u4E0D\u518D\u51FA\u73FE\u5728\u5F85\u6536\u6E05\u55AE\uFF0C\u4E5F\u4E0D\u518D\u963B\u64CB\u65E5\u7D50\u3002\u9019\u4E0D\u6703\u4F5C\u5EE2\u4EFB\u4F55\u5DF2\u4FDD\u5B58\u8A02\u55AE\u3002";
+    if (item.recordOnly) {
+      title.textContent = action === "restore" ? "\u91CD\u65B0\u555F\u7528\u820A\u4F86\u6E90\uFF1F" : "\u505C\u7528\u539F\u6A94\u5DF2\u79FB\u8D70\u7684\u4F86\u6E90\uFF1F";
+      description.textContent = action === "restore" ? "\u8ACB\u5148\u5C07\u540C\u4E00\u4EFD\u539F\u5716\u653E\u56DE\u672C\u5E97\u5F85\u8655\u7406\u8CC7\u6599\u593E\u3002\u7CFB\u7D71\u6703\u6838\u5C0D\u5167\u5BB9\u53CA\u6B0A\u9650\uFF1B\u4E0D\u6703\u81EA\u52D5\u5F9E\u5783\u573E\u6876\u9084\u539F\u6216\u642C\u52D5\u5176\u4ED6\u4F4D\u7F6E\u7684\u6A94\u6848\u3002" : "\u7CFB\u7D71\u5C07\u518D\u6B21\u78BA\u8A8D\u539F\u5716\u5DF2\u4E0D\u5728\u672C\u5E97\u5F85\u8655\u7406\u8CC7\u6599\u593E\uFF0C\u53EA\u505C\u7528\u820A\u4F86\u6E90\u7D00\u9304\u3001\u4FDD\u7559\u539F\u56E0\uFF0C\u4E0D\u6703\u522A\u9664\u6216\u642C\u52D5\u539F\u6A94\u3002\u505C\u7528\u5F8C\u53EF\u91CD\u65B0\u532F\u5165\u540C\u6A94\u6848\u3002";
+    }
+    if (item.duplicate && !item.recordOnly) description.textContent += " \u672C\u5F35\u70BA\u91CD\u50B3\u526F\u672C\uFF0C\u53EA\u8655\u7406\u9019\u500B\u526F\u672C\uFF0C\u4E0D\u6539\u52D5\u539F\u4F86\u6E90\u6216\u5DF2\u4FDD\u5B58\u8A02\u55AE\u3002";
     if (inDraft(item.fileId)) description.textContent += " \u6B64\u7167\u7247\u5C6C\u65BC\u76EE\u524D\u672A\u4FDD\u5B58\u8349\u7A3F\uFF1B\u79FB\u9664\u6210\u529F\u5F8C\u5C07\u653E\u68C4\u9019\u4EFD\u8349\u7A3F\uFF0C\u5176\u9918\u539F\u5716\u4ECD\u4FDD\u7559\u3002";
     checkText.textContent = action === "restore" ? "\u6211\u5DF2\u78BA\u8A8D\u8981\u5C07\u9019\u5F35\u7167\u7247\u6062\u5FA9\u70BA\u5F85\u6536\u3002" : "\u6211\u5DF2\u78BA\u8A8D\u9019\u5F35\u7167\u7247\u53EF\u79FB\u9664\uFF1B\u82E5\u4ECD\u662F\u6709\u6548\u8A02\u55AE\uFF0C\u61C9\u4FDD\u7559\u4E26\u5B8C\u6210\u8986\u6838\u3002";
     reason.value = "";
     reasonLabel.hidden = !!item.operationId;
     check.checked = false;
     status.textContent = "";
+    if (item.recordOnly) checkText.textContent = action === "restore" ? "\u6211\u5DF2\u5C07\u540C\u4E00\u4EFD\u539F\u5716\u653E\u56DE\u672C\u5E97\u5F85\u8655\u7406\u8CC7\u6599\u593E\uFF0C\u540C\u610F\u6838\u5C0D\u5F8C\u91CD\u65B0\u555F\u7528\u3002" : "\u6211\u5DF2\u6838\u5C0D\u539F\u6A94\u4F4D\u7F6E\uFF0C\u78BA\u8A8D\u505C\u7528\u9019\u7B46\u820A\u4F86\u6E90\u7D00\u9304\u3002";
     confirm2.textContent = item.operationId ? "\u91CD\u8A66\u539F\u64CD\u4F5C" : action === "restore" ? "\u78BA\u8A8D\u5FA9\u539F" : "\u78BA\u8A8D\u79FB\u9664";
-    cancel.textContent = action === "restore" ? "\u66AB\u4E0D\u5FA9\u539F" : "\u4FDD\u7559\u7167\u7247";
+    if (item.recordOnly && !item.operationId) confirm2.textContent = action === "restore" ? "\u78BA\u8A8D\u91CD\u65B0\u555F\u7528" : "\u78BA\u8A8D\u505C\u7528\u820A\u4F86\u6E90";
+    cancel.textContent = item.recordOnly ? "\u66AB\u4E0D\u8655\u7406" : action === "restore" ? "\u66AB\u4E0D\u5FA9\u539F" : "\u4FDD\u7559\u7167\u7247";
     controls2();
     dialog.showModal();
     reasonLabel.hidden ? check.focus() : reason.focus();
@@ -107,7 +115,7 @@ function createSourceRemovalUI({ container, api: api2, canChange, canRestore, in
     controls2();
     status.textContent = item.action === "restore" ? "\u6B63\u5728\u5FA9\u539F\u4E26\u78BA\u8A8D\u5B58\u53D6\u6B0A\u9650\u2026" : "\u6B63\u5728\u79FB\u81F3\u53EF\u5FA9\u539F\u5340\u4E26\u78BA\u8A8D\u5B58\u53D6\u6B0A\u9650\u2026";
     try {
-      const result = await api2("/source-actions", "POST", { storeCode: container.dataset.storeCode || "R14", fileId: item.fileId, action: item.action, operationId: op, expectedVersion: item.expectedVersion ?? item.sourceVersion ?? item.version ?? 0, confirmed: true, ...!item.operationId ? { reason: reason.value.trim() } : {} });
+      const result = await api2("/source-actions", "POST", { storeCode: container.dataset.storeCode || "R14", fileId: item.fileId, action: item.action, operationId: op, expectedVersion: item.expectedVersion ?? item.sourceVersion ?? item.version ?? 0, confirmed: true, recordOnly: !!item.recordOnly, ...!item.operationId ? { reason: reason.value.trim() } : {} });
       if (result.completed !== true) throw Error("\u64CD\u4F5C\u5C1A\u672A\u78BA\u8A8D\u5B8C\u6210\uFF0C\u8ACB\u66F4\u65B0\u6E05\u55AE\u67E5\u770B\u7D00\u9304");
       dialog.close();
       selected = null;
@@ -119,7 +127,7 @@ function createSourceRemovalUI({ container, api: api2, canChange, canRestore, in
         notice("\u7167\u7247\u64CD\u4F5C\u5DF2\u5B8C\u6210\uFF0C\u4F46\u6E05\u55AE\u66F4\u65B0\u672A\u5B8C\u6210\uFF0C\u8ACB\u624B\u52D5\u6AA2\u67E5\u65B0\u55AE\u3002", true);
         return;
       }
-      const text2 = item.action === "restore" ? "\u7167\u7247\u5DF2\u5FA9\u539F\u81F3\u5F85\u6536\u6E05\u55AE\uFF0C\u8ACB\u91CD\u65B0\u958B\u555F\u8655\u7406\u3002" : "\u7167\u7247\u5DF2\u79FB\u9664\u4E26\u4FDD\u7559\u53EF\u5FA9\u539F\u7D00\u9304\uFF1B\u5DF2\u4FDD\u5B58\u8A02\u55AE\u4FDD\u6301\u539F\u6A23\u3002";
+      const text2 = item.recordOnly ? item.action === "restore" ? "\u820A\u4F86\u6E90\u5DF2\u91CD\u65B0\u555F\u7528\uFF0C\u8ACB\u91CD\u65B0\u958B\u555F\u8655\u7406\u3002" : "\u820A\u4F86\u6E90\u5DF2\u505C\u7528\uFF0C\u539F\u6A94\u672A\u88AB\u79FB\u52D5\u6216\u522A\u9664\uFF1B\u53EF\u91CD\u65B0\u532F\u5165\u540C\u6A94\u6848\u3002" : item.action === "restore" ? "\u7167\u7247\u5DF2\u5FA9\u539F\u81F3\u5F85\u6536\u6E05\u55AE\uFF0C\u8ACB\u91CD\u65B0\u958B\u555F\u8655\u7406\u3002" : "\u7167\u7247\u5DF2\u79FB\u9664\u4E26\u4FDD\u7559\u53EF\u5FA9\u539F\u7D00\u9304\uFF1B\u5DF2\u4FDD\u5B58\u8A02\u55AE\u4FDD\u6301\u539F\u6A23\u3002";
       notice(text2, false);
       listStatus.textContent = text2;
     } catch (e) {
@@ -140,13 +148,13 @@ function createSourceRemovalUI({ container, api: api2, canChange, canRestore, in
       const data = await api2("/source-actions?store=" + encodeURIComponent(container.dataset.storeCode || "R14"));
       list.replaceChildren();
       for (const item of data.records) {
-        const row = node3("div", void 0, "item"), phase = item.state === "removed" ? "\u5DF2\u79FB\u9664\uFF0C\u53EF\u7531\u7E3D\u90E8\u5FA9\u539F" : "\u64CD\u4F5C\u672A\u5B8C\u6210\uFF0C\u4E0D\u4EE3\u8868\u5DF2\u79FB\u9664";
-        row.append(node3("strong", phase), node3("p", new Date(item.updatedAt).toLocaleString("zh-TW")));
+        const row = node3("div", void 0, "item"), missing = item.state === "missing", phase = missing ? "\u539F\u6A94\u4E0D\u5728\u5F85\u8655\u7406\u8CC7\u6599\u593E\uFF0C\u5C1A\u672A\u505C\u7528" : item.state === "removed" ? item.recordOnly ? "\u820A\u4F86\u6E90\u5DF2\u505C\u7528\uFF0C\u539F\u6A94\u672A\u642C\u52D5" : "\u5DF2\u79FB\u9664\uFF0C\u53EF\u7531\u7E3D\u90E8\u5FA9\u539F" : "\u64CD\u4F5C\u672A\u5B8C\u6210\uFF0C\u4E0D\u4EE3\u8868\u5DF2\u79FB\u9664";
+        row.append(node3("strong", phase), node3("p", `\u4F86\u6E90\u8B58\u5225\uFF1A${item.fileId.slice(-8)}\uFF5C${new Date(item.updatedAt).toLocaleString("zh-TW")}`));
         if (item.state !== "removed" || canRestore()) {
-          const b = node3("button", item.state === "removed" ? "\u5FA9\u539F\u81F3\u5F85\u6536\u6E05\u55AE" : "\u91CD\u8A66\u539F\u64CD\u4F5C", "secondary");
+          const b = node3("button", missing ? "\u6838\u5C0D\u4E26\u505C\u7528\u820A\u4F86\u6E90" : item.state === "removed" ? item.recordOnly ? "\u539F\u6A94\u653E\u56DE\u5F8C\u91CD\u65B0\u555F\u7528" : "\u5FA9\u539F\u81F3\u5F85\u6536\u6E05\u55AE" : "\u91CD\u8A66\u539F\u64CD\u4F5C", "secondary");
           b.type = "button";
-          b.onclick = () => open(item, item.state === "removed" ? "restore" : item.action, b);
-          if (item.state === "removed") b.onclick = () => open({ fileId: item.fileId, version: item.version }, "restore", b);
+          b.onclick = () => open(item, missing ? "remove" : item.state === "removed" ? "restore" : item.action, b);
+          if (item.state === "removed") b.onclick = () => open({ fileId: item.fileId, version: item.version, recordOnly: item.recordOnly }, "restore", b);
           row.append(b);
         } else row.append(node3("p", "\u9700\u8981\u5FA9\u539F\u6642\uFF0C\u8ACB\u806F\u7D61\u7E3D\u90E8\u3002"));
         list.append(row);
@@ -159,20 +167,22 @@ function createSourceRemovalUI({ container, api: api2, canChange, canRestore, in
       refreshing = false;
     }
   }
+  reload.onclick = () => void refresh2();
   details.addEventListener("toggle", () => {
     if (details.open) void refresh2();
   });
   return { button(file, label) {
     const b = node3("button", "\u79FB\u9664\u5F85\u6536\u7167\u7247", "source-remove-button");
     b.type = "button";
+    b.disabled = !!file.duplicate && !canRestore();
     b.setAttribute("aria-label", "\u79FB\u9664" + label);
-    b.onclick = () => open({ fileId: file.id, sourceVersion: file.sourceVersion || 0, label }, "remove", b);
+    b.onclick = () => open({ fileId: file.id, sourceVersion: file.sourceVersion || 0, label, duplicate: file.duplicate }, "remove", b);
     return b;
   }, refresh: refresh2, dialog };
 }
 
 // store-orders/core.js
-var VERSION = "20261103-store-orders-r52";
+var VERSION = "20261103-store-orders-r53";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -2272,7 +2282,7 @@ function groupControls() {
   $("cloud-group-open").disabled = state.busy || guard.blocked || count < 2;
   $("cloud-group-separate").disabled = state.busy || guard.blocked || !count;
   document.querySelectorAll("[data-append-source]").forEach((b) => {
-    b.disabled = state.busy || guard.blocked || !state.current || !!state.current.batchId;
+    b.disabled = b.dataset.duplicate === "true" || state.busy || guard.blocked || !state.current || !!state.current.batchId;
   });
 }
 async function openSources(ids, append = false) {
@@ -2320,17 +2330,28 @@ function renderIncoming(files) {
   const available = files.filter((f) => !f.orderId), signature2 = JSON.stringify([store(), available, [...state.lastUploads || []]]);
   if (signature2 === state.incomingSignature) return;
   state.incomingSignature = signature2;
-  for (const id of state.selectedSources) if (!available.some((f) => f.id === id)) state.selectedSources.delete(id);
+  for (const id of state.selectedSources) if (!available.some((f) => f.id === id && !f.duplicate)) state.selectedSources.delete(id);
   state.previewUrls.forEach(URL.revokeObjectURL);
   state.previewUrls = [];
   for (const id of state.sourcePreviews.keys()) if (!available.some((f) => f.id === id)) state.sourcePreviews.delete(id);
   $("cloud-incoming").replaceChildren();
   for (const [index, f] of available.entries()) {
     const row = node2("div", void 0, "item"), label = node2("p", `\u7167\u7247${index + 1}\u30FB${new Date(f.createdTime).toLocaleString("zh-TW")}\u30FB${f.mimeType}`), open = node2("button", "\u958B\u555F\u70BA\u65B0\u8A02\u55AE"), append = node2("button", "\u8FFD\u52A0\u9801\u6578", "secondary"), select = node2("input"), choice = node2("label", void 0, "check"), preview = node2("button", "\u9810\u89BD\u7167\u7247", "secondary"), image = node2("img");
+    if (f.duplicate) {
+      label.append(document.createTextNode("\u30FB\u91CD\u50B3\u526F\u672C\uFF08\u8ACB\u7E3D\u90E8\u6838\u5C0D\u79FB\u9664\uFF09"));
+      open.disabled = true;
+      select.disabled = true;
+      append.disabled = true;
+    }
     row.dataset.sourceId = f.id;
     append.dataset.appendSource = f.id;
     select.type = "checkbox";
     select.dataset.selectSource = f.id;
+    if (f.duplicate) {
+      select.dataset.duplicate = "true";
+      append.dataset.duplicate = "true";
+      open.dataset.duplicate = "true";
+    }
     select.checked = state.selectedSources.has(f.id);
     choice.append(select, document.createTextNode(`\u9078\u53D6\u7167\u7247${index + 1}\uFF08\u540C\u55AE\u9801\u9762\u4F9D\u5E8F\u52FE\u9078\uFF09`));
     image.hidden = true;

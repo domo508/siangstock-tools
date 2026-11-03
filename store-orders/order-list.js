@@ -1,4 +1,4 @@
-import * as C from './core.js?v=20261103-store-orders-r52';
+import * as C from './core.js?v=20261103-store-orders-r53';
 
 // Cache only display metadata in memory. Never cache customer data or full snapshots.
 export async function listSummaries(rows,{storeCode,businessDate,actor,cache,read}){

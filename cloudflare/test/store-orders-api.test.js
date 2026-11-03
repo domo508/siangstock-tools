@@ -15,10 +15,11 @@ async function register(){file("source-file-001",config.stores.R00.pendingFolder
 async function save(o=order(),version=0,operationId=crypto.randomUUID()){return call("/orders",{order:o,expectedVersion:version,operationId});}
 async function settled(){await register();expect((await save()).status).toBe(200);const r=await call("/settle",{storeCode:"R00",businessDate:"2026-10-23",orders:[{id:"test-order-001",version:1}],confirmed:true,operationId:crypto.randomUUID()});expect(r.status).toBe(200);return r;}
 beforeEach(()=>{
- sql=new DatabaseSync(":memory:");sql.exec(readFileSync("worker/migrations/0042_store_orders.sql","utf8"));sql.exec(readFileSync("worker/migrations/0045_store_order_guests.sql","utf8"));sql.exec(readFileSync("worker/migrations/0047_store_order_invite_labels.sql","utf8"));sql.exec(readFileSync("worker/migrations/0044_store_order_recognition.sql","utf8"));sql.exec(readFileSync("worker/migrations/0052_store_order_source_removals.sql","utf8"));sql.exec(readFileSync("worker/migrations/0053_store_order_recognition_recovery.sql","utf8"));files=new Map();serial=0;
+ sql=new DatabaseSync(":memory:");sql.exec(readFileSync("worker/migrations/0042_store_orders.sql","utf8"));sql.exec(readFileSync("worker/migrations/0045_store_order_guests.sql","utf8"));sql.exec(readFileSync("worker/migrations/0047_store_order_invite_labels.sql","utf8"));sql.exec(readFileSync("worker/migrations/0044_store_order_recognition.sql","utf8"));sql.exec(readFileSync("worker/migrations/0052_store_order_source_removals.sql","utf8"));sql.exec(readFileSync("worker/migrations/0053_store_order_recognition_recovery.sql","utf8"));sql.exec(readFileSync("worker/migrations/0054_store_order_source_reconciliation.sql","utf8"));files=new Map();serial=0;
  env={DB:database(),ALLOWED_ORIGINS:"https://siangstock.com",STORE_ORDERS_CONFIG:JSON.stringify(config),STORE_ORDERS_SERVICE_ACCOUNT:JSON.stringify({client_email:"service@test.gserviceaccount.com",private_key:"test-not-a-key"}),ACCESS_AUD:"test",ACCESS_TEAM_DOMAIN:"test"};
  vi.spyOn(OrderDrive.prototype,"checkFolder").mockResolvedValue(undefined);vi.spyOn(OrderDrive.prototype,"checkPermissions").mockResolvedValue(undefined);
  vi.spyOn(OrderDrive.prototype,"meta").mockImplementation(async id=>{if(!files.has(id))throw Error("missing");const f=files.get(id);return {...f,size:String(JSON.stringify(f.content).length),md5Checksum:"stable-md5"};});
+ vi.spyOn(OrderDrive.prototype,"sourceMeta").mockImplementation(async id=>files.has(id)?OrderDrive.prototype.meta(id):null);
  vi.spyOn(OrderDrive.prototype,"list").mockImplementation(async(folder,imagesOnly)=>[...files.values()].filter(f=>f.parents.includes(folder)&&(!imagesOnly||f.mimeType.startsWith("image/")||f.mimeType==="application/pdf")));
  vi.spyOn(OrderDrive.prototype,"read").mockImplementation(async id=>new TextEncoder().encode(typeof files.get(id).content==="string"?files.get(id).content:JSON.stringify(files.get(id).content)).buffer);
  vi.spyOn(OrderDrive.prototype,"json").mockImplementation(async id=>structuredClone(files.get(id).content));
@@ -219,4 +220,27 @@ it('背景辨識由同一來源取回，完整結果只存受限Drive，跨店�
 it('公司雲端受限區權限無法確認時，辨識提交前停止，不花AI費用',async()=>{
  await register();env.OPENAI_API_KEY='synthetic-key';OrderDrive.prototype.checkFolder.mockRejectedValueOnce(Error('private storage failure'));const upstream=vi.spyOn(globalThis,'fetch');
  const r=await call('/recognize',{storeCode:'R00',fileId:'source-file-001'});expect(r.status).toBe(503);expect(upstream).not.toHaveBeenCalled();
+});
+
+it('總部移除重傳副本不改原圖與已保存訂單；一般門市不能處理副本',async()=>{
+ await register();await save();file('duplicate-source-001',config.stores.R00.pendingFolderId,'synthetic-image','image/png');
+ expect((await call('/sources',{storeCode:'R00',fileId:'duplicate-source-001'})).body.duplicate).toBe(true);
+ const scan=(await call('/scan?store=R00',undefined,HQ)).body.files.find(f=>f.id==='duplicate-source-001');expect(scan).toMatchObject({duplicate:true,orderId:null});
+ const b=removeBody('duplicate-source-001');expect((await call('/source-actions',b)).status).toBe(403);expect((await call('/source-actions',b,HQ)).status).toBe(200);
+ expect(files.get(b.fileId).parents).toEqual([config.recycleFolderId]);expect(files.get('source-file-001').parents).toEqual([config.stores.R00.pendingFolderId]);expect(sql.prepare('SELECT version,status FROM store_orders').get()).toMatchObject({version:1,status:'reviewed'});
+});
+it('雲端直接移走原圖：總部查出缺檔並停用舊來源，重傳不被副本反向阻擋',async()=>{
+ await register();file('duplicate-source-001',config.stores.R00.pendingFolderId,'synthetic-image','image/png');await call('/sources',{storeCode:'R00',fileId:'duplicate-source-001'});
+ files.get('source-file-001').parents=['outside-company-folder'];
+ const rows=(await call('/source-actions?store=R00',undefined,HQ)).body.records;expect(rows.find(r=>r.fileId==='source-file-001')).toMatchObject({state:'missing',recordOnly:1});expect((await call('/source-actions?store=R00')).body.records).toHaveLength(0);
+ const b={...removeBody(),recordOnly:true};expect((await call('/source-actions',b)).status).toBe(403);expect((await call('/source-actions',b,HQ)).body.state).toBe('removed');expect(OrderDrive.prototype.move).not.toHaveBeenCalled();expect(files.get(b.fileId).parents).toEqual(['outside-company-folder']);expect((await call('/source-actions',b,HQ)).status).toBe(200);
+ file('reupload-source-001',config.stores.R00.pendingFolderId,'synthetic-image','image/png');expect((await call('/sources',{storeCode:'R00',fileId:'reupload-source-001'})).body).toMatchObject({fileId:'reupload-source-001',duplicate:false});
+ const restore={...b,action:'restore',expectedVersion:1,operationId:crypto.randomUUID()};expect((await call('/source-actions',restore,HQ)).status).toBe(403);files.get(b.fileId).parents=[config.stores.R00.pendingFolderId];files.get(b.fileId).content='changed';expect((await call('/source-actions',restore,HQ)).status).toBe(409);files.get(b.fileId).content='synthetic-image';expect((await call('/source-actions',restore,HQ)).status).toBe(409);expect((await call('/source-actions',removeBody('reupload-source-001'),HQ)).status).toBe(200);expect((await call('/source-actions',restore,HQ)).body.state).toBe('active');
+});
+it('原檔已刪除也僅停用本店已登記未歸單來源，權限及查詢失敗不當作缺檔',async()=>{
+ await register();const b={...removeBody(),recordOnly:true};expect((await call('/source-actions',b,HQ)).status).toBe(409);files.delete(b.fileId);OrderDrive.prototype.sourceMeta.mockRejectedValueOnce(Error('synthetic permission denied'));expect((await call('/source-actions',b,HQ)).status).toBe(503);expect(sql.prepare('SELECT COUNT(*) n FROM store_order_source_controls').get().n).toBe(0);
+ expect((await call('/source-actions',{...b,fileId:'unknown-source-001'},HQ)).status).toBe(403);expect((await call('/source-actions',b,HQ)).status).toBe(200);expect(OrderDrive.prototype.move).not.toHaveBeenCalled();
+});
+it('缺檔停用不繞過已保存訂單、忙碌狀態或來源跨店保護',async()=>{
+ await register();await save();files.get('source-file-001').parents=['outside'];expect((await call('/source-actions',{...removeBody(),recordOnly:true},HQ)).status).toBe(409);expect((await call('/source-actions',{...removeBody(),storeCode:'R01',recordOnly:true},HQ)).status).toBe(403);
 });

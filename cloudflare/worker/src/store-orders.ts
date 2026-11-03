@@ -89,12 +89,14 @@ export class OrderDrive {
     if (!result.access_token) fail("公司雲端授權失敗", 503);
     return this.accessToken = result.access_token!;
   }
-  async request(path: string, init: RequestInit = {}, upload = false): Promise<any> {
+  async request(path: string, init: RequestInit = {}, upload = false, allowMissing = false): Promise<any> {
     const r = await fetch(`https://www.googleapis.com/${upload ? "upload/" : ""}drive/v3/${path}`, { ...init, ...(this.operationSignal?{signal:this.operationSignal}:{}), headers: { ...init.headers, Authorization: `Bearer ${await this.token()}` } });
+    if (r.status===404&&allowMissing)return null;
     if (!r.ok) fail(r.status === 429 ? "公司雲端額度或流量已滿，請稍後重試" : "公司雲端操作失敗，資料尚未完成交接", 503);
     return r.status === 204 ? {} : r.json();
   }
   async meta(id: string) { return this.request(`files/${folderId(id)}?supportsAllDrives=true&fields=id,mimeType,parents,driveId,size,trashed,createdTime,appProperties,version,md5Checksum`); }
+  async sourceMeta(id:string){return this.request(`files/${folderId(id)}?supportsAllDrives=true&fields=id,mimeType,parents,trashed`,{},false,true);}
   async checkFolder(id: string, allowed: string[]) {
     const meta = await this.meta(id);
     if (meta.trashed || (this.c.storageType==="company_account"?!!meta.driveId||!meta.parents?.includes(this.c.rootFolderId):meta.driveId !== this.c.sharedDriveId) || meta.mimeType !== "application/vnd.google-apps.folder") fail("資料夾不在指定公司儲存位置", 503);
@@ -484,15 +486,21 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv, ctx?:Ex
     }
     if(action==="/source-actions"&&request.method==="GET") {
       const store=storeFor(who,url.searchParams.get("store"),c);
-      const rows=await env.DB.prepare(`SELECT x.file_id fileId,x.state,x.version,x.operation_id operationId,x.updated_at updatedAt,a.action,a.expected_version expectedVersion FROM store_order_source_controls x JOIN store_order_source_actions a ON a.operation_id=x.operation_id WHERE x.store_code=? AND x.state!='active' ${who.guest?"AND x.actor=?":""} ORDER BY x.updated_at DESC LIMIT 100`).bind(...(who.guest?[store,who.email]:[store])).all();
+      const rows=await env.DB.prepare(`SELECT x.file_id fileId,x.state,x.version,x.operation_id operationId,x.updated_at updatedAt,a.action,a.expected_version expectedVersion,a.record_only recordOnly FROM store_order_source_controls x JOIN store_order_source_actions a ON a.operation_id=x.operation_id WHERE x.store_code=? AND x.state!='active' ${who.guest?"AND x.actor=?":""} ORDER BY x.updated_at DESC LIMIT 100`).bind(...(who.guest?[store,who.email]:[store])).all();
+      if(who.role==='hq'){
+        await drive.checkFolder(c.stores[store].pendingFolderId,[...c.hqEmails,...c.stores[store].emails]);
+        const present=new Set((await drive.list(c.stores[store].pendingFolderId,true)).map(f=>f.id));
+        const missing=await env.DB.prepare("SELECT s.file_id fileId,COALESCE(x.version,0) version,s.created_at updatedAt FROM store_order_sources s LEFT JOIN store_order_source_controls x ON x.file_id=s.file_id WHERE s.store_code=? AND s.order_id IS NULL AND (x.state IS NULL OR x.state='active') ORDER BY s.created_at DESC LIMIT 200").bind(store).all<any>();
+        rows.results.push(...missing.results.filter(r=>!present.has(r.fileId)).map(r=>({...r,state:'missing',recordOnly:1})));
+      }
       return response({records:rows.results});
     }
     if (action === "/scan" && request.method === "GET") {
       const store = storeFor(who, url.searchParams.get("store"), c), folder = c.stores[store].pendingFolderId;
       await drive.checkFolder(folder, [...c.hqEmails, ...c.stores[store].emails]);
-      const sources = await drive.list(folder, true), registered = await env.DB.prepare("SELECT file_id,order_id FROM store_order_sources WHERE store_code=?").bind(store).all<{file_id:string;order_id:string|null}>();
+      const sources = await drive.list(folder, true), registered = await env.DB.prepare("SELECT file_id,order_id,duplicate_of FROM store_order_sources WHERE store_code=?").bind(store).all<{file_id:string;order_id:string|null;duplicate_of:string|null}>();
       const controls=await env.DB.prepare("SELECT file_id,state,version FROM store_order_source_controls WHERE store_code=?").bind(store).all<{file_id:string;state:string;version:number}>();
-      return response({ files: sources.filter(f=>(!who.guest||f.appProperties?.soActor===who.email)&&!controls.results.some(x=>x.file_id===f.id&&x.state!=='active')).map(f => ({ id: f.id, mimeType: f.mimeType, size: f.size, createdTime: f.createdTime, sourceVersion:controls.results.find(x=>x.file_id===f.id)?.version||0, orderId: registered.results.find(r => r.file_id === f.id)?.order_id || null })) });
+      return response({ files: sources.filter(f=>(!who.guest||f.appProperties?.soActor===who.email)&&!controls.results.some(x=>x.file_id===f.id&&x.state!=='active')).map(f => ({ id: f.id, mimeType: f.mimeType, size: f.size, createdTime: f.createdTime, sourceVersion:controls.results.find(x=>x.file_id===f.id)?.version||0, orderId: registered.results.find(r => r.file_id === f.id)?.duplicate_of?null:registered.results.find(r => r.file_id === f.id)?.order_id || null, duplicate:!!registered.results.find(r=>r.file_id===f.id)?.duplicate_of })) });
     }
     if (action === "/sources" && request.method === "POST") {
       const b = await bounded(request), store = storeFor(who, b.storeCode, c), fileId = folderId(b.fileId), meta = await drive.owned(fileId, c.stores[store].pendingFolderId);
@@ -502,10 +510,10 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv, ctx?:Ex
       const digest = await orderHash(await drive.read(fileId, 20000000));
       const registered=await env.DB.prepare("SELECT digest FROM store_order_sources WHERE file_id=?").bind(fileId).first<{digest:string}>();
       if(registered&&registered.digest!==digest)fail("此原圖已被改動，請另傳新檔並由總部核對",409);
-      const duplicate = await env.DB.prepare("SELECT s.file_id,s.order_id FROM store_order_sources s WHERE s.store_code=? AND s.digest=? AND NOT EXISTS(SELECT 1 FROM store_order_source_controls x WHERE x.file_id=s.file_id AND x.state!='active')").bind(store, digest).first<any>();
+      const duplicate = await env.DB.prepare("SELECT s.file_id,s.order_id FROM store_order_sources s WHERE s.store_code=? AND s.digest=? AND s.duplicate_of IS NULL AND NOT EXISTS(SELECT 1 FROM store_order_source_controls x WHERE x.file_id=s.file_id AND x.state!='active')").bind(store, digest).first<any>();
       if (duplicate) {
         if (duplicate.file_id !== fileId) await env.DB.prepare("INSERT OR IGNORE INTO store_order_sources(file_id,store_code,digest,order_id,created_at,duplicate_of) VALUES (?,?,?,?,?,?)").bind(fileId,store,digest,duplicate.order_id,now(),duplicate.file_id).run();
-        if(who.guest&&duplicate.file_id!==fileId)fail("此照片已有來源紀錄，請由總部核對重傳",409);
+        if(who.guest&&duplicate.file_id!==fileId)fail("此照片已有來源紀錄；請總部在「已移除照片／操作未完成」核對重傳或原檔已移走的情況",409);
         return response({ fileId: duplicate.file_id, orderId: duplicate.order_id, duplicate: duplicate.file_id !== fileId });
       }
       await env.DB.prepare("INSERT INTO store_order_sources(file_id,store_code,digest,created_at,source_md5) VALUES (?,?,?,?,?)").bind(fileId, store, digest, now(),meta.md5Checksum || null).run();
