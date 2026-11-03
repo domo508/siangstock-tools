@@ -9,7 +9,7 @@ export function createFlowFeedback(doc=document) {
   if(!target?.closest)return last;
   if(target.closest('#cloud-next-step'))return last;
   if(target.closest('#cloud-authorize,#cloud-master,#cloud-master-file,#cloud-master-tools'))return 'master';
-  if(target.closest('#cloud-ai,#cloud-ai-consent'))return 'ai';
+  if(target.closest('#cloud-ai,#cloud-ai-recover,#cloud-ai-consent'))return 'ai';
   if(target.closest('#cloud-save-zone'))return 'save';
   if(target.closest('#cloud-review'))return 'review';
   if(target.closest('#cloud-incoming,#cloud-queue,#cloud-batches'))return 'incoming';
@@ -32,7 +32,7 @@ export function createFlowFeedback(doc=document) {
  function show(text,error=false,area=active?.area||last){
   const el=get(areas[area]||areas.session);el.hidden=false;el.textContent=text;el.className='notice '+(error?'danger':'success');
   if(active)active.messaged=true;
-  if(error){const hints={master:'請查看主檔區的原因，重試雲端讀取；需要時再使用手動備援。',receipt:'請先檢查待收清單，確認沒有原圖後再重試，避免重複上傳。',incoming:'請查看此處原因，核對待收清單或原來的單據。',ai:'請查看按鈕旁的錯誤。再次辨識會另計費用，不會自動重送。',save:'請回到覆核欄位修正，保存成功前不代表已交接。',settlement:'請核對異常單與雲端結果；不要重複建立結算批次。'};
+  if(error){const hints={master:'請查看主檔區的原因，重試雲端讀取；需要時再使用手動備援。',receipt:'請先檢查待收清單，確認沒有原圖後再重試，避免重複上傳。',incoming:'請查看此處原因，核對待收清單或原來的單據。',ai:'請查看按鈕旁的錯誤。斷線後先按「檢查／取回辨識結果」；重新辨識才另計費用，不會自動重送。',save:'請回到覆核欄位修正，保存成功前不代表已交接。',settlement:'請核對異常單與雲端結果；不要重複建立結算批次。'};
    guide(area,'這一步尚未完成',hints[area]||'請依此處錯誤提示修正後再操作。',{scroll:true});
    if(active)active.failed=true;
   }

@@ -15,7 +15,7 @@ async function register(){file("source-file-001",config.stores.R00.pendingFolder
 async function save(o=order(),version=0,operationId=crypto.randomUUID()){return call("/orders",{order:o,expectedVersion:version,operationId});}
 async function settled(){await register();expect((await save()).status).toBe(200);const r=await call("/settle",{storeCode:"R00",businessDate:"2026-10-23",orders:[{id:"test-order-001",version:1}],confirmed:true,operationId:crypto.randomUUID()});expect(r.status).toBe(200);return r;}
 beforeEach(()=>{
- sql=new DatabaseSync(":memory:");sql.exec(readFileSync("worker/migrations/0042_store_orders.sql","utf8"));sql.exec(readFileSync("worker/migrations/0045_store_order_guests.sql","utf8"));sql.exec(readFileSync("worker/migrations/0047_store_order_invite_labels.sql","utf8"));files=new Map();serial=0;
+ sql=new DatabaseSync(":memory:");sql.exec(readFileSync("worker/migrations/0042_store_orders.sql","utf8"));sql.exec(readFileSync("worker/migrations/0045_store_order_guests.sql","utf8"));sql.exec(readFileSync("worker/migrations/0047_store_order_invite_labels.sql","utf8"));sql.exec(readFileSync("worker/migrations/0044_store_order_recognition.sql","utf8"));sql.exec(readFileSync("worker/migrations/0052_store_order_source_removals.sql","utf8"));sql.exec(readFileSync("worker/migrations/0053_store_order_recognition_recovery.sql","utf8"));files=new Map();serial=0;
  env={DB:database(),ALLOWED_ORIGINS:"https://siangstock.com",STORE_ORDERS_CONFIG:JSON.stringify(config),STORE_ORDERS_SERVICE_ACCOUNT:JSON.stringify({client_email:"service@test.gserviceaccount.com",private_key:"test-not-a-key"}),ACCESS_AUD:"test",ACCESS_TEAM_DOMAIN:"test"};
  vi.spyOn(OrderDrive.prototype,"checkFolder").mockResolvedValue(undefined);vi.spyOn(OrderDrive.prototype,"checkPermissions").mockResolvedValue(undefined);
  vi.spyOn(OrderDrive.prototype,"meta").mockImplementation(async id=>{if(!files.has(id))throw Error("missing");const f=files.get(id);return {...f,size:String(JSON.stringify(f.content).length),md5Checksum:"stable-md5"};});
@@ -165,3 +165,58 @@ it('訪客不能讀取或下載總部批次，亦不能藉批次ID繞過隔離',
 it('正式開放後也不能透過舊單筆API繞過整批產檔',async()=>{await settled();env.STORE_ORDERS_PRODUCTION_EXPORT='approved-20261030';expect((await call('/orders/test-order-001/export',{expectedVersion:2,mode:'production'},HQ)).status).toBe(410);expect((await call('/orders/test-order-001/export',{expectedVersion:2,mode:'test'},HQ)).status).toBe(410);expect(sql.prepare('SELECT status FROM store_orders').get().status).toBe('settled');});
 
 it('日結與批次輸出接受一般商品整元拆列，快照不改量價且摘要區分原列與POS列',async()=>{await register();const o=order();o.priceBasis='line_total';o.items[0].unitPrice=201;o.items[1].unitPrice=49;expect((await save(o)).status).toBe(200);const settled=await call('/settle',{storeCode:'R00',businessDate:o.businessDate,orders:[{id:o.id,version:1}],confirmed:true,operationId:crypto.randomUUID()});expect(settled.status).toBe(200);const {view,body}=await batchBody(settled.body.batchId);expect(view.summary).toMatchObject({rows:2,posRows:3,quantity:3,amountCents:25000});expect(view.orders[0].items).toEqual(o.items);env.STORE_ORDERS_PRODUCTION_EXPORT='approved-20261030';expect((await call('/batches/'+settled.body.batchId+'/export',body,HQ)).status).toBe(200);const after=await batchBody(settled.body.batchId);expect(after.view.orders[0].items).toEqual(o.items);expect(after.view.summary).toMatchObject({rows:2,posRows:3,quantity:3,amountCents:25000});});
+const removeBody=(fileId='source-file-001')=>({storeCode:'R00',fileId,action:'remove',expectedVersion:0,operationId:crypto.randomUUID(),confirmed:true,reason:'合成測試誤傳'});
+it('待收移除必填原因與確認；已保存訂單不可移除；移除後日結守恆',async()=>{
+ await register();await save();file('remove-source-002',config.stores.R00.pendingFolderId,'synthetic','image/png');const b=removeBody('remove-source-002');
+ expect((await call('/source-actions',{...b,reason:''})).status).toBe(400);expect((await call('/source-actions',{...b,confirmed:false})).status).toBe(400);expect((await call('/source-actions',removeBody())).status).toBe(409);
+ expect((await call('/source-actions',b)).body).toMatchObject({completed:true,state:'removed',version:1});expect(files.get(b.fileId).parents).toEqual([config.recycleFolderId]);expect((await call('/scan?store=R00')).body.files.map(f=>f.id)).not.toContain(b.fileId);
+ expect(sql.prepare('SELECT status,version FROM store_orders').get()).toMatchObject({status:'reviewed',version:1});expect((await call('/settle',{storeCode:'R00',businessDate:'2026-10-23',orders:[{id:'test-order-001',version:1}],confirmed:true,operationId:crypto.randomUUID()})).status).toBe(200);
+ expect(JSON.stringify(sql.prepare('SELECT * FROM store_order_source_actions').all())).not.toContain(b.reason);
+});
+it('移除冪等、僅總部復原、舊操作不重移已復原原圖；復原後未歸單仍擋日結',async()=>{
+ await register();const b=removeBody();expect((await call('/source-actions',b)).status).toBe(200);const n=files.size;expect((await call('/source-actions',b)).status).toBe(200);expect(files.size).toBe(n);
+ const r={...b,action:'restore',expectedVersion:1,operationId:crypto.randomUUID(),reason:'誤移除復原'};expect((await call('/source-actions',r)).status).toBe(403);expect((await call('/source-actions',r,HQ)).body).toMatchObject({completed:true,state:'active',version:2});expect((await call('/source-actions',b)).status).toBe(409);expect((await call('/scan?store=R00')).body.files[0].sourceVersion).toBe(2);expect(sql.prepare('SELECT COUNT(*) n FROM store_orders').get().n).toBe(0);
+ expect((await call('/settle',{storeCode:'R00',businessDate:'2026-10-23',orders:[],confirmed:true,noOrders:true,operationId:crypto.randomUUID()})).status).toBe(409);
+});
+it('搬移部分失敗不假報成功，原操作可重試；狀態閘門阻擋保存與結算及AI',async()=>{
+ await register();const b=removeBody(),original=OrderDrive.prototype.move.getMockImplementation();OrderDrive.prototype.move.mockImplementationOnce(async(...a)=>{await original(...a);throw Error('synthetic-interrupt');});
+ expect((await call('/source-actions',b)).status).toBe(503);expect(sql.prepare('SELECT state FROM store_order_source_controls').get().state).toBe('removing');expect((await save()).status).toBe(409);expect((await call('/settle',{storeCode:'R00',businessDate:'2026-10-23',orders:[],confirmed:true,noOrders:true,operationId:crypto.randomUUID()})).status).toBe(409);
+ expect(()=>sql.prepare("INSERT INTO store_order_recognitions(id,store_code,file_id,actor,request_hash,status,business_day,created_at,updated_at,lock_until) VALUES('synthetic-job','R00','source-file-001','test','hash','processing','2026-10-23','now','now','9999')").run()).toThrow(/source_action_conflict/);
+ expect((await call('/source-actions',{...b,reason:'變更原因'})).status).toBe(409);expect((await call('/source-actions',b)).status).toBe(200);
+});
+it('訪客僅移除自己的原圖、看自己的紀錄，不能復原或跨店',async()=>{
+ const cookie=await guestLogin(),who=(await guestCall(cookie,'/session')).body;file('guest-remove-001',config.stores.R00.pendingFolderId,'fake','image/png',{appProperties:{soActor:who.email}});file('other-remove-001',config.stores.R00.pendingFolderId,'other','image/png',{appProperties:{soActor:'other-guest'}});const b=removeBody('guest-remove-001');
+ expect((await guestCall(cookie,'/source-actions',{...b,fileId:'other-remove-001'})).status).toBe(403);expect((await guestCall(cookie,'/source-actions',{...b,storeCode:'R01'})).status).toBe(403);expect((await guestCall(cookie,'/source-actions',b)).status).toBe(200);expect((await call('/source-actions',removeBody('other-remove-001'),HQ)).status).toBe(200);expect((await guestCall(cookie,'/source-actions?store=R00')).body.records).toHaveLength(1);expect((await guestCall(cookie,'/source-actions',{...b,action:'restore',expectedVersion:1,operationId:crypto.randomUUID()})).status).toBe(403);
+});
+it('辨識中與準備結算中不移除；舊版不繞過',async()=>{
+ await register();const b=removeBody();sql.prepare("INSERT INTO store_order_recognitions(id,store_code,file_id,actor,request_hash,status,business_day,created_at,updated_at,lock_until) VALUES('synthetic-job','R00','source-file-001','test','hash','processing','2026-10-23','now','now','9999')").run();expect((await call('/source-actions',b)).status).toBe(409);sql.exec('DELETE FROM store_order_recognitions');sql.prepare("INSERT INTO store_order_batches(id,store_code,business_date,operation_id,operation_hash,created_at,created_by) VALUES('synthetic-batch','R00','2026-10-23','synthetic-settle','hash','now','test')").run();expect((await call('/source-actions',b)).status).toBe(409);expect((await call('/source-actions',b,EMAIL,{'X-Store-Orders-Version':'old'})).status).toBe(409);
+});
+it('移除確認期間另一人先保存，原子預留拒絕移除並保留已保存資料',async()=>{
+ await register();const original=OrderDrive.prototype.write.getMockImplementation();OrderDrive.prototype.write.mockImplementationOnce(async(...a)=>{const record=await original(...a);expect((await save()).status).toBe(200);return record;});
+ expect((await call('/source-actions',removeBody())).status).toBe(409);expect(files.get('source-file-001').parents).toEqual([config.stores.R00.pendingFolderId]);expect(sql.prepare('SELECT status,version FROM store_orders').get()).toMatchObject({status:'reviewed',version:1});expect(sql.prepare('SELECT COUNT(*) n FROM store_order_source_actions').get().n).toBe(0);
+});
+it('移除及復原兩側權限檢查失敗不宣稱成功；紀錄讀回不同時不搬移',async()=>{
+ await register();OrderDrive.prototype.checkFolder.mockRejectedValueOnce(Error('synthetic denied'));expect((await call('/source-actions',removeBody())).status).toBe(503);expect(files.get('source-file-001').parents).toEqual([config.stores.R00.pendingFolderId]);
+ const original=OrderDrive.prototype.json.getMockImplementation();OrderDrive.prototype.json.mockImplementationOnce(async id=>({...await original(id),reason:'changed'}));expect((await call('/source-actions',removeBody())).status).toBe(503);expect(sql.prepare('SELECT COUNT(*) n FROM store_order_source_controls').get().n).toBe(0);
+});
+it('移除原因紀錄有雜湊保護，部分失敗後紀錄被改動不可復原式重試',async()=>{
+ await register();const b=removeBody();OrderDrive.prototype.move.mockRejectedValueOnce(Error('synthetic interruption'));expect((await call('/source-actions',b)).status).toBe(503);const action=sql.prepare('SELECT record_id FROM store_order_source_actions').get();files.get(action.record_id).content.reason='tampered';const result=await call('/source-actions',b);expect(result.status).toBe(503);expect(result.body.error).toContain('紀錄已變更');expect(files.get(b.fileId).parents).toEqual([config.stores.R00.pendingFolderId]);
+});
+
+it('背景辨識由同一來源取回，完整結果只存受限Drive，跨店不可取得、總部可協助取回',async()=>{
+ await register();env.OPENAI_API_KEY='synthetic-key';const png=Buffer.alloc(24);Buffer.from('89504e470d0a1a0a','hex').copy(png);png.writeUInt32BE(10,16);png.writeUInt32BE(10,20);const image='data:image/png;base64,'+png.toString('base64');
+ const {syntheticFullOrder}=await import('../../store-orders/synthetic-form.js');const raw=syntheticFullOrder();raw.header.storeCode='R00';const op=crypto.randomUUID();
+ const upstream=vi.spyOn(globalThis,'fetch').mockImplementation(async(_url,init)=>Response.json(init?.method==='POST'?{id:'resp_synthetic',status:'queued'}:{id:'resp_synthetic',status:'completed',model:'gpt-6.1-sol',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(raw)}]}]}));
+ const b={storeCode:'R00',fileId:'source-file-001',operationId:op,mode:'full',consent:true,image,detailImages:[image,image,image],pageIndex:0};
+ expect((await call('/recognize',b)).body.job.status).toBe('processing');
+ const path='/recognitions?store=R00&fileId=source-file-001&pageIndex=0';
+ expect((await call(path,undefined,OTHER)).status).toBe(403);expect((await call(path,undefined,HQ)).body.job.status).toBe('completed');
+ const r=await call(path);expect(r.body.result.extraction.header.paperNumber).toBe(raw.header.paperNumber);expect(r.body.job.status).toBe('completed');
+ const row=sql.prepare('SELECT * FROM store_order_recognitions WHERE id=?').get(op);expect(files.get(row.result_drive_id).parents).toEqual([config.recycleFolderId]);expect(JSON.stringify(row)).not.toContain(raw.header.customer.name);
+ expect((await call(path,undefined,EMAIL,{'X-Store-Orders-Version':'old'})).status).toBe(409);await call(path);expect(upstream.mock.calls.filter(c=>c[1]?.method==='POST')).toHaveLength(1);
+ files.get(row.result_drive_id).content.extraction.header.paperNumber='tampered';expect((await call(path)).status).toBe(409);
+});
+it('公司雲端受限區權限無法確認時，辨識提交前停止，不花AI費用',async()=>{
+ await register();env.OPENAI_API_KEY='synthetic-key';OrderDrive.prototype.checkFolder.mockRejectedValueOnce(Error('private storage failure'));const upstream=vi.spyOn(globalThis,'fetch');
+ const r=await call('/recognize',{storeCode:'R00',fileId:'source-file-001'});expect(r.status).toBe(503);expect(upstream).not.toHaveBeenCalled();
+});

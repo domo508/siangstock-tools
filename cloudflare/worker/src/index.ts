@@ -1,4 +1,4 @@
-import { cleanupStoreOrders, storeOrdersRoute } from "./store-orders";
+import { cleanupStoreOrders, recoverStoreOrderRecognitions, storeOrdersRoute } from "./store-orders";
 import { homepageDepartmentsRoute } from "./homepage-departments";
 import { verifyAdmin } from "./access";
 import { RequestValidationError, validateRules, validateUpdateBody } from "./schema";
@@ -97,10 +97,10 @@ async function updateRules(request: Request, env: Env): Promise<Response> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?:ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     try {
-      const storeOrdersResponse = await storeOrdersRoute(request, env);
+      const storeOrdersResponse = await storeOrdersRoute(request, env, ctx);
       if (storeOrdersResponse) return storeOrdersResponse;
       const homepageResponse = await homepageDepartmentsRoute(request, env);
       if (homepageResponse) return homepageResponse;
@@ -124,6 +124,7 @@ export default {
     }
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    if(_controller.cron==='* * * * *'){ctx.waitUntil(recoverStoreOrderRecognitions(env));return;}
     ctx.waitUntil(Promise.all([cleanupNotifications(env), cleanupStoreTransfers(env), cleanupStoreOrders(env)]).then(() => undefined));
   }
 } satisfies ExportedHandler<Env>;

@@ -1,5 +1,5 @@
-import { STORES } from "./core.js?v=20261102-store-orders-r50";
-import { VersionGuard } from "./runtime.js?v=20261102-store-orders-r50";
+import { STORES } from "./core.js?v=20261103-store-orders-r51";
+import { VersionGuard } from "./runtime.js?v=20261103-store-orders-r51";
 const $=id=>document.getElementById(id),guard=new VersionGuard();
 for(const [code,name] of Object.entries({...STORES,R14:STORES.R14||""})){const option=document.createElement("option");option.value=code;option.textContent=`${code} ${name}`;$("paper-store").append(option);}
 $("paper-store").value="R14";

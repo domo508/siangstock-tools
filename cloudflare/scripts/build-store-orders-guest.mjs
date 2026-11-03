@@ -19,6 +19,6 @@ await writeFile(path.join(out,'index.html'),html);
 let paper=await readFile(path.join(tool,'paper.html'),'utf8');paper=paper.replace('/store-orders/?','/store-orders/guest/?');await writeFile(path.join(out,'paper.html'),paper);
 for(const name of ['style.css','paper.css','version.json'])await cp(path.join(tool,name),path.join(out,name));
 await cp(path.join(root,'site.css'),path.join(out,'site.css'));await cp(path.join(root,'inventory/assets/xlsx.full.min.js'),path.join(out,'xlsx.full.min.js'));
-await rm(path.join(out,'vendor'),{recursive:true,force:true});
+await mkdir(path.join(out,'vendor'),{recursive:true}); // Preserve immutable historical guest assets.
 for(const name of ['pdf','heic'])await cp(path.join(tool,'vendor',VERSION,name),path.join(out,'vendor',VERSION,name),{recursive:true});
 console.log('Guest bundle built for '+VERSION+' (local assets only; no credentials)');

@@ -1,9 +1,10 @@
+import {sourceAction,SourceActionError} from './store-order-sources';
 import {recognitionResponse} from './store-order-stream';
 import {STORE_ORDER_SUPER_ADMIN,readHQAccess,updateHQAccess,HQAccessError} from "./store-order-hq-access";
 import {ownerStorageSetupRoute} from "./store-order-setup";
 import {ownerDriveToken,OwnerError,type OwnerEnv} from "./store-order-owner";
 import {issueGuestInvite,redeemGuestInvite,verifyGuest,logoutGuest,GuestError} from "./store-order-guests";
-import {recognizeStoreOrder,RecognitionError,ORDER_AI_MODEL} from "./store-order-recognition";
+import {recognizeStoreOrder,recognitionStatus,advanceRecognition,type RecognitionStorage,RecognitionError,ORDER_AI_MODEL} from "./store-order-recognition";
 import {resolvedERPPrices} from "../../../store-orders/bundle-pricing.js";
 import { SignJWT, importPKCS8 } from "jose";
 import { verifyCompanyUser, type AccessConfig } from "./access";
@@ -67,6 +68,7 @@ export async function orderHash(value: string | ArrayBuffer): Promise<string> {
   return [...new Uint8Array(digest)].map(n => n.toString(16).padStart(2, "0")).join("");
 }
 export class OrderDrive {
+  operationSignal?: AbortSignal;
   private accessToken = "";
   serviceEmail!: string;
   private account!: { client_email: string; private_key: string };
@@ -88,7 +90,7 @@ export class OrderDrive {
     return this.accessToken = result.access_token!;
   }
   async request(path: string, init: RequestInit = {}, upload = false): Promise<any> {
-    const r = await fetch(`https://www.googleapis.com/${upload ? "upload/" : ""}drive/v3/${path}`, { ...init, headers: { ...init.headers, Authorization: `Bearer ${await this.token()}` } });
+    const r = await fetch(`https://www.googleapis.com/${upload ? "upload/" : ""}drive/v3/${path}`, { ...init, ...(this.operationSignal?{signal:this.operationSignal}:{}), headers: { ...init.headers, Authorization: `Bearer ${await this.token()}` } });
     if (!r.ok) fail(r.status === 429 ? "公司雲端額度或流量已滿，請稍後重試" : "公司雲端操作失敗，資料尚未完成交接", 503);
     return r.status === 204 ? {} : r.json();
   }
@@ -348,6 +350,27 @@ async function exportBatch(request:Request,env:OrdersEnv,who:Actor,c:Config,driv
   return response({saved:true,redownload:false,versions:expected.map(o=>({...o,version:o.version+1}))});
 }
 
+function recognitionStorage(c:Config,drive:OrderDrive):RecognitionStorage {
+ return {
+  async save(id,result){
+   await drive.checkFolder(c.recycleFolderId,c.hqEmails);
+   const file=await drive.write(c.recycleFolderId,`ai-${id}.json`,result,`ai-result-${id}`);
+   await drive.owned(file,c.recycleFolderId);await drive.checkPermissions(file,c.hqEmails);
+   const back=await drive.json(file,1000000);
+   if(await orderHash(JSON.stringify(back))!==await orderHash(JSON.stringify(result)))fail('辨識雲端保存核對失敗，尚未提供結果',503);
+   return {id:file,hash:await orderHash(JSON.stringify(back))};
+  },
+  async load(id){await drive.owned(id,c.recycleFolderId);await drive.checkPermissions(id,c.hqEmails);return drive.json(id,1000000);}
+ };
+}
+// This minute trigger only retrieves/cancels existing responses. It NEVER submits paid AI work.
+export async function recoverStoreOrderRecognitions(env:OrdersEnv):Promise<void>{
+ const jobs=(await env.DB.prepare("SELECT id FROM store_order_recognitions WHERE status='processing' AND deadline_at IS NOT NULL ORDER BY created_at LIMIT 20").all<{id:string}>()).results;
+ if(!jobs.length)return;
+ const c=await configuration(env);
+ for(const job of jobs){try{const drive=new OrderDrive(env,c);drive.operationSignal=AbortSignal.timeout(25000);await advanceRecognition(env,job.id,recognitionStorage(c,drive));}catch{/* Keep the job recoverable; no raw error, content or credentials are logged. */}}
+}
+
 export async function cleanupStoreOrders(env:OrdersEnv):Promise<void> {
   if(!env.STORE_ORDERS_CONFIG&&!env.STORE_ORDERS_VAULT)return;
   let result="retention_completed";
@@ -356,7 +379,7 @@ export async function cleanupStoreOrders(env:OrdersEnv):Promise<void> {
   try {await env.DB.prepare("INSERT INTO store_order_events(id,actor,event,created_at) VALUES (?,?,?,?)").bind(crypto.randomUUID(),"system",result,now()).run();} catch { /* No credential, file or customer details are logged. */ }
 }
 
-export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promise<Response | null> {
+export async function storeOrdersRoute(request: Request, env: OrdersEnv, ctx?:ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url),guestPath=url.pathname.startsWith("/api/store-orders-guest/"),prefix=guestPath?"/api/store-orders-guest":"/api/store-orders"; if(url.pathname!==prefix&&!url.pathname.startsWith(prefix+"/"))return null;
   try {
     if (!["GET", "POST", "PUT"].includes(request.method)) fail("不支援此操作", 405);
@@ -401,9 +424,26 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promis
       const meta=await drive.owned(id,folder);if(!MIME.has(meta.mimeType))fail("只能讀取授權訂單原圖",403);if(source)await unchangedSource(env,drive,id);
       return new Response(await drive.read(id,20000000),{headers:{...JSON_HEADERS,"Content-Type":meta.mimeType,"Content-Disposition":"inline"}});
     }
-    if(action==="/recognize"&&request.method==="POST"){
-      const b=await bounded(request,23000000),store=storeFor(who,b.storeCode,c),fileId=folderId(b.fileId);
-      return recognitionResponse(()=>recognizeStoreOrder(env,b,{actor:who.email,storeCode:store,fileId,validateSource:async()=>{const registered=await env.DB.prepare("SELECT file_id FROM store_order_sources WHERE file_id=? AND store_code=? AND duplicate_of IS NULL").bind(fileId,store).first();if(!registered)fail("請先登記本店來源原圖",403);const meta=await drive.owned(fileId,c.stores[store].pendingFolderId);if(who.guest&&meta.appProperties?.soActor!==who.email)fail("無權辨識其他人的原圖",403);await unchangedSource(env,drive,fileId);}}),error=>({error:error instanceof RecognitionError||error instanceof OrderError?error.message:"辨識結果未確認收到，請先檢查狀態，勿重複送出",status:error instanceof RecognitionError||error instanceof OrderError?error.status:503}));
+    if((action==="/recognize"&&request.method==="POST")||(action==="/recognitions"&&request.method==="GET")){
+      if(request.headers.get('X-Store-Orders-Version')!==VERSION)fail('重新載入最新版後再操作',409);
+      const b=request.method==='POST'?await bounded(request,23000000):Object.fromEntries(url.searchParams),store=storeFor(who,b.storeCode||b.store,c),fileId=folderId(b.fileId);
+      drive.operationSignal=AbortSignal.timeout(25000);
+      const context={actor:who.email,storeCode:store,fileId,storage:recognitionStorage(c,drive),validateSource:async()=>{
+        const registered=await env.DB.prepare("SELECT file_id,order_id FROM store_order_sources WHERE file_id=? AND store_code=? AND duplicate_of IS NULL").bind(fileId,store).first<any>();
+        if(!registered)fail('請先登記本店來源原圖',403);
+        if(registered.order_id){const row=await index(env,registered.order_id);visible(who,row,c);if(row.batch_id)fail('已結算訂單不可重新帶入辨識結果',409);}
+        const control=await env.DB.prepare("SELECT state FROM store_order_source_controls WHERE file_id=?").bind(fileId).first<{state:string}>();if(control&&control.state!=='active')fail('照片已移除或正在處理，請更新清單',409);
+        const meta=await drive.owned(fileId,c.stores[store].pendingFolderId);if(who.guest&&meta.appProperties?.soActor!==who.email)fail('無權辨識其他人的原圖',403);await unchangedSource(env,drive,fileId);
+      }};
+      if(request.method==='GET'){
+        await context.validateSource();
+        const page=Number(b.pageIndex??0);if(!Number.isSafeInteger(page)||page<0||page>29)fail('來源頁碼不符');
+        const job=await env.DB.prepare(`SELECT id,actor FROM store_order_recognitions WHERE file_id=? AND store_code=? ${who.role==='hq'?'':'AND actor=?'} AND page_index=? ORDER BY created_at DESC,id DESC LIMIT 1`).bind(...(who.role==='hq'?[fileId,store,page]:[fileId,store,who.email,page])).first<{id:string;actor:string}>();
+        return response(job?await recognitionStatus(env,job.id,{...context,actor:job.actor}):{version:VERSION,job:null});
+      }
+      await drive.checkFolder(c.recycleFolderId,c.hqEmails);
+      const work=recognizeStoreOrder(env,b,context);ctx?.waitUntil(work.catch(()=>undefined));
+      return recognitionResponse(()=>work,error=>({error:error instanceof RecognitionError||error instanceof OrderError?error.message:'辨識提交未確認，請先檢查辨識狀態，勿重複送出',status:error instanceof RecognitionError||error instanceof OrderError?error.status:503}));
     }
     if(action==="/attention"&&request.method==="GET") {
       hq(who);
@@ -437,20 +477,32 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promis
       const batches = who.guest?{results:[]}:await env.DB.prepare("SELECT id,business_date,status,previous_batch_id,created_at FROM store_order_batches WHERE store_code=? AND business_date=? ORDER BY created_at").bind(store, date).all();
       return response({ orders: rows.results, batches: batches.results });
     }
+    if(action==="/source-actions"&&request.method==="POST") {
+      const b=await bounded(request),store=storeFor(who,b.storeCode,c);
+      drive.operationSignal=AbortSignal.timeout(120000);
+      return response(await sourceAction(env.DB,drive,{store,actor:who.email,guest:!!who.guest,hq:who.role==="hq",pending:c.stores[store].pendingFolderId,recycle:c.recycleFolderId,hqEmails:c.hqEmails,storeEmails:[...c.hqEmails,...c.stores[store].emails]},b));
+    }
+    if(action==="/source-actions"&&request.method==="GET") {
+      const store=storeFor(who,url.searchParams.get("store"),c);
+      const rows=await env.DB.prepare(`SELECT x.file_id fileId,x.state,x.version,x.operation_id operationId,x.updated_at updatedAt,a.action,a.expected_version expectedVersion FROM store_order_source_controls x JOIN store_order_source_actions a ON a.operation_id=x.operation_id WHERE x.store_code=? AND x.state!='active' ${who.guest?"AND x.actor=?":""} ORDER BY x.updated_at DESC LIMIT 100`).bind(...(who.guest?[store,who.email]:[store])).all();
+      return response({records:rows.results});
+    }
     if (action === "/scan" && request.method === "GET") {
       const store = storeFor(who, url.searchParams.get("store"), c), folder = c.stores[store].pendingFolderId;
       await drive.checkFolder(folder, [...c.hqEmails, ...c.stores[store].emails]);
       const sources = await drive.list(folder, true), registered = await env.DB.prepare("SELECT file_id,order_id FROM store_order_sources WHERE store_code=?").bind(store).all<{file_id:string;order_id:string|null}>();
-      return response({ files: sources.filter(f=>!who.guest||f.appProperties?.soActor===who.email).map(f => ({ id: f.id, mimeType: f.mimeType, size: f.size, createdTime: f.createdTime, orderId: registered.results.find(r => r.file_id === f.id)?.order_id || null })) });
+      const controls=await env.DB.prepare("SELECT file_id,state,version FROM store_order_source_controls WHERE store_code=?").bind(store).all<{file_id:string;state:string;version:number}>();
+      return response({ files: sources.filter(f=>(!who.guest||f.appProperties?.soActor===who.email)&&!controls.results.some(x=>x.file_id===f.id&&x.state!=='active')).map(f => ({ id: f.id, mimeType: f.mimeType, size: f.size, createdTime: f.createdTime, sourceVersion:controls.results.find(x=>x.file_id===f.id)?.version||0, orderId: registered.results.find(r => r.file_id === f.id)?.order_id || null })) });
     }
     if (action === "/sources" && request.method === "POST") {
       const b = await bounded(request), store = storeFor(who, b.storeCode, c), fileId = folderId(b.fileId), meta = await drive.owned(fileId, c.stores[store].pendingFolderId);
       if(who.guest&&meta.appProperties?.soActor!==who.email)fail("無權登記其他人的原圖",403);
+      if(await env.DB.prepare("SELECT 1 FROM store_order_source_controls WHERE file_id=? AND state!='active'").bind(fileId).first())fail("照片已移除或正在處理，請更新清單",409);
       if (!MIME.has(meta.mimeType)) fail("不支援的單據格式");
       const digest = await orderHash(await drive.read(fileId, 20000000));
       const registered=await env.DB.prepare("SELECT digest FROM store_order_sources WHERE file_id=?").bind(fileId).first<{digest:string}>();
       if(registered&&registered.digest!==digest)fail("此原圖已被改動，請另傳新檔並由總部核對",409);
-      const duplicate = await env.DB.prepare("SELECT file_id,order_id FROM store_order_sources WHERE store_code=? AND digest=?").bind(store, digest).first<any>();
+      const duplicate = await env.DB.prepare("SELECT s.file_id,s.order_id FROM store_order_sources s WHERE s.store_code=? AND s.digest=? AND NOT EXISTS(SELECT 1 FROM store_order_source_controls x WHERE x.file_id=s.file_id AND x.state!='active')").bind(store, digest).first<any>();
       if (duplicate) {
         if (duplicate.file_id !== fileId) await env.DB.prepare("INSERT OR IGNORE INTO store_order_sources(file_id,store_code,digest,order_id,created_at,duplicate_of) VALUES (?,?,?,?,?,?)").bind(fileId,store,digest,duplicate.order_id,now(),duplicate.file_id).run();
         if(who.guest&&duplicate.file_id!==fileId)fail("此照片已有來源紀錄，請由總部核對重傳",409);
@@ -509,6 +561,8 @@ export async function storeOrdersRoute(request: Request, env: OrdersEnv): Promis
     }
     return response({ error: "找不到此操作" }, 404);
   } catch (error) {
+    if(error instanceof SourceActionError)return response({error:error.message},error.status);
+    if(String(error).includes('source_action_conflict'))return response({error:'照片正在移除、復原或狀態已變更，請更新清單後再操作'},409);
     if(error instanceof HQAccessError)return response({error:error.message},error.status);
     if(error instanceof OwnerError)return response({error:error.message},error.status);
     if(error instanceof GuestError)return response({error:error.message},error.status);

@@ -1,5 +1,178 @@
+// store-orders/recognition-job.js
+var recognitionQuery = (p) => `/recognitions?store=${encodeURIComponent(p.storeCode)}&fileId=${encodeURIComponent(p.fileId)}&pageIndex=${p.index}`;
+async function waitRecognition(page, { api: api2, jobId, onProgress = () => {
+}, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, maxWait = 36e4 }) {
+  const started = now();
+  while (true) {
+    const data = await api2(recognitionQuery(page));
+    if (!data.job || data.job.id !== jobId) throw Error("\u8FA8\u8B58\u4F5C\u696D\u5DF2\u6539\u8B8A\u6216\u5C1A\u672A\u78BA\u8A8D\u63D0\u4EA4\uFF0C\u8ACB\u6AA2\u67E5\u72C0\u614B\uFF1B\u672A\u81EA\u52D5\u91CD\u9001");
+    onProgress(data.job);
+    if (data.job.status === "completed") {
+      if (!data.result?.extraction?.header) throw Error("\u5B8C\u6574\u8FA8\u8B58\u7D50\u679C\u5C1A\u672A\u53D6\u5F97\uFF0C\u672A\u63A1\u7528\u90E8\u5206\u7D50\u679C");
+      return data.result;
+    }
+    if (data.job.status === "failed") throw Error(data.job.error || "\u8FA8\u8B58\u672A\u5B8C\u6210\uFF0C\u672A\u81EA\u52D5\u91CD\u9001\uFF1B\u8ACB\u4EBA\u5DE5\u586B\u5BEB\u6216\u660E\u78BA\u91CD\u8A66");
+    if (now() - started >= maxWait) throw Error("\u66AB\u6642\u7121\u6CD5\u78BA\u8A8D\u8FA8\u8B58\u5B8C\u6210\uFF0C\u672A\u81EA\u52D5\u91CD\u9001\uFF1B\u8ACB\u7A0D\u5F8C\u6309\u300C\u6AA2\u67E5\uFF0F\u53D6\u56DE\u8FA8\u8B58\u7D50\u679C\u300D");
+    await sleep(5e3);
+  }
+}
+async function collectRecognition(pages, { api: api2, onProgress = () => {
+}, wait = waitRecognition }) {
+  const results = [];
+  for (const [i, page] of pages.entries()) {
+    const data = await api2(recognitionQuery(page));
+    if (!data.job) throw Error(`\u7B2C${i + 1}\u9801\u6C92\u6709\u53EF\u53D6\u56DE\u7684\u8FA8\u8B58\u4F5C\u696D\uFF0C\u672A\u5957\u7528\u90E8\u5206\u7D50\u679C\uFF1B\u8ACB\u5B8C\u6574\u8FA8\u8B58\u6216\u4EBA\u5DE5\u88DC\u9F4A`);
+    onProgress(data.job, i);
+    results.push(data.job.status === "completed" && data.result ? data.result : await wait(page, { api: api2, jobId: data.job.id, onProgress: (job) => onProgress(job, i) }));
+  }
+  return results;
+}
+
+// store-orders/source-removal-ui.js
+function createSourceRemovalUI({ container, api: api2, canChange, canRestore, inDraft, setBusy, afterChange, notice }) {
+  const doc = container.ownerDocument, node3 = (tag, text2, cls) => {
+    const e = doc.createElement(tag);
+    if (text2 !== void 0) e.textContent = text2;
+    if (cls) e.className = cls;
+    return e;
+  };
+  const details = node3("details", void 0, "source-removed-tools"), summary = node3("summary", "\u5DF2\u79FB\u9664\u7167\u7247\uFF0F\u64CD\u4F5C\u672A\u5B8C\u6210"), list = node3("div"), listStatus = node3("p");
+  listStatus.setAttribute("role", "status");
+  details.append(summary, listStatus, list);
+  container.after(details);
+  const dialog = node3("dialog", void 0, "source-removal-dialog");
+  dialog.setAttribute("aria-labelledby", "source-remove-title");
+  const title = node3("h2");
+  title.id = "source-remove-title";
+  const description = node3("p"), identity = node3("p", void 0, "source-remove-identity"), reasonLabel = node3("label", "\u539F\u56E0\uFF08\u5FC5\u586B\uFF09"), reason = node3("textarea");
+  reason.rows = 3;
+  reason.maxLength = 200;
+  reason.placeholder = "\u4F8B\u5982\uFF1A\u8AA4\u50B3\u3001\u91CD\u8907\u4E0A\u50B3\u6216\u672C\u5F35\u6E2C\u8A66\u4E0D\u518D\u4F7F\u7528\u3002\u8ACB\u52FF\u586B\u5BA2\u6236\u500B\u8CC7\u3002";
+  reasonLabel.append(reason);
+  const checkLabel = node3("label", void 0, "check"), check = node3("input");
+  check.type = "checkbox";
+  const checkText = node3("span");
+  checkLabel.append(check, checkText);
+  const status = node3("p");
+  status.setAttribute("role", "alert");
+  const actions = node3("div", void 0, "source-remove-actions"), cancel = node3("button", "\u4FDD\u7559\u7167\u7247", "secondary"), confirm2 = node3("button", "\u78BA\u8A8D\u79FB\u9664", "source-remove-confirm");
+  cancel.type = confirm2.type = "button";
+  actions.append(cancel, confirm2);
+  dialog.append(title, description, identity, reasonLabel, checkLabel, status, actions);
+  doc.body.append(dialog);
+  let selected = null, working = false, op = null, origin = null, refreshing = false;
+  function controls2() {
+    confirm2.disabled = working || !selected || !check.checked || !selected.operationId && !reason.value.trim() || !canChange();
+    cancel.disabled = working;
+    reason.disabled = working || !!selected?.operationId;
+    check.disabled = working;
+  }
+  reason.oninput = check.onchange = controls2;
+  function close() {
+    if (working) return;
+    dialog.close();
+    origin?.focus();
+    selected = null;
+    op = null;
+  }
+  cancel.onclick = close;
+  dialog.addEventListener("cancel", (e) => {
+    if (working) e.preventDefault();
+  });
+  function open(item, action, button) {
+    if (!canChange()) return;
+    origin = button;
+    selected = { ...item, action };
+    op = item.operationId || crypto.randomUUID();
+    title.textContent = action === "restore" ? "\u5FA9\u539F\u5F85\u6536\u7167\u7247\uFF1F" : "\u79FB\u9664\u9019\u5F35\u5F85\u6536\u7167\u7247\uFF1F";
+    identity.textContent = item.label || `\u7167\u7247\u8B58\u5225\uFF1A${item.fileId.slice(-8)}`;
+    description.textContent = action === "restore" ? "\u5FA9\u539F\u5F8C\u6703\u56DE\u5230\u539F\u9580\u5E02\u7684\u5F85\u6536\u6E05\u55AE\uFF0C\u53EF\u80FD\u518D\u6B21\u963B\u64CB\u65E5\u7D50\u3002\u8ACB\u78BA\u8A8D\u4ECD\u9700\u8655\u7406\u9019\u5F35\u7167\u7247\u3002" : "\u539F\u5716\u6703\u79FB\u81F3\u7E3D\u90E8\u53EF\u5FA9\u539F\u5340\uFF0C\u5B8C\u6210\u5F8C\u4E0D\u518D\u51FA\u73FE\u5728\u5F85\u6536\u6E05\u55AE\uFF0C\u4E5F\u4E0D\u518D\u963B\u64CB\u65E5\u7D50\u3002\u9019\u4E0D\u6703\u4F5C\u5EE2\u4EFB\u4F55\u5DF2\u4FDD\u5B58\u8A02\u55AE\u3002";
+    if (inDraft(item.fileId)) description.textContent += " \u6B64\u7167\u7247\u5C6C\u65BC\u76EE\u524D\u672A\u4FDD\u5B58\u8349\u7A3F\uFF1B\u79FB\u9664\u6210\u529F\u5F8C\u5C07\u653E\u68C4\u9019\u4EFD\u8349\u7A3F\uFF0C\u5176\u9918\u539F\u5716\u4ECD\u4FDD\u7559\u3002";
+    checkText.textContent = action === "restore" ? "\u6211\u5DF2\u78BA\u8A8D\u8981\u5C07\u9019\u5F35\u7167\u7247\u6062\u5FA9\u70BA\u5F85\u6536\u3002" : "\u6211\u5DF2\u78BA\u8A8D\u9019\u5F35\u7167\u7247\u53EF\u79FB\u9664\uFF1B\u82E5\u4ECD\u662F\u6709\u6548\u8A02\u55AE\uFF0C\u61C9\u4FDD\u7559\u4E26\u5B8C\u6210\u8986\u6838\u3002";
+    reason.value = "";
+    reasonLabel.hidden = !!item.operationId;
+    check.checked = false;
+    status.textContent = "";
+    confirm2.textContent = item.operationId ? "\u91CD\u8A66\u539F\u64CD\u4F5C" : action === "restore" ? "\u78BA\u8A8D\u5FA9\u539F" : "\u78BA\u8A8D\u79FB\u9664";
+    cancel.textContent = action === "restore" ? "\u66AB\u4E0D\u5FA9\u539F" : "\u4FDD\u7559\u7167\u7247";
+    controls2();
+    dialog.showModal();
+    reasonLabel.hidden ? check.focus() : reason.focus();
+  }
+  confirm2.onclick = async () => {
+    if (confirm2.disabled || !selected) return;
+    const item = selected;
+    working = true;
+    setBusy(true);
+    controls2();
+    status.textContent = item.action === "restore" ? "\u6B63\u5728\u5FA9\u539F\u4E26\u78BA\u8A8D\u5B58\u53D6\u6B0A\u9650\u2026" : "\u6B63\u5728\u79FB\u81F3\u53EF\u5FA9\u539F\u5340\u4E26\u78BA\u8A8D\u5B58\u53D6\u6B0A\u9650\u2026";
+    try {
+      const result = await api2("/source-actions", "POST", { storeCode: container.dataset.storeCode || "R14", fileId: item.fileId, action: item.action, operationId: op, expectedVersion: item.expectedVersion ?? item.sourceVersion ?? item.version ?? 0, confirmed: true, ...!item.operationId ? { reason: reason.value.trim() } : {} });
+      if (result.completed !== true) throw Error("\u64CD\u4F5C\u5C1A\u672A\u78BA\u8A8D\u5B8C\u6210\uFF0C\u8ACB\u66F4\u65B0\u6E05\u55AE\u67E5\u770B\u7D00\u9304");
+      dialog.close();
+      selected = null;
+      op = null;
+      details.open = true;
+      try {
+        await afterChange(item.fileId, item.action);
+      } catch {
+        notice("\u7167\u7247\u64CD\u4F5C\u5DF2\u5B8C\u6210\uFF0C\u4F46\u6E05\u55AE\u66F4\u65B0\u672A\u5B8C\u6210\uFF0C\u8ACB\u624B\u52D5\u6AA2\u67E5\u65B0\u55AE\u3002", true);
+        return;
+      }
+      const text2 = item.action === "restore" ? "\u7167\u7247\u5DF2\u5FA9\u539F\u81F3\u5F85\u6536\u6E05\u55AE\uFF0C\u8ACB\u91CD\u65B0\u958B\u555F\u8655\u7406\u3002" : "\u7167\u7247\u5DF2\u79FB\u9664\u4E26\u4FDD\u7559\u53EF\u5FA9\u539F\u7D00\u9304\uFF1B\u5DF2\u4FDD\u5B58\u8A02\u55AE\u4FDD\u6301\u539F\u6A23\u3002";
+      notice(text2, false);
+      listStatus.textContent = text2;
+    } catch (e) {
+      status.textContent = e.message || "\u5C1A\u672A\u78BA\u8A8D\u6210\u529F\uFF0C\u8ACB\u4FDD\u7559\u539F\u5716\u4E26\u66F4\u65B0\u6E05\u55AE";
+      status.className = "notice danger";
+      notice(status.textContent, true);
+    } finally {
+      working = false;
+      setBusy(false);
+      controls2();
+      await refresh2();
+    }
+  };
+  async function refresh2() {
+    if (!details.open || refreshing) return;
+    refreshing = true;
+    try {
+      const data = await api2("/source-actions?store=" + encodeURIComponent(container.dataset.storeCode || "R14"));
+      list.replaceChildren();
+      for (const item of data.records) {
+        const row = node3("div", void 0, "item"), phase = item.state === "removed" ? "\u5DF2\u79FB\u9664\uFF0C\u53EF\u7531\u7E3D\u90E8\u5FA9\u539F" : "\u64CD\u4F5C\u672A\u5B8C\u6210\uFF0C\u4E0D\u4EE3\u8868\u5DF2\u79FB\u9664";
+        row.append(node3("strong", phase), node3("p", new Date(item.updatedAt).toLocaleString("zh-TW")));
+        if (item.state !== "removed" || canRestore()) {
+          const b = node3("button", item.state === "removed" ? "\u5FA9\u539F\u81F3\u5F85\u6536\u6E05\u55AE" : "\u91CD\u8A66\u539F\u64CD\u4F5C", "secondary");
+          b.type = "button";
+          b.onclick = () => open(item, item.state === "removed" ? "restore" : item.action, b);
+          if (item.state === "removed") b.onclick = () => open({ fileId: item.fileId, version: item.version }, "restore", b);
+          row.append(b);
+        } else row.append(node3("p", "\u9700\u8981\u5FA9\u539F\u6642\uFF0C\u8ACB\u806F\u7D61\u7E3D\u90E8\u3002"));
+        list.append(row);
+      }
+      if (!data.records.length) list.append(node3("p", "\u76EE\u524D\u6C92\u6709\u5DF2\u79FB\u9664\u6216\u672A\u5B8C\u6210\u7684\u64CD\u4F5C\u3002"));
+    } catch (e) {
+      listStatus.textContent = "\u79FB\u9664\u7D00\u9304\u8B80\u53D6\u5931\u6557\uFF1A" + e.message;
+      listStatus.className = "notice danger";
+    } finally {
+      refreshing = false;
+    }
+  }
+  details.addEventListener("toggle", () => {
+    if (details.open) void refresh2();
+  });
+  return { button(file, label) {
+    const b = node3("button", "\u79FB\u9664\u5F85\u6536\u7167\u7247", "source-remove-button");
+    b.type = "button";
+    b.setAttribute("aria-label", "\u79FB\u9664" + label);
+    b.onclick = () => open({ fileId: file.id, sourceVersion: file.sourceVersion || 0, label }, "remove", b);
+    return b;
+  }, refresh: refresh2, dialog };
+}
+
 // store-orders/core.js
-var VERSION = "20261102-store-orders-r50";
+var VERSION = "20261103-store-orders-r51";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -499,7 +672,7 @@ function createFlowFeedback(doc = document) {
     if (!target2?.closest) return last;
     if (target2.closest("#cloud-next-step")) return last;
     if (target2.closest("#cloud-authorize,#cloud-master,#cloud-master-file,#cloud-master-tools")) return "master";
-    if (target2.closest("#cloud-ai,#cloud-ai-consent")) return "ai";
+    if (target2.closest("#cloud-ai,#cloud-ai-recover,#cloud-ai-consent")) return "ai";
     if (target2.closest("#cloud-save-zone")) return "save";
     if (target2.closest("#cloud-review")) return "review";
     if (target2.closest("#cloud-incoming,#cloud-queue,#cloud-batches")) return "incoming";
@@ -546,7 +719,7 @@ function createFlowFeedback(doc = document) {
     el.className = "notice " + (error ? "danger" : "success");
     if (active) active.messaged = true;
     if (error) {
-      const hints = { master: "\u8ACB\u67E5\u770B\u4E3B\u6A94\u5340\u7684\u539F\u56E0\uFF0C\u91CD\u8A66\u96F2\u7AEF\u8B80\u53D6\uFF1B\u9700\u8981\u6642\u518D\u4F7F\u7528\u624B\u52D5\u5099\u63F4\u3002", receipt: "\u8ACB\u5148\u6AA2\u67E5\u5F85\u6536\u6E05\u55AE\uFF0C\u78BA\u8A8D\u6C92\u6709\u539F\u5716\u5F8C\u518D\u91CD\u8A66\uFF0C\u907F\u514D\u91CD\u8907\u4E0A\u50B3\u3002", incoming: "\u8ACB\u67E5\u770B\u6B64\u8655\u539F\u56E0\uFF0C\u6838\u5C0D\u5F85\u6536\u6E05\u55AE\u6216\u539F\u4F86\u7684\u55AE\u64DA\u3002", ai: "\u8ACB\u67E5\u770B\u6309\u9215\u65C1\u7684\u932F\u8AA4\u3002\u518D\u6B21\u8FA8\u8B58\u6703\u53E6\u8A08\u8CBB\u7528\uFF0C\u4E0D\u6703\u81EA\u52D5\u91CD\u9001\u3002", save: "\u8ACB\u56DE\u5230\u8986\u6838\u6B04\u4F4D\u4FEE\u6B63\uFF0C\u4FDD\u5B58\u6210\u529F\u524D\u4E0D\u4EE3\u8868\u5DF2\u4EA4\u63A5\u3002", settlement: "\u8ACB\u6838\u5C0D\u7570\u5E38\u55AE\u8207\u96F2\u7AEF\u7D50\u679C\uFF1B\u4E0D\u8981\u91CD\u8907\u5EFA\u7ACB\u7D50\u7B97\u6279\u6B21\u3002" };
+      const hints = { master: "\u8ACB\u67E5\u770B\u4E3B\u6A94\u5340\u7684\u539F\u56E0\uFF0C\u91CD\u8A66\u96F2\u7AEF\u8B80\u53D6\uFF1B\u9700\u8981\u6642\u518D\u4F7F\u7528\u624B\u52D5\u5099\u63F4\u3002", receipt: "\u8ACB\u5148\u6AA2\u67E5\u5F85\u6536\u6E05\u55AE\uFF0C\u78BA\u8A8D\u6C92\u6709\u539F\u5716\u5F8C\u518D\u91CD\u8A66\uFF0C\u907F\u514D\u91CD\u8907\u4E0A\u50B3\u3002", incoming: "\u8ACB\u67E5\u770B\u6B64\u8655\u539F\u56E0\uFF0C\u6838\u5C0D\u5F85\u6536\u6E05\u55AE\u6216\u539F\u4F86\u7684\u55AE\u64DA\u3002", ai: "\u8ACB\u67E5\u770B\u6309\u9215\u65C1\u7684\u932F\u8AA4\u3002\u65B7\u7DDA\u5F8C\u5148\u6309\u300C\u6AA2\u67E5\uFF0F\u53D6\u56DE\u8FA8\u8B58\u7D50\u679C\u300D\uFF1B\u91CD\u65B0\u8FA8\u8B58\u624D\u53E6\u8A08\u8CBB\u7528\uFF0C\u4E0D\u6703\u81EA\u52D5\u91CD\u9001\u3002", save: "\u8ACB\u56DE\u5230\u8986\u6838\u6B04\u4F4D\u4FEE\u6B63\uFF0C\u4FDD\u5B58\u6210\u529F\u524D\u4E0D\u4EE3\u8868\u5DF2\u4EA4\u63A5\u3002", settlement: "\u8ACB\u6838\u5C0D\u7570\u5E38\u55AE\u8207\u96F2\u7AEF\u7D50\u679C\uFF1B\u4E0D\u8981\u91CD\u8907\u5EFA\u7ACB\u7D50\u7B97\u6279\u6B21\u3002" };
       guide(area, "\u9019\u4E00\u6B65\u5C1A\u672A\u5B8C\u6210", hints[area] || "\u8ACB\u4F9D\u6B64\u8655\u932F\u8AA4\u63D0\u793A\u4FEE\u6B63\u5F8C\u518D\u64CD\u4F5C\u3002", { scroll: true });
       if (active) active.failed = true;
     }
@@ -1889,6 +2062,19 @@ var review = createReview($("cloud-review"), { cloudMode: true, requireVersion: 
 var profile = { get: builtInPOSProfile, setBlocked() {
 } };
 $("cloud-pos-profile").textContent = "\u5DF2\u5167\u5EFA\u5DE5\u7A0B\u5E2B\u78BA\u8A8D\u7684\u6700\u7D4225\u6B04POS\uFF1AR\u6B04\u70BA\u6BCF\u4EF6\u50F9\u683C\uFF0C\u56DB\u7A2E\u4ED8\u6B3E\u5C0D\u7167\u5DF2\u8A2D\u5B9A\uFF0C\u7121\u9808\u532F\u5165\u7BC4\u672C\u3002";
+var sourceRemoval = createSourceRemovalUI({ container: $("cloud-incoming"), api: async (path, method, body) => {
+  await guard.require();
+  return api(path, method, body);
+}, canChange: () => !!state.session && !guard.blocked, canRestore: () => hq(), inDraft: (id) => state.current?.version === 0 && state.current.sources.some((s) => s.fileId === id), setBusy: (value) => {
+  state.busy = value;
+  controls();
+}, afterChange: async (id, action) => {
+  if (action === "remove" && state.current?.sources.some((s) => s.fileId === id)) clearOrder();
+  state.selectedSources.delete(id);
+  state.lastUploads?.delete(id);
+  state.incomingSignature = "";
+  await refresh();
+}, notice: (text2, error) => feedback.show(text2, error, "incoming") });
 function node2(tag, text2, cls) {
   const n = document.createElement(tag);
   if (text2 !== void 0) n.textContent = text2;
@@ -1944,6 +2130,7 @@ function controls() {
   $("cloud-correction-reason").hidden = !state.correction;
   $("cloud-correct").hidden = !hq() || !state.current?.batchId || !["settled", "import_failed"].includes(state.current?.status);
   $("cloud-ai").disabled = disabled || locked || !state.master || !state.pages.length || !state.session?.recognitionReady;
+  $("cloud-ai-recover").disabled = $("cloud-ai").disabled;
   $("cloud-pos").hidden = !hq();
   $("cloud-pos-date").value = $("cloud-date").value;
   $("cloud-pos-date").disabled = disabled || !hq();
@@ -1980,13 +2167,19 @@ async function run(fn, options = {}) {
 }
 async function api(path, method = "GET", body) {
   if (!state.session && !["/session", "/redeem"].includes(path)) throw Error("\u8ACB\u5148\u9023\u7DDA\u516C\u53F8\u5DE5\u5177");
-  const r = await fetch(apiPrefix + path, { method, credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json", "X-Store-Orders-Version": VERSION }, ...body ? { body: JSON.stringify(body) } : {} });
-  if (!(r.headers.get("Content-Type") || "").includes("application/json")) throw Error(path === "/recognize" ? "\u672A\u6536\u5230\u5B8C\u6574\u8FA8\u8B58\u56DE\u61C9\uFF0C\u53EF\u80FD\u70BA\u9023\u7DDA\u903E\u6642\uFF1B\u8ACB\u5148\u6AA2\u67E5\u72C0\u614B\uFF0C\u52FF\u91CD\u8907\u9001\u51FA" : "\u516C\u53F8\u767B\u5165\u5DF2\u904E\u671F\uFF0C\u8ACB\u91CD\u65B0\u9023\u7DDA");
+  let r;
+  try {
+    r = await fetch(apiPrefix + path, { method, credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json", "X-Store-Orders-Version": VERSION }, ...body ? { body: JSON.stringify(body) } : {} });
+  } catch (e) {
+    if (path.startsWith("/recogn")) throw Error("\u8FA8\u8B58\u9023\u7DDA\u4E2D\u65B7\uFF0C\u672A\u81EA\u52D5\u91CD\u9001\uFF1B\u8ACB\u6309\u300C\u6AA2\u67E5\uFF0F\u53D6\u56DE\u8FA8\u8B58\u7D50\u679C\u300D\uFF0C\u4E0D\u7528\u91CD\u50B3\u539F\u5716");
+    throw e;
+  }
+  if (!(r.headers.get("Content-Type") || "").includes("application/json")) throw Error(path.startsWith("/recogn") ? "\u672A\u6536\u5230\u5B8C\u6574\u8FA8\u8B58\u56DE\u61C9\uFF0C\u53EF\u80FD\u70BA\u9023\u7DDA\u903E\u6642\uFF1B\u8ACB\u5148\u6AA2\u67E5\u72C0\u614B\uFF0C\u52FF\u91CD\u8907\u9001\u51FA" : "\u516C\u53F8\u767B\u5165\u5DF2\u904E\u671F\uFF0C\u8ACB\u91CD\u65B0\u9023\u7DDA");
   let data;
   try {
     data = await r.json();
   } catch (e) {
-    if (path === "/recognize") throw Error("\u8FA8\u8B58\u9023\u7DDA\u4E2D\u65B7\uFF0C\u672A\u6536\u5230\u5B8C\u6574\u7D50\u679C\uFF1B\u8ACB\u52FF\u76F4\u63A5\u91CD\u8907\u9001\u51FA\uFF0C\u5148\u78BA\u8A8D\u76EE\u524D\u8FA8\u8B58\u72C0\u614B");
+    if (path.startsWith("/recogn")) throw Error("\u8FA8\u8B58\u9023\u7DDA\u4E2D\u65B7\uFF0C\u672A\u6536\u5230\u5B8C\u6574\u7D50\u679C\uFF1B\u8ACB\u52FF\u76F4\u63A5\u91CD\u8907\u9001\u51FA\uFF0C\u5148\u78BA\u8A8D\u76EE\u524D\u8FA8\u8B58\u72C0\u614B");
     throw e;
   }
   if (!r.ok || data.error) {
@@ -2009,7 +2202,7 @@ function clearOrder() {
   state.aiOperation = null;
   review.clear();
   $("cloud-ai-consent").checked = false;
-  $("cloud-ai-status").textContent = "\u8ACB\u5148\u6838\u5C0D\u539F\u5716\u4E26\u53D6\u5F97\u5546\u54C1\u4E3B\u6A94\uFF0C\u518D\u9001\u51FA\u8FA8\u8B58\uFF1B\u8655\u7406\u671F\u9593\u8ACB\u4FDD\u6301\u6B64\u9801\u958B\u555F\u3002";
+  $("cloud-ai-status").textContent = "\u8ACB\u5148\u6838\u5C0D\u539F\u5716\u53CA\u5546\u54C1\u4E3B\u6A94\u518D\u8FA8\u8B58\uFF1B\u91CD\u6574\u6216\u65B7\u7DDA\u5F8C\uFF0C\u91CD\u65B0\u958B\u555F\u76F8\u540C\u539F\u5716\u4E26\u6309\u300C\u6AA2\u67E5\uFF0F\u53D6\u56DE\u8FA8\u8B58\u7D50\u679C\u300D\uFF0C\u4E0D\u9700\u91CD\u50B3\u3002";
   $("cloud-ai-status").className = "notice";
   controls();
 }
@@ -2098,7 +2291,7 @@ async function openSources(ids, append = false) {
   $("cloud-ai-consent").checked = false;
   $("cloud-page-summary").textContent = `\u672C\u8A02\u55AE\u5171${order.sources.length}\u500B\u6A94\u6848\uFF0F${order.pageCount}\u9801\uFF0C\u8ACB\u9010\u9801\u6838\u5C0D\uFF1B\u8FFD\u52A0\u5F8C\u9808\u91CD\u65B0\u8FA8\u8B58\u6240\u6709\u9801\u9762\u6216\u4EBA\u5DE5\u88DC\u9F4A\u4E26\u8986\u6838\u3002`;
   message("\u539F\u5716\u5DF2\u8F09\u5165\u3002\u5C1A\u672A\u4FDD\u5B58\u516C\u53F8\u8A02\u55AE\u3002");
-  if (state.master) feedback.guide("ai", "\u4E0B\u4E00\u6B65\uFF1A\u8FA8\u8B58\u6574\u7B46\u8A02\u55AE", `\u5DF2\u8F09\u5165${order.pageCount}\u9801\uFF0C\u6838\u5C0D\u5168\u90E8\u539F\u5716\u5F8C\u52FE\u9078\u6388\u6B0A\uFF0C\u518D\u6309AI\u8FA8\u8B58\uFF1B\u4E5F\u53EF\u4EBA\u5DE5\u8F38\u5165\u3002`, { scroll: true });
+  if (state.master) feedback.guide("ai", "\u4E0B\u4E00\u6B65\uFF1A\u8FA8\u8B58\u6574\u7B46\u8A02\u55AE", `\u5DF2\u8F09\u5165${order.pageCount}\u9801\u3002\u5148\u524D\u9001\u51FA\u904E\u8FA8\u8B58\u6642\u8ACB\u6309\u300C\u6AA2\u67E5\uFF0F\u53D6\u56DE\u8FA8\u8B58\u7D50\u679C\u300D\uFF1B\u9996\u6B21\u624D\u52FE\u9078\u6388\u6B0A\u4E26\u9001AI\uFF0C\u4E5F\u53EF\u4EBA\u5DE5\u8F38\u5165\u3002`, { scroll: true });
   else feedback.guide(guestPage ? "cloud-master-tools" : "master", "\u4E0B\u4E00\u6B65\uFF1A\u53D6\u5F97\u5546\u54C1\u67E5\u8A62", guestPage ? "\u539F\u5716\u5DF2\u4FDD\u7559\u3002\u8ACB\u91CD\u8A66\u5546\u54C1\u67E5\u8A62\uFF0C\u4E0D\u9700Google\u6388\u6B0A\u3002" : "\u539F\u5716\u5DF2\u4FDD\u7559\u5728\u672C\u9801\uFF0C\u8ACB\u5148\u8F09\u5165\u5546\u54C1\u4E3B\u6A94\uFF0C\u518D\u56DE\u5230\u8FA8\u8B58\u5340\u3002", { scroll: true });
 }
 async function thumbnail(blob) {
@@ -2117,6 +2310,7 @@ async function openSource(id, append = false) {
   return openSources([id], append);
 }
 function renderIncoming(files) {
+  $("cloud-incoming").dataset.storeCode = store();
   const available = files.filter((f) => !f.orderId), signature2 = JSON.stringify([store(), available, [...state.lastUploads || []]]);
   if (signature2 === state.incomingSignature) return;
   state.incomingSignature = signature2;
@@ -2169,7 +2363,7 @@ function renderIncoming(files) {
     }
     open.onclick = () => run(() => openSource(f.id), { area: "incoming", working: "\u6B63\u5728\u8F09\u5165\u539F\u5716\uFF0C\u8ACB\u7A0D\u5019\u2026" });
     append.onclick = () => run(() => openSource(f.id, true), { area: "incoming", working: "\u6B63\u5728\u8FFD\u52A0\u76EE\u524D\u8A02\u55AE\u7684\u9801\u6578\u2026" });
-    row.append(label, choice, preview, image, open, append);
+    row.append(label, choice, preview, image, open, append, sourceRemoval.button(f, `\u7167\u7247${index + 1}`));
     $("cloud-incoming").append(row);
   }
   groupControls();
@@ -2460,60 +2654,73 @@ $("cloud-date").onchange = () => {
   void run(filterDay, { area: "settlement", working: "\u6B63\u5728\u66F4\u65B0\u6240\u9078\u65E5\u671F\u6E05\u55AE\u2026" });
 };
 $("cloud-list-refresh").onclick = () => run(filterDay, { area: "settlement", working: "\u6B63\u5728\u66F4\u65B0\u6240\u9078\u65E5\u671F\u6E05\u55AE\u2026" });
-$("cloud-ai").onclick = async () => {
-  const status = $("cloud-ai-status");
-  let ticks;
-  const started = Date.now();
-  status.className = "notice";
-  await run(async () => {
+function recognitionPages() {
+  return state.pages.map((p) => ({ ...p, storeCode: store() }));
+}
+function recognitionProgress(job, index = 0) {
+  const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(job.createdAt)) / 1e3));
+  $("cloud-ai-status").textContent = `\u7B2C${index + 1}\uFF0F${state.pages.length}\u9801\uFF1A${elapsed >= 180 ? "\u8FA8\u8B58\u8F03\u4E45\uFF0C\u4ECD\u5728\u8655\u7406" : "AI\u8FA8\u8B58\u8655\u7406\u4E2D"}\uFF0C\u5DF2\u7B49\u5F85${elapsed}\u79D2\u3002\u6BCF\u9801\u7B49\u5F85\u4E0A\u96505\u5206\u9418\uFF1B\u4E0D\u6703\u81EA\u52D5\u91CD\u65B0\u9001\u51FA\u3002`;
+  feedback.guide("ai", "\u8FA8\u8B58\u8655\u7406\u4E2D", $("cloud-ai-status").textContent);
+}
+function applyRecognition(results, base) {
+  if (!state.current || state.current.id !== base.id || state.current.version !== base.version || JSON.stringify(state.current.sources) !== JSON.stringify(base.sources)) throw Error("\u76EE\u524D\u8A02\u55AE\u5DF2\u6539\u8B8A\uFF0C\u672A\u5957\u7528\u8FA8\u8B58\u7D50\u679C");
+  const raw = mergeFullPages(results.map((r) => r.extraction));
+  if (text(raw.header.storeCode).toUpperCase() !== store()) throw Error("\u8FA8\u8B58\u9580\u5E02\u8207\u76EE\u524D\u9580\u5E02\u4E0D\u540C\uFF0C\u672A\u5957\u7528\u7D50\u679C\uFF0C\u8ACB\u5C0D\u7167\u539F\u5716\u4EBA\u5DE5\u4FEE\u6B63");
+  review.update(raw, state.master, state.urls, results.map((r) => r.recognition));
+  const draft = review.get().order;
+  Object.assign(draft, { id: base.id, version: base.version, sources: base.sources, status: "pending", reviewed: false, originalExtraction: raw, recognizedPages: results.map((r) => r.extraction), recognition: results.map((r) => r.recognition), reviewEdits: [], headerRecognition: { ...draft.headerRecognition, synthetic: false } });
+  adopt(draft);
+  state.base = "";
+  $("cloud-ai-consent").checked = false;
+  $("cloud-ai-status").textContent = "\u8FA8\u8B58\u5B8C\u6210\uFF0C\u8868\u982D\u3001\u5546\u54C1\u8207\u4ED8\u6B3E\u5DF2\u5E36\u5165\uFF0C\u8ACB\u4F9D\u539F\u5716\u8986\u6838\u4E26\u4FDD\u5B58\u3002";
+  $("cloud-ai-status").className = "notice success";
+  message($("cloud-ai-status").textContent);
+  feedback.guide("review", "\u4E0B\u4E00\u6B65\uFF1A\u7531\u8868\u982D\u958B\u59CB\u8986\u6838", "\u8FA8\u8B58\u7D50\u679C\u5DF2\u5E36\u5165\uFF0C\u8ACB\u6838\u5C0D\u8868\u982D\u3001\u5546\u54C1\u3001\u7D44\u5408\u8207\u4ED8\u6B3E\uFF0C\u518D\u52FE\u6700\u4E0B\u65B9\u5169\u9805\u78BA\u8A8D\u3002", { scroll: true });
+}
+function recognitionReady() {
+  if (!state.current || state.current.batchId) throw Error("\u8ACB\u958B\u555F\u672A\u7D50\u7B97\u7684\u5B8C\u6574\u8A02\u55AE");
+  if (!state.master) throw Error("\u8ACB\u5148\u53D6\u5F97\u5546\u54C1\u4E3B\u6A94");
+}
+$("cloud-ai-recover").onclick = () => run(async () => {
+  recognitionReady();
+  const base = snapshot().order, before = JSON.stringify(base);
+  $("cloud-ai-status").className = "notice";
+  const results = await collectRecognition(recognitionPages(), { api, onProgress: recognitionProgress });
+  await guard.require();
+  if (JSON.stringify(snapshot().order) !== before) throw Error("\u4EBA\u5DE5\u8986\u6838\u5167\u5BB9\u5DF2\u8B8A\u66F4\uFF0C\u672A\u8986\u84CB\uFF1B\u8ACB\u518D\u6B21\u78BA\u8A8D\u5F8C\u53D6\u56DE");
+  if (!confirm("\u5B8C\u6574\u8FA8\u8B58\u7D50\u679C\u5DF2\u53D6\u5F97\u3002\u672C\u6B21\u53EA\u53D6\u56DE\u539F\u4F5C\u696D\uFF0C\u4E0D\u53E6\u9001AI\uFF1B\u5E36\u5165\u6703\u53D6\u4EE3\u76EE\u524D\u672A\u4FDD\u5B58\u7684\u8868\u982D\u3001\u5546\u54C1\u8207\u4ED8\u6B3E\u4FEE\u6539\uFF0C\u78BA\u5B9A\u5E36\u5165\uFF1F")) {
+    message("\u5DF2\u4FDD\u7559\u76EE\u524D\u4EBA\u5DE5\u5167\u5BB9\uFF0C\u6C92\u6709\u5E36\u5165\u8FA8\u8B58\u7D50\u679C\u3002");
+    return false;
+  }
+  applyRecognition(results, base);
+}, { area: "ai", working: "\u6B63\u5728\u6AA2\u67E5\u539F\u8FA8\u8B58\u4F5C\u696D\uFF0C\u4E0D\u6703\u53E6\u9001AI\u2026" });
+$("cloud-ai").onclick = () => run(async () => {
+  recognitionReady();
+  if (!$("cloud-ai-consent").checked) throw Error("\u8ACB\u5148\u78BA\u8A8D\u5B8C\u6574\u55AE\u50B3\u9001\u6388\u6B0A");
+  const pages = recognitionPages(), previous = [];
+  for (const p of pages) previous.push((await api(recognitionQuery(p))).job);
+  if (previous.some((j) => j?.status === "processing")) throw Error("\u539F\u8FA8\u8B58\u4ECD\u5728\u8655\u7406\uFF0C\u8ACB\u6309\u300C\u6AA2\u67E5\uFF0F\u53D6\u56DE\u8FA8\u8B58\u7D50\u679C\u300D\uFF1B\u672A\u91CD\u8907\u9001\u51FA");
+  if ((snapshot().order.items.length || state.aiOperation || previous.some(Boolean)) && !confirm("\u9019\u5F35\u55AE\u5DF2\u6709\u5167\u5BB9\u6216\u8FA8\u8B58\u7D00\u9304\u3002\u91CD\u65B0\u8FA8\u8B58\u6703\u53E6\u8A08\u6BCF\u9801API\u8CBB\u7528\uFF0C\u4E26\u53D6\u4EE3\u76EE\u524D\u672A\u4FDD\u5B58\u4FEE\u6B63\u3002\u82E5\u53EA\u9700\u53D6\u56DE\u7D50\u679C\uFF0C\u8ACB\u53D6\u6D88\u4E26\u6309\u300C\u6AA2\u67E5\uFF0F\u53D6\u56DE\u8FA8\u8B58\u7D50\u679C\u300D\u3002\u78BA\u5B9A\u91CD\u65B0\u8FA8\u8B58\uFF1F")) return false;
+  const base = snapshot().order, before = JSON.stringify(base), results = [];
+  $("cloud-ai-status").className = "notice";
+  for (const [i, p] of pages.entries()) {
+    message(`\u6B63\u5728\u6E96\u5099\u7B2C${i + 1}\uFF0F${pages.length}\u9801\u8FA8\u8B58\u3002`);
+    const image = await createImageBitmap(p.blob);
+    let prepared;
     try {
-      if (!$("cloud-ai-consent").checked) throw Error("\u8ACB\u5148\u78BA\u8A8D\u5B8C\u6574\u55AE\u50B3\u9001\u6388\u6B0A");
-      if (!state.current || state.current.batchId) throw Error("\u8ACB\u958B\u555F\u672A\u7D50\u7B97\u7684\u5B8C\u6574\u8A02\u55AE");
-      if (!state.master) throw Error("\u8ACB\u5148\u53D6\u5F97\u5546\u54C1\u4E3B\u6A94");
-      if ((snapshot().order.items.length || state.aiOperation) && !confirm("\u9019\u5F35\u55AE\u5DF2\u9001\u51FA\u904E\u8FA8\u8B58\u3002\u518D\u6B21\u8FA8\u8B58\u6703\u53E6\u8A08API\u8CBB\u7528\uFF0C\u4E26\u8986\u84CB\u76EE\u524D\u672A\u4FDD\u5B58\u7684\u8868\u982D\u3001\u5546\u54C1\u53CA\u4ED8\u6B3E\u4FEE\u6B63\u3002\u78BA\u5B9A\u91CD\u65B0\u8FA8\u8B58\uFF1F")) return false;
-      const progress = () => {
-        status.textContent = `AI\u8FA8\u8B58\u8655\u7406\u4E2D\uFF0C\u5DF2\u7B49\u5F85${Math.floor((Date.now() - started) / 1e3)}\u79D2\uFF1B\u5B8C\u6574\u55AE\u53EF\u80FD\u9700\u89812\u81F33\u5206\u9418\uFF0C\u8ACB\u4FDD\u6301\u6B64\u9801\u958B\u555F\uFF0C\u52FF\u91CD\u8907\u9001\u51FA\u3002`;
-      };
-      progress();
-      ticks = setInterval(progress, 1e3);
-      const results = [];
-      for (const [i, p] of state.pages.entries()) {
-        message(`\u6B63\u5728\u8FA8\u8B58\u7B2C${i + 1}\uFF0F${state.pages.length}\u9801\uFF0C\u8ACB\u52FF\u91CD\u8907\u64CD\u4F5C\u3002`);
-        const image = await createImageBitmap(p.blob);
-        let prepared;
-        try {
-          prepared = prepareImageInput(image, { full: true });
-        } finally {
-          image.close();
-        }
-        const request2 = { storeCode: store(), fileId: p.fileId, operationId: crypto.randomUUID(), mode: "full", consent: true, image: prepared.image, detailImages: prepared.detailImages };
-        state.aiOperation = request2.operationId;
-        const result = await api("/recognize", "POST", request2);
-        results.push(result);
-      }
-      const raw = mergeFullPages(results.map((r) => r.extraction));
-      if (text(raw.header.storeCode).toUpperCase() !== store()) throw Error("\u8FA8\u8B58\u9580\u5E02\u8207\u76EE\u524D\u9580\u5E02\u4E0D\u540C\uFF0C\u672A\u5957\u7528\u7D50\u679C\uFF0C\u8ACB\u5C0D\u7167\u539F\u5716\u4EBA\u5DE5\u4FEE\u6B63");
-      const base = snapshot().order;
-      review.update(raw, state.master, state.urls, results.map((r) => r.recognition));
-      const draft = review.get().order;
-      Object.assign(draft, { id: base.id, version: base.version, sources: base.sources, status: "pending", reviewed: false, originalExtraction: raw, recognizedPages: results.map((r) => r.extraction), recognition: results.map((r) => r.recognition), reviewEdits: [], headerRecognition: { ...draft.headerRecognition, synthetic: false } });
-      adopt(draft);
-      state.base = "";
-      $("cloud-ai-consent").checked = false;
-      status.textContent = "\u8FA8\u8B58\u5B8C\u6210\uFF0C\u8868\u982D\u3001\u5546\u54C1\u8207\u4ED8\u6B3E\u5DF2\u5E36\u5165\uFF0C\u8ACB\u4F9D\u539F\u5716\u8986\u6838\u4E26\u4FDD\u5B58\u3002";
-      status.className = "notice success";
-      message(status.textContent);
-      feedback.guide("review", "\u4E0B\u4E00\u6B65\uFF1A\u7531\u8868\u982D\u958B\u59CB\u8986\u6838", "\u8FA8\u8B58\u7D50\u679C\u5DF2\u5E36\u5165\uFF0C\u8ACB\u6838\u5C0D\u8868\u982D\u3001\u5546\u54C1\u3001\u7D44\u5408\u8207\u4ED8\u6B3E\uFF0C\u518D\u52FE\u6700\u4E0B\u65B9\u5169\u9805\u78BA\u8A8D\u3002", { scroll: true });
-    } catch (e) {
-      if (e instanceof TypeError) e = Error("\u8FA8\u8B58\u9023\u7DDA\u4E2D\u65B7\uFF0C\u672A\u6536\u5230\u5B8C\u6574\u7D50\u679C\uFF1B\u8ACB\u4FDD\u6301\u9801\u9762\u958B\u555F\uFF0C\u52FF\u76F4\u63A5\u91CD\u8907\u9001\u51FA");
-      status.textContent = e.message || "\u8FA8\u8B58\u7D50\u679C\u672A\u78BA\u8A8D\u6536\u5230\uFF0C\u8ACB\u52FF\u91CD\u8907\u9001\u51FA";
-      status.className = "notice danger";
-      throw e;
+      prepared = prepareImageInput(image, { full: true });
     } finally {
-      clearInterval(ticks);
+      image.close();
     }
-  }, { area: "ai", working: "\u6B63\u5728\u6E96\u5099\u5B8C\u6574\u55AE\u8FA8\u8B58\u2026" });
-};
+    const request2 = { storeCode: store(), fileId: p.fileId, pageIndex: p.index, operationId: crypto.randomUUID(), mode: "full", consent: true, image: prepared.image, detailImages: prepared.detailImages };
+    state.aiOperation = request2.operationId;
+    await api("/recognize", "POST", request2);
+    results.push(await waitRecognition(p, { api, jobId: request2.operationId, onProgress: (job) => recognitionProgress(job, i) }));
+  }
+  await guard.require();
+  if (JSON.stringify(snapshot().order) !== before) throw Error("\u4EBA\u5DE5\u8986\u6838\u5167\u5BB9\u5DF2\u8B8A\u66F4\uFF0C\u672A\u8986\u84CB\uFF1B\u8ACB\u7528\u53D6\u56DE\u529F\u80FD\u91CD\u65B0\u78BA\u8A8D");
+  applyRecognition(results, base);
+}, { area: "ai", working: "\u6B63\u5728\u6E96\u5099\u5B8C\u6574\u55AE\u8FA8\u8B58\u2026" });
 async function saveOrder(mode = "reviewed") {
   if (!state.current) throw Error("\u8ACB\u5148\u958B\u555F\u8A02\u55AE");
   const snap = snapshot(), o = snap.order;
