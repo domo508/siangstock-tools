@@ -1,20 +1,20 @@
-import {recognitionQuery,waitRecognition,collectRecognition} from './recognition-job.js?v=20261103-store-orders-r51';
-import {createSourceRemovalUI} from './source-removal-ui.js?v=20261103-store-orders-r51';
-import {listSummaries,canVoidOrder,voidSavedOrder} from './order-list.js?v=20261103-store-orders-r51';
-import {collectDailyReport,dailyWorkbook} from './daily-report.js?v=20261103-store-orders-r51';
-import {loadSourceGroup} from './source-group.js?v=20261103-store-orders-r51';
-import {createFlowFeedback} from './flow-feedback.js?v=20261103-store-orders-r51';
-import * as C from './core.js?v=20261103-store-orders-r51';
-import * as G from './google.js?v=20261103-store-orders-r51';
-import {createSourceUploader} from './source-upload.js?v=20261103-store-orders-r51';
-import {VersionGuard} from './runtime.js?v=20261103-store-orders-r51';
-import {pagesFor} from './media.js?v=20261103-store-orders-r51';
-import {prepareImageInput} from './image-input.js?v=20261103-store-orders-r51';
-import {createReview,reviewErrors,confirmReview} from './review.js?v=20261103-store-orders-r51';
-import {builtInPOSProfile} from './pos-built-in.js?v=20261103-store-orders-r51';
-import {buildRevisedPOS,TEMPLATE_WRITE_OPTIONS,revisedPOSErrors} from './pos-template.js?v=20261103-store-orders-r51';
-import {costUnits,resolvedERPPrices} from './bundle-pricing.js?v=20261103-store-orders-r51';
-import {mergeFullPages} from './merge-pages.js?v=20261103-store-orders-r51';
+import {recognitionQuery,waitRecognition,collectRecognition} from './recognition-job.js?v=20261103-store-orders-r52';
+import {createSourceRemovalUI} from './source-removal-ui.js?v=20261103-store-orders-r52';
+import {listSummaries,canVoidOrder,voidSavedOrder} from './order-list.js?v=20261103-store-orders-r52';
+import {collectDailyReport,dailyWorkbook} from './daily-report.js?v=20261103-store-orders-r52';
+import {loadSourceGroup} from './source-group.js?v=20261103-store-orders-r52';
+import {createFlowFeedback} from './flow-feedback.js?v=20261103-store-orders-r52';
+import * as C from './core.js?v=20261103-store-orders-r52';
+import * as G from './google.js?v=20261103-store-orders-r52';
+import {createSourceUploader} from './source-upload.js?v=20261103-store-orders-r52';
+import {VersionGuard} from './runtime.js?v=20261103-store-orders-r52';
+import {pagesFor} from './media.js?v=20261103-store-orders-r52';
+import {prepareImageInput} from './image-input.js?v=20261103-store-orders-r52';
+import {createReview,reviewErrors,confirmReview} from './review.js?v=20261103-store-orders-r52';
+import {builtInPOSProfile} from './pos-built-in.js?v=20261103-store-orders-r52';
+import {buildRevisedPOS,TEMPLATE_WRITE_OPTIONS,revisedPOSErrors} from './pos-template.js?v=20261103-store-orders-r52';
+import {costUnits,resolvedERPPrices} from './bundle-pricing.js?v=20261103-store-orders-r52';
+import {mergeFullPages} from './merge-pages.js?v=20261103-store-orders-r52';
 const $=id=>document.getElementById(id),guard=new VersionGuard(),guestPage=location.pathname.startsWith('/store-orders/guest/');
 const apiPrefix=guestPage?'/api/store-orders-guest':'/api/store-orders';
 const state={listCache:new Map(),session:null,master:null,masterIssue:false,masterSource:"",current:null,base:'',sources:[],pages:[],urls:[],queue:[],busy:false,refreshSerial:0,refreshing:false,selectedSources:new Set(),incomingSignature:'',previewUrls:[],sourcePreviews:new Map(),correction:false,settlement:null,aiOperation:null,batchView:null,batchSignature:'',batchSerial:0};
@@ -26,7 +26,7 @@ const key=()=>`store-orders-cloud:${state.session?.email||'disconnected'}`;
 const review=createReview($('cloud-review'),{cloudMode:true,requireVersion:()=>guard.require(),context:()=>({expectedStore:store(),existingNumbers:[],sourcePageCount:state.pages.length,guest:!!state.session?.guest})});
 const profile={get:builtInPOSProfile,setBlocked(){}};
 $('cloud-pos-profile').textContent='已內建工程師確認的最終25欄POS：R欄為每件價格，四種付款對照已設定，無須匯入範本。';
-const sourceRemoval=createSourceRemovalUI({container:$('cloud-incoming'),api:async(path,method,body)=>{await guard.require();return api(path,method,body);},canChange:()=>!!state.session&&!guard.blocked,canRestore:()=>hq(),inDraft:id=>state.current?.version===0&&state.current.sources.some(s=>s.fileId===id),setBusy:value=>{state.busy=value;controls();},afterChange:async(id,action)=>{if(action==='remove'&&state.current?.sources.some(s=>s.fileId===id))clearOrder();state.selectedSources.delete(id);state.lastUploads?.delete(id);state.incomingSignature='';await refresh();},notice:(text,error)=>feedback.show(text,error,'incoming')});
+const sourceRemoval=createSourceRemovalUI({container:$('cloud-incoming'),api:async(path,method,body)=>{await guard.require();return api(path,method,body);},canChange:()=>!!state.session&&!guard.blocked,canRestore:()=>hq(),inDraft:id=>state.current?.version===0&&state.current.sources.some(s=>s.fileId===id),setBusy:value=>{state.busy=value;controls();},afterChange:async(id,action)=>{if(action==='remove'&&state.current?.sources.some(s=>s.fileId===id))clearOrder();state.selectedSources.delete(id);state.lastUploads?.delete(id);state.incomingSignature='';await refresh();},notice:(text,error)=>{feedback.show(text,error,'incoming');if(!error){const remaining=state.sources.some(f=>!f.orderId);feedback.guide(remaining?'incoming':hq()?'settlement':'receipt',remaining?'下一步：開啟待收原圖':hq()?'下一步：核對每日清單':'目前沒有待收原圖',remaining?'請核對待收照片後繼續處理。':hq()?'請核對當日紙本、保存狀態與帳款；已結算的批次不需再次結算。':'可繼續上傳下一張；已保存訂單交由總部後續處理。');}}});
 function node(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
 function message(text,error=false){feedback.show(text,error);}
 function store(){return $('cloud-store').value==='__other__'?C.text($('cloud-store-other').value).toUpperCase():$('cloud-store').value;}

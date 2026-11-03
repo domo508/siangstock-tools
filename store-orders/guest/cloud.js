@@ -172,7 +172,7 @@ function createSourceRemovalUI({ container, api: api2, canChange, canRestore, in
 }
 
 // store-orders/core.js
-var VERSION = "20261103-store-orders-r51";
+var VERSION = "20261103-store-orders-r52";
 var READ_OPTIONS = Object.freeze({ type: "array", cellStyles: true, cellDates: false, raw: true });
 var WRITE_OPTIONS = Object.freeze({ bookType: "biff8", type: "array" });
 var POS_HEADERS = Object.freeze(["\u55AE\u865F", "\u7D50\u5E33\u65E5\u671F", "\u958B\u55AE\u5009\u5EAB", "\u51FA\u8CA8\u5009\u5EAB", "\u53D6\u8CA8\u5009\u5EAB", "\u6703\u54E1\u5361\u865F", "\u92B7\u5225", "\u5099\u8A3B", "\u8CA8\u865F", "\u984F\u8272", "\u984F\u8272\u7DE8\u78BC", "\u5C3A\u78BC", "\u5C3A\u78BC\u7DE8\u78BC", "\u662F\u5426\u8D08\u54C1", "\u5C0E\u8CFC", "\u5BE6\u6536\u7387", "\u6578\u91CF", "\u4E2D\u4FE1\u4FE1\u7528\u5361", "\u73FE\u91D1", "\u767E\u8CA8\u73FE\u91D1\u5377", "LinePay"]);
@@ -2074,7 +2074,13 @@ var sourceRemoval = createSourceRemovalUI({ container: $("cloud-incoming"), api:
   state.lastUploads?.delete(id);
   state.incomingSignature = "";
   await refresh();
-}, notice: (text2, error) => feedback.show(text2, error, "incoming") });
+}, notice: (text2, error) => {
+  feedback.show(text2, error, "incoming");
+  if (!error) {
+    const remaining = state.sources.some((f) => !f.orderId);
+    feedback.guide(remaining ? "incoming" : hq() ? "settlement" : "receipt", remaining ? "\u4E0B\u4E00\u6B65\uFF1A\u958B\u555F\u5F85\u6536\u539F\u5716" : hq() ? "\u4E0B\u4E00\u6B65\uFF1A\u6838\u5C0D\u6BCF\u65E5\u6E05\u55AE" : "\u76EE\u524D\u6C92\u6709\u5F85\u6536\u539F\u5716", remaining ? "\u8ACB\u6838\u5C0D\u5F85\u6536\u7167\u7247\u5F8C\u7E7C\u7E8C\u8655\u7406\u3002" : hq() ? "\u8ACB\u6838\u5C0D\u7576\u65E5\u7D19\u672C\u3001\u4FDD\u5B58\u72C0\u614B\u8207\u5E33\u6B3E\uFF1B\u5DF2\u7D50\u7B97\u7684\u6279\u6B21\u4E0D\u9700\u518D\u6B21\u7D50\u7B97\u3002" : "\u53EF\u7E7C\u7E8C\u4E0A\u50B3\u4E0B\u4E00\u5F35\uFF1B\u5DF2\u4FDD\u5B58\u8A02\u55AE\u4EA4\u7531\u7E3D\u90E8\u5F8C\u7E8C\u8655\u7406\u3002");
+  }
+} });
 function node2(tag, text2, cls) {
   const n = document.createElement(tag);
   if (text2 !== void 0) n.textContent = text2;
