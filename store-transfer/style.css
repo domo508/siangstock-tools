@@ -4,6 +4,14 @@ html, body { max-width: 100%; overflow-x: clip; }
 .compact-hero { padding-bottom: 2.5rem; }
 .compact-hero h1 { max-width: 13em; font-size: clamp(2.15rem, 4vw, 3.7rem); }
 .panel { margin-top: 1.5rem; }
+.reply-deadline-panel { margin:1rem 0; padding:1rem; border:1px solid #bfd9df; border-radius:14px; background:#f1f8f8; min-width:0; }
+.reply-deadline-controls { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; align-items:end; }
+.reply-deadline-controls label { display:grid; gap:.5rem; min-width:0; font-weight:700; }
+.reply-deadline-controls input,.reply-deadline-controls select,.reply-deadline-controls textarea { width:100%; min-width:0; box-sizing:border-box; padding:.7rem; border:1px solid #c9d8e2; border-radius:10px; background:#fff; font:inherit; }
+.reply-deadline-controls textarea { white-space:pre-wrap; overflow-wrap:anywhere; resize:vertical; }
+.reply-deadline-panel p,.reply-extension-history li { overflow-wrap:anywhere; line-height:1.6; }
+.reply-extension-history { margin:1rem 0; }
+@media(max-width:650px) { .reply-deadline-controls { grid-template-columns:minmax(0,1fr); } }
 .period-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 1.5rem 0; }
 .activity-feedback { padding:.8rem 1rem; border:1px solid #c9d8e2; border-radius:10px; background:#f4f9fa; white-space:normal; overflow-wrap:anywhere; line-height:1.65; }
 .activity-feedback:empty { display:none; }

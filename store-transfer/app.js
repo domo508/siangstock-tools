@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261102-transfer-same-day-r1";
+  const APP_VERSION = "20261103-transfer-deadline-r1";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -768,7 +768,7 @@
     const proposal = iso(new Date());
     const following = new Date(`${proposal}T12:00:00`); following.setDate(following.getDate() + 1);
     const lock = transferCore.nextWorkingDay(iso(following), holidays);
-    $("proposal-date").value = proposal; $("lock-at").value = `${lock}T09:00`;
+    $("proposal-date").value = proposal; $("lock-at").value = `${lock}T18:00`;
   }
 
   function defaults() {
@@ -1149,11 +1149,33 @@
     } catch { return {}; }
   }
 
+  function replyDeadline(payload, storeState) {
+    const base = payload.batch.lock_at;
+    return Date.parse(storeState?.reply_deadline_at) > Date.parse(base) ? storeState.reply_deadline_at : base;
+  }
+
+  function deadlineLabel(value) {
+    return new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
+  }
+
+  function replyDeadlinePanel(payload) {
+    if (state.config.role === "store" || !["open", "review"].includes(payload.batch.status)) return "";
+    const eligible = payload.storeStatuses.filter(row => ["pending", "saved", "submitted"].includes(row.status) && !row.erp_created_at && row.correction_mode !== "hq");
+    if (!eligible.length) return "";
+    return `<section class="reply-deadline-panel"><h3>總部延長指定門市回覆期限</h3><p>只延長所選門市，不改數量、核准狀態及到貨日。已送出者仍須先撤回修改；跨日延長不會自動延後活動核准日，活動如已逾原核准日仍須重新核對計算。</p><div class="reply-deadline-controls"><label><span>門市與目前期限（台北時間）</span><select data-deadline-store>${eligible.map(row=>`<option value="${row.store_code}">${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}・${escapeHtml(deadlineLabel(replyDeadline(payload,row)))}</option>`).join("")}</select></label><label><span>延長至（台北時間）</span><input data-deadline-at type="datetime-local" required></label><label><span>延長原因（必填）</span><textarea data-deadline-reason rows="2" maxlength="300" placeholder="例如：門市需補充確認數量"></textarea></label><button type="button" class="secondary-button" data-action="extend-reply-deadline">確認延長本店期限</button></div><p class="status-line" data-deadline-status role="status" aria-live="polite"></p></section>`;
+  }
+
+  function replyExtensionHistory(payload) {
+    const rows = payload.replyExtensions || [];
+    if (!rows.length) return "";
+    return `<details class="reply-extension-history"><summary>回覆期限延長紀錄（${rows.length}筆）</summary><ul>${rows.map(row=>`<li>${escapeHtml(row.store_code)}：${escapeHtml(deadlineLabel(row.previous_deadline_at))} → ${escapeHtml(deadlineLabel(row.deadline_at))}；${escapeHtml(row.reason)}（${escapeHtml(row.created_by)}・${escapeHtml(deadlineLabel(row.created_at))}）</li>`).join("")}</ul></details>`;
+  }
+
   function itemTable(payload) {
     const ownState = payload.storeStatuses.find((row) => row.store_code === state.config.storeCode);
     const ownStatus = ownState?.status;
     const returnedForStoreEdit = ownState?.correction_mode === "store";
-    const editable = state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && !["submitted", "approved", "closed"].includes(ownStatus) && (Date.now() < Date.parse(payload.batch.lock_at) || returnedForStoreEdit);
+    const editable = state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && !["submitted", "approved", "closed"].includes(ownStatus) && (Date.now() < Date.parse(replyDeadline(payload, ownState)) || returnedForStoreEdit);
     const hqEditable = state.config.role !== "store" && ["open", "review"].includes(payload.batch.status);
     const correctionStores = new Set(payload.storeStatuses.filter((row) => row.correction_mode).map((row) => row.store_code));
     const correctionOpen = correctionStores.size > 0;
@@ -1428,8 +1450,8 @@
   function detailActions(payload) {
     const ownState = payload.storeStatuses.find((row) => row.store_code === state.config.storeCode);
     const ownStatus = ownState?.status;
-    if (state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && ownStatus === "submitted" && Date.now() < Date.parse(payload.batch.lock_at)) return '<button class="secondary-button" type="button" data-action="withdraw">撤回修改</button>';
-    if (state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && !["submitted", "approved", "closed"].includes(ownStatus) && (Date.now() < Date.parse(payload.batch.lock_at) || ownState?.correction_mode === "store")) return '<button class="secondary-button" type="button" data-action="save">暫存</button><button class="primary-button" type="button" data-action="submit">送出總部覆核</button>';
+    if (state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && ownStatus === "submitted" && Date.now() < Date.parse(replyDeadline(payload, ownState))) return '<button class="secondary-button" type="button" data-action="withdraw">撤回修改</button>';
+    if (state.config.role === "store" && ["open", "review"].includes(payload.batch.status) && !["submitted", "approved", "closed"].includes(ownStatus) && (Date.now() < Date.parse(replyDeadline(payload, ownState)) || ownState?.correction_mode === "store")) return '<button class="secondary-button" type="button" data-action="save">暫存</button><button class="primary-button" type="button" data-action="submit">送出總部覆核</button>';
     if (state.config.role !== "store" && ["open", "review"].includes(payload.batch.status)) return '<button class="secondary-button" type="button" data-action="hq-save">暫存覆核</button><button class="primary-button" type="button" data-action="approve">核准本週調撥</button>';
     if (state.config.role !== "store" && ["approved", "erp_created"].includes(payload.batch.status)) {
       const erpButtons = [...new Set(payload.items.map((item) => item.store_code))].map((store) => { const done = payload.storeStatuses.find((row) => row.store_code === store)?.erp_created_at; return `<button class="secondary-button" type="button" data-action="erp" data-store="${store}">${done ? "重新下載" : "下載"}${store} ERP檔</button>`; }).join("");
@@ -1442,7 +1464,7 @@
   function statusOverview(payload) {
     if (state.config.role === "store") return "";
     const labels = { pending: "尚未處理", saved: "已暫存", submitted: "已送出", approved: "已核准", closed: "已完成" };
-    return `<section class="store-status-overview"><h3>門市回覆與ERP狀態</h3><p>可直接點選門市卡片，只查看該店調撥內容。</p><div class="status-grid">${payload.storeStatuses.map((row) => { const correctionLabel = row.correction_mode === "store" ? "總部退回・待門市修改" : row.correction_mode === "hq" ? "總部更正中" : labels[row.status] || row.status; return `<button class="store-status-card" type="button" data-store-status="${row.store_code}" data-store-filter="${row.store_code}" data-store-filter-scope="batch"><strong>${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</strong><span>${escapeHtml(correctionLabel)}</span><small>${row.erp_created_at ? `ERP已產生・${escapeHtml(row.erp_created_at)}` : "ERP尚未產生"}</small></button>`; }).join("")}</div></section>`;
+    return `<section class="store-status-overview"><h3>門市回覆與ERP狀態</h3><p>可直接點選門市卡片，只查看該店調撥內容。</p><div class="status-grid">${payload.storeStatuses.map((row) => { const correctionLabel = row.correction_mode === "store" ? "總部退回・待門市修改" : row.correction_mode === "hq" ? "總部更正中" : labels[row.status] || row.status; return `<button class="store-status-card" type="button" data-store-status="${row.store_code}" data-store-filter="${row.store_code}" data-store-filter-scope="batch"><strong>${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</strong><span>${escapeHtml(correctionLabel)}</span><small>回覆至 ${escapeHtml(deadlineLabel(replyDeadline(payload,row)))}${row.reply_deadline_at ? "・總部已延長" : ""}</small><small>${row.erp_created_at ? `ERP已產生・${escapeHtml(row.erp_created_at)}` : "ERP尚未產生"}</small></button>`; }).join("")}</div></section>`;
   }
 
   function perStoreActions(payload) {
@@ -1495,7 +1517,7 @@
     const scheduleText = Object.values(schedule).map((row) => `${row.storeCode} 本批${row.currentArrivalDate}／下一輪${row.nextArrivalDate}`).join("；");
     const activeCorrection = p.storeStatuses.find((row) => row.correction_mode);
     const correctionNotice = activeCorrection ? `<p class="result-alert warn"><strong>${activeCorrection.correction_mode === "store" ? "已退回門市修改" : "總部更正中"}：</strong>${escapeHtml(activeCorrection.store_code)}・第${escapeHtml(activeCorrection.correction_revision)}版・${escapeHtml(activeCorrection.correction_reason || "未填原因")}。原核准內容已保留，重新核准後才可產生ERP。</p>` : "";
-    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>門市回覆鎖定：${escapeHtml(p.batch.lock_at)}・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${correctionNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${skuFilterBar("batch", state.batchSku)}${approvedCorrectionPanel(p)}${statusOverview(p)}${itemTable(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
+    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>${state.config.role === "store" ? "本店回覆期限" : "共同回覆期限"}：${escapeHtml(deadlineLabel(replyDeadline(p,p.storeStatuses.find(row=>row.store_code===state.config.storeCode))))}（台北時間）・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${correctionNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${skuFilterBar("batch", state.batchSku)}${replyDeadlinePanel(p)}${approvedCorrectionPanel(p)}${statusOverview(p)}${itemTable(p)}${replyExtensionHistory(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
     $("batch-detail").querySelector(".detail-actions").insertAdjacentHTML("beforebegin", perStoreActions(p));
     $("batch-detail").querySelectorAll("textarea.reason-input").forEach(autoSizeReasonField);
     $("batch-dialog").showModal();
@@ -1532,10 +1554,26 @@
     state.dialogBusy = true;
     const controls = [...$("batch-detail").querySelectorAll("input,textarea,select,button")].map(control => [control, control === button ? false : control.disabled]);
     controls.forEach(([control]) => { control.disabled = true; });
-    const status = $("batch-detail").querySelector("[data-per-store-status]") || $("dialog-status");
+    const status = (action === "extend-reply-deadline" ? $("batch-detail").querySelector("[data-deadline-status]") : null) || $("batch-detail").querySelector("[data-per-store-status]") || $("dialog-status");
     status.textContent = "處理中，請勿重複操作…";
     try {
-      if (action === "save" || action === "submit") await api(`/batches/${encodeURIComponent(batch.batch.id)}/stores/${state.config.storeCode}/${action}`, { method: "PUT", body: { expectedRevision: batch.batch.revision, items: rowsFromDialog(action) } });
+      if (action === "extend-reply-deadline") {
+        if (dialogHasChanges()) throw new Error("有尚未暫存的覆核內容，請先暫存覆核，再延長回覆期限。");
+        const storeCode = $("batch-detail").querySelector("[data-deadline-store]")?.value;
+        const rawDate = $("batch-detail").querySelector("[data-deadline-at]")?.value;
+        const reason = $("batch-detail").querySelector("[data-deadline-reason]")?.value.trim();
+        const deadlineAt = rawDate ? new Date(`${rawDate}:00+08:00`) : null;
+        const storeState = batch.storeStatuses.find(row=>row.store_code===storeCode);
+        if (!storeCode || !reason || !deadlineAt || !Number.isFinite(deadlineAt.getTime())) throw new Error("請選擇門市、填寫新的回覆期限及延長原因。");
+        if (deadlineAt.getTime() <= Math.max(Date.now(), Date.parse(replyDeadline(batch,storeState)))) throw new Error("新的回覆期限須晚於現在與本店目前期限。");
+        status.textContent = `正在將 ${storeCode} 回覆期限延長至 ${deadlineLabel(deadlineAt)}，請勿重複操作…`;
+        await api(`/batches/${encodeURIComponent(batch.batch.id)}/stores/${storeCode}/reply-deadline`, {method:"POST",body:{expectedRevision:batch.batch.revision,deadlineAt:deadlineAt.toISOString(),reason}});
+        $("batch-dialog").close(); await openBatch(batch.batch.id); await loadBatches();
+        const success = $("batch-detail").querySelector("[data-deadline-status]") || $("dialog-status");
+        success.textContent = `${storeCode} 回覆期限已延長至 ${deadlineLabel(deadlineAt)}；門市重新開啟批次後可接續，已送出者先撤回修改。`;
+        return;
+      }
+      else if (action === "save" || action === "submit") await api(`/batches/${encodeURIComponent(batch.batch.id)}/stores/${state.config.storeCode}/${action}`, { method: "PUT", body: { expectedRevision: batch.batch.revision, items: rowsFromDialog(action) } });
       else if (action === "withdraw") await api(`/batches/${encodeURIComponent(batch.batch.id)}/stores/${state.config.storeCode}/withdraw`, { method: "POST", body: {} });
       else if (action === "hq-save") await api(`/batches/${encodeURIComponent(batch.batch.id)}/hq-save`, { method: "PUT", body: { expectedRevision: batch.batch.revision, items: rowsFromDialog("approve") } });
       else if (action === "approve-store") {
@@ -1567,7 +1605,7 @@
         await api(`/batches/${encodeURIComponent(batch.batch.id)}/corrections/open`, { method: "POST", body: { storeCode, mode: action === "return-store" ? "store" : "hq", reason } });
       }
       $("batch-dialog").close(); await loadBatches();
-    } catch (error) { const message = $("batch-detail").querySelector("[data-per-store-status]") || $("dialog-status"); message.textContent = error.message; } finally { state.dialogBusy = false; controls.forEach(([control, disabled]) => { if (control.isConnected) control.disabled = disabled; }); }
+    } catch (error) { const message = (action === "extend-reply-deadline" ? $("batch-detail").querySelector("[data-deadline-status]") : null) || $("batch-detail").querySelector("[data-per-store-status]") || $("dialog-status"); message.textContent = error.message; } finally { state.dialogBusy = false; controls.forEach(([control, disabled]) => { if (control.isConnected) control.disabled = disabled; }); }
   }
 
   async function start() {
