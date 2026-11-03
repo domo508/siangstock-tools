@@ -1,5 +1,9 @@
 # 庫存採購規劃｜下一階段核心功能
 
+## 2026-11-03 本輪授權：週調撥搜尋提醒連動
+
+商品主列被品號／門市篩掉時提醒及展開明細同步隱藏；提醒標示門市與品號、清除搜尋可恢復，重算數量也不得留下孤立提醒。全批供應及原因檢核、數量及Excel／ERP口徑不變。隔離分支codex/transfer-warning-filter-20261103，基準c0077a0，保留訂單r53及當日其他正式修正；正式發布與驗收結果待補。本輪無D1遷移或正式業務寫入。
+
 ## 2026-11-03 窄列操作指引已發布（正式網域連線驗收受限）
 
 功能5d68f7b6e7099888f47ceb24a59851fde8669fd1已依本次授權推送feature/company-tools-static-site，Zeabur明確顯示該部署運作中；Worker9aa8d213-667e-4fa4-93d9-4ee229d2752a發布成功。共用指引20261103-guidance-compact-r6，首頁20261103-guide-compact-entry-r1；工具維持最新procurement-deadline-r1／transfer-deadline-r1。保留今天18:00期限與逐店延長，不重做D1遷移。

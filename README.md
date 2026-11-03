@@ -1,5 +1,13 @@
 # 翔仔居家公司工具
 
+## 2026-11-03 周調撥提醒列篩選（本輪授權發布）
+
+發布前三道門檻：完整Worker型別生成、tsc及63份938項通過，含8項本輪正式函式回歸；版本、入口及HTML資產已同步；原core／活動／workflow、後端業務與既有XLSX／ERP守恆測試保留。Worker只有既有版本常數調整，未變更業務處理、Access／JWT／CSP、D1或排程。回復基準c0077a0及Worker02377f4d-c712-44e7-ba9f-585973f9463b，需前後端版本同步，不回復或修改正式批次資料。
+
+修正搜尋品號／切換門市只隱藏商品主列、卻留下黃色追加量提醒的問題。提醒是否顯示須同時滿足原判斷有內容、存在對應商品主列且該主列可見；數量／原因重新計算也採同一限制，清除篩選恢復應有提醒。標題帶門市代碼、名稱與ERP品號並跳脫文字；已展開明細也直接跟隨商品主列，不受中間空提醒列影響。全批供應加總／缺原因防呆仍涵蓋被篩掉的商品，不可藉搜尋繞過。沒有更動確認／核准量、主採購及週調撥core、活動、ERP、權限或日期。
+
+以c0077a0最新正式版本建立隔離分支codex/transfer-warning-filter-20261103，保留訂單r53、18:00及逐店延長、compact-r6。正式舊頁唯讀重現A102067搜尋留下80段孤立提醒；合成UI驗證小寫／部分品號、門市組合、查無結果、清除及數量再計算，孤立提醒0；320／390px文字自動換行無提醒列溢出。本輪版本週調撥20261103-transfer-filter-r1、主採購20261103-procurement-filter-r1及首頁20261103-transfer-filter-entry-r1同步。發布與正式驗收待補，不把準備當完成；私有證據.local-context/verification/20261103-transfer-warning-filter/。
+
 ## 2026-11-03 窄列操作指引已發布（正式網域連線驗收受限）
 
 功能5d68f7b6e7099888f47ceb24a59851fde8669fd1已依本次授權推送feature/company-tools-static-site，Zeabur明確顯示該部署運作中；Worker9aa8d213-667e-4fa4-93d9-4ee229d2752a發布成功。共用指引20261103-guidance-compact-r6，首頁20261103-guide-compact-entry-r1；工具維持最新procurement-deadline-r1／transfer-deadline-r1。保留今天18:00期限與逐店延長，不重做D1遷移。

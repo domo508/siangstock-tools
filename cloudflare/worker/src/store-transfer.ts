@@ -180,7 +180,7 @@ function storeReplyDeadline(batch: Record<string, unknown>, store: Record<string
 async function extendStoreReply(request: Request, env: StoreTransferEnv, batchId: string, requestedStore: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (request.headers.get("X-Store-Transfer-Version") !== "20261103-transfer-deadline-r1") throw new RequestValidationError("回覆期限功能已有新版，請重新載入最新版。", 409);
+  if (request.headers.get("X-Store-Transfer-Version") !== "20261103-transfer-filter-r1") throw new RequestValidationError("回覆期限功能已有新版，請重新載入最新版。", 409);
   const storeCode = visibleStore(requestedStore, who.role, who.storeCode);
   if (!storeCode) throw new RequestValidationError("必須指定門市。");
   const input = await readBody(request, 8192);
@@ -1160,7 +1160,7 @@ async function openApprovedCorrection(request: Request, env: StoreTransferEnv, b
 async function approveBatch(request: Request, env: StoreTransferEnv, batchId: string, saveOnly = false, requestedStore?: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261103-transfer-deadline-r1") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
+  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261103-transfer-filter-r1") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
   const batch = await env.DB.prepare("SELECT status, revision, proposal_date, arrival_schedule FROM store_transfer_batches WHERE id = ? AND deleted_at IS NULL").bind(batchId).first<Record<string, unknown>>();
   if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
   if (!["open", "review"].includes(String(batch.status))) throw new RequestValidationError("此批次目前不可核准。", 409);
@@ -1550,7 +1550,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
     return json({ hasMore:rows.results.length>100, plans:await Promise.all(rows.results.slice(0,100).map(async raw=>{const row=raw as Record<string,unknown>,current=await currentActivityRecord(env,row);const {source,config,...metadata}=row;return {...metadata,status:current.status,startProposalDate:current.config.startProposalDate || "",...("settingsOutdated" in current?{settingsOutdated:true}:{})};})) });
   }
   requireSameOrigin(request,env);
-  if(request.headers.get("X-Store-Transfer-Version") !== "20261103-transfer-deadline-r1") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
+  if(request.headers.get("X-Store-Transfer-Version") !== "20261103-transfer-filter-r1") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
   const body = await readBody(request,3_000_000), now = new Date().toISOString();
   if (request.method === "POST" && !id) {
     const source = activitySource(body.source), planId = crypto.randomUUID();

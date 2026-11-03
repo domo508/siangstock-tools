@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261103-transfer-deadline-r1";
+  const APP_VERSION = "20261103-transfer-filter-r1";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -627,14 +627,24 @@
       const skuMatches = !skuQuery || String(row.dataset.sku || "").toLocaleUpperCase("en-US").includes(skuQuery);
       row.hidden = !(storeMatches && skuMatches);
     });
+    syncQuantityWarningVisibility(root);
     root.querySelectorAll("[data-decision-detail]").forEach((detail) => {
-      detail.hidden = !detail.classList.contains("is-open") || Boolean(detail.previousElementSibling?.hidden);
+      const previous = detail.previousElementSibling;
+      const owner = previous?.matches("[data-quantity-warning]") ? previous.previousElementSibling : previous;
+      detail.hidden = !detail.classList.contains("is-open") || !owner || owner.hidden;
     });
     root.querySelectorAll("[data-store-section]").forEach((section) => {
       const rows = [...section.querySelectorAll("[data-store-row]")];
       section.hidden = rows.length > 0 && !rows.some((row) => !row.hidden);
     });
     refreshSkuFilterSummary(scope);
+  }
+
+  function syncQuantityWarningVisibility(root) {
+    root.querySelectorAll("[data-quantity-warning]").forEach((warning) => {
+      const owner = warning.previousElementSibling;
+      warning.hidden = !warning.dataset.warningTone || !owner?.matches("tr[data-store-row][data-item-type]") || owner.hidden;
+    });
   }
 
   function applyStoreFilter(scope, storeCode) {
@@ -1288,9 +1298,11 @@
         title = "人工新增品項的系統未建議原因";
         copy = `${row.dataset.systemReason || "本批次依現行規則未形成補貨需求"}；${projectionText}。`;
       }
-      warning.hidden = !tone;
+      warning.dataset.warningTone = tone;
+      warning.hidden = !tone || row.hidden;
       warning.className = `decision-warning-row${tone ? ` ${tone}` : ""}`;
-      warning.querySelector("td").innerHTML = tone ? `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(copy)}</span>` : "";
+      const identity = `${row.dataset.store} ${state.config.stores[row.dataset.store]?.name || ""}／${row.dataset.sku}`;
+      warning.querySelector("td").innerHTML = tone ? `<strong>${escapeHtml(identity)}｜${escapeHtml(title)}</strong><span>${escapeHtml(copy)}</span>` : "";
     });
     detail.querySelectorAll('[data-action="save"], [data-action="submit"], [data-action="approve"]').forEach((button) => { button.disabled = blocking > 0; });
     const status = detail.querySelector("#dialog-status");
