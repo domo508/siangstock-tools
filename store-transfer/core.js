@@ -13,6 +13,20 @@
     P11043: { name: "紡布提袋 25' [30×30×10][小]", size: "小" }
   });
   const CUSTOM_TRANSFER_SKU_MARKERS = Object.freeze(["SA", "SB", "OA", "OB"]);
+  const SPECIAL_TRANSFER_SKUS = new Set(["C41879", "C41888", "C41889", "C41891", "C41892", "C41894", "C41899", "C41904", "C41909", "C41910", "C41918", "C41921", "C41922"]);
+
+  function specialBeddingProductReason(product) {
+    const sku = String(product?.sku || "").normalize("NFKC").trim().toUpperCase();
+    if (SPECIAL_TRANSFER_SKUS.has(sku)) return "已確認特殊規格品號";
+    const name = String(product?.name || "").normalize("NFKC");
+    if (/客製|客制|訂製|訂制/.test(name)) return "品名明示客製／訂製";
+    // A dimensional pillow/mattress is not automatically custom. Only bedding
+    // with centimetre dimensions AND an explicit nonstandard master size qualifies.
+    const size = String(product?.size || "").normalize("NFKC");
+    if (/床包|床裙|被套/.test(name) && /(?:其它|其他|特殊|非標準)尺寸|特殊規格|客製/.test(size)
+      && /\d+(?:\.\d+)?\s*[xX×＊*]\s*\d+(?:\.\d+)?(?:\s*[xX×＊*]\s*\d+(?:\.\d+)?)?\s*(?:cm|公分)/i.test(name)) return "主檔非標準尺寸床寢品（疑似客製）";
+    return "";
+  }
 
   function isCustomTransferSku(sku) {
     const normalized = String(sku || "").normalize("NFKC").trim().toUpperCase();
@@ -72,6 +86,8 @@
     const sku = String(product?.sku || "").normalize("NFKC").trim().toUpperCase();
     if (isCustomTransferSku(sku)) return { excluded: true, source: "custom_sku" };
     if (isCombinationTransferSku(sku)) return { excluded: true, source: "combination_sku" };
+    const specialReason = specialBeddingProductReason(product);
+    if (specialReason) return { excluded: true, source: "special_product", reason: specialReason };
     if (transferExclusionSkus(storeInventory).has(sku)) return { excluded: true, source: "exact_exclusion" };
     for (const rule of normalizedApplicabilityRules(storeInventory)) {
       if (!applicabilityRuleMatches(rule, product, storeCode)) continue;
@@ -88,6 +104,7 @@
     if (!decision?.excluded) return "";
     if (decision.source === "custom_sku") return "客製品號（SA／SB／OA／OB）不自動產生周調撥建議";
     if (decision.source === "combination_sku") return "O開頭組合號不自動產生周調撥建議";
+    if (decision.source === "special_product") return `${decision.reason}，不自動產生周調撥建議`;
     if (decision.source === "exact_exclusion") return "已列入排除周調撥品號";
     if (decision.source === "applicability_rule") {
       const name = decision.rule?.name ? `「${decision.rule.name}」` : "周調撥適用規則";
@@ -697,6 +714,7 @@
     const isTransferExcluded = (sku, storeCode = "") => {
       const normalized = String(sku || "").normalize("NFKC").trim().toUpperCase();
       if (isCustomTransferSku(normalized) || isCombinationTransferSku(normalized)) return true;
+      if (specialBeddingProductReason({ ...masterBySku.get(normalized), sku: normalized })) return true;
       if (transferExclusions.has(normalized)) return true;
       if (!storeCode || !applicabilityRules.length) return false;
       return transferApplicabilityDecision({ transferExclusions: [], applicabilityRules }, masterBySku.get(normalized) || { sku: normalized, name: "" }, storeCode, proposalDate).excluded;

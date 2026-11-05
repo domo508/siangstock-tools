@@ -205,6 +205,37 @@ describe("待發貨與A/B測試比對", () => {
     expect(core.isCombinationTransferSku("A102061")).toBe(false);
   });
 
+  it("特殊規格清單與非標準尺寸同步排除正式及A/B，保留人工警示與原在途", () => {
+    const cases = [
+      ...["C41879", "C41888", "C41889", "C41891", "C41892", "C41894", "C41899", "C41904", "C41909", "C41910", "C41918", "C41921", "C41922"].map(sku => ({sku, name:"合成特殊床包組"})),
+      {sku:"TEST-CUSTOM",name:"合成訂製床包"},
+      {sku:"TEST-SIZE",name:"合成床包組 123×187×38cm",size:"其它尺寸"},
+      {sku:"TEST-SIZE2",name:"合成薄被套 210×280cm",size:"非標準尺寸"}
+    ];
+    for (const mode of ["formal", "comparison"]) for (const product of cases) {
+      const input=transferModeInput(mode),sku=product.sku;
+      input.master.bySku=new Map([[sku,product]]);
+      input.inventory.records=input.inventory.records.map(r=>({...r,sku}));
+      input.transfer.records=input.transfer.records.map(r=>({...r,sku}));
+      input.sales[0].records=input.sales[0].records.map(r=>({...r,sku}));
+      input.storeDisplayExceptions=[{storeCode:"R00",sku,displayQuantity:5,enabled:true}];
+      input.storeInventory={applicabilityRules:[{enabled:true,matchType:"sku",sku,action:"allow",scheduleMode:"always",priority:9999}]};
+      const original=JSON.stringify(input.inventory),result=core.buildSuggestions(input);
+      expect(result.rows).toHaveLength(0);expect(result.shortageRows).toHaveLength(0);expect(result.comparisonFacts).toHaveLength(0);
+      expect(result.manualItemFacts[0].autoExcluded).toBe(true);
+      expect(result.manualItemCatalog[0].autoExclusions.R00).toContain("不自動產生");
+      expect(result.pendingTransferRows).toHaveLength(1);expect(JSON.stringify(input.inventory)).toBe(original);
+    }
+  });
+
+  it("不把全C類、標準床包與正常三維枕頭當成特殊品", () => {
+    for(const product of [{sku:"C00001",name:"合成5尺床包"},{sku:"C00002",name:"合成枕頭60×40×12cm",size:"其它尺寸"},{sku:"C00003",name:"合成床包152×188×35cm",size:"5尺"}]){
+      const input=transferModeInput("formal"),sku=product.sku;input.master.bySku=new Map([[sku,product]]);
+      input.inventory.records=input.inventory.records.map(r=>({...r,sku}));input.transfer.records=[];input.sales[0].records=input.sales[0].records.map(r=>({...r,sku}));
+      const result=core.buildSuggestions(input);expect(result.regularRows.length+result.shortageRows.length).toBeGreaterThan(0);expect(result.manualItemCatalog[0].autoExclusions).toEqual({});
+    }
+  });
+
   it("周調撥適用規則不能重新納入客製品號", () => {
     const input = transferModeInput("formal");
     const sku = "XSA42002";
