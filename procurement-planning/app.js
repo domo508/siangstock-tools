@@ -14,7 +14,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261105-procurement-special-r1";
+  const APP_VERSION = "20261105-procurement-supply-window-r1";
   const state = {
     importProgress: null, shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -313,7 +313,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261105-procurement-special-r1");
+        const worker = new Worker("inventory-reader-worker.js?v=20261105-procurement-supply-window-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -502,7 +502,7 @@
       selectedSuppliers: [...state.selectedSuppliers], returnScope: state.returnScope ? [...state.returnScope] : null,
       firstReview: state.firstReview, review: state.review, purchaseStatusSummary: state.purchaseStatusSummary, costSummary: state.costSummary,
       consignmentStyleAudit: state.consignmentSource?.styleAudit || { pinkDetected: false, pinkCells: 0 },
-      controls: { month: elements.month.value, checkpoint: elements.checkpoint.value, orderDate: elements.orderDate.value, inventoryDate: elements.inventoryDate.value, pendingDate: elements.pendingDate.value, transferDate: elements.transferDate.value, consignmentDate: elements.consignmentDate.value, salesDate: elements.salesDate.value, activityDemand: activitySettings() }
+      controls: { month: elements.month.value, checkpoint: elements.checkpoint.value, orderDate: elements.orderDate.value, inventoryDate: elements.inventoryDate.value, pendingDate: elements.pendingDate.value, transferDate: elements.transferDate.value, consignmentDate: elements.consignmentDate.value, salesDate: elements.salesDate.value, activityDemand: activitySettings(), foreignBackorders: get("#foreign-backorders").value, foreignBackordersConfirmed: get("#foreign-backorders-confirmed").checked }
     };
   }
 
@@ -578,6 +578,8 @@
       const target = ({ month: elements.month, checkpoint: elements.checkpoint, orderDate: elements.orderDate, inventoryDate: elements.inventoryDate, pendingDate: elements.pendingDate, transferDate: elements.transferDate, consignmentDate: elements.consignmentDate, salesDate: elements.salesDate })[key];
       if (target && value) target.value = value;
     });
+    get("#foreign-backorders").value = draft.controls?.foreignBackorders || "";
+    get("#foreign-backorders-confirmed").checked = draft.controls?.foreignBackordersConfirmed === true;
     const activity = draft.controls?.activityDemand || draft.analysis?.appliedRules?.activityDemand;
     sharedActivity?.restore(activity);
     if (activity) {
@@ -1079,7 +1081,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261105-procurement-special-r1");
+      const worker = new Worker("seasonal-model-worker.js?v=20261105-procurement-supply-window-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -1693,7 +1695,8 @@
     const response = await fetch("/api/procurement/rules", { headers: { Accept: "application/json" }, cache: "no-store" });
     const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-    state.procurementRules = result.rules;
+    if (!result.rules || !Number.isSafeInteger(result.version) || result.version < 1) throw new Error("公司採購規則回應不完整，請重新確認公司登入。");
+    state.procurementRules = result.rules; state.procurementRulesVersion = result.version;
   }
   function previousMonthValue(value) {
     const match = /^(\d{4})-(\d{2})$/.exec(String(value || ""));
@@ -2042,7 +2045,7 @@
       const source = structuredClone(transferActivitySource());
       source.originParentId=state.parentBatchId;
       for (const month of source.months) if(!(month.retailTarget>0)) throw new Error(`${month.month}沒有可提供的實體門市需求，請先確認目標及歷史資料。`);
-      const send=async body=>fetch("/api/store-transfer/activity-plans", { method:"POST", cache:"no-store", headers:{Accept:"application/json","Content-Type":"application/json","X-Store-Transfer-Version":"20261105-transfer-special-r1"},body:JSON.stringify(body) });
+      const send=async body=>fetch("/api/store-transfer/activity-plans", { method:"POST", cache:"no-store", headers:{Accept:"application/json","Content-Type":"application/json","X-Store-Transfer-Version":"20261105-transfer-shortage-product-r1"},body:JSON.stringify(body) });
       let response=await send({source}), result=await response.json();
       if(response.status===409 && result.existingId && confirm(`${result.error}\n\n確認更新此活動來源？`)) {response=await send({source,expectedRevision:result.existingRevision});result=await response.json();}
       if (!response.ok) throw new Error(result.error || "提供活動草稿失敗；須具備週調撥總部權限。");
@@ -2292,16 +2295,24 @@
   function updateStoreShortageSelection() {
     const checkboxes = [...elements.storeShortageRows.querySelectorAll("[data-shortage-select]")];
     const selected = checkboxes.filter((input) => input.checked).length;
-    elements.storeShortageSelectedCount.textContent = `${selected}項`;
+    const products = new Set(checkboxes.filter(input => input.checked).map(input => input.dataset.sku)).size;
+    elements.storeShortageSelectedCount.textContent = `${products}項商品／${selected}筆門市需求`;
+    elements.storeShortageRows.querySelectorAll("[data-shortage-product-select]").forEach(input => {
+      const children = checkboxes.filter(child => child.dataset.sku === input.dataset.shortageProductSelect);
+      const count = children.filter(child => child.checked).length;
+      input.checked = children.length > 0 && count === children.length;
+      input.indeterminate = count > 0 && count < children.length;
+    });
     elements.storeShortageSelectAll.checked = checkboxes.length > 0 && selected === checkboxes.length;
     elements.storeShortageSelectAll.indeterminate = selected > 0 && selected < checkboxes.length;
     elements.storeShortageBatchBar.querySelectorAll("[data-shortage-bulk-mode], [data-shortage-bulk-close]").forEach((button) => { button.disabled = state.shortageBulkBusy || selected === 0 || !state.storeShortagePermissions?.canDecide; });
   }
   function renderStoreShortageNeeds() {
     const rows = state.storeShortageNeeds || [];
-    const total = rows.reduce((sum, row) => sum + Number(row.unfilled_quantity || 0), 0);
     const canDecide = Boolean(state.storeShortagePermissions?.canDecide && !state.shortageBulkBusy);
-    const countLabel = rows.length ? `${rows.length}項・${formatNumber(total)}件` : "目前無待辦";
+    const groups = shortageBatch.groupProducts(rows);
+    const remaining = groups.reduce((sum, group) => sum + group.transferRemaining, 0);
+    const countLabel = rows.length ? `${groups.length}項商品・待補配${formatNumber(remaining)}件／${rows.length}筆門市需求` : "目前無待辦";
     elements.storeShortageCount.textContent = countLabel;
     elements.storeShortageTopCount.textContent = rows.length ? `門市不足 ${countLabel}` : "門市不足目前無待辦";
     elements.storeShortageEmpty.hidden = rows.length > 0;
@@ -2309,11 +2320,19 @@
     elements.storeShortageTableWrap.hidden = rows.length === 0;
     if (!state.storeShortageRendered || (rows.length > 0 && !elements.storeShortageCard.open)) elements.storeShortageCard.open = rows.length > 0;
     state.storeShortageRendered = true;
-    elements.storeShortageRows.innerHTML = rows.map((row) => {
+    const detailRow = (row) => {
       const purchaseUncovered = Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.covered_quantity || 0));
       const transferRemaining = Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.fulfilled_quantity || 0));
       const disabled = canDecide ? "" : " disabled";
-      return `<tr><td class="shortage-select-column"><input type="checkbox" data-shortage-select data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" aria-label="選取${escapeHtml(row.store_code)} ${escapeHtml(row.sku)}"${disabled}></td><td>${escapeHtml(row.store_code)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${formatNumber(row.approved_demand_quantity)}</td><td>${formatNumber(row.allocated_quantity)}</td><td>${formatNumber(row.unfilled_quantity)}</td><td>${formatNumber(row.covered_quantity)}</td><td>${formatNumber(purchaseUncovered)}</td><td>${formatNumber(row.fulfilled_quantity || 0)}</td><td>${formatNumber(transferRemaining)}</td><td>${escapeHtml(row.needed_by || "待確認")}</td><td>${escapeHtml(handlingLabel(row))}</td><td><div class="shortage-actions"><button type="button" data-shortage-mode="merge_next" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "merge_next" ? "is-selected" : ""}"${disabled}>併入下一張</button><button type="button" data-shortage-mode="new_order" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "new_order" ? "is-selected" : ""}"${disabled}>建立補採新單</button><button type="button" data-shortage-close="resolved" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"${disabled}>已補配結案</button><button type="button" data-shortage-close="cancelled" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"${disabled}>取消需求</button></div></td></tr>`;
+      const facts = [["核准需求", row.approved_demand_quantity], ["已配", row.allocated_quantity], ["確認未配", row.unfilled_quantity], ["已採購覆蓋", row.covered_quantity], ["尚未採購覆蓋", purchaseUncovered], ["後續已補配", row.fulfilled_quantity || 0], ["尚待門市補配", transferRemaining]];
+      return `<article class="shortage-store-detail"><label class="shortage-store-detail-title"><input type="checkbox" data-shortage-select data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" aria-label="選取${escapeHtml(row.store_code)} ${escapeHtml(row.sku)}"${disabled}><strong>${escapeHtml(row.store_code)}</strong><span>${escapeHtml(handlingLabel(row))}</span></label><p class="budget-note">${escapeHtml(row.product_name)}・需要到店：${escapeHtml(row.needed_by || "待確認")}</p><dl class="shortage-store-facts">${facts.map(([label, value]) => `<div><dt>${label}</dt><dd>${formatNumber(value)}</dd></div>`).join("")}</dl><div class="shortage-actions"><button type="button" data-shortage-mode="merge_next" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "merge_next" ? "is-selected" : ""}"${disabled}>併入下一張</button><button type="button" data-shortage-mode="new_order" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" class="${row.handling_mode === "new_order" ? "is-selected" : ""}"${disabled}>建立補採新單</button><button type="button" data-shortage-close="resolved" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"${disabled}>已補配結案</button><button type="button" data-shortage-close="cancelled" data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"${disabled}>取消需求</button></div></article>`;
+    };
+    elements.storeShortageRows.innerHTML = groups.map(group => {
+      const stores = group.stores.map(store => {
+        const quantity = group.rows.filter(row => row.store_code === store).reduce((sum, row) => sum + Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.fulfilled_quantity || 0)), 0);
+        return `<span class="shortage-store-chip">${escapeHtml(store)}：${formatNumber(quantity)}件</span>`;
+      }).join("");
+      return `<article class="shortage-product-card"><div class="shortage-product-heading"><label class="shortage-product-identity"><input type="checkbox" data-shortage-product-select="${escapeHtml(group.sku)}" aria-label="選取${escapeHtml(group.sku)}全部門市需求"${canDecide ? "" : " disabled"}><span><strong>${escapeHtml(group.sku)}</strong><span>${escapeHtml(group.name)}</span></span></label><strong class="shortage-product-total">待補配 ${formatNumber(group.transferRemaining)}件</strong></div><div class="shortage-product-facts"><div><span>已採購覆蓋</span><strong>${formatNumber(group.covered)}件</strong></div><div><span>尚未採購覆蓋</span><strong>${formatNumber(group.purchaseUncovered)}件</strong></div><div><span>缺貨門市（待補配量）</span><div class="shortage-store-list">${stores}</div></div><div><span>最早需要到店</span><strong>${escapeHtml(group.earliestNeededBy || "待確認")}</strong></div></div><details class="shortage-product-details"><summary>查看／處理 ${group.rows.length}筆門市明細</summary><p>各店狀態與到店日可能不同；勾選商品會選取其全部門市需求，亦可逐店勾選後使用上方批次處理。</p><div class="shortage-store-details">${group.rows.map(detailRow).join("")}</div></details></article>`;
     }).join("");
     elements.storeShortageSelectAll.disabled = !canDecide || rows.length === 0;
     updateStoreShortageSelection();
@@ -2865,9 +2884,29 @@
     });
     return { current, future, reviewSuppliers };
   }
+  function foreignBackorderSettings() {
+    const map = new Map();
+    const text = get("#foreign-backorders").value.trim();
+    text.split(/\r?\n/).forEach((line, index) => {
+      if (!line.trim()) return;
+      const parts = line.trim().split(/[,，\t]/).map(value => value.trim());
+      if (parts.length !== 2 || !parts[0] || !/^\d+$/.test(parts[1]) || !Number.isFinite(Number(parts[1])) || Number(parts[1]) > 10000000 || map.has(parts[0])) throw new Error(`有效欠單第${index + 1}列格式錯誤或品號重複，請填入「品號,非負數量」。`);
+      map.set(parts[0], Number(parts[1]));
+    });
+    return { backordersBySku: map, backordersConfirmed: get("#foreign-backorders-confirmed").checked };
+  }
+  function renderForeignSupplyRows(rows) {
+    const affected = rows.filter(row => row.supplyWindow);
+    get("#foreign-supply-result").hidden = !affected.length;
+    get("#foreign-supply-result-rows").innerHTML = affected.map(row => {
+      const w = row.supplyWindow;
+      return `<article class="shortage-store-detail"><strong>${escapeHtml(row.sku)} ${escapeHtml(row.name)}</strong><dl class="shortage-store-facts"><div><dt>預估缺貨起日</dt><dd>${escapeHtml(w.firstShortageDate || "到貨前未見缺口")}</dd></div><div><dt>本次預估到貨</dt><dd>${escapeHtml(w.arrival)}</dd></div><div><dt>到貨後保障至</dt><dd>${escapeHtml(w.protectionEnd)}</dd></div><div><dt>到貨前預估流失</dt><dd>${formatNumber(w.lostQty)}件</dd></div><div><dt>已知有效欠單</dt><dd>${formatNumber(w.backorderQty)}件</dd></div><div><dt>到貨後預估可售至</dt><dd>${escapeHtml(w.projectedAvailableUntil)}</dd></div><div><dt>建議採購</dt><dd>${formatNumber(row.suggestedPurchaseQty)}件</dd></div></dl><p class="budget-note">${escapeHtml(w.backlogStatus)}；${escapeHtml(w.allocationNote)}${w.undatedPendingQty ? `；${formatNumber(w.undatedPendingQty)}件未到貨日期待確認，未抵扣及時供應。` : ""}</p></article>`;
+    }).join("");
+  }
   function renderSelectedAnalysis() {
     if (!state.analysis) return;
     const rows = selectedRows();
+    renderForeignSupplyRows(state.analysis.rows.filter(row => !state.activeWorkUnit ? state.selectedSuppliers.has(canonicalSupplierName(row.supplier)) : core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit)));
     const amount = rows.reduce((sum, row) => sum + Number(row.suggestedPurchaseAmount || 0), 0);
     const quantity = rows.reduce((sum, row) => sum + Number(row.suggestedPurchaseQty || 0), 0);
     const payments = selectedPaymentSummary(rows);
@@ -3079,6 +3118,14 @@
     const readRequired = async file => { const workbook = await readWorkbook(file); markFileRead(); return workbook; };
     try {
       const monthEndMode = elements.checkpoint.value === "month-end";
+      const backorderStamp = JSON.stringify([get("#foreign-backorders").value, get("#foreign-backorders-confirmed").checked]);
+      const backorderSettings = monthEndMode ? {} : foreignBackorderSettings();
+      let calculationRulesVersion = null;
+      if (!monthEndMode) {
+        await loadProcurementRules();
+        calculationRulesVersion = state.procurementRulesVersion;
+        if (state.procurementRules?.springFestival?.mode !== "supply-window-v1") throw new Error("公司採購規則尚在更新，請保留選檔，稍後重新確認最新版再產生建議；舊批次可續作。");
+      }
       const inventory = await parseInventoryFile(state.inventoryFile); markFileRead();
       setStatus("庫存預檢完成，正在解析其它資料並套用正式採購、寄庫與付款規則…");
       const [masterWorkbook, transferWorkbook, consignmentWorkbook, lirongWorkbook, modelWorkbook, pendingWorkbooks, salesWorkbooks] = await Promise.all([
@@ -3133,6 +3180,7 @@
         analysisMonth: elements.month.value, orderDate: elements.orderDate.value, activityDemand: activity, activityHistory, reservedConsignmentBySku,
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
         springFestivalRule: state.procurementRules?.springFestival,
+        ...backorderSettings,
         purchaseUnitRules: state.procurementRules?.purchaseUnits,
         consignmentRules: state.procurementRules?.consignment,
         storeInventoryRules: state.procurementRules?.storeInventory,
@@ -3167,6 +3215,10 @@
       };
       if (!(await checkRuntimeVersion())) throw new Error("本機計算已結束，但版本尚未確認或已有新版，結果未採用且尚未寫入台帳。請先確認上方版本訊息。");
       await sharedActivity.verify(activityToken);
+      await loadProcurementRules();
+      if (state.procurementRulesVersion !== calculationRulesVersion) throw new Error("公司採購規則已在計算期間更新，請保留檔案並重新產生建議。");
+      if (backorderStamp !== JSON.stringify([get("#foreign-backorders").value, get("#foreign-backorders-confirmed").checked])) throw new Error("有效欠單設定已在計算期間變更，請重新產生建議。");
+      analysis.appliedRules.version = calculationRulesVersion;
       state.analysis = analysis; state.baseAnalysis = analysis; state.workflowType = state.shortageRunMode === "new_order" ? "store_shortage_replenishment" : "system_recommendation";
       state.transferParentContext=null;state.transferPeriodError=false;state.transferPeriodSyncing=false;
       state.parentBatchId = newParentBatchId(); state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set(); state.draftId = state.parentBatchId;
@@ -3886,7 +3938,18 @@
   elements.addChannel.addEventListener("click", addRevenueChannel); elements.refreshQueue.addEventListener("click", loadLedger); elements.refreshSharedDrafts.addEventListener("click", loadSharedWorkflowDrafts);
   elements.googleConnect.addEventListener("click", connectGoogle); elements.summaryAuthConnect.addEventListener("click", connectGoogle); elements.autoSource.addEventListener("click", loadAutomaticSources);
   elements.storeShortageRows.addEventListener("click", decideStoreShortage);
-  elements.storeShortageRows.addEventListener("change", (event) => { if (event.target.matches("[data-shortage-select]")) updateStoreShortageSelection(); });
+  [get("#foreign-backorders"), get("#foreign-backorders-confirmed")].forEach(input => input.addEventListener("change", () => {
+    if (state.analysis && !state.approved) invalidateAnalysis();
+    get("#foreign-backorder-status").textContent = "欠單設定已變更；下次新採購計算採用，既有核准／ERP不回寫。";
+  }));
+  elements.storeShortageRows.addEventListener("change", (event) => {
+    if (event.target.matches("[data-shortage-product-select]")) {
+      elements.storeShortageRows.querySelectorAll("[data-shortage-select]").forEach(input => {
+        if (input.dataset.sku === event.target.dataset.shortageProductSelect) input.checked = event.target.checked;
+      });
+      updateStoreShortageSelection();
+    } else if (event.target.matches("[data-shortage-select]")) updateStoreShortageSelection();
+  });
   elements.storeShortageSelectAll.addEventListener("change", () => {
     elements.storeShortageRows.querySelectorAll("[data-shortage-select]").forEach((input) => { input.checked = elements.storeShortageSelectAll.checked; });
     updateStoreShortageSelection();

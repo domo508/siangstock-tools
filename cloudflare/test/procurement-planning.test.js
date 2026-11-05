@@ -2821,7 +2821,8 @@ describe("採購規劃前台與入口", () => {
     expect(rulesAdminHtml).toContain('id="featured-supplier-list"');
     expect(rulesAdminHtml).toContain("未列入、新增後尚未列入或由資料臨時辨識到的供應商");
     expect(rulesAdminHtml).toContain('id="spring-festival-extra-days"');
-    expect(rulesAdminHtml).toContain("預設53天，可在45～60天內調整");
+    expect(rulesAdminHtml).toContain("新規則不固定加53天");
+    expect(rulesAdminHtml).toContain('id="spring-festival-last-arrival"');
     expect(rulesAdminHtml).toContain("供應商＋品類＋尺寸");
     expect(rulesAdminHtml).not.toContain("品名比對（以 | 分隔且皆須命中）");
     expect(rulesAdminApp).toContain("featuredSuppliers");

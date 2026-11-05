@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20261105-procurement-special-r1">
+  <link rel="stylesheet" href="style.css?v=20261105-procurement-supply-window-r1">
   <link rel="stylesheet" href="/live-guidance/style.css?v=20261103-guidance-compact-r6">
 </head>
 <body>
@@ -386,14 +386,14 @@
             <span>
               <span class="eyebrow">核准後自動回拋</span>
               <strong id="store-shortage-title">門市不足待採購</strong>
-              <small>同一門市同一品號只採最新版；先選處理方式，才會納入本次採購建議。</small>
+              <small>依商品彙整各店最新版缺口；展開可逐店處理，先選處理方式才納入本次採購建議。</small>
             </span>
             <span class="store-shortage-summary-state"><span id="store-shortage-count" class="source-badge recommended">正在同步</span><span class="store-shortage-toggle-text" aria-hidden="true"></span></span>
           </summary>
           <div class="store-shortage-body">
             <div id="store-shortage-empty" class="store-shortage-empty">目前沒有已核准的門市未配需求。</div>
             <div id="store-shortage-batch-bar" class="shortage-batch-bar" hidden>
-              <label><input id="store-shortage-select-all" type="checkbox"> 全選本頁 <strong id="store-shortage-selected-count">0項</strong></label>
+              <label><input id="store-shortage-select-all" type="checkbox"> 全選商品 <strong id="store-shortage-selected-count">0項商品／0筆門市需求</strong></label>
               <div class="shortage-batch-actions">
                 <button type="button" class="secondary-button" data-shortage-bulk-mode="merge_next" disabled>批次併入下一張</button>
                 <button type="button" class="primary-button" data-shortage-bulk-mode="new_order" disabled>批次建立補採新單</button>
@@ -403,16 +403,22 @@
               </div>
             </div>
             <div id="store-shortage-table-wrap" class="result-table-wrap" hidden>
-              <table class="result-table compact-table store-shortage-table">
-                <thead><tr><th class="shortage-select-column">選取</th><th>門市</th><th>ERP品號</th><th>品名</th><th>核准需求</th><th>已配</th><th>確認未配</th><th>已採購覆蓋</th><th>尚未採購覆蓋</th><th>後續已補配</th><th>尚待門市補配</th><th>需要到店日</th><th>處理狀態</th><th>單筆處理／結案</th></tr></thead>
-                <tbody id="store-shortage-rows"></tbody>
-              </table>
+              <p class="budget-note">商品主列分開顯示「尚待門市補配」與「尚未採購覆蓋」；展開可核對已採購覆蓋、後續已補配及各店狀態。</p>
+              <div id="store-shortage-rows" class="shortage-product-list"></div>
             </div>
             <div class="source-control-actions shortage-run-actions"><button id="run-shortage-order-button" class="primary-button" type="button" disabled>產生門市不足補採新單</button></div>
             <p id="store-shortage-status" role="status" aria-live="polite" class="budget-note">暫估未配不會占用額度；只有總部核准後的最新版需求才會顯示在這裡。</p>
           </div>
         </details>
       </section>
+      <details class="foreign-supply-input">
+        <summary>國外採購：有效欠單與到貨空窗</summary>
+        <p>缺貨期間未成交的需求不會轉為到貨後採購；仍須交付的有效欠單請另填。此處不包含已列入「門市不足待採購」的需求，避免重複。</p>
+        <label for="foreign-backorders">其他有效欠單（選填，每列：ERP品號,數量）</label>
+        <textarea id="foreign-backorders" rows="3" placeholder="例如：G40012,10" aria-describedby="foreign-backorder-status"></textarea>
+        <label class="checkbox-field"><input id="foreign-backorders-confirmed" type="checkbox"> 已核對：除上列數量外，沒有其他有效欠單</label>
+        <p id="foreign-backorder-status" class="budget-note">未確認時，建議不含未提供的其他欠單，結果會標示待覆核；不代表已確認為0。</p>
+      </details>
       <div id="source-status" class="result-alert" role="status">固定來源尚未完成公司 Google 授權；可先使用各來源的手動備援。</div>
       <div class="result-alert warn" role="note"><strong>暫行權限例外：</strong>普優瑪與力榮寄庫表目前仍可能開放「知道連結的任何人可編輯」。因權限由供應商維護，本次先不阻擋部署；工具仍會逐次檢查來源格式、資料日期與內容雜湊，但此項尚未完成正式權限驗收。</div>
     </section>
@@ -469,6 +475,7 @@
         <p class="work-unit-note">同一批可包含多個審核單位；只有正式核准的批次才會占用採購額度，未送出、待核准與已核准不會重複計算。</p>
       </section>
       <div id="summary-cards" class="summary-grid procurement-summary"></div>
+      <details id="foreign-supply-result" class="foreign-supply-input" hidden><summary>國外採購：預估缺貨與到貨後保障</summary><div id="foreign-supply-result-rows"></div></details>
       <div id="result-alert" class="result-alert" role="status"></div>
       <details id="excluded-result-panel" class="excluded-result-panel" hidden>
         <summary><span>未列入自動建議／需人工確認</span><strong id="excluded-result-count">0項</strong></summary>
@@ -612,7 +619,7 @@
         <article><strong>力榮採購與寄庫分開</strong><p>現貨5天、製作14天、製作後最早19天；每個品號只能0或10的倍數。</p></article>
         <article><strong>上林獨立檢視</strong><p>固定28天檢視期；總部、門市與加總需求使用公式。</p></article>
         <article><strong>承諾與付款分流</strong><p>國內核准時承諾100%、實際到貨付款；國外核准時認列訂金30%，其餘70%於實際到貨時認列與付款。</p></article>
-        <article><strong>國外春節停工備貨</strong><p>補貨範圍跨入年度停工期才加量；預設53天，可於45～60天內調整並分開顯示額度影響。</p></article>
+        <article><strong>國外春節停工備貨</strong><p>依年前最後到貨回推下單期限；復工後再加完整交期估年後到貨。按供應空窗補足需求，不固定加53天；到貨前流失不轉為欠單，已知有效欠單另保留。</p></article>
       </div>
       <p class="result-note">一般備貨公式屬程式內建，不列入管理頁。供應商、國外春節停工備貨、寄庫、採購單位、門市庫存與黑名單由採購核准者管理；權限與通知只有最高權限可查看及變更。</p>
     </section>
@@ -633,18 +640,18 @@
   <script src="xlsx-style-runtime.js?v=20260930-month-end-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20261105-procurement-special-r1"></script>
+  <script src="core.js?v=20261105-procurement-supply-window-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
-  <script src="google-sources.js?v=20261105-procurement-special-r1"></script>
+  <script src="google-sources.js?v=20261105-procurement-supply-window-r1"></script>
   <script src="../store-transfer/core.js?v=20261027-activity-transfer-r6"></script>
-  <script src="../store-transfer/activity.js?v=20261105-transfer-special-r1"></script>
-  <script src="activity-planning.js?v=20261105-procurement-special-r1"></script>
-  <script src="shortage-batch.js?v=20261105-procurement-special-r1"></script>
-  <script src="activity-period.js?v=20261105-procurement-special-r1"></script>
-  <script src="activity-registry.js?v=20261105-procurement-special-r1"></script>
+  <script src="../store-transfer/activity.js?v=20261105-transfer-shortage-product-r1"></script>
+  <script src="activity-planning.js?v=20261105-procurement-supply-window-r1"></script>
+  <script src="shortage-batch.js?v=20261105-procurement-supply-window-r1"></script>
+  <script src="activity-period.js?v=20261105-procurement-supply-window-r1"></script>
+  <script src="activity-registry.js?v=20261105-procurement-supply-window-r1"></script>
   <script src="/live-guidance/progress.js?v=20261103-guidance-compact-r6"></script>
 <script src="/live-guidance/app.js?v=20261103-guidance-compact-r6"></script>
-  <script src="guidance.js?v=20261105-procurement-special-r1"></script>
-  <script src="app.js?v=20261105-procurement-special-r1"></script>
+  <script src="guidance.js?v=20261105-procurement-supply-window-r1"></script>
+  <script src="app.js?v=20261105-procurement-supply-window-r1"></script>
 </body>
 </html>

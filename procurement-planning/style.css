@@ -1179,3 +1179,43 @@ body.history-readonly .stage-two, body.history-readonly .stage-three, body.histo
 .activity-registry-actions { display:flex; flex-wrap:wrap; gap:10px; }
 .activity-registry button { max-width:100%; white-space:normal; overflow-wrap:anywhere; }
 @media(max-width:600px){.activity-registry {padding:14px}.activity-registry-actions button {width:100%}}
+
+/* Product summaries wrap on narrow screens; store-specific decisions remain in details. */
+.shortage-product-list { display: grid; gap: 14px; min-width: 0; }
+.shortage-product-card { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: #fff; overflow-wrap: anywhere; }
+.shortage-product-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.shortage-product-identity { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.shortage-product-identity input { flex: 0 0 auto; width: 20px; height: 20px; accent-color: var(--blue); }
+.shortage-product-identity > span { display: grid; gap: 4px; min-width: 0; }
+.shortage-product-identity strong { color: var(--navy); }
+.shortage-product-total { color: #8a5017; flex-shrink: 0; }
+.shortage-product-facts { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr) minmax(0, 2fr) minmax(130px, 1fr); gap: 14px; margin: 16px 0; }
+.shortage-product-facts > div { display: grid; gap: 5px; align-content: start; }
+.shortage-product-facts > div > span { color: var(--muted); font-size: .88rem; }
+.shortage-store-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.shortage-store-chip { background: #edf5f7; color: #174e66; border-radius: 8px; padding: 4px 8px; }
+.shortage-product-details summary { cursor: pointer; font-weight: 700; color: var(--blue); padding: 6px 0; }
+.shortage-product-details summary:focus-visible { outline: 3px solid #80bccb; outline-offset: 3px; }
+.shortage-product-details p { color: var(--muted); }
+.shortage-detail-wrap { overflow-x: auto; max-width: 100%; }
+@media (max-width: 650px) {
+  .shortage-product-heading { flex-direction: column; }
+  .shortage-product-facts { grid-template-columns: 1fr; }
+  .shortage-product-card { padding: 14px; }
+  .shortage-batch-bar > label { white-space: normal; flex-wrap: wrap; }
+}
+
+.shortage-store-details { display: grid; gap: 12px; }
+.shortage-store-detail { border: 1px solid #d8e4e8; background: #f7fafb; padding: 14px; border-radius: 12px; min-width: 0; }
+.shortage-store-detail-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.shortage-store-detail-title input { width: 18px; height: 18px; accent-color: var(--blue); }
+.shortage-store-detail-title span { font-size: .85rem; color: var(--muted); }
+.shortage-store-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; margin: 14px 0; }
+.shortage-store-facts dt { color: var(--muted); font-size: .84rem; }
+.shortage-store-facts dd { margin: 4px 0 0; font-weight: 700; }
+.shortage-store-detail .shortage-actions { min-width: 0; }
+
+.foreign-supply-input { padding: 16px; margin: 18px 0; border: 1px solid var(--line); border-radius: 16px; background: #f3f8f8; }
+.foreign-supply-input summary { color: var(--navy); font-weight: 700; cursor: pointer; }
+.foreign-supply-input textarea { display: block; width: 100%; max-width: 100%; box-sizing: border-box; font: inherit; padding: 10px; border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; }
+.foreign-supply-input label { overflow-wrap: anywhere; }

@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261105-transfer-special-r1";
+  const APP_VERSION = "20261105-transfer-shortage-product-r1";
   const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -617,6 +617,31 @@
       : `找不到符合「${query}」且分配量大於0的品項。`;
   }
 
+  function renderShortageProducts(rows, persisted = false) {
+    const normalized = rows.map(row => persisted ? row : ({
+      store_code: row.storeCode, sku: row.sku, product_name: row.productName,
+      demand_quantity: row.demandQuantity, allocated_quantity: row.allocatedQuantity,
+      unfilled_quantity: row.unfilledQuantity, reason: row.reason,
+      follow_up_status: row.followUpStatus || "待回拋主採購"
+    }));
+    return globalThis.ProcurementShortageBatch.groupProducts(normalized).map(group => {
+      const details = group.rows.map(row => `<tr data-store-row data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" data-shortage-quantity="${Number(row.unfilled_quantity || 0)}"><td>${escapeHtml(row.store_code)}</td><td>${Number(row.demand_quantity || 0)}</td><td>${Number(row.allocated_quantity || 0)}</td><td>${Number(row.unfilled_quantity || 0)}</td><td>${escapeHtml(state.config.role === "store" ? storeFacingSystemReason(row.reason, row.allocated_quantity) : row.reason)}</td><td>${escapeHtml(row.follow_up_status || "待回拋主採購")}</td></tr>`).join("");
+      return `<article class="shortage-product-card" data-shortage-product><div class="shortage-product-heading"><div><strong>${escapeHtml(group.sku)}</strong><span>${escapeHtml(group.name)}</span></div><strong data-shortage-total>未配 ${group.unfilled}件</strong></div><div class="shortage-store-list" data-shortage-stores></div><details><summary>查看各店需求、原因與後續狀態</summary><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>需求量</th><th>已配量</th><th>未配不足量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody>${details}</tbody></table></div></details></article>`;
+    }).join("");
+  }
+
+  function refreshShortageProductSummaries(root) {
+    root.querySelectorAll("[data-shortage-product]").forEach(card => {
+      const visible = [...card.querySelectorAll("[data-store-row]")].filter(row => !row.hidden);
+      card.hidden = visible.length === 0;
+      const byStore = new Map();
+      for (const row of visible) byStore.set(row.dataset.store, (byStore.get(row.dataset.store) || 0) + Number(row.dataset.shortageQuantity || 0));
+      const quantity = [...byStore.values()].reduce((sum, value) => sum + value, 0);
+      card.querySelector("[data-shortage-total]").textContent = `未配 ${quantity}件`;
+      card.querySelector("[data-shortage-stores]").innerHTML = [...byStore].map(([store, count]) => `<span>${escapeHtml(store)}：${count}件</span>`).join("");
+    });
+  }
+
   function applyResultFilters(scope) {
     const root = scope === "calculation" ? $("calculation-results") : $("batch-detail");
     if (!root) return;
@@ -627,6 +652,7 @@
       const skuMatches = !skuQuery || String(row.dataset.sku || "").toLocaleUpperCase("en-US").includes(skuQuery);
       row.hidden = !(storeMatches && skuMatches);
     });
+    refreshShortageProductSummaries(root);
     syncQuantityWarningVisibility(root);
     root.querySelectorAll("[data-decision-detail]").forEach((detail) => {
       const previous = detail.previousElementSibling;
@@ -981,7 +1007,7 @@
       $("consumable-results").hidden = !state.calculation.consumableRows.length;
       $("consumable-rows").innerHTML = state.calculation.consumableRows.map((row) => previewRow(row, "consumable")).join("");
       $("shortage-results").hidden = !state.calculation.shortageRows.length;
-      $("shortage-rows").innerHTML = state.calculation.shortageRows.map((row) => previewRow(row, "shortage")).join("");
+      $("shortage-rows").innerHTML = renderShortageProducts(state.calculation.shortageRows);
       $("pending-transfer-results").hidden = !state.calculation.pendingTransferRows.length;
       $("pending-transfer-rows").innerHTML = state.calculation.pendingTransferRows.map((row) => `<tr data-store-row data-store="${escapeHtml(row.storeCode)}" data-sku="${escapeHtml(row.sku)}"><td>${escapeHtml(row.storeCode)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.productName)}</td><td>${escapeHtml(row.documentCode)}</td><td>${escapeHtml(row.status)}</td><td>${row.quantity}</td><td>${escapeHtml(row.openedDate || "—")}</td><td>${escapeHtml(row.shippedDate || "—")}</td><td>${row.includedInCalculation ? "已納入抵扣" : "A/B模式已排除"}</td></tr>`).join("");
       $("publish-button").disabled = mode === "comparison" || (!state.calculation.rows.length && !state.calculation.shortageRows.length);
@@ -1238,7 +1264,7 @@
     const storeOptions = payload.storeStatuses.filter((row) => row.status !== "approved" && (!correctionOpen || correctionStores.has(row.store_code))).map((row) => `<option value="${row.store_code}">${row.store_code} ${escapeHtml(state.config.stores[row.store_code]?.name || "")}</option>`).join("");
     const manualForm = canChangeItems ? `<section class="result-section manual-item-section"><h3>人工新增品項</h3><p>輸入完整ERP品號後，系統會帶入品名、「系統未建議原因」與「申請後預估可售至」。推估沿用本批次建立時的門市庫存、待發貨／在途及近42天現場銷售基準；送出後總部覆核會看到相同欄位。移除既有品項仍會保留稽核紀錄。</p><div class="manual-item-form">${state.config.role !== "store" ? `<label><span>門市</span><select data-manual-store>${storeOptions}</select></label>` : ""}<label><span>品項類型</span><select data-manual-type><option value="regular">一般必要補貨</option><option value="special_stock">建議調撥</option><option value="activity_gift">活動／贈品</option><option value="consumable">提袋耗材</option></select></label><label><span>ERP品號</span><input data-manual-sku maxlength="80" autocomplete="off"></label><label><span>品名（自動帶入）</span><input data-manual-name maxlength="300" readonly></label><label><span>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</span><input data-manual-quantity type="number" min="1" step="1"></label><label><span>${state.config.role === "store" ? "申請後" : "核准後"}預估可售至</span><output data-manual-projection>請先輸入品號與數量</output></label><label class="manual-system-reason-field"><span>系統未建議原因</span><output data-manual-system-reason>請先輸入品號</output></label><label class="manual-reason-field"><span>新增原因</span><textarea data-manual-reason class="reason-input" rows="2" maxlength="300" autocomplete="off"></textarea></label><button class="secondary-button" type="button" data-local-action="add-item">加入確認清單</button></div><p class="manual-supply-warning" data-manual-supply-warning role="alert" hidden></p><p class="status-line" data-manual-status></p><div class="result-table-wrap"><table class="transfer-table manual-item-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>類型</th><th>系統建議</th><th>系統未建議原因</th><th>${state.config.role === "store" ? "門市確認量" : "總部核准量"}</th><th>${state.config.role === "store" ? "申請後" : "核准後"}預估可售至</th><th>原因</th><th>操作</th></tr></thead><tbody data-manual-rows></tbody></table></div></section>` : "";
     const shortages = payload.shortages || [];
-    const shortageTable = shortages.length ? `<section class="result-section shortage-section" data-store-section><h3>缺貨未配與後續補貨狀態</h3><p>這些數量不會加入門市確認量或ERP檔；用來說明總倉為何未能配足，並保留後續回拋主採購的狀態。</p><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>ERP品號</th><th>品名</th><th>需求量</th><th>已配量</th><th>未配不足量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody>${shortages.map((row) => `<tr data-store-row data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}"><td>${escapeHtml(row.store_code)}</td><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${row.demand_quantity}</td><td>${row.allocated_quantity}</td><td>${row.unfilled_quantity}</td><td>${escapeHtml(state.config.role === "store" ? storeFacingSystemReason(row.reason, row.allocated_quantity) : row.reason)}</td><td>${escapeHtml(row.follow_up_status)}</td></tr>`).join("")}</tbody></table></div></section>` : "";
+    const shortageTable = shortages.length ? `<section class="result-section shortage-section" data-store-section><h3>缺貨未配與後續補貨狀態</h3><p>依品號彙整目前篩選門市的未配量；展開可看各店原因與後續狀態。這些數量不會加入門市確認量或ERP檔。</p><div class="shortage-product-list">${renderShortageProducts(shortages, true)}</div></section>` : "";
     return [
       table(payload.items.filter((item) => item.item_type === "regular"), "一般週補貨（必要調撥）"),
       table(payload.items.filter((item) => item.item_type === "special_stock"), "建議調撥（非必要）", "單人被套各材質前2名花色；可依現場判斷填0。"),

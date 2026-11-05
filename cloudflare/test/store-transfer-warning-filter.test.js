@@ -19,11 +19,11 @@ function fixture(role='hq') {
   const buttons=[{disabled:false},{disabled:false}],status={textContent:''};
   const detail={hidden:true,classList:{contains:()=>true},previousElementSibling:entries[0].main};
   const section={hidden:false,querySelectorAll:()=>entries.map(e=>e.main)};
-  const root={querySelectorAll(s){if(s==='[data-store-row]'||s==='tr[data-item-type]')return entries.map(e=>e.main);if(s==='[data-quantity-warning]')return entries.map(e=>e.warning);if(s==='[data-decision-detail]')return [detail];if(s==='[data-store-section]')return [section];return buttons;},querySelector:()=>status};
+  const root={querySelectorAll(s){if(s==='[data-store-row]'||s==='tr[data-item-type]')return entries.map(e=>e.main);if(s==='[data-quantity-warning]')return entries.map(e=>e.warning);if(s==='[data-decision-detail]')return [detail];if(s==='[data-store-section]')return [section];if(s==='[data-shortage-product]')return [];return buttons;},querySelector:()=>status};
   const state={batchStore:'all',batchSku:'',calculationStore:'all',calculationSku:'',config:{role,stores:{R00:{name:'合成中山'},R06:{name:'合成文心'},R01:{name:'合成北屯'}}}};
   const ctx={state,$:()=>root,refreshSkuFilterSummary:()=>{},quantityProjectionText:()=> '預估可售至：2026-11-13'};
   vm.createContext(ctx);
-  vm.runInContext(['escapeHtml','syncQuantityWarningVisibility','applyResultFilters','refreshDialogQuantityWarnings'].map(functionSource).join('\n'),ctx);
+  vm.runInContext(['escapeHtml','refreshShortageProductSummaries','syncQuantityWarningVisibility','applyResultFilters','refreshDialogQuantityWarnings'].map(functionSource).join('\n'),ctx);
   const filter=(sku='',store='all',scope='batch')=>{state[scope==='batch'?'batchSku':'calculationSku']=sku;state[scope==='batch'?'batchStore':'calculationStore']=store;ctx.applyResultFilters(scope);};
   return {entries,ctx,state,root,buttons,status,detail,section,filter};
 }

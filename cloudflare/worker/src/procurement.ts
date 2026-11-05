@@ -384,7 +384,11 @@ function validateProcurementRules(value: unknown): Record<string, unknown> {
   };
   if (!validDate(springFestival.closureStart) || !validDate(springFestival.recoveryDate)) throw new RequestValidationError("春節停工與恢復出貨日須為有效日期。");
   if (String(springFestival.closureStart) > String(springFestival.recoveryDate)) throw new RequestValidationError("春節停工開始日不可晚於恢復出貨日。");
-  if (!Number.isInteger(Number(springFestival.extraDays)) || Number(springFestival.extraDays) < 45 || Number(springFestival.extraDays) > 60) throw new RequestValidationError("春節額外備貨天數須為45至60天的整數。");
+  if (springFestival.mode != null && !["legacy", "supply-window-v1"].includes(String(springFestival.mode))) throw new RequestValidationError("春節供應規則版本錯誤。");
+  if (springFestival.mode === "supply-window-v1") {
+    if (!validDate(springFestival.lastArrivalDate) || String(springFestival.closureStart) > String(springFestival.lastArrivalDate) || String(springFestival.lastArrivalDate) >= String(springFestival.recoveryDate)) throw new RequestValidationError("請確認工廠停工、年前最後到貨與復工日期順序。");
+    if (Number(springFestival.extraDays) !== 0) throw new RequestValidationError("供應空窗規則不再固定增加備貨天數。");
+  } else if (!Number.isInteger(Number(springFestival.extraDays)) || Number(springFestival.extraDays) < 45 || Number(springFestival.extraDays) > 60) throw new RequestValidationError("春節額外備貨天數須為45至60天的整數。");
   for (const supplier of rules.suppliers as Record<string, unknown>[]) {
     if (!supplier || typeof supplier !== "object" || !String(supplier.name || "").trim()) throw new RequestValidationError("供應商名稱不可空白。");
     if (!["國內", "國外"].includes(String(supplier.country))) throw new RequestValidationError("供應商國別只能是國內或國外。");

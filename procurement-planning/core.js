@@ -117,9 +117,11 @@
   ]);
   const DEFAULT_SPRING_FESTIVAL_RULE = Object.freeze({
     enabled: true,
-    closureStart: "2027-01-16",
-    recoveryDate: "2027-02-28",
-    extraDays: 53
+    mode: "supply-window-v1",
+    closureStart: "2027-01-06",
+    recoveryDate: "2027-02-21",
+    lastArrivalDate: "2027-01-23",
+    extraDays: 0
   });
   const PRIMARY_SUPPLIERS = Object.freeze(["普優瑪寢具有限公司", "力榮", "上林", "潤泰羽絨", "泰能脊康"]);
 
@@ -2804,7 +2806,147 @@
     return end >= start ? Math.floor((end - start) / 86400000) + 1 : 0;
   }
 
+  function resolveForeignSupplyDates({ asOfDate, orderDate, leadDays, reviewDays, rule, storeInventoryRules = {} }) {
+    const valid = value => { const ms = /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? Date.parse(`${value}T00:00:00Z`) : NaN; return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === value; };
+    if (![rule.closureStart, rule.recoveryDate, rule.lastArrivalDate].every(valid) || rule.closureStart > rule.lastArrivalDate || rule.lastArrivalDate >= rule.recoveryDate) throw new Error("春節供應日期不完整或順序錯誤，請至規則管理確認停工、年前最後到貨及復工日。");
+    const purchaseDate = parseDateValue(orderDate) || asOfDate;
+    if (purchaseDate < asOfDate) throw new Error("預計下單日不可早於資料截止日。");
+    const nominalLastOrderDate = addDays(rule.lastArrivalDate, -leadDays);
+    const ordinaryArrival = holidayCoverageAdjustment(purchaseDate, leadDays, storeInventoryRules).adjustedDate;
+    const postFestivalArrival = addDays(rule.recoveryDate, leadDays);
+    const springRelevant = rule.enabled !== false && asOfDate < postFestivalArrival && addDays(asOfDate, leadDays + reviewDays) >= rule.closureStart;
+    const missesYearEnd = springRelevant && (purchaseDate > nominalLastOrderDate || ordinaryArrival > rule.lastArrivalDate);
+    const arrival = missesYearEnd && purchaseDate < rule.recoveryDate ? postFestivalArrival : ordinaryArrival;
+    if (rule.enabled !== false && asOfDate > postFestivalArrival && addDays(arrival, reviewDays).slice(0, 4) > rule.lastArrivalDate.slice(0, 4)) throw new Error("國外供應商保障期間已跨到下一年度，請先更新春節年度供應日期，不能沿用過期設定。");
+    return { purchaseDate, nominalLastOrderDate, lastArrivalDate: rule.lastArrivalDate, closureStart: rule.closureStart, recoveryDate: rule.recoveryDate, postFestivalArrival, springRelevant, arrival, missesYearEnd, normalEnd: holidayCoverageAdjustment(arrival, reviewDays, storeInventoryRules).adjustedDate };
+  }
+
+  // Dated inventory simulation. Before this order arrives, unmet model demand is lost,
+  // never carried as debt. Only explicitly supplied backorders are carried once.
+  function planForeignSupplyWindow({ asOfDate, arrivalDate, endDate, inventoryQty, storeInventory = {}, deliveries = [], dailyDemand, safetyQty = 0, safetyByStore = null, hqSafetyQty = 0, backorderQty = 0 }) {
+    const first = addDays(asOfDate, 1);
+    const duration = Math.round((dateToUtcMs(endDate) - dateToUtcMs(first)) / 86400000);
+    if (!Number.isFinite(duration) || duration < 0 || duration > 1500) throw new Error("供應保障期間無效，請確認下單、復工及到貨日期。");
+    if (![inventoryQty, safetyQty, backorderQty, ...Object.values(storeInventory)].every(v => Number.isFinite(Number(v)) && Number(v) >= 0)) throw new Error("庫存、安全量或有效欠單須為非負有效數字。");
+    if (deliveries.some(d => !Number.isFinite(Number(d.quantity)) || Number(d.quantity) < 0)) throw new Error("未到貨數量格式錯誤。");
+    let hq = Number(inventoryQty), floor = 0, firstShortageDate = "", lostQty = 0, soldBeforeArrival = 0, atArrival = null, forecastAfterArrival = 0, firstAfterArrivalShortageDate = "";
+    const stores = { ...storeInventory }, lostByStore = {}, events = new Map();
+    let undatedPendingQty = 0;
+    for (const delivery of deliveries) {
+      if (!delivery.deliveryDate) { undatedPendingQty += Number(delivery.quantity); continue; }
+      const date = parseDateValue(delivery.deliveryDate);
+      if (!date || date <= asOfDate) { undatedPendingQty += Number(delivery.quantity); continue; }
+      events.set(date, (events.get(date) || 0) + Number(delivery.quantity));
+    }
+    for (let offset = 0; offset < duration; offset += 1) {
+      const date = addDays(first, offset);
+      hq += events.get(date) || 0;
+      const afterArrival = date >= arrivalDate;
+      if (afterArrival && atArrival == null) { atArrival = { hq: Math.max(0, hq), stores: { ...stores } }; hq -= Number(backorderQty); }
+      const demand = dailyDemand(date);
+      if (!demand || ![demand.hq ?? 0, ...Object.values(demand.stores || {})].every(v => Number.isFinite(Number(v)) && Number(v) >= 0)) throw new Error("逐日需求數字無效，已停止採購計算。");
+      const needs = { HQ: Number(demand.hq ?? 0) };
+      for (const [code, quantity] of Object.entries(demand.stores || {})) {
+        const available = Math.max(0, Number(stores[code] || 0));
+        const fromStore = Math.min(available, Number(quantity));
+        stores[code] = available - fromStore;
+        needs[code] = Number(quantity) - fromStore;
+        if (!afterArrival) soldBeforeArrival += fromStore;
+      }
+      for (const [code, need] of Object.entries(needs)) {
+        if (afterArrival) { hq -= need; floor = Math.max(floor, -hq); if (hq < -1e-8 && !firstAfterArrivalShortageDate) firstAfterArrivalShortageDate = date; }
+        else {
+          const sold = Math.min(Math.max(0, hq), need); hq -= sold; soldBeforeArrival += sold;
+          const lost = need - sold;
+          if (lost > 1e-8) { if (!firstShortageDate) firstShortageDate = date; lostQty += lost; lostByStore[code] = (lostByStore[code] || 0) + lost; }
+        }
+      }
+      if (afterArrival) forecastAfterArrival += Number(demand.hq || 0) + Object.values(demand.stores || {}).reduce((a, b) => a + Number(b), 0);
+    }
+    const stockAtArrival = atArrival || { hq: Math.max(0, hq), stores: { ...stores } };
+    // Safety is a network target; actual transfers remain a separate operational check.
+    const remainingStores = Object.values(stores).reduce((a, b) => a + Number(b || 0), 0);
+    const safetyDeficit = safetyByStore ? Number(hqSafetyQty) + Object.entries(safetyByStore).reduce((a, [code, target]) => a + Math.max(0, Number(target) - Number(stores[code] || 0)), 0) : Math.max(0, Number(safetyQty) - remainingStores);
+    const rawNeed = Math.max(0, floor, -hq + safetyDeficit);
+    return { rawNeed, firstShortageDate, firstAfterArrivalShortageDate, lostQty, lostByStore, soldBeforeArrival, stockAtArrival, forecastAfterArrival, undatedPendingQty, endDate, arrivalDate, backorderQty: Number(backorderQty), endingBalanceWithoutNewOrder: hq + remainingStores, safetyQty: Number(safetyQty) };
+  }
+
+  function applyForeignSupplyWindows(result, input) {
+    const rule = input.springFestivalRule || DEFAULT_SPRING_FESTIVAL_RULE;
+    const sourceProfiles = new Map();
+    for (const profile of input.model?.seasonalProfilesByKey?.values() || []) sourceProfiles.set(`${profile.scope}／${profile.level}：${profile.name}`, profile);
+    const pending = aggregatePendingReports(input.pendingReports || []);
+    for (const row of result.rows) {
+      if (row.supplierCountry !== "國外" || row.externalPurchaseBlocked || row.manualSupplierReview || row.sellThroughStop) continue;
+      const dates = resolveForeignSupplyDates({ asOfDate: result.asOfDate, orderDate: input.orderDate, leadDays: row.supplierLeadDays, reviewDays: row.reviewDays, rule, storeInventoryRules: input.storeInventoryRules });
+      const profile = row.seasonalProfileSource?.startsWith("SKU：") ? input.model?.seasonalProfilesBySku?.get(row.sku) : sourceProfiles.get(row.seasonalProfileSource);
+      const dailyDemand = date => {
+        if (row.supplyActivityDaily?.[date]) return row.supplyActivityDaily[date];
+        const index = profile ? averageSeasonalIndex(profile.indices, dateToUtcMs(date), 1, 1) : null;
+        const rawFactor = index && row.horizonSeasonRecentIndex ? index / row.horizonSeasonRecentIndex : row.horizonRawSeasonFactor || 1;
+        const limits = profile?.reliability === "高" ? [0.5, 4] : [0.65, 3];
+        const factor = effectiveSeasonalFactor(Math.max(limits[0], Math.min(limits[1], rawFactor)), row.seasonalDemandMode);
+        const ratioBase = row.seasonalRatioBaseDailyQty ?? row.baseForecastDailyQty / Math.max(0.001, Number(row.horizonSeasonFactor || 1));
+        let baseDaily = ratioBase * factor;
+        if (row.seasonalHistoryRepeated && profile) {
+          const historical = historicalSeasonalAverageDaily(profile, dateToUtcMs(date), 1);
+          if (historical != null) baseDaily = Math.max(baseDaily, historical);
+        }
+        const ratio = row.baseForecastDailyQty > 0 ? baseDaily / row.baseForecastDailyQty : 1;
+        const legacyUplift = row.activityDemandApplied && Number(row.activityDemandMultiplier) > 1 && date >= input.activityDemand?.startDate && date <= input.activityDemand?.endDate ? Number(row.activityDemandMultiplier) : 1;
+        return { hq: row.hqDailyQty * ratio * legacyUplift, stores: Object.fromEntries(Object.entries(row.storeDailyByCode || {}).map(([code, qty]) => [code, qty * ratio * legacyUplift])) };
+      };
+      const explicit = input.backordersBySku?.get?.(row.sku) ?? input.backordersBySku?.[row.sku];
+      const confirmedStoreDebt = (input.storeTransferNeeds || []).filter(need => need.sku === row.sku && ["merge_next", "new_order"].includes(need.handlingMode || need.handling_mode)).reduce((total, need) => {
+        const by = parseDateValue(need.neededBy || need.needed_by);
+        return total + (!by || by <= dates.arrival ? Math.max(0, Number(need.unfilledQuantity ?? need.unfilled_quantity ?? 0)) : 0);
+      }, 0);
+      const backorderQty = explicit == null ? confirmedStoreDebt : Number(explicit) + confirmedStoreDebt;
+      if (!Number.isSafeInteger(backorderQty) || backorderQty < 0) throw new Error(`${row.sku}有效欠單數量錯誤。`);
+      const common = { asOfDate: result.asOfDate, arrivalDate: dates.arrival, inventoryQty: row.inventoryQty, storeInventory: row.storeInventoryByCode, deliveries: pending.bySku.get(row.sku)?.deliveries || [], dailyDemand, safetyQty: row.safetyStockQty, safetyByStore: Object.fromEntries(Object.entries(row.storeDailyByCode || {}).map(([code, qty]) => [code, storeTargetQty(qty, row.tier)])), hqSafetyQty: row.hqDailyQty * row.safetyBufferDays, backorderQty };
+      const normal = planForeignSupplyWindow({ ...common, endDate: dates.normalEnd });
+      const spring = dates.springRelevant && dates.arrival < dates.postFestivalArrival ? planForeignSupplyWindow({ ...common, endDate: dates.postFestivalArrival }) : null;
+      const normalReleased = normal.rawNeed * row.releaseRate;
+      const required = Math.max(normalReleased, spring?.rawNeed || 0);
+      const base = spring?.rawNeed > 0 ? Math.ceil(required) : roundSuggestedQuantity(required, row.recommendationScore);
+      const packed = roundByPack(base, row.packSize, 0, row.reviewDays + row.supplierLeadDays);
+      const projectionEnd = addDays((spring || normal).endDate, 180);
+      const projected = planForeignSupplyWindow({ ...common, endDate: projectionEnd, deliveries: [...common.deliveries, { quantity: packed.quantity, deliveryDate: dates.arrival }] });
+      const previous = row.suggestedPurchaseQty;
+      row.standardSuggestedPurchaseQty = roundByPack(roundSuggestedQuantity(normalReleased, row.recommendationScore), row.packSize, 0, row.reviewDays + row.supplierLeadDays).quantity;
+      row.standardRawPurchaseQty = normal.rawNeed; row.standardReleasedPurchaseQty = normalReleased;
+      row.effectiveSupplierLeadDays = Math.round((dateToUtcMs(dates.arrival) - dateToUtcMs(result.asOfDate)) / 86400000);
+      row.rawPurchaseQty = Math.max(normal.rawNeed, spring?.rawNeed || 0); row.releasedPurchaseQty = required;
+      row.baseSuggestedPurchaseQty = base; row.suggestedPurchaseQty = packed.quantity; row.suggestedPurchaseAmount = packed.quantity * row.unitCost;
+      row.packDownQty = packed.down; row.packUpQty = packed.up; row.packDirection = packed.direction;
+      row.springFestivalApplied = Boolean(spring); row.springFestivalExtraDays = 0;
+      row.springFestivalClosureStart = dates.closureStart; row.springFestivalRecoveryDate = dates.recoveryDate;
+      row.springFestivalExtraSuggestedQty = Math.max(0, packed.quantity - row.standardSuggestedPurchaseQty);
+      row.springFestivalExtraRawQty = Math.max(0, (spring?.rawNeed || 0) - normalReleased);
+      row.springFestivalExtraAmount = row.springFestivalExtraSuggestedQty * row.unitCost;
+      row.springFestivalUncoveredRawQty = spring?.rawNeed || 0;
+      row.activityDemandAdditionalSuggestedQty = 0; row.activityDemandAdditionalRawQty = 0;
+      row.recommendationSource = dates.springRelevant ? "一般需求；春節供應空窗保障" : "一般需求；依到貨日重估";
+      const detail = spring || normal;
+      row.supplyWindow = { policy: "supply-window-v1", ...dates, protectionEnd: spring ? dates.postFestivalArrival : dates.normalEnd, ...detail, backlogStatus: explicit == null && input.backordersConfirmed !== true ? "未提供其他有效欠單，建議未包含；請覆核" : "已確認其他有效欠單", originalSuggestedQty: previous, normalSuggestedQty: row.standardSuggestedPurchaseQty, finalSuggestedQty: packed.quantity, projectedSupplyGapDate: projected.firstAfterArrivalShortageDate, projectedAvailableUntil: projected.firstAfterArrivalShortageDate ? addDays(projected.firstAfterArrivalShortageDate, -1) : `至少${projectionEnd}`, activityTimelineApplied: Boolean(row.supplyActivityDaily), allocationNote: "總倉可支援門市的數量推估；實際調撥到店日須另核對" };
+      delete row.supplyActivityDaily;
+      row.supplyStatus += `；預估到貨${dates.arrival}，保障至${row.supplyWindow.protectionEnd}；到貨前預估流失${detail.lostQty.toFixed(1)}件（不轉為欠單）${row.supplyWindow.backlogStatus.startsWith("未提供") ? "；其他有效欠單待確認" : ""}${detail.undatedPendingQty ? "；未到貨日期待確認，不作及時供應抵扣" : ""}`;
+      if (row.activityPlanning) { row.activityPlanning.expectedArrival = dates.arrival; row.activityPlanning.expectedProductionArrival = dates.arrival; row.activityPlanning.supplyWindowApplied = true; }
+    }
+    result.rows.forEach(row => { delete row.supplyActivityDaily; });
+    result.rows.sort((a,b) => b.suggestedPurchaseAmount - a.suggestedPurchaseAmount || a.sku.localeCompare(b.sku));
+    result.suggestedRows = result.rows.filter(row => row.suggestedPurchaseQty > 0);
+    Object.assign(result.totals, { suggestedSkuCount: result.suggestedRows.length, suggestedPurchaseQty: result.suggestedRows.reduce((a,r)=>a+r.suggestedPurchaseQty,0), suggestedPurchaseAmount: result.suggestedRows.reduce((a,r)=>a+r.suggestedPurchaseAmount,0), springFestivalSkuCount: result.rows.filter(r=>r.springFestivalApplied).length, springFestivalExtraQty: result.rows.reduce((a,r)=>a+Number(r.springFestivalExtraSuggestedQty||0),0), springFestivalExtraAmount: result.rows.reduce((a,r)=>a+Number(r.springFestivalExtraAmount||0),0), activityDemandAdditionalSuggestedQty: result.rows.reduce((a,r)=>a+Number(r.activityDemandAdditionalSuggestedQty||0),0), activityDemandAdditionalRawQty: result.rows.reduce((a,r)=>a+Number(r.activityDemandAdditionalRawQty||0),0), activityDemandAdditionalAmount: result.rows.reduce((a,r)=>a+Number(r.activityDemandAdditionalSuggestedQty||0)*r.unitCost,0) });
+    result.appliedRules.springFestival = { ...rule, policy: "依可靠到貨日保障；到貨前流失需求不遞延，其他有效欠單須確認；不固定增加53天" };
+    return result;
+  }
+
   function buildProcurementRecommendations(input) {
+    const supplyRule = input.springFestivalRule || DEFAULT_SPRING_FESTIVAL_RULE;
+    if (!input._foreignSupplyBase && supplyRule.mode === "supply-window-v1") {
+      const ordinary = buildProcurementRecommendations({ ...input, _foreignSupplyBase: true, springFestivalRule: { ...supplyRule, enabled: false, mode: "legacy" } });
+      return applyForeignSupplyWindows(ordinary, input);
+    }
     if (input.activityDemand?.enabled && input.activityDemand.method === "monthly-target") {
       if (!global.ProcurementActivityPlanning) throw new Error("活動備貨模組未載入，請重新載入最新版。");
       return global.ProcurementActivityPlanning.buildRecommendations(input, (ordinaryInput) => buildProcurementRecommendations(ordinaryInput));
@@ -3605,6 +3747,7 @@
         seasonalDataReady: Boolean(seasonalProfile) || (row.skuSeasonalDataReady && (pool?.seasonalDataReady ?? true)),
         forecastDailyQty: channelAdjustedDaily,
         baseForecastDailyQty: adjustedDaily,
+        seasonalRatioBaseDailyQty: demandBaseDaily * (pool?.factor || 1),
         activityDemandApplied: activityAdditionalRawQty > 0,
         activityDemandName: activityDemand.enabled ? activityDemand.name : "",
         activityDemandMethod: activityDemand.enabled ? activityDemand.methodLabel : "",
@@ -4632,7 +4775,7 @@
       "釋放後未取整需求": row.releasedPurchaseQty,
       "春節備貨規則": row.springFestivalApplied ? "是" : "否",
       "春節停工開始日": row.springFestivalClosureStart || "",
-      "春節恢復出貨日": row.springFestivalRecoveryDate || "",
+      "春節恢復出貨日": row.supplyWindow ? `工廠復工：${row.supplyWindow.recoveryDate}（非到貨日）` : row.springFestivalRecoveryDate || "",
       "春節額外備貨天數": row.springFestivalExtraDays || 0,
       "前次春節備貨未交量": row.priorSpringFestivalPendingQty || 0,
       "春節額外建議量": row.springFestivalExtraSuggestedQty || 0,
@@ -4650,8 +4793,8 @@
       "連假保障增加量": row.holidayProtectionAdditionalQty || 0,
       "本次新增採購量": row.suggestedPurchaseQty,
       "總倉目前庫存可售至": hqCurrentInventoryAvailableTo,
-      "全公司合計庫存可售至": companyCurrentInventoryAvailableTo,
-      "全公司系統建議採購後可售至": systemAvailableTo,
+      "全公司合計庫存可售至": row.supplyWindow?.firstShortageDate ? addDays(row.supplyWindow.firstShortageDate, -1) : companyCurrentInventoryAvailableTo,
+      "全公司系統建議採購後可售至": row.supplyWindow ? `到貨後：${row.supplyWindow.projectedAvailableUntil}${row.supplyWindow.firstShortageDate ? "（到貨前有缺口）" : ""}` : systemAvailableTo,
       "寄倉現貨": row.consignmentDataAvailable === false ? "資料未取得" : row.consignmentCurrentQty,
       "粉紅排程": row.consignmentDataAvailable === false ? "資料未取得" : row.consignmentScheduledQty,
       "寄倉缺口": row.consignmentDataAvailable === false ? "未驗證" : Math.max(row.suggestedPurchaseQty - row.consignmentCurrentQty - row.consignmentScheduledQty, 0),
@@ -4913,6 +5056,7 @@
       ["資料安全", "本檔由瀏覽器本機產生；不修改或上傳原始Excel。"],
       ["本次匯出範圍", outputScope],
       ["銷售截止日", recommendations.asOfDate],
+      ...(recommendations.appliedRules?.version ? [["公司採購規則版本", recommendations.appliedRules.version]] : []),
       ["銷售檔最新結帳日", recommendations.sourceMaxSalesDate],
       ["銷售日期檢核", recommendations.salesDateStatus, recommendations.salesDateGapDays == null ? "未辨識" : `相差${recommendations.salesDateGapDays}天`],
       ["工廠寄倉目標", `${recommendations.factoryTargetDays}天`],
@@ -5186,15 +5330,39 @@
       applyTableCis(activitySheet, XLSX);
       XLSX.utils.book_append_sheet(workbook, activitySheet, "10_活動備貨檢查");
     }
+    const supplyRows = selectedRows.filter(row => row.supplyWindow);
+    if (supplyRows.length) {
+      const sheet = XLSX.utils.json_to_sheet(supplyRows.map(row => ({
+        "ERP品號": row.sku, "商品品名": row.name, "供應商": row.supplier,
+        "年前最後下單日（名目）": row.supplyWindow.nominalLastOrderDate,
+        "年前最後到貨日": row.supplyWindow.lastArrivalDate,
+        "工廠復工日": row.supplyWindow.recoveryDate,
+        "年後首批預估到貨": row.supplyWindow.postFestivalArrival,
+        "本次預估到貨": row.supplyWindow.arrival,
+        "到貨前預估缺貨起日": row.supplyWindow.firstShortageDate || "未見缺口",
+        "到貨前預估流失量（不轉欠單）": row.supplyWindow.lostQty,
+        "已知有效欠單": row.supplyWindow.backorderQty,
+        "欠單核對狀態": row.supplyWindow.backlogStatus,
+        "無日期未到貨量（未抵扣）": row.supplyWindow.undatedPendingQty,
+        "到貨後保障截止": row.supplyWindow.protectionEnd,
+        "到貨後預估可售至": row.supplyWindow.projectedAvailableUntil,
+        "本次計算建議量": row.suggestedPurchaseQty,
+        "本次計算金額": row.suggestedPurchaseAmount,
+        "供應提醒": row.supplyStatus
+      })));
+      setColumnWidths(sheet, [16, 40, 22, 24, 22, 20, 24, 22, 26, 28, 16, 48, 30, 24, 24, 20, 22, 80]);
+      applyTableCis(sheet, XLSX); XLSX.utils.book_append_sheet(workbook, sheet, "11_供應空窗檢查");
+    }
     appendManualReasonSheet(workbook, XLSX);
     return workbook;
   }
 
   function activityReviewFields(baseline, finalQty) {
     const plan = baseline?.activityPlanning;
-    if (!plan) return {};
+    const supply = baseline?.supplyWindow ? { supplyWindow: { ...baseline.supplyWindow, approvedQty: Math.max(0, Number(finalQty || 0)), quantityChanged: Number(finalQty) !== Number(baseline.supplyWindow.finalSuggestedQty) } } : {};
+    if (!plan) return supply;
     const approvedShortage = plan.shortage == null ? null : Math.max(Number(plan.shortage || 0), Number(plan.netNeed || 0) - Math.min(Math.max(0, Number(finalQty || 0)), Number(plan.onTimePurchaseCapacity || 0)), 0);
-    return { activityPlanning: { ...plan, approvedQty: Math.max(0, Number(finalQty || 0)), approvedShortage } };
+    return { ...supply, activityPlanning: { ...plan, approvedQty: Math.max(0, Number(finalQty || 0)), approvedShortage } };
   }
 
   function reviewReturnedWorkbook(workbook, XLSX, options = {}) {
@@ -5329,7 +5497,9 @@
         const storeInventoryQty = Math.max(0, Number(manuallyAdded ? Object.values(baseline?.storeInventoryByCode || {}).reduce((sum, value) => sum + Number(value || 0), 0) : source["門市可售庫存"] || 0));
         const pendingQty = Math.max(0, Number(manuallyAdded ? (baseline?.effectivePendingQty ?? baseline?.pendingQty) : source["已採購未到貨"] || 0));
         const availableDays = forecastDaily > 0 ? (inventoryQty + storeInventoryQty + pendingQty + finalQty) / forecastDaily : null;
-      const availableTo = availableDays == null ? "需求為0" : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
+      const availableTo = baseline?.supplyWindow
+        ? (Number(finalQty) === Number(baseline.supplyWindow.finalSuggestedQty) ? `到貨後：${baseline.supplyWindow.projectedAvailableUntil}${baseline.supplyWindow.firstShortageDate ? "（到貨前有缺口）" : ""}` : "人工量已變更，需重估到貨後可售日期")
+        : availableDays == null ? "需求為0" : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
         const comparison = Number(suggestedQty || 0) > 0 ? finalQty / Number(suggestedQty) : (finalQty > 0 ? Infinity : 1);
         const aiJudgment = blockedReason ? "規則阻擋" : (sellThroughRestartException ? "S品人工例外" : (comparison > 1.2 ? "偏高" : comparison < 0.8 ? "偏低" : "合理"));
         rows.push({
@@ -5517,7 +5687,9 @@
       const storeInventoryQty = Math.max(0, Number(source["門市可售庫存"] || 0));
       const pendingQty = Math.max(0, Number(source["已採購未到貨"] || 0));
       const availableDays = forecastDaily > 0 ? (inventoryQty + storeInventoryQty + pendingQty + Math.max(0, Number(finalQty || 0))) / forecastDaily : null;
-      const availableTo = availableDays == null ? String(source["全公司人工確認後可售至"] || source["人工確認後可售至"] || source["人工填寫可售至"] || "需求為0") : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
+      const availableTo = baseline?.supplyWindow
+        ? (Number(finalQty) === Number(baseline.supplyWindow.finalSuggestedQty) ? `到貨後：${baseline.supplyWindow.projectedAvailableUntil}${baseline.supplyWindow.firstShortageDate ? "（到貨前有缺口）" : ""}` : "人工量已變更，需重估到貨後可售日期")
+        : availableDays == null ? String(source["全公司人工確認後可售至"] || source["人工確認後可售至"] || source["人工填寫可售至"] || "需求為0") : addDays(options.asOfDate || new Date().toISOString().slice(0, 10), Math.floor(availableDays));
       const comparison = suggestedQty > 0 ? Number(finalQty || 0) / suggestedQty : (Number(finalQty || 0) > 0 ? Infinity : 1);
       const aiJudgment = blockedReason ? "規則阻擋" : (baseline?.sellThroughRestartException ? "S品人工例外" : (comparison > 1.2 ? "偏高" : comparison < 0.8 ? "偏低" : "合理"));
       rows.push({
@@ -5597,6 +5769,7 @@
     PROCUREMENT_POLICY,
     SUPPLIER_RULES,
     DEFAULT_SPRING_FESTIVAL_RULE,
+    resolveForeignSupplyDates, planForeignSupplyWindow, applyForeignSupplyWindows,
     PRIMARY_SUPPLIERS,
     FULL_CONSIGNMENT_RETURN_REASON,
     normalizeText,

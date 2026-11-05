@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const APP_VERSION = "20261105-transfer-special-r1";
+  const APP_VERSION = "20261105-transfer-shortage-product-r1";
   const state = { config: null, version: 0, rules: null, dirty: false, googleTokenClient: null, googleAccessToken: "", masterBySku: null, runtimeOutdated: false, latestRuntimeVersion: "" };
   const GOOGLE_READ_SCOPE = "openid email https://www.googleapis.com/auth/drive.readonly";
   const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -24,7 +24,7 @@
     addUnit: get("#add-unit"), addStore: get("#add-store-rule"), blacklist: get("#blacklist-input"), holidays: get("#workday-holidays"),
     accessPanel: get("#access-panel"), approvers: get("#approver-emails"), storeTransferHq: get("#store-transfer-hq-emails"), recipient: get("#notification-recipient"), retention: get("#retention-months"),
     saveAccess: get("#save-access"), accessStatus: get("#access-status"), reason: get("#change-reason"), save: get("#save-rules"), saveStatus: get("#save-status"),
-    springFestivalEnabled: get("#spring-festival-enabled"), springFestivalStart: get("#spring-festival-start"), springFestivalRecovery: get("#spring-festival-recovery"), springFestivalExtraDays: get("#spring-festival-extra-days"),
+    springFestivalEnabled: get("#spring-festival-enabled"), springFestivalStart: get("#spring-festival-start"), springFestivalRecovery: get("#spring-festival-recovery"), springFestivalExtraDays: get("#spring-festival-extra-days"), springFestivalLastArrival: get("#spring-festival-last-arrival"),
     puyoumaPull: get("#puyouma-pull"), puyoumaProduction: get("#puyouma-production"), puyoumaHot: get("#puyouma-hot"), puyoumaStable: get("#puyouma-stable"), puyoumaLow: get("#puyouma-low"),
     lirongPull: get("#lirong-pull"), lirongProduction: get("#lirong-production"), lirongDelivery: get("#lirong-delivery"), lirongHot: get("#lirong-hot"), lirongStable: get("#lirong-stable"), lirongLow: get("#lirong-low"),
     arrivals: Object.fromEntries(["R00", "R01", "R03", "R10", "R07", "R06"].map((code) => [code, get(`#arrival-${code}`)]))
@@ -53,7 +53,7 @@
 
   function configureReturnPath() {
     if (new URLSearchParams(location.search).get("from") !== "store-transfer") return;
-    const target = "../../store-transfer/?deploy=20261105-transfer-special-r1";
+    const target = "../../store-transfer/?deploy=20261105-transfer-shortage-product-r1";
     const source = get("#source-tool-link"); const back = get("#source-back-link"); const brand = get("#tool-brand-link");
     source.href = target; source.textContent = "門市週補貨與調撥";
     back.href = target; back.textContent = "← 返回週調撥工具";
@@ -297,7 +297,9 @@
     elements.springFestivalEnabled.checked = rule.enabled !== false;
     elements.springFestivalStart.value = rule.closureStart || "";
     elements.springFestivalRecovery.value = rule.recoveryDate || "";
-    elements.springFestivalExtraDays.value = String(rule.extraDays ?? 53);
+    elements.springFestivalExtraDays.value = String(rule.mode === "supply-window-v1" ? 0 : (rule.extraDays ?? 53));
+    elements.springFestivalLastArrival.value = rule.lastArrivalDate || "";
+    elements.springFestivalExtraDays.closest("label").hidden = rule.mode === "supply-window-v1";
   }
   function render() {
     renderSuppliers(); renderFeaturedSuppliers(); renderUnits(); renderStores(); setConsignmentFields(); setSpringFestivalFields();
@@ -351,6 +353,7 @@
   elements.springFestivalEnabled.addEventListener("change", () => { ensureSpringFestivalRule().enabled = elements.springFestivalEnabled.checked; markDirty(); });
   elements.springFestivalStart.addEventListener("input", () => { ensureSpringFestivalRule().closureStart = elements.springFestivalStart.value; markDirty(); });
   elements.springFestivalRecovery.addEventListener("input", () => { ensureSpringFestivalRule().recoveryDate = elements.springFestivalRecovery.value; markDirty(); });
+  elements.springFestivalLastArrival.addEventListener("input", () => { ensureSpringFestivalRule().lastArrivalDate = elements.springFestivalLastArrival.value; markDirty(); });
   elements.springFestivalExtraDays.addEventListener("input", () => { ensureSpringFestivalRule().extraDays = Number(elements.springFestivalExtraDays.value || 0); markDirty(); });
   configureReturnPath();
   elements.reloadLatest.addEventListener("click", () => {

@@ -56,5 +56,22 @@
     }
     return plan;
   }
-  global.ProcurementShortageBatch = { run, requestJson, retryPlan };
+  // Presentation only: retain every original store/SKU row for decisions and API writes.
+  function groupProducts(rows = []) {
+    const groups = new Map();
+    for (const row of rows) {
+      if (!groups.has(row.sku)) groups.set(row.sku, { sku: row.sku, name: row.product_name || "", rows: [], stores: [], transferRemaining: 0, purchaseUncovered: 0, covered: 0, unfilled: 0, earliestNeededBy: "" });
+      const group = groups.get(row.sku);
+      group.rows.push(row);
+      if (!group.stores.includes(row.store_code)) group.stores.push(row.store_code);
+      const unfilled = Number(row.unfilled_quantity || 0);
+      group.unfilled += unfilled;
+      group.covered += Number(row.covered_quantity || 0);
+      group.transferRemaining += Math.max(0, unfilled - Number(row.fulfilled_quantity || 0));
+      group.purchaseUncovered += Math.max(0, unfilled - Number(row.covered_quantity || 0));
+      if (row.needed_by && (!group.earliestNeededBy || row.needed_by < group.earliestNeededBy)) group.earliestNeededBy = row.needed_by;
+    }
+    return [...groups.values()].sort((a, b) => String(a.sku).localeCompare(String(b.sku), "zh-Hant", { numeric: true }));
+  }
+  global.ProcurementShortageBatch = { run, requestJson, retryPlan, groupProducts };
 })(typeof globalThis !== "undefined" ? globalThis : window);

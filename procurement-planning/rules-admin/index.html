@@ -42,11 +42,12 @@
       </div>
       <fieldset class="spring-festival-rule">
         <legend>國外供應商春節停工備貨</legend>
-        <label class="checkbox-field"><input id="spring-festival-enabled" type="checkbox"> 啟用跨停工期自動加量</label>
+        <label class="checkbox-field"><input id="spring-festival-enabled" type="checkbox"> 啟用春節供應空窗保障</label>
         <label>停工開始日<input id="spring-festival-start" type="date"></label>
-        <label>恢復出貨日<input id="spring-festival-recovery" type="date"></label>
+        <label>工廠復工日<input id="spring-festival-recovery" type="date"></label>
+        <label>年前最後到貨日<input id="spring-festival-last-arrival" type="date"></label>
         <label>額外備貨天數<input id="spring-festival-extra-days" type="number" min="45" max="60" step="1"></label>
-        <p>只套用國別為「國外」，且本次到貨／下次補貨範圍跨入停工區間的品項。預設53天，可在45～60天內調整；額外數量與金額會在前台及Excel分開顯示。</p>
+        <p>只套用國別為「國外」的供應商。年前最後到貨日回推完整交期為最後下單日；未確認能年前完成者按復工日＋完整交期估到貨，不另加船運。新規則不固定加53天；到貨前流失需求不轉為欠單，其他有效欠單另行確認。年度及供應商承諾變更時須更新日期。</p>
       </fieldset>
       <div class="result-table-wrap"><table class="rules-table"><thead><tr><th>供應商</th><th>別名（逗號分隔）</th><th>國別</th><th>平均採購週期</th><th>檢視期</th><th>一般自動採購</th><th>排除原因</th><th></th></tr></thead><tbody id="supplier-rows"></tbody></table></div>
     </section>
@@ -94,10 +95,10 @@
     <footer><p>每次儲存都會建立新版本，保留修改人、時間與原因。</p></footer>
   </main>
   <script src="../../inventory/assets/xlsx.full.min.js"></script>
-  <script src="../core.js?v=20261105-procurement-special-r1"></script>
+  <script src="../core.js?v=20261105-procurement-supply-window-r1"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="/live-guidance/progress.js?v=20261103-guidance-compact-r6"></script>
 <script src="/live-guidance/app.js?v=20261103-guidance-compact-r6"></script>
-  <script src="admin.js?v=20261105-transfer-special-r1"></script>
+  <script src="admin.js?v=20261105-transfer-shortage-product-r1"></script>
 </body>
 </html>

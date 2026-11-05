@@ -331,3 +331,18 @@ it("historical reservation uncertainty preserves ordinary demand but never inven
   expect(result.totals.suggestedPurchaseQty).toBe(result.suggestedRows.reduce((s,r)=>s+r.suggestedPurchaseQty,0));
   expect(result.totals.suggestedPurchaseAmount).toBe(result.suggestedRows.reduce((s,r)=>s+r.suggestedPurchaseAmount,0));
 });
+
+describe('國外春節供應空窗與活動逐日接續',()=>{
+ it('到貨前活動尖峰保留流失警示，不挪成到貨後採購；門市交接來源保留',()=>{
+  const rules={...core.DEFAULT_SPRING_FESTIVAL_RULE,enabled:true,mode:'supply-window-v1'};
+  const before=JSON.stringify(fixture.activityHistory);
+  const low=run({springFestivalRule:rules,backordersConfirmed:true});
+  const high=run({springFestivalRule:rules,backordersConfirmed:true,activityDemand:{...fixture.activityDemand,monthlyTargets:{'2026-11':{amount:400000000}}}});
+  const a=low.rows.find(r=>r.sku==='A2'),b=high.rows.find(r=>r.sku==='A2');
+  expect(a.supplyWindow.activityTimelineApplied).toBe(true);expect(b.supplyWindow.activityTimelineApplied).toBe(true);
+  expect(b.supplyWindow.lostQty).toBeGreaterThan(a.supplyWindow.lostQty);expect(b.suggestedPurchaseQty).toBe(a.suggestedPurchaseQty);
+  expect(b.activityDemandAdditionalSuggestedQty).toBe(0);expect(b.supplyActivityDaily).toBeUndefined();expect(high.activityTransferSource.rows.length).toBeGreaterThan(0);
+  expect(JSON.stringify(fixture.activityHistory)).toBe(before);
+  expect(high.totals.suggestedPurchaseAmount).toBe(high.suggestedRows.reduce((sum,row)=>sum+row.suggestedPurchaseAmount,0));
+ });
+});

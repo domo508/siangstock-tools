@@ -263,6 +263,21 @@
           const remainingAdjustment = month === input.asOfDate.slice(0, 7) ? (projection.target > 0 && futureWeight > 0 ? Math.max(0, projection.target - actualMonthRevenue) / projection.target / futureWeight : 0) : 1;
           const monthlyQty = quantityForecast.value * projection.factor * priceAdjustment * remainingAdjustment;
           if (!recentUnitPrice || !modelUnitPrice) context.notes.add("部分SKU缺少可比較的實收單價，需求以件數基準估算，請覆核促銷折扣與商品組合。");
+          if (input._foreignSupplyBase && row.supplierCountry === "國外") {
+            row.supplyActivityDaily ||= {};
+            for (let i = 0; i < projection.shape.weights.length; i += 1) {
+              const d = `${month}-${String(i + 1).padStart(2, "0")}`;
+              if (d <= input.asOfDate || d > settings.endDate) continue;
+              const demand = row.supplyActivityDaily[d] ||= { hq: 0, stores: {} };
+              const qty = monthlyQty * projection.shape.weights[i];
+              if (!/^R\d{2}$/.test(channel) || channel === "R09") demand.hq += qty;
+              else {
+                const recent = positive(row.storeDailyByCode?.[channel]) + positive(row.storeDirectDailyByCode?.[channel]);
+                const direct = recent > 0 ? positive(row.storeDirectDailyByCode?.[channel]) / recent : 0;
+                demand.hq += qty * direct; demand.stores[channel] = (demand.stores[channel] || 0) + qty * (1 - direct);
+              }
+            }
+          }
           let fraction = 0;
           for (let i = 0; i < projection.shape.weights.length; i += 1) { const d = `${month}-${String(i + 1).padStart(2, "0")}`; if (d > input.asOfDate && d <= settings.endDate) fraction += projection.shape.weights[i]; }
           quantity += monthlyQty * fraction;
