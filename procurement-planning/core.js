@@ -167,7 +167,7 @@
         name: ["品名", "商品名稱", "商品品名"],
         orderedQuantity: ["採購數量", "訂購數量", "數量"],
         deliveredQuantity: ["交貨數量", "已交數量", "已到貨數量", "收貨數量"],
-        remainingQuantity: ["未交數量", "待交數量", "未到貨數量"],
+        remainingQuantity: ["未交數量", "待交數量", "未到貨數量", "採購未交量", "未交量"],
         unitCost: ["未稅採購價", "本次採購價", "未稅進貨價", "採購價", "進貨價", "單價"],
         amount: ["採購額", "金額", "採購金額", "未稅金額", "合計"],
         remark: ["備註", "明細備註"],
@@ -532,6 +532,7 @@
       let bestScore = 0;
       headers.forEach((header, index) => {
         if (used.has(index)) return;
+        if (schemaName === "pending" && field === "orderedQuantity" && SCHEMAS.pending.fields.remainingQuantity.some(alias => normalizeHeader(alias) === normalizeHeader(header))) return;
         const score = scoreHeader(header, aliases);
         if (score > bestScore) {
           bestIndex = index;
@@ -546,7 +547,7 @@
 
   function validateMapping(schemaName, mapping) {
     const missing = SCHEMAS[schemaName].required
-      .filter((field) => mapping[field] == null)
+      .filter((field) => mapping[field] == null && !(schemaName === "pending" && field === "orderedQuantity" && mapping.remainingQuantity != null))
       .map((field) => FIELD_LABELS[field] || field);
     return { valid: missing.length === 0, missing };
   }
@@ -857,18 +858,24 @@
     for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
       const row = selected.rows[index];
       const sku = normalizeSku(valueAt(row, selected.mapping, "sku"));
-      const orderedQuantity = parseNumber(valueAt(row, selected.mapping, "orderedQuantity"));
-      if (!sku || orderedQuantity == null) continue;
+      const orderedQuantity = parseNumber(valueAt(row, selected.mapping, selected.mapping.orderedQuantity == null ? "remainingQuantity" : "orderedQuantity"));
+      if (!sku || /^(?:合計|總計|小計)$/.test(sku)) continue;
+      if (orderedQuantity == null || orderedQuantity < 0) throw new Error(`採購單第${index + 1}列 ${sku}數量格式錯誤，請修正後重匯完整清單。`);
       const deliveredQuantity = Math.max(0, Number(parseNumber(valueAt(row, selected.mapping, "deliveredQuantity")) || 0));
       const remainingCell = parseNumber(valueAt(row, selected.mapping, "remainingQuantity"));
+      for (const field of ["deliveredQuantity", "remainingQuantity"]) {
+        const raw = valueAt(row, selected.mapping, field);
+        if (raw !== "" && raw != null && (parseNumber(raw) == null || parseNumber(raw) < 0)) throw new Error(`採購單第${index + 1}列 ${sku}${field === "remainingQuantity" ? "未交" : "已交"}數量格式錯誤，請修正後重匯完整清單。`);
+      }
       const status = String(valueAt(row, selected.mapping, "status") || "").normalize("NFKC").trim();
       const statusKey = normalizeText(status);
       const documentClosed = isAffirmative(valueAt(row, selected.mapping, "documentClosed"));
       const fullyReceived = isAffirmative(valueAt(row, selected.mapping, "fullyReceived")) || /(?:已)?全部到貨|全數到貨/.test(statusKey);
       const draft = /^(?:新單|草稿|暫存)$/.test(statusKey);
+      const cancelled = /^(?:已)?(?:作廢|取消|結案|關閉)$/.test(statusKey);
       const rawRemainingQuantity = remainingCell == null ? Number(orderedQuantity || 0) - deliveredQuantity : remainingCell;
       const quantity = hasLifecycleColumns
-        ? ((draft || documentClosed || fullyReceived) ? 0 : Math.max(0, rawRemainingQuantity))
+        ? ((draft || cancelled || documentClosed || fullyReceived) ? 0 : Math.max(0, rawRemainingQuantity))
         : Math.max(0, Number(orderedQuantity || 0));
       if (quantity === 0 && deliveredQuantity === 0 && Number(orderedQuantity || 0) === 0) continue;
       const unitCost = parseNumber(valueAt(row, selected.mapping, "unitCost"));
@@ -901,6 +908,7 @@
         expectedDeliveryDate,
         receiptDate,
         draft,
+        cancelled,
         fullyReceived,
         documentClosed,
         hasLifecycleColumns,
@@ -1749,7 +1757,7 @@
     const deduplicated = deduplicatePendingReports(reports);
     const records = deduplicated.records;
     for (const row of records) {
-      if (row.isCustomOrder || row.automaticProcurementExcluded || row.quantity <= 0) continue;
+      if (row.isCustomOrder || row.automaticProcurementExcluded || row.draft || row.cancelled || row.documentClosed || row.fullyReceived || row.quantity <= 0) continue;
       if (!bySku.has(row.sku)) {
         bySku.set(row.sku, { sku: row.sku, name: row.name, quantity: 0, amount: 0, files: new Set(), sourceRows: [], deliveries: [], orders: [] });
       }

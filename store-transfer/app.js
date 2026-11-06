@@ -1,7 +1,7 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261105-transfer-shortage-product-r1";
-  const state = { config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
+  const APP_VERSION = "20261106-transfer-erp-pending-r1";
+  const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
   const outputXlsx = globalThis.ProcurementXlsxWriter || inputXlsx;
@@ -621,12 +621,13 @@
     const normalized = rows.map(row => persisted ? row : ({
       store_code: row.storeCode, sku: row.sku, product_name: row.productName,
       demand_quantity: row.demandQuantity, allocated_quantity: row.allocatedQuantity,
-      unfilled_quantity: row.unfilledQuantity, reason: row.reason,
+      unfilled_quantity: row.unfilledQuantity, needed_by: row.nextArrivalDate, reason: row.reason,
       follow_up_status: row.followUpStatus || "待回拋主採購"
     }));
     return globalThis.ProcurementShortageBatch.groupProducts(normalized).map(group => {
-      const details = group.rows.map(row => `<tr data-store-row data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" data-shortage-quantity="${Number(row.unfilled_quantity || 0)}"><td>${escapeHtml(row.store_code)}</td><td>${Number(row.demand_quantity || 0)}</td><td>${Number(row.allocated_quantity || 0)}</td><td>${Number(row.unfilled_quantity || 0)}</td><td>${escapeHtml(state.config.role === "store" ? storeFacingSystemReason(row.reason, row.allocated_quantity) : row.reason)}</td><td>${escapeHtml(row.follow_up_status || "待回拋主採購")}</td></tr>`).join("");
-      return `<article class="shortage-product-card" data-shortage-product><div class="shortage-product-heading"><div><strong>${escapeHtml(group.sku)}</strong><span>${escapeHtml(group.name)}</span></div><strong data-shortage-total>未配 ${group.unfilled}件</strong></div><div class="shortage-store-list" data-shortage-stores></div><details><summary>查看各店需求、原因與後續狀態</summary><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>需求量</th><th>已配量</th><th>未配不足量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody>${details}</tbody></table></div></details></article>`;
+      const details = group.rows.map(row => `<tr data-store-row data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" data-needed-by="${escapeHtml(row.needed_by || row.next_arrival_date || "")}" data-shortage-quantity="${Number(row.unfilled_quantity || 0)}"><td>${escapeHtml(row.store_code)}</td><td>${Number(row.demand_quantity || 0)}</td><td>${Number(row.allocated_quantity || 0)}</td><td>${Number(row.unfilled_quantity || 0)}</td><td>${escapeHtml(state.config.role === "store" ? storeFacingSystemReason(row.reason, row.allocated_quantity) : row.reason)}</td><td>${escapeHtml(String(row.follow_up_status || "待回拋主採購").replace("已由採購覆蓋待到貨", "有歷史採購關聯；未交以ERP清單為準"))}</td></tr>`).join("");
+      const needed = group.earliestNeededBy || "待確認";
+      return `<article class="shortage-product-card" data-shortage-product data-shortage-product-sku="${escapeHtml(group.sku)}"><div class="shortage-product-heading"><div><strong>${escapeHtml(group.sku)}</strong><span>${escapeHtml(group.name)}</span></div><strong data-shortage-total>未配 ${group.unfilled}件</strong></div><div class="shortage-store-list" data-shortage-stores></div><p data-shortage-needed>補貨需要日（最早）：${escapeHtml(needed)}（週調撥下一輪到店日）</p>${globalThis.ProcurementShortageBatch.renderPendingInfo(group.sku, state.pendingPurchaseSnapshot, escapeHtml)}<details><summary>查看各店需求、原因與後續狀態</summary><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>需求量</th><th>已配量</th><th>未配不足量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody>${details}</tbody></table></div></details></article>`;
     }).join("");
   }
 
@@ -636,6 +637,8 @@
       card.hidden = visible.length === 0;
       const byStore = new Map();
       for (const row of visible) byStore.set(row.dataset.store, (byStore.get(row.dataset.store) || 0) + Number(row.dataset.shortageQuantity || 0));
+      const needed = visible.map(row => row.dataset.neededBy).filter(Boolean).sort()[0];
+      card.querySelector("[data-shortage-needed]").textContent = `補貨需要日（最早）：${needed || "待確認"}（週調撥下一輪到店日）`;
       const quantity = [...byStore.values()].reduce((sum, value) => sum + value, 0);
       card.querySelector("[data-shortage-total]").textContent = `未配 ${quantity}件`;
       card.querySelector("[data-shortage-stores]").innerHTML = [...byStore].map(([store, count]) => `<span>${escapeHtml(store)}：${count}件</span>`).join("");
@@ -788,13 +791,31 @@
     $("batch-list").innerHTML = renderBatchCards(payload.batches, "目前沒有週調撥批次。");
   }
 
+  function refreshPendingPurchaseCards() {
+    document.querySelectorAll("[data-shortage-product-sku]").forEach(card => {
+      const panel = card.querySelector(".shortage-pending-info");
+      if (panel) panel.outerHTML = globalThis.ProcurementShortageBatch.renderPendingInfo(card.dataset.shortageProductSku, state.pendingPurchaseSnapshot, escapeHtml);
+    });
+  }
+
   async function loadPendingPurchases() {
-    const payload = await api("/pending-purchases");
+    let payload;
+    try { payload = await api("/pending-purchases"); } catch (error) {
+      state.pendingPurchaseSnapshot = { available: false, error: "ERP未交資料讀取失敗，請重新整理；不能視為零件。" };
+      $("pending-purchase-updated").textContent = state.pendingPurchaseSnapshot.error;
+      $("pending-purchase-wrap").hidden = true;
+      $("pending-purchase-empty").hidden = false;
+      $("pending-purchase-empty").textContent = state.pendingPurchaseSnapshot.error;
+      refreshPendingPurchaseCards();
+      return;
+    }
+    state.pendingPurchaseSnapshot = payload;
+    refreshPendingPurchaseCards();
     const rows = payload.rows || [];
     $("pending-purchase-empty").hidden = rows.length > 0;
     $("pending-purchase-wrap").hidden = rows.length === 0;
-    $("pending-purchase-rows").innerHTML = rows.map((row) => `<tr><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${Number(row.pending_quantity || 0).toLocaleString("zh-TW")}</td><td>${escapeHtml(row.expected_delivery_date || "未提供")}</td><td>${escapeHtml(row.source_date)}</td><td>已有未交，但本週仍須以總倉現貨判斷可配量</td></tr>`).join("");
-    $("pending-purchase-updated").textContent = rows.length ? `共${rows.length}個品號・更新${String(rows[0].updated_at || "").replace("T", " ").slice(0, 19)}` : "目前無未到貨摘要";
+    $("pending-purchase-rows").innerHTML = rows.map((row) => `<tr><td>${escapeHtml(row.sku)}</td><td>${escapeHtml(row.product_name)}</td><td>${Number(row.pending_quantity || 0).toLocaleString("zh-TW")}</td><td>${escapeHtml(row.expected_delivery_date || "未提供")}</td><td>${escapeHtml(row.source_date)}</td><td>全公司未交量；本週仍須以總倉現貨判斷可配量</td></tr>`).join("");
+    $("pending-purchase-updated").textContent = rows.length ? `共${rows.length}個品號・更新${String(rows[0].updated_at || "").replace("T", " ").slice(0, 19)}` : payload.available ? `完整清單截止${payload.sourceDate}；目前無未交商品` : "未交資料未提供";
   }
 
   function applyScheduleForWeek(weekKey) {
@@ -1670,7 +1691,8 @@
         if (state.config.permissions?.canManageRules) { $("rules-link").hidden = false; $("transfer-rules-link").hidden = false; }
         if (!state.config.googleOAuthClientId) { $("google-connect-button").disabled = true; $("source-status").textContent = "正式環境尚未設定 Google OAuth，用手動備援仍可操作。"; }
       }
-      await Promise.all([loadBatches(), loadPendingPurchases(), ...(state.config.permissions?.canCollaborate ? [loadCollaborationDrafts()] : [])]);
+      await loadPendingPurchases();
+      await Promise.all([loadBatches(), ...(state.config.permissions?.canCollaborate ? [loadCollaborationDrafts()] : [])]);
       if (state.config.role === "store" && location.hash === "#display-exceptions") await showDisplayExceptions();
     } catch (error) { $("account-badge").textContent = "公司帳號驗證失敗"; $("batch-list").innerHTML = accountRecovery(error); }
   }
@@ -1684,7 +1706,7 @@
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkRuntimeVersion(); });
   window.addEventListener("focus", checkRuntimeVersion);
   window.setInterval(checkRuntimeVersion, 5 * 60 * 1000);
-  $("refresh-button").addEventListener("click", () => loadBatches().catch((error) => { $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; }));
+  $("refresh-button").addEventListener("click", () => (async () => { await loadPendingPurchases(); await loadBatches(); })().catch((error) => { $("batch-list").innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`; }));
   $("refresh-activity-plans").addEventListener("click",()=>loadActivityPlans().catch(e=>activityMessage(e.message,"error")));
   $("activity-plan-select").addEventListener("change",async e=>{
     if (state.activitySaving || state.activityPlanDirty) { e.target.value=state.activityPlan?.id || ""; activityMessage("分配正在儲存或有未儲存修改，請先完成確認，不會切換並覆蓋內容。","error"); return; }

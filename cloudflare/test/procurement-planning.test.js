@@ -3026,3 +3026,17 @@ describe("毛浴巾採購報表依系列、品項、花色及尺寸排列", () =
     expect(rows.reduce((s,r)=>s+Number(r["建議採購量"]),0)).toBe(result.totals.suggestedPurchaseQty);
   });
 });
+
+describe('ERP未交量為唯一採購抵扣來源',()=>{
+ it('同品號舊關聯量不減需求，ERP未交只抵一次、晚到或無日期不抵及時需求',()=>{
+  const h=loadBrowserScript('../procurement-planning/shortage-batch.js').ProcurementShortageBatch;
+  const request={store_code:'R00',sku:'A1',unfilled_quantity:50,fulfilled_quantity:2,covered_quantity:10};
+  const input={master:makeMaster(),inventory:makeInventory(),consignment:makeConsignment(),salesReports:[makeSales()],model:makeForecastModel(),blacklist:[],asOfDate:'2026-08-28',checkpoint:'mid-month',storeTransferNeeds:[{storeCode:'R00',sku:'A1',unfilledQuantity:h.remainingNeed(request),neededBy:'2026-08-29',handlingMode:'merge_next'}]};
+  const calc=pendingReports=>core.buildProcurementRecommendations({...input,pendingReports}).rows.find(r=>r.sku==='A1');
+  const without=calc([]),timely=calc([makePending()]);
+  expect(timely.storeTransferNeedQty).toBe(48);expect(timely.effectivePendingQty).toBe(5);expect(without.rawPurchaseQty-timely.rawPurchaseQty).toBe(5);
+  const late=makePending();late.records[0].expectedDeliveryDate='2026-08-30';expect(calc([late]).rawPurchaseQty).toBe(without.rawPurchaseQty);
+  late.records[0].expectedDeliveryDate=null;expect(calc([late]).rawPurchaseQty).toBe(without.rawPurchaseQty);
+  request.covered_quantity=500;expect(h.remainingNeed(request)).toBe(48);
+ });
+});

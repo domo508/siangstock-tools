@@ -284,12 +284,13 @@ describe("前台導覽", () => {
     const procurementWorker = readFileSync("../cloudflare/worker/src/procurement.ts", "utf8");
     const transferWorker = readFileSync("../cloudflare/worker/src/store-transfer.ts", "utf8");
     const migration = readFileSync("../cloudflare/worker/migrations/0019_store_shortage_resolution_lifecycle.sql", "utf8");
-    expect(html).toContain("尚未採購覆蓋");
+    expect(html).toContain("ERP採購未交量");
     expect(html).toContain("尚待門市補配");
-    expect(app).toContain("已到貨待下次調撥");
+    expect(app).toContain("歷史到貨註記");
     expect(app).toContain("已補配結案");
-    expect(procurementWorker).toContain("b.status = 'erp_created'");
-    expect(procurementWorker).toContain("date(b.updated_at) < date(?)");
+    const snapshotSave = procurementWorker.slice(procurementWorker.indexOf("async function savePendingPurchaseSnapshot"), procurementWorker.indexOf("function validateProcurementRules"));
+    expect(snapshotSave).not.toContain("arrival_detected");
+    expect(snapshotSave).toContain("validatePendingOrders");
     expect(transferWorker).toContain("later_transfer_fulfilled");
     expect(migration).toContain("fulfilled_quantity");
     expect(migration).toContain("manual_cancelled");

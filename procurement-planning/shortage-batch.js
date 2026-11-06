@@ -73,5 +73,30 @@
     }
     return [...groups.values()].sort((a, b) => String(a.sku).localeCompare(String(b.sku), "zh-Hant", { numeric: true }));
   }
-  global.ProcurementShortageBatch = { run, requestJson, retryPlan, groupProducts };
+  // Procurement associations/approval are not proof of an ERP outstanding order.
+  // Only physical follow-up allocation reduces the remaining store request here.
+  function remainingNeed(row) {
+    return Math.max(0, Number(row.unfilled_quantity || 0) - Number(row.fulfilled_quantity || 0));
+  }
+  function pendingInfo(sku, snapshot) {
+    const row = snapshot?.rows?.find(item => item.sku === sku);
+    const available = snapshot?.available === true;
+    let orders = null;
+    try { orders = Array.isArray(row?.order_details) ? row.order_details : JSON.parse(row?.order_details || "null"); } catch (_) { /* Legacy summary has no reliable order details. */ }
+    if (!Array.isArray(orders)) orders = null;
+    const total = available ? Number(row?.pending_quantity || 0) : null;
+    const dates = (orders || []).map(order => order.deliveryDate).filter(Boolean).sort();
+    return { total, orders, restricted: Boolean(row?.details_restricted), earliest: dates[0] || row?.expected_delivery_date || "", sourceDate: snapshot?.sourceDate || row?.source_date || "", updatedAt: snapshot?.updatedAt || row?.updated_at || "", available, error: snapshot?.error || "" };
+  }
+  function renderPendingInfo(sku, snapshot, escapeHtml) {
+    const info = pendingInfo(sku, snapshot);
+    const number = qty => Number(qty).toLocaleString("zh-TW", { maximumFractionDigits: 3 });
+    const total = info.available ? `${number(info.total)}件` : "未交資料未提供";
+    const date = info.earliest || (info.total === 0 ? "無未交" : "未提供");
+    const updated = info.updatedAt ? new Date(info.updatedAt).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false }) + "（台北）" : "未提供";
+    const knownOrders = info.orders?.some(order => order.documentCode);
+    const detail = info.orders?.length ? `<details><summary>查看未交${knownOrders ? "採購單" : "數量與日期"}明細</summary><div class="pending-order-list">${info.orders.map(order => `<div><span>${escapeHtml(order.documentCode || "未提供單號（商品未交量）")}</span><strong>${number(order.quantity)}件</strong><span>預計到貨：${escapeHtml(order.deliveryDate || "未提供")}</span></div>`).join("")}</div></details>` : "";
+    return `<section class="shortage-pending-info" aria-label="ERP採購未交資訊"><div class="shortage-pending-grid"><div><span>ERP採購未交量</span><strong>${total}</strong></div><div><span>最早預計到貨日</span><strong>${escapeHtml(date)}</strong></div></div><p>${info.available ? `全公司商品總量，非門市專屬。清單截止：${escapeHtml(info.sourceDate || "未提供")}；更新：${escapeHtml(updated)}。` : escapeHtml(info.error || "請由主採購工具成功讀取完整ERP未交清單後同步。")}${info.restricted ? " 單據明細僅總部可查看。" : info.available && info.total > 0 && !knownOrders ? " 未提供採購單號明細。" : ""}</p>${detail}<p>建議、核准或摘要不當作已下單；未交量不等於本週可配庫存，到貨後仍須收貨與配送。</p></section>`;
+  }
+  global.ProcurementShortageBatch = { run, requestJson, retryPlan, groupProducts, remainingNeed, pendingInfo, renderPendingInfo };
 })(typeof globalThis !== "undefined" ? globalThis : window);

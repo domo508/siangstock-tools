@@ -1219,3 +1219,16 @@ body.history-readonly .stage-two, body.history-readonly .stage-three, body.histo
 .foreign-supply-input summary { color: var(--navy); font-weight: 700; cursor: pointer; }
 .foreign-supply-input textarea { display: block; width: 100%; max-width: 100%; box-sizing: border-box; font: inherit; padding: 10px; border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; }
 .foreign-supply-input label { overflow-wrap: anywhere; }
+
+/* ERP outstanding orders are product-level supply, never store allocations. */
+.shortage-pending-info { margin: 12px 0; padding: 14px; background: #eff7f9; border-radius: 12px; min-width: 0; }
+.shortage-pending-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.shortage-pending-grid span, .shortage-pending-grid strong { display: block; overflow-wrap: anywhere; }
+.shortage-pending-grid span { color: #526b7c; font-size: .86rem; }
+.shortage-pending-grid strong { color: #17324d; font-size: 1.05rem; }
+.shortage-pending-info p { margin: 8px 0 0; font-size: .82rem; color: #526b7c; overflow-wrap: anywhere; }
+.shortage-pending-info summary { cursor: pointer; padding: 10px 0; color: #176b87; }
+.pending-order-list { display: grid; gap: 8px; }
+.pending-order-list > div { display: flex; flex-wrap: wrap; gap: 8px 16px; background: #fff; border-radius: 8px; padding: 10px; }
+.pending-order-list span { overflow-wrap: anywhere; min-width: 0; }
+@media (max-width: 380px) { .shortage-pending-grid { grid-template-columns: 1fr; } }
