@@ -1,5 +1,13 @@
 # 庫存採購規劃｜下一階段核心功能
 
+## 2026-11-09 搜尋卡片顯示剩餘可直接新增量（已授權部署，發布準備）
+
+使用者要求避免「沒有安全保留量可額外開放」被誤認為不能調撥；使用者本輪已明確授權正式發布；先前僅修改的授權狀態已更新。正式仍cb1b06e／transfer-bulk-release-r2與Worker bd0f320d-63ac-4611-8135-7d29a8e5bf92。修改位於隔離工作區.local-context/work/transfer-bulk-release-20261109，正在提交與發布，正式驗收完成後補記。
+
+搜尋回應新增remainingQuantity、supplyKnown、batchEditable、directManualAllowed；剩餘可新增量＝MAX(原可供應＋已開放額度－六店既有最終分配量,0)，沿用HQ確認→門市確認→原建議且保留明確0。供應未知傳null不當0，批次不可編輯不顯示可直接申請。卡片明列「本批六店共用剩餘可新增：X件」，有量以淡綠提示「可直接人工新增，不需額外開放」，無保留時改顯「無需勾選開放額度，可在人工新增品項區申請」；額度用完、供應未知、批次不可編輯分別說明。僅搜尋結果提示，沒有變更選取資格、開放／申請／核准／ERP規則或寫入資料。
+
+完整70份1014項及tsc通過，新增跨店占用、明確0、未知、關閉批次與四種文案測試；既有SQLite+D1及XLSX／ERP守恆測試均通過，core／workflow逐位元不變。本機正式前台合成例「原可供應10－占用2＝剩8件」與淡綠提示驗證，390／320px對話框352／282px無溢出。r3執行版本、manifest、資產與跨工具入口已本機準備，仍待正式發布驗收。私有證據.local-context/verification/20261109-transfer-direct-supply/。
+
 ## 2026-11-09 系列商品批次開放已部署與驗收
 
 功能 `af43a57` 已推送正式分支feature/company-tools-static-site，Zeabur `6af1dfda03a5d9114765b31b` completed/success；Worker `bd0f320d-63ac-4611-8135-7d29a8e5bf92` 已發布，無資料庫遷移或權限變更。週調撥20261109-transfer-bulk-release-r2、主採購procurement-transfer-bulk-r2與首頁transfer-bulk-entry-r2同步。取代下方發布準備狀態。

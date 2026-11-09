@@ -428,3 +428,9 @@ html, body { max-width: 100%; overflow-x: clip; }
 .quota-preview ul { max-height:240px;overflow:auto;padding-left:1.4rem; }
 [data-bulk-supply] [data-bulk-summary] { font-weight:700;overflow-wrap:anywhere; }
 @media(max-width:700px){.quota-product-list{grid-template-columns:minmax(0,1fr);}.quota-selection-actions button{width:100%;}.quota-fields select{max-width:100%;}}
+
+.quota-availability { border-radius:10px;padding:.7rem .8rem;overflow-wrap:anywhere; }
+.quota-availability.ready { background:#edf7f0;color:#2f725b;border:1px solid #c8e2d2; }
+.quota-availability.warn { background:#fff6e3;color:#785b20; }
+.quota-availability.muted { background:#f2f5f7;color:#526b7c; }
+.quota-product-facts strong { display:block;width:100%;color:#17324d; }

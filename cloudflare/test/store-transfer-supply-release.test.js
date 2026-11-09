@@ -12,7 +12,7 @@ const id = 'TR-PER-STORE';
 const hq = 'siang01@siangapato.com.tw';
 const email = { R00: 'tpzssa@siangapato.com.tw', R01: 'txg_sianga_pato@siangapato.com.tw' };
 async function call(path, method = 'GET', body, actor = hq) {
-  return storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer${path}`, { method, headers: { Origin: 'https://siangstock.com', 'Content-Type': 'application/json', 'X-Test-Email': actor, 'X-Store-Transfer-Version': '20261109-transfer-bulk-release-r2' }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
+  return storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer${path}`, { method, headers: { Origin: 'https://siangstock.com', 'Content-Type': 'application/json', 'X-Test-Email': actor, 'X-Store-Transfer-Version': '20261109-transfer-bulk-release-r3' }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
 }
 const detail = async () => (await call(`/batches/${id}`)).json();
 const items = store => ['PASS', 'EDIT', 'ZERO'].map(sku => ({storeCode:store,sku,productName:`合成${sku}`,suggestedQuantity:2,itemType:'regular',calculationDate:'2026-11-04',decisionSnapshot:{hqAvailable:20,hqReleasable:20,hqSupplyCeiling:20}}));
@@ -134,6 +134,17 @@ it('批次開放接續門市共用、歸零、送出、總部核准與實際XLSX
 });
 it('批次開放保留同源／版本防護，舊版與過時查詢不得寫入',async()=>{
  bulkFixture(2);const p=await searchBulk(),body={items:p.rows.map(r=>({sku:r.sku,extraQuantity:1})),reason:'合成需求',expectedRevision:p.expectedRevision};
- for(const headers of [{Origin:'https://elsewhere.example','X-Store-Transfer-Version':'20261109-transfer-bulk-release-r2'},{Origin:'https://siangstock.com','X-Store-Transfer-Version':'old'}]) await expect(storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer/batches/${id}/supply-releases`,{method:'PUT',headers:{...headers,'Content-Type':'application/json','X-Test-Email':hq},body:JSON.stringify(body)}),env)).rejects.toThrow();
+ for(const headers of [{Origin:'https://elsewhere.example','X-Store-Transfer-Version':'20261109-transfer-bulk-release-r3'},{Origin:'https://siangstock.com','X-Store-Transfer-Version':'old'}]) await expect(storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer/batches/${id}/supply-releases`,{method:'PUT',headers:{...headers,'Content-Type':'application/json','X-Test-Email':hq},body:JSON.stringify(body)}),env)).rejects.toThrow();
  await expect(putBulk(body.items,p.expectedRevision+1)).rejects.toThrow(/更新/);expect(sql.prepare('SELECT COUNT(*) n FROM store_transfer_supply_releases').get().n).toBe(0);
+});
+it('搜尋可直接新增量扣除跨店最終分配，0不回填；未知不當0，關閉不顯示可申請',async()=>{
+ const insert=sql.prepare("INSERT INTO store_transfer_batch_product_catalog(batch_id,sku,product_name,hq_available,hq_reserve,hq_releasable,created_at) VALUES(?,?,?,?,?,?,'2026-11-02')");
+ insert.run(id,'DIRECT','合成直接新增',10,0,10);insert.run(id,'EMPTY','合成額度已滿',3,0,3);insert.run(id,'UNKNOWN','合成供應未知',null,null,null);
+ const item=sql.prepare("INSERT INTO store_transfer_items(batch_id,store_code,sku,product_name,item_type,calculation_date,suggested_quantity,store_confirmed_quantity,hq_approved_quantity,daily_usage,base_quantity,updated_at,updated_by) VALUES(?,?,?,'合成','regular','2026-11-04',?,?,?,0,0,'2026-11-02','synthetic')");
+ item.run(id,'R00','DIRECT',2,2,null);item.run(id,'R01','DIRECT',4,4,0);item.run(id,'R00','EMPTY',3,3,null);
+ let rows=(await searchBulk('合成')).rows;
+ expect(rows.find(r=>r.sku==='DIRECT')).toMatchObject({canEdit:false,remainingQuantity:8,directManualAllowed:true,allocated:2});
+ expect(rows.find(r=>r.sku==='EMPTY')).toMatchObject({remainingQuantity:0,directManualAllowed:false});
+ expect(rows.find(r=>r.sku==='UNKNOWN')).toMatchObject({remainingQuantity:null,supplyKnown:false,directManualAllowed:false});
+ sql.prepare("UPDATE store_transfer_batches SET status='approved' WHERE id=?").run(id);rows=(await searchBulk('合成')).rows;expect(rows.find(r=>r.sku==='DIRECT')).toMatchObject({remainingQuantity:8,batchEditable:false,directManualAllowed:false});
 });
