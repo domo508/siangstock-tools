@@ -1568,6 +1568,45 @@ describe("採購建議第二階段", () => {
     expect(summary.some((row) => row[0] === "使用限制" && String(row[1]).includes("不可直接下單"))).toBe(true);
   });
 
+  it("採購建議移除重複供應商貨號，真實XLSX回匯與舊欄位相容且ERP守恆", () => {
+    const recommendations = core.buildProcurementRecommendations({
+      master: makeMaster(), inventory: makeInventory(), pendingReports: [makePending()], consignment: makeConsignment(),
+      salesReports: [makeSales()], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28"
+    });
+    for (const row of [...recommendations.rows, ...recommendations.suggestedRows]) {
+      Object.assign(row, {consignmentCurrentQty:1000, consignmentDataAvailable:true, pendingQty:0, effectivePendingQty:0});
+    }
+    const baselineBySku = new Map(recommendations.rows.map(row => [row.sku, row]));
+    const output = core.buildRecommendationWorkbook(recommendations, XLSX);
+    const sheets = output.SheetNames.filter(name => /^03(?:A|B\d|C|D)_/.test(name));
+    expect(sheets.length).toBeGreaterThan(0);
+    for (const name of sheets) {
+      const headers = XLSX.utils.sheet_to_json(output.Sheets[name], {header:1})[0];
+      expect(headers).not.toContain("供應商貨號");
+      if (headers.includes("ERP品號")) expect(headers[headers.indexOf("ERP品號") + 1]).toBe("商品品名");
+    }
+    const roundtrip = workbook => XLSX.read(XLSX.write(workbook, {type:"array", bookType:"xlsx"}), {type:"array", cellStyles:true, cellDates:true, nodim:true});
+    const options = {asOfDate:"2026-08-28", orderDate:"2026-09-20", baselineBySku};
+    const current = core.reviewReturnedWorkbook(roundtrip(output), XLSX, options);
+    expect(current.errors).toEqual([]);
+    expect(current.rows.length).toBeGreaterThan(0);
+    for (const row of current.rows) expect(row.supplierSku).toBe(baselineBySku.get(row.sku).supplierSku || "");
+    const legacy = roundtrip(output);
+    for (const name of sheets) {
+      const data = XLSX.utils.sheet_to_json(legacy.Sheets[name], {header:1, defval:""});
+      const index = data[0].indexOf("ERP品號");
+      if (index < 0) continue;
+      data.forEach((row, r) => row.splice(index+1, 0, r === 0 ? "供應商貨號" : baselineBySku.get(row[index])?.supplierSku || ""));
+      legacy.Sheets[name] = XLSX.utils.aoa_to_sheet(data);
+    }
+    const old = core.reviewReturnedWorkbook(roundtrip(legacy), XLSX, options);
+    expect(old.errors).toEqual([]);
+    const quantities = review => review.rows.map(({sku, finalQty, unitCost, supplierSku}) => ({sku, finalQty, unitCost, supplierSku}));
+    expect(quantities(current)).toEqual(quantities(old));
+    const erp = review => XLSX.utils.sheet_to_json(core.buildErpPurchaseWorkbook(review, XLSX, {approved:true,batchId:"SYNTH"}).Sheets["通用貨品數量"], {header:1,defval:""});
+    expect(erp(current)).toEqual(erp(old));
+  });
+
   it("普優瑪寄庫報表以花色為大類、品項為中類、尺寸為小類", () => {
     expect(core.puyoumaConsignmentGroup({ name: "5尺60天絲床包 [晨曦]", purchaseTab: "天絲＋天絲棉", mainCategory: "床包", size: "5尺床包" }))
       .toEqual({ materialCategory: "天絲／天絲棉", majorCategory: "晨曦", mediumCategory: "床包", smallCategory: "5尺床包", size: "5尺床包" });

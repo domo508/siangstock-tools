@@ -387,9 +387,15 @@
   function canSendSummary() { return Boolean(token() && grantedScopes.split(/\s+/).includes("https://www.googleapis.com/auth/gmail.send")); }
   function clearAuthorization() { accessToken = ""; expiresAt = 0; grantedScopes = ""; }
 
+  function loadPuyoumaConsignment(config, XLSX) {
+    const id = config?.fixedSources?.puyoumaSpreadsheetId;
+    if (!id) throw new Error("公司尚未設定普優瑪寄庫來源。");
+    return loadSpreadsheet(id, ["'庫存+下單'"], XLSX);
+  }
+
   global.ProcurementGoogleSources = {
     initialize, authorize, verifyCompanyIdentity, loadAll, token, canSendSummary, clearAuthorization,
     downloadDriveFile, listDriveExcelFiles, loadLatestMaster, loadLatestApprovedModel, uploadDriveExcel, sendSeasonalModelSummary, sendMonthEndReport,
-    selectSpreadsheetSheetTitle
+    selectSpreadsheetSheetTitle, loadPuyoumaConsignment
   };
 })(typeof globalThis !== "undefined" ? globalThis : window);

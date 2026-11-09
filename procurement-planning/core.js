@@ -4713,7 +4713,6 @@
       "中類（品項）": hierarchy.mediumCategory,
       "小類（尺寸）": hierarchy.smallCategory,
       "ERP品號": row.sku,
-      "供應商貨號": row.supplierSku,
       "商品品名": row.name,
       "商品狀態": row.tier,
       "貨品狀態": row.productStatus || "空白（待人工確認）",
@@ -5512,7 +5511,7 @@
         const aiJudgment = blockedReason ? "規則阻擋" : (sellThroughRestartException ? "S品人工例外" : (comparison > 1.2 ? "偏高" : comparison < 0.8 ? "偏低" : "合理"));
         rows.push({
           sheetName, sourceRow: (source.__rowNum__ + 1), supplier, supplierCountry: supplierRule?.country || "待確認", sku,
-          supplierSku: manuallyAdded ? String(baseline?.supplierSku || "").trim() : String(source["供應商貨號"] || "").trim(), name, suggestedQty: Math.max(0, Number(suggestedQty || 0)),
+          supplierSku: manuallyAdded ? String(baseline?.supplierSku || "").trim() : String(source["供應商貨號"] || baseline?.supplierSku || "").trim(), name, suggestedQty: Math.max(0, Number(suggestedQty || 0)),
           confirmedQty: Math.max(0, Number(confirmedQty || 0)), finalQty, unitCost: Math.max(0, Number(unitCost || 0)), reason,
           ...activityReviewFields(baseline, finalQty),
           reasonCategory: reasonInput.category, reasonDetail: reasonInput.detail,

@@ -1687,10 +1687,23 @@ async function consignmentReservations(request: Request, env: ProcurementEnv): P
   return json({ version: 1, source: "approved_not_erp", reservations, ...(planning ? { purpose: "planning", verified: issues.length === 0, issues } : {}) });
 }
 
+async function supplierOrder(request: Request, env: ProcurementEnv, batchId: string): Promise<Response> {
+  await verifyCompanyUser(request, procurementAccess(env));
+  // One read statement: header and item quantities come from the same DB snapshot.
+  const result = await env.DB.prepare("SELECT b.id, b.status, b.revision, b.approved_amount AS batch_amount, b.analysis_month, i.sku, i.name, i.supplier, i.approved_quantity, i.erp_quantity, i.approved_amount FROM procurement_batches b LEFT JOIN procurement_batch_items i ON i.batch_id = b.id WHERE b.id = ? ORDER BY i.sku").bind(batchId).all<Record<string, unknown>>();
+  const first = result.results[0];
+  if (!first) throw new RequestValidationError("找不到這筆採購批次。", 404);
+  if (!["approved", "erp_created", "received"].includes(String(first.status))) throw new RequestValidationError("只能匯出已確認且未撤銷的採購批次。", 409);
+  return json({ batch: { id: first.id, status: first.status, revision: first.revision, approved_amount: first.batch_amount, analysis_month: first.analysis_month },
+    items: result.results.filter(row => row.sku != null).map(row => ({ sku: row.sku, name: row.name, supplier: row.supplier, approved_quantity: row.approved_quantity, erp_quantity: row.erp_quantity, approved_amount: row.approved_amount })) });
+}
+
 export async function procurementRoute(request: Request, env: ProcurementEnv): Promise<Response | null> {
   if(new URL(request.url).pathname.startsWith("/api/procurement/activities"))return activityRegistryRoute(request,env,{read:()=>verifyCompanyUser(request,procurementAccess(env)),write:()=>verifyApprover(request,env),origin:()=>requireSameOrigin(request,env),body:()=>body(request)});
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/procurement")) return null;
+  const supplierOrderMatch = url.pathname.match(/^\/api\/procurement\/batches\/([^/]+)\/supplier-order$/);
+  if (supplierOrderMatch && request.method === "GET") return supplierOrder(request, env, decodeURIComponent(supplierOrderMatch[1]));
   if (url.pathname === "/api/procurement/config" && request.method === "GET") return config(request, env);
   if (url.pathname === "/api/procurement/rules" && request.method === "GET") return procurementRules(request, env);
   if (url.pathname === "/api/procurement/rules" && request.method === "PUT") return saveProcurementRules(request, env);
