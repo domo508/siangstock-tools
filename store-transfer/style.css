@@ -399,3 +399,15 @@ html, body { max-width: 100%; overflow-x: clip; }
 .pending-order-list > div { display: flex; flex-wrap: wrap; gap: 8px 16px; background: #fff; border-radius: 8px; padding: 10px; }
 .pending-order-list span { overflow-wrap: anywhere; min-width: 0; }
 @media (max-width: 380px) { .shortage-pending-grid { grid-template-columns: 1fr; } }
+
+/* Batch supply and actionable validation use the existing CIS tokens. */
+.quota-fields { display:flex;flex-wrap:wrap;gap:1rem;align-items:end;margin:1rem 0; }
+.quota-fields label { display:grid;gap:.4rem;flex:1 1 220px;min-width:0; }
+.quota-fields input,.quota-fields textarea { width:100%;max-width:100%;box-sizing:border-box; }
+[data-quota-result] { overflow-wrap:anywhere; }
+.blocking-list { margin:1rem 0;overflow-wrap:anywhere; }
+.blocking-list ul { padding-left:1.2rem; }
+.blocking-list li { display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:.6rem 0; }
+.blocking-list li span { flex:1 1 200px;min-width:0; }
+.blocking-target { outline:3px solid #176b87;outline-offset:-3px; }
+@media(max-width:600px) { .quota-fields button { width:100%; } }

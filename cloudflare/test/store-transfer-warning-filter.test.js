@@ -16,16 +16,16 @@ function fixture(role='hq') {
     return {main,warning,input,reason,cell};
   };
   const entries=[row('R00','A102067'),row('R06','A102067'),row('R01','B53398')];
-  const buttons=[{disabled:false},{disabled:false}],status={textContent:''};
+  const buttons=[{disabled:false},{disabled:false}],status={textContent:''},list={hidden:true,innerHTML:''};
   const detail={hidden:true,classList:{contains:()=>true},previousElementSibling:entries[0].main};
   const section={hidden:false,querySelectorAll:()=>entries.map(e=>e.main)};
-  const root={querySelectorAll(s){if(s==='[data-store-row]'||s==='tr[data-item-type]')return entries.map(e=>e.main);if(s==='[data-quantity-warning]')return entries.map(e=>e.warning);if(s==='[data-decision-detail]')return [detail];if(s==='[data-store-section]')return [section];if(s==='[data-shortage-product]')return [];return buttons;},querySelector:()=>status};
+  const root={querySelectorAll(s){if(s==='[data-store-row]'||s==='tr[data-item-type]')return entries.map(e=>e.main);if(s==='[data-quantity-warning]')return entries.map(e=>e.warning);if(s==='[data-decision-detail]')return [detail];if(s==='[data-store-section]')return [section];if(s==='[data-shortage-product]')return [];return buttons;},querySelector:s=>s==='[data-blocking-list]'?list:status};
   const state={batchStore:'all',batchSku:'',calculationStore:'all',calculationSku:'',config:{role,stores:{R00:{name:'合成中山'},R06:{name:'合成文心'},R01:{name:'合成北屯'}}}};
   const ctx={state,$:()=>root,refreshSkuFilterSummary:()=>{},quantityProjectionText:()=> '預估可售至：2026-11-13'};
   vm.createContext(ctx);
   vm.runInContext(['escapeHtml','refreshShortageProductSummaries','syncQuantityWarningVisibility','applyResultFilters','refreshDialogQuantityWarnings'].map(functionSource).join('\n'),ctx);
   const filter=(sku='',store='all',scope='batch')=>{state[scope==='batch'?'batchSku':'calculationSku']=sku;state[scope==='batch'?'batchStore':'calculationStore']=store;ctx.applyResultFilters(scope);};
-  return {entries,ctx,state,root,buttons,status,detail,section,filter};
+  return {entries,ctx,state,root,buttons,status,list,detail,section,filter};
 }
 
 describe('正式前台提醒列跟隨商品主列',()=>{
@@ -84,3 +84,6 @@ describe('正式前台提醒列跟隨商品主列',()=>{
     f.filter('A102067');expect(f.detail.hidden).toBe(false);
   });
 });
+
+it('阻擋清單列品號原因、跳轉入口且不混入黃色提醒，修正後清除',()=>{const f=fixture('store');f.entries[2].reason.value='';f.ctx.refreshDialogQuantityWarnings();expect(f.list.hidden).toBe(false);expect(f.list.innerHTML).toContain('R01／B53398');expect(f.list.innerHTML).toContain('人工追加量尚未填寫原因');expect(f.list.innerHTML).toContain('前往該品項');expect(f.list.innerHTML).not.toContain('A102067');const quantities=f.entries.map(e=>e.input.value);f.entries[2].reason.value='已補原因';f.ctx.refreshDialogQuantityWarnings();expect(f.list.hidden).toBe(true);expect(f.buttons.every(b=>!b.disabled)).toBe(true);expect(f.entries.map(e=>e.input.value)).toEqual(quantities);});
+it('無效數量不能以NaN或負值繞過前台清單',()=>{const f=fixture();for(const value of ['-1','bad','1.5']){f.entries[2].input.value=value;f.ctx.refreshDialogQuantityWarnings();expect(f.list.innerHTML).toContain('數量格式不正確');expect(f.buttons.every(b=>b.disabled)).toBe(true);}});

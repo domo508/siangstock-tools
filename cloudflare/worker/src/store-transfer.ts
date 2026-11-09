@@ -2,6 +2,7 @@ import { verifyCompanyUser, type AccessConfig } from "./access";
 import { RequestValidationError } from "./schema";
 import { assertCurrentActivity } from "./procurement-activities";
 import { readPendingPurchaseSnapshot } from "./pending-purchases";
+import { readSupplyReleases, releasedCeiling, validateRelease } from "./store-transfer-supply";
 import { FIXED_SOURCES } from "./fixed-sources";
 
 type StoreTransferEnv = AccessConfig & { DB: D1Database; ALLOWED_ORIGINS: string; GOOGLE_OAUTH_CLIENT_ID?: string; PROCUREMENT_ACCESS_AUD?: string };
@@ -181,7 +182,7 @@ function storeReplyDeadline(batch: Record<string, unknown>, store: Record<string
 async function extendStoreReply(request: Request, env: StoreTransferEnv, batchId: string, requestedStore: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (request.headers.get("X-Store-Transfer-Version") !== "20261109-transfer-puyouma-link-r2") throw new RequestValidationError("回覆期限功能已有新版，請重新載入最新版。", 409);
+  if (request.headers.get("X-Store-Transfer-Version") !== "20261109-transfer-supply-release-r1") throw new RequestValidationError("回覆期限功能已有新版，請重新載入最新版。", 409);
   const storeCode = visibleStore(requestedStore, who.role, who.storeCode);
   if (!storeCode) throw new RequestValidationError("必須指定門市。");
   const input = await readBody(request, 8192);
@@ -634,6 +635,14 @@ async function detail(request: Request, env: StoreTransferEnv, batchId: string):
     if (scope && String(row.store_code) !== scope) current.otherAllocated += value;
     supplyUsage.set(sku, current);
   });
+  const supplyReleases = await readSupplyReleases(env.DB, batchId);
+  items.results = items.results.map((row) => {
+    const release = supplyReleases.get(String(row.sku));
+    if (!release) return row;
+    const snapshot = parseJson(row.decision_snapshot);
+    const base = Number(snapshot.hqSupplyCeiling ?? snapshot.hqReleasable ?? release.base_releasable);
+    return {...row, decision_snapshot: JSON.stringify({...snapshot, hqSupplyCeiling: releasedCeiling(base,release), supplyReleaseOpen: release.extra_quantity>0})};
+  });
   const visibleItems = who.role === "store" ? items.results.map((row) => ({
     ...row,
     rule_summary: /人工新增/.test(String(row.rule_summary || "")) ? String(row.rule_summary) : "門市週調撥系統判斷",
@@ -658,13 +667,14 @@ async function manualItemFact(request: Request, env: StoreTransferEnv, batchId: 
   const row = await env.DB.prepare("SELECT * FROM store_transfer_manual_item_facts WHERE batch_id = ? AND store_code = ? AND sku = ?").bind(batchId, scope, sku).first<Record<string, unknown>>();
   const allocated = await env.DB.prepare("SELECT COALESCE(SUM(COALESCE(hq_approved_quantity, store_confirmed_quantity, suggested_quantity)), 0) quantity FROM store_transfer_items WHERE batch_id = ? AND sku = ? AND store_code <> ?").bind(batchId, sku, scope).first<Record<string, unknown>>();
   const otherAllocated = Number(allocated?.quantity || 0);
+  const release = (await readSupplyReleases(env.DB,batchId)).get(sku);
   if (!row) {
     const catalog = await env.DB.prepare("SELECT product_name, hq_available, hq_reserve, hq_releasable, auto_exclusions FROM store_transfer_batch_product_catalog WHERE batch_id = ? AND sku = ?").bind(batchId, sku).first<Record<string, unknown>>();
     if (!catalog) throw new RequestValidationError("此品號不在本批次建立時的商品主檔，請確認ERP品號。", 404);
     const schedule = parseJson(batchStore.arrival_schedule);
     const storeSchedule = schedule[scope] && typeof schedule[scope] === "object" && !Array.isArray(schedule[scope]) ? schedule[scope] as Record<string, unknown> : {};
     const exclusionReason = String(parseJson(catalog.auto_exclusions)[scope] || "");
-    return json({ storeCode: scope, sku, productName: String(catalog.product_name), calculationDate: String(storeSchedule.currentArrivalDate || batchStore.proposal_date), baseQuantity: 0, displayGap: 0, dailyUsage: 0, physicalInventory: 0, pendingSubmittedQuantity: 0, inTransitQuantity: 0, currentQuantity: 0, localSales42: 0, b3Sales42: 0, targetQuantity: 0, displayQuantity: 0, currentArrivalDate: String(storeSchedule.currentArrivalDate || batchStore.proposal_date), nextArrivalDate: String(storeSchedule.nextArrivalDate || storeSchedule.currentArrivalDate || batchStore.proposal_date), preArrivalStockoutRisk: false, inventoryEvidenceVersion: 1, systemProjection: "近期無現場銷售", systemReason: exclusionReason || "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", autoExcluded: Boolean(exclusionReason), exclusionReason, hqAvailable: Number(catalog.hq_available || 0), hqReserve: Number(catalog.hq_reserve || 0), hqReleasable: Number(catalog.hq_releasable || 0), supplyKnown: catalog.hq_releasable != null, otherAllocated });
+    return json({ storeCode: scope, sku, productName: String(catalog.product_name), calculationDate: String(storeSchedule.currentArrivalDate || batchStore.proposal_date), baseQuantity: 0, displayGap: 0, dailyUsage: 0, physicalInventory: 0, pendingSubmittedQuantity: 0, inTransitQuantity: 0, currentQuantity: 0, localSales42: 0, b3Sales42: 0, targetQuantity: 0, displayQuantity: 0, currentArrivalDate: String(storeSchedule.currentArrivalDate || batchStore.proposal_date), nextArrivalDate: String(storeSchedule.nextArrivalDate || storeSchedule.currentArrivalDate || batchStore.proposal_date), preArrivalStockoutRisk: false, inventoryEvidenceVersion: 1, systemProjection: "近期無現場銷售", systemReason: exclusionReason || "本批次沒有此品號的門市庫存、近期銷售、待發貨或在途紀錄；依現行規則未形成補貨需求", autoExcluded: Boolean(exclusionReason), exclusionReason, hqAvailable: Number(catalog.hq_available || 0), hqReserve: Number(catalog.hq_reserve || 0), hqReleasable: releasedCeiling(Number(catalog.hq_releasable || 0),release), supplyKnown: catalog.hq_releasable != null, supplyReleaseOpen: Number(release?.extra_quantity || 0)>0, supplyReserved: Number(catalog.hq_reserve || 0)>0 && releasedCeiling(Number(catalog.hq_releasable || 0),release)===0, otherAllocated });
   }
   return json({
     storeCode: String(row.store_code), sku: String(row.sku), productName: String(row.product_name),
@@ -677,8 +687,8 @@ async function manualItemFact(request: Request, env: StoreTransferEnv, batchId: 
     currentArrivalDate: String(row.current_arrival_date || row.calculation_date), nextArrivalDate: String(row.next_arrival_date || row.calculation_date),
     preArrivalStockoutRisk: Number(row.pre_arrival_stockout_risk || 0) === 1, inventoryEvidenceVersion: 1,
     systemReason: who.role === "store" ? storeFacingReason(row.system_reason, 0) : String(row.system_reason || ""), hqAvailable: Number(row.hq_available || 0),
-    hqReserve: Number(row.hq_reserve || 0), hqReleasable: Number(row.hq_releasable || 0), autoExcluded: Number(row.auto_excluded || 0) === 1,
-    exclusionReason: String(row.exclusion_reason || ""), supplyKnown: row.hq_releasable != null, otherAllocated
+    hqReserve: Number(row.hq_reserve || 0), hqReleasable: releasedCeiling(Number(row.hq_releasable || 0),release), autoExcluded: Number(row.auto_excluded || 0) === 1,
+    exclusionReason: String(row.exclusion_reason || ""), supplyKnown: row.hq_releasable != null, supplyReleaseOpen: Number(release?.extra_quantity || 0)>0, supplyReserved: Number(row.hq_reserve || 0)>0 && releasedCeiling(Number(row.hq_releasable || 0),release)===0, otherAllocated
   });
 }
 
@@ -1018,6 +1028,7 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
   const seen = new Set<string>();
   const requestedBySku = new Map<string, number>();
   const supplyCeilingBySku = new Map<string, number>();
+  const supplyReleases = await readSupplyReleases(env.DB, batchId);
   const otherStoreAllocationBySku = new Map<string, number>();
   allExisting.results.filter((row) => String(row.store_code) !== storeCode).forEach((row) => {
     const sku = String(row.sku);
@@ -1065,7 +1076,7 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
   });
   for (const [sku, requested] of requestedBySku) {
     if (!supplyCeilingBySku.has(sku)) continue;
-    const ceiling = Number(supplyCeilingBySku.get(sku) || 0);
+    const ceiling = releasedCeiling(Number(supplyCeilingBySku.get(sku) || 0), supplyReleases.get(sku));
     const occupied = Number(otherStoreAllocationBySku.get(sku) || 0);
     if (occupied + requested > ceiling) {
       const message = who.role === "store"
@@ -1163,7 +1174,7 @@ async function openApprovedCorrection(request: Request, env: StoreTransferEnv, b
 async function approveBatch(request: Request, env: StoreTransferEnv, batchId: string, saveOnly = false, requestedStore?: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261109-transfer-puyouma-link-r2") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
+  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261109-transfer-supply-release-r1") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
   const batch = await env.DB.prepare("SELECT status, revision, proposal_date, arrival_schedule FROM store_transfer_batches WHERE id = ? AND deleted_at IS NULL").bind(batchId).first<Record<string, unknown>>();
   if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
   if (!["open", "review"].includes(String(batch.status))) throw new RequestValidationError("此批次目前不可核准。", 409);
@@ -1220,6 +1231,7 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   const seen = new Set<string>();
   const approvedBySku = new Map<string, number>();
   const supplyCeilingBySku = new Map<string, number>();
+  const supplyReleases = await readSupplyReleases(env.DB, batchId);
   const existingUpdates: Record<string, unknown>[] = [];
   const manualInserts: Record<string, unknown>[] = [];
   // Pending stores retain their current allocation; already approved quantities
@@ -1277,7 +1289,7 @@ async function approveBatch(request: Request, env: StoreTransferEnv, batchId: st
   });
   for (const [sku, approved] of approvedBySku) {
     if (!supplyCeilingBySku.has(sku)) continue;
-    const ceiling = Number(supplyCeilingBySku.get(sku) || 0);
+    const ceiling = releasedCeiling(Number(supplyCeilingBySku.get(sku) || 0), supplyReleases.get(sku));
     if (approved > ceiling) throw new RequestValidationError(`${sku}總倉本批可供應${ceiling}件，各門市合計核准${approved}件；請調整後再核准。`, 409);
   }
   for (const key of baseline.keys()) if (!seen.has(key)) throw new RequestValidationError("總部核准明細不完整；移除品項請使用移除按鈕，系統會保留稽核紀錄。", 409);
@@ -1553,7 +1565,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
     return json({ hasMore:rows.results.length>100, plans:await Promise.all(rows.results.slice(0,100).map(async raw=>{const row=raw as Record<string,unknown>,current=await currentActivityRecord(env,row);const {source,config,...metadata}=row;return {...metadata,status:current.status,startProposalDate:current.config.startProposalDate || "",...("settingsOutdated" in current?{settingsOutdated:true}:{})};})) });
   }
   requireSameOrigin(request,env);
-  if(request.headers.get("X-Store-Transfer-Version") !== "20261109-transfer-puyouma-link-r2") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
+  if(request.headers.get("X-Store-Transfer-Version") !== "20261109-transfer-supply-release-r1") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
   const body = await readBody(request,3_000_000), now = new Date().toISOString();
   if (request.method === "POST" && !id) {
     const source = activitySource(body.source), planId = crypto.randomUUID();
@@ -1602,6 +1614,39 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
   return json({ id, revision:revision+1 });
 }
 
+async function supplyRelease(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
+  const who=await actor(request,env); assertHq(who.role);
+  if(request.method==="PUT") { requireSameOrigin(request,env); if(request.headers.get("X-Store-Transfer-Version")!=="20261109-transfer-supply-release-r1") throw new RequestValidationError("額度功能已有新版，請重新載入最新版。",409); }
+  const sku=text(new URL(request.url).searchParams.get("sku"),"ERP品號",80).toUpperCase();
+  if(!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) throw new RequestValidationError("ERP品號格式錯誤。");
+  const batch=await env.DB.prepare("SELECT status,revision FROM store_transfer_batches WHERE id=? AND deleted_at IS NULL").bind(batchId).first<Record<string,unknown>>();
+  if(!batch) throw new RequestValidationError("找不到此週調撥批次。",404);
+  const catalog=await env.DB.prepare("SELECT * FROM store_transfer_batch_product_catalog WHERE batch_id=? AND sku=?").bind(batchId,sku).first<Record<string,unknown>>();
+  if(!catalog) throw new RequestValidationError("此品號不在本批商品資料中，無法開放額度。",404);
+  const previous=await env.DB.prepare("SELECT * FROM store_transfer_supply_releases WHERE batch_id=? AND sku=?").bind(batchId,sku).first<Record<string,unknown>>();
+  const usage=await env.DB.prepare("SELECT COALESCE(SUM(COALESCE(hq_approved_quantity,store_confirmed_quantity,suggested_quantity)),0) quantity FROM store_transfer_items WHERE batch_id=? AND sku=?").bind(batchId,sku).first<{quantity:number}>();
+  const editable=await env.DB.prepare("SELECT COUNT(*) n FROM store_transfer_store_status WHERE batch_id=? AND status NOT IN ('approved','closed') AND erp_created_at IS NULL").bind(batchId).first<{n:number}>();
+  const allocated=Number(usage?.quantity || 0), extra=Number(previous?.extra_quantity || 0);
+  const known=[catalog.hq_available,catalog.hq_reserve,catalog.hq_releasable].every(v=>v!=null && Number.isSafeInteger(Number(v)) && Number(v)>=0);
+  const canEdit=["open","review"].includes(String(batch.status)) && Number(editable?.n || 0)>0 && known;
+  if(request.method==="GET") {
+    const history=await env.DB.prepare("SELECT previous_quantity,extra_quantity,reason,created_at,created_by FROM store_transfer_supply_release_events WHERE batch_id=? AND sku=? ORDER BY id DESC LIMIT 20").bind(batchId,sku).all();
+    return json({sku,productName:catalog.product_name,available:catalog.hq_available,reserve:catalog.hq_reserve,baseReleasable:catalog.hq_releasable,extraQuantity:extra,allocated,effective:known?Number(catalog.hq_releasable)+extra:null,remaining:known?Math.max(0,Number(catalog.hq_releasable)+extra-allocated):null,expectedRevision:Number(batch.revision),canEdit,history:history.results});
+  }
+  if(!canEdit) throw new RequestValidationError("批次無可編輯門市或總倉供應資料未知，不能調整額度。",409);
+  const body=await readBody(request,4000);
+  if(Number(body.expectedRevision)!==Number(batch.revision)) throw new RequestValidationError("批次已由其他同事更新，請重新查詢品號。",409);
+  const next=quantity(body.extraQuantity,"本批額外開放量"),reason=text(body.reason,"開放原因");
+  validateRelease(catalog.hq_available,catalog.hq_reserve,catalog.hq_releasable,next,allocated);
+  const now=new Date().toISOString(),revision=Number(batch.revision);
+  await guardedBatch(env,batchId,revision,[
+    env.DB.prepare("INSERT INTO store_transfer_supply_releases(batch_id,sku,extra_quantity,reason,updated_at,updated_by) VALUES(?,?,?,?,?,?) ON CONFLICT(batch_id,sku) DO UPDATE SET extra_quantity=excluded.extra_quantity,reason=excluded.reason,updated_at=excluded.updated_at,updated_by=excluded.updated_by").bind(batchId,sku,next,reason,now,who.email),
+    env.DB.prepare("INSERT INTO store_transfer_supply_release_events(batch_id,sku,previous_quantity,extra_quantity,reason,batch_revision,created_at,created_by) VALUES(?,?,?,?,?,?,?,?)").bind(batchId,sku,extra,next,reason,revision+1,now,who.email),
+    env.DB.prepare("UPDATE store_transfer_batches SET revision=revision+1,updated_at=?,updated_by=? WHERE id=?").bind(now,who.email,batchId)
+  ]);
+  return json({sku,extraQuantity:next,expectedRevision:revision+1});
+}
+
 export async function storeTransferRoute(request: Request, env: StoreTransferEnv): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/store-transfer")) return null;
@@ -1630,6 +1675,8 @@ export async function storeTransferRoute(request: Request, env: StoreTransferEnv
   if (collaborationMatch && request.method === "DELETE") return deleteCollaborationDraft(request, env, decodeURIComponent(collaborationMatch[1]));
   if (url.pathname === "/api/store-transfer/batches" && request.method === "GET") return listBatches(request, env);
   if (url.pathname === "/api/store-transfer/batches" && request.method === "POST") return createBatch(request, env);
+  const supplyReleaseMatch=url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/supply-release$/);
+  if(supplyReleaseMatch && ["GET","PUT"].includes(request.method)) return supplyRelease(request,env,decodeURIComponent(supplyReleaseMatch[1]));
   const manualItemFactMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/manual-item-fact$/);
   if (manualItemFactMatch && request.method === "GET") return manualItemFact(request, env, decodeURIComponent(manualItemFactMatch[1]));
   const detailMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)$/);
@@ -1669,6 +1716,8 @@ export async function cleanupStoreTransfers(env: StoreTransferEnv): Promise<void
     env.DB.prepare("DELETE FROM store_transfer_procurement_need_events WHERE created_at < datetime('now', '-12 months')"),
     env.DB.prepare(`DELETE FROM store_transfer_manual_item_facts WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_batch_product_catalog WHERE batch_id IN (${expired})`),
+    env.DB.prepare(`DELETE FROM store_transfer_supply_release_events WHERE batch_id IN (${expired})`),
+    env.DB.prepare(`DELETE FROM store_transfer_supply_releases WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_items WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_store_status WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_batches WHERE id IN (${expired})`),

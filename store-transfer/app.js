@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261109-transfer-puyouma-link-r2";
+  const APP_VERSION = "20261109-transfer-supply-release-r1";
   const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -1273,7 +1273,7 @@
         hasInventoryBreakdown ? evidence("現有實體庫存", `${Number(snapshot.physicalInventory)}件`) : evidence("現有實體庫存", "舊批次未保存，需以原始檔重算"),
         hasInventoryBreakdown ? evidence("待發貨／在途", `${Number(snapshot.pendingSubmittedQuantity)}／${Number(snapshot.inTransitQuantity)}件`) : evidence("待發貨／在途", "舊批次未保存，需以原始檔重算"),
         hasInventoryBreakdown ? evidence("計算可用量", `${Number(snapshot.currentQuantity)}件`) : evidence("調撥前可售基準", `${Number(item.base_quantity || 0).toFixed(1)}件`),
-        hasSnapshot ? evidence("目標／不可售展示", `${Number(snapshot.targetQuantity || 0)}／${Number(snapshot.displayQuantity || 0)}件`) : evidence("不可售展示缺口", `${Number(item.display_gap || 0)}件`),
+        hasSnapshot ? evidence("本批目標量", `${Number(snapshot.targetQuantity || 0)}件`) + evidence("本店不可售展示量（本批計算快照）", `${Number(snapshot.displayQuantity || 0)}件；計算時優先採用已啟用的門市例外`) : evidence("不可售展示缺口", `${Number(item.display_gap || 0)}件`),
         hasSnapshot ? evidence("本批／下一輪到店", `${snapshot.currentArrivalDate || "—"}／${snapshot.nextArrivalDate || "—"}`) : evidence("計算日期", item.calculation_date || "舊批次未保存"),
         ...(state.config.role !== "store" ? [supplyKnown ? evidence("總倉可用／安全保留／本批可供應", `${Number(snapshot.hqAvailable || 0)}／${Number(snapshot.hqReserve || 0)}／${supplyCeiling}件`) : evidence("總倉供應快照", "舊批次未保存")] : []),
         evidence("系統判斷", systemReason, true),
@@ -1308,7 +1308,7 @@
       if (!input) return;
       totals.set(row.dataset.sku, (totals.get(row.dataset.sku) || 0) + Math.max(0, Number(input.value || 0)));
     });
-    let blocking = 0;
+    let blocking = 0; const blockingItems = [];
     rows.forEach((row) => {
       const input = row.querySelector(inputSelector), warning = row.nextElementSibling?.matches("[data-quantity-warning]") ? row.nextElementSibling : null;
       if (!input || !warning) return;
@@ -1323,7 +1323,9 @@
       const extra = Math.max(0, quantity - suggested);
       const projectionText = quantityProjectionText(row, quantity);
       let tone = "", title = "", copy = "";
-      if (supplyKnown && total > ceiling) {
+      if (!Number.isSafeInteger(Number(input.value)) || Number(input.value)<0 || (row.dataset.itemType === "consumable" && quantity % 100 !== 0)) {
+        tone="danger"; blocking+=1; title="數量格式不正確"; copy="請輸入0以上整數；提袋耗材須為100的倍數。";
+      } else if (supplyKnown && total > ceiling) {
         tone = "danger"; blocking += 1;
         if (state.config.role === "store") {
           title = `總倉供應量不足：${row.dataset.sku} 無法以目前數量送出`;
@@ -1345,16 +1347,30 @@
         title = "人工新增品項的系統未建議原因";
         copy = `${row.dataset.systemReason || "本批次依現行規則未形成補貨需求"}；${projectionText}。`;
       }
+      if(tone === "danger") {
+        row.dataset.blockingIndex=String(blockingItems.length);
+        blockingItems.push({row,store:row.dataset.store,sku:row.dataset.sku,title});
+      } else delete row.dataset.blockingIndex;
       warning.dataset.warningTone = tone;
       warning.hidden = !tone || row.hidden;
       warning.className = `decision-warning-row${tone ? ` ${tone}` : ""}`;
       const identity = `${row.dataset.store} ${state.config.stores[row.dataset.store]?.name || ""}／${row.dataset.sku}`;
       warning.querySelector("td").innerHTML = tone ? `<strong>${escapeHtml(identity)}｜${escapeHtml(title)}</strong><span>${escapeHtml(copy)}</span>` : "";
     });
-    detail.querySelectorAll('[data-action="save"], [data-action="submit"], [data-action="approve"]').forEach((button) => { button.disabled = blocking > 0; });
+    detail.querySelectorAll('[data-action="save"], [data-action="submit"], [data-action="approve"], [data-action="hq-save"]').forEach((button) => { button.disabled = blocking > 0; });
+    const list=detail.querySelector("[data-blocking-list]");
+    if(list) { list.hidden=blocking===0;
+    list.innerHTML=blocking ? `<strong>尚有 ${blocking} 筆未通過檢核</strong><ul>${blockingItems.map((x,i)=>`<li><span>${escapeHtml(x.store)}／${escapeHtml(x.sku)}：${escapeHtml(x.title)}</span><button type="button" class="secondary-button compact" data-blocking-jump="${i}">前往該品項</button></li>`).join("")}</ul>` : ""; }
     const status = detail.querySelector("#dialog-status");
     if (status && blocking > 0) status.textContent = `尚有 ${blocking} 筆數量或原因未通過檢核。`;
     else if (status && /尚有 \d+ 筆數量或原因未通過檢核/.test(status.textContent)) status.textContent = "數量檢核完成，可以繼續操作。";
+  }
+
+  function manualMaximum(skuInput) {
+    const sku=skuInput.dataset.lookupSku;
+    const selector=state.config.role === "store" ? "[data-confirmed]" : "[data-approved]";
+    const own=[...$("batch-detail").querySelectorAll("tr[data-item-type]")].filter(r=>r.dataset.sku===sku).reduce((sum,r)=>sum+Math.max(0,Number(r.querySelector(selector)?.value || 0)),0);
+    return Math.max(0,Number(skuInput.dataset.hqReleasable || 0)-(state.config.role === "store" ? Number(skuInput.dataset.otherAllocated || 0) : 0)-own);
   }
 
   function updateManualFormProjection() {
@@ -1363,14 +1379,14 @@
     const quantity = Number(detail.querySelector("[data-manual-quantity]").value || 0);
     const item = { item_type: detail.querySelector("[data-manual-type]").value, calculation_date: skuInput.dataset.calculationDate, base_quantity: Number(skuInput.dataset.base || 0), daily_usage: Number(skuInput.dataset.daily || 0), display_gap: Number(skuInput.dataset.displayGap || 0), system_projection: skuInput.dataset.systemProjection || "", manual: true };
     const warning = detail.querySelector("[data-manual-supply-warning]"), addButton = detail.querySelector('[data-local-action="add-item"]');
-    const maximum = Math.max(0, Number(skuInput.dataset.hqReleasable || 0) - Number(skuInput.dataset.otherAllocated || 0));
+    const maximum = manualMaximum(skuInput);
     const supplyExceeded = skuInput.dataset.supplyKnown === "true" && quantity > maximum;
     const projectionQuantity = supplyExceeded ? maximum : quantity;
     output.textContent = quantity > 0 ? `${supplyExceeded ? "依可供應上限" : state.config.role === "store" ? "申請後" : "核准後"}預估可售至：${rowProjection(item, projectionQuantity)}` : "請輸入本次數量";
     warning.hidden = !supplyExceeded;
     warning.textContent = supplyExceeded
       ? state.config.role === "store"
-        ? `總倉供應量不足：${skuInput.dataset.lookupSku}無法以目前數量加入，請降低申請量後重試。`
+        ? skuInput.dataset.supplyReserved === "true" ? "本品項受總倉安全保留限制，請聯繫總部評估開放額度。" : `總倉供應量不足：${skuInput.dataset.lookupSku}無法以目前數量加入，請降低申請量後重試。`
         : `總倉數量不足：本店目前最多可核准 ${maximum} 件，輸入 ${quantity} 件；請修改數量後再加入。`
       : "";
     addButton.disabled = supplyExceeded;
@@ -1394,6 +1410,7 @@
       Object.assign(skuInput.dataset, { lookupSku: fact.sku, lookupStore: fact.storeCode, calculationDate: fact.calculationDate, base: String(fact.baseQuantity), daily: String(fact.dailyUsage), displayGap: String(fact.displayGap), systemProjection: fact.systemProjection || "", systemReason: fact.systemReason || "", autoExcluded: String(fact.autoExcluded === true), exclusionReason: fact.exclusionReason || "", hqAvailable: String(fact.hqAvailable || 0), hqReserve: String(fact.hqReserve || 0), hqReleasable: String(fact.hqReleasable || 0), supplyKnown: String(fact.supplyKnown === true), otherAllocated: String(fact.otherAllocated || 0) });
       systemReasonOutput.textContent = state.config.role === "store" ? storeFacingSystemReason(fact.systemReason, 0) : fact.systemReason || "本批次未保存系統未建議原因";
       status.textContent = fact.autoExcluded ? `${fact.storeCode}／${fact.sku} 原屬自動排除品；仍可人工申請，送出後會以黃色標示供總部覆核。` : `${fact.storeCode}／${fact.sku} 已帶入批次建立時的庫存、近42天銷售及總倉可供應基準。`;
+      skuInput.dataset.supplyReserved=String(fact.supplyReserved === true);
       updateManualFormProjection();
       return fact;
     } catch (error) {
@@ -1420,7 +1437,7 @@
     const quantity = Number(quantityInput.value), reason = reasonInput.value.normalize("NFKC").trim();
     if (!sku || !productName || !Number.isSafeInteger(quantity) || quantity <= 0 || !reason) { status.textContent = "請填妥ERP品號、品名、1以上整數數量與新增原因。"; return; }
     if (type === "consumable" && quantity % 100 !== 0) { status.textContent = "提袋耗材數量須為100的倍數。"; return; }
-    const maximum = Math.max(0, Number(skuInput.dataset.hqReleasable || 0) - Number(skuInput.dataset.otherAllocated || 0));
+    const maximum = manualMaximum(skuInput);
     if (skuInput.dataset.supplyKnown === "true" && quantity > maximum) {
       status.textContent = state.config.role === "store" ? `${sku}總倉供應量不足，無法以目前數量加入；請降低申請量。` : `${sku}總倉數量不足，本店目前最多可核准${maximum}件；請修改數量。`;
       return;
@@ -1564,6 +1581,64 @@
     status.textContent = `${stores.join("、")} ERP已產檔並發起下載；請確認下載資料夾。多檔下載若被瀏覽器阻擋，可逐店重新下載。調出／調入倉仍在ERP人工指定。`;
   }
 
+  function supplyQuotaPanel(p) {
+    const editable=["open","review"].includes(p.batch.status);
+    return `<section class="result-section supply-quota-panel" data-quota-panel><h3>${state.config.role === "store" ? "更新可申請狀態" : "查詢品號／開放調撥額度"}</h3><p>${state.config.role === "store" ? "總部開放額度後可更新本批品號狀態；已填寫但未保存的數量與原因會保留。" : "只開放本批六店共用的安全保留額度，不自動新增商品或改量。已核准／已產ERP內容仍須走原更正程序。"}</p>${state.config.role === "store" ? "" : `<div class="quota-fields"><label>ERP品號<input data-quota-sku maxlength="80" autocomplete="off"></label><button type="button" class="secondary-button" data-quota-action="lookup">查詢品號</button></div><div data-quota-result hidden></div><div class="quota-fields" data-quota-edit hidden><label>本批額外開放總量<input data-quota-quantity type="number" min="0" step="1"></label><label>開放／調整原因<textarea data-quota-reason maxlength="300" rows="2"></textarea></label><button type="button" class="primary-button" data-quota-action="save" ${editable ? "" : "disabled"}>確認開放</button></div>`}<button type="button" class="secondary-button" data-quota-action="refresh">更新可申請狀態</button><p data-quota-status role="status" class="status-line"></p></section>`;
+  }
+
+  async function refreshBatchSupply() {
+    const old=state.activeBatch, query=state.config.storeCode ? `?store=${state.config.storeCode}` : "";
+    const latest=await api(`/batches/${encodeURIComponent(old.batch.id)}${query}`);
+    const business=p=>JSON.stringify({status:p.batch.status,items:p.items.map(x=>[x.store_code,x.sku,x.item_type,x.suggested_quantity,x.store_confirmed_quantity,x.hq_approved_quantity,x.store_reason,x.hq_reason]),stores:p.storeStatuses});
+    if(business(old)!==business(latest)) throw new Error("批次明細或狀態已由其他同事更新；目前輸入仍保留，請先核對新版明細，不會自動覆寫或送出。");
+    for(const row of $("batch-detail").querySelectorAll("tr[data-item-type]")) {
+      const item=latest.items.find(i=>i.store_code===row.dataset.store && i.sku===row.dataset.sku && i.item_type===row.dataset.itemType);
+      if(item){const snap=savedDecisionSnapshot(item); if(Object.hasOwn(snap,"hqSupplyCeiling")){row.dataset.supplyCeiling=String(snap.hqSupplyCeiling);row.dataset.supplyKnown="true";
+        let detailRow=row.nextElementSibling;if(detailRow?.matches("[data-quantity-warning]"))detailRow=detailRow.nextElementSibling;
+        if(state.config.role!=="store") for(const entry of detailRow?.querySelectorAll(".decision-evidence") || []) if(entry.querySelector("span")?.textContent==="總倉可用／安全保留／本批可供應") entry.querySelector("strong").textContent=`${Number(snap.hqAvailable || 0)}／${Number(snap.hqReserve || 0)}／${Number(snap.hqSupplyCeiling)}件`;
+      }}
+      else {
+        const fact=await api(`/batches/${encodeURIComponent(old.batch.id)}/manual-item-fact?store=${encodeURIComponent(row.dataset.store)}&sku=${encodeURIComponent(row.dataset.sku)}`);
+        row.dataset.supplyCeiling=String(fact.hqReleasable);row.dataset.supplyKnown=String(fact.supplyKnown);
+      }
+      row.dataset.otherAllocated=String(latest.supplyUsage?.[row.dataset.sku]?.otherAllocated || 0);
+    }
+    state.activeBatch=latest;
+    const form=$("batch-detail").querySelector("[data-manual-sku]");
+    if(form?.value.trim()) await lookupManualItemFact();
+    refreshDialogQuantityWarnings();
+  }
+
+  async function handleQuotaAction(action) {
+    if(state.dialogBusy) return;
+    const panel=$("batch-detail").querySelector("[data-quota-panel]"), status=panel.querySelector("[data-quota-status]");
+    const buttons=[...panel.querySelectorAll("button")]; buttons.forEach(b=>b.disabled=true);state.dialogBusy=true;
+    status.textContent="讀取本批最新供應狀態…"; let saved=false;
+    try {
+      if(action==="refresh") {await refreshBatchSupply(); status.textContent="可申請狀態已更新；尚未保存的數量與原因已保留。";return;}
+      const sku=panel.querySelector("[data-quota-sku]").value.normalize("NFKC").trim().toUpperCase();
+      if(!sku) throw new Error("請先輸入ERP品號。");
+      const url=`/batches/${encodeURIComponent(state.activeBatch.batch.id)}/supply-release?sku=${encodeURIComponent(sku)}`;
+      if(action==="save") {
+        const lookup=panel._quota;
+        if(!lookup || lookup.sku!==sku) throw new Error("品號已變更，請先重新查詢。");
+        if(!lookup.canEdit) throw new Error("本批目前不能調整此品號額度。");
+        if(panel.querySelector("[data-quota-quantity]").value.trim()==="") throw new Error("請填寫本批額外開放總量；取消開放請明確填0。");
+        const amount=Number(panel.querySelector("[data-quota-quantity]").value),reason=panel.querySelector("[data-quota-reason]").value.trim();
+        if(!Number.isSafeInteger(amount) || amount<0 || !reason) throw new Error("請填寫0以上整數的開放總量與原因。");
+        await api(url,{method:"PUT",body:{extraQuantity:amount,reason,expectedRevision:lookup.expectedRevision}});
+        saved=true; status.textContent="額度已保存，正在更新可申請狀態…";
+        try {await refreshBatchSupply();} catch(error){status.textContent=`額度已保存；${error.message}`;return;}
+      }
+      const q=await api(url);panel._quota=q;
+      const result=panel.querySelector("[data-quota-result]");result.hidden=false;
+      result.innerHTML=`<strong>${escapeHtml(q.sku)}／${escapeHtml(q.productName)}</strong><p>本批總倉可用：${q.available ?? "資料未保存"}件；安全保留：${q.reserve ?? "資料未保存"}件；原可供應：${q.baseReleasable ?? "資料未保存"}件</p><p>額外開放：${q.extraQuantity}件；目前已分配：${q.allocated}件；剩餘可新增：${q.remaining ?? "未知"}件</p><p>額外開放總量會取代上次設定，並非再次累加；僅本批六店共用。</p>${q.history.length ? `<details><summary>查看額度異動紀錄</summary>${q.history.map(h=>`<p>${escapeHtml(h.created_at)}／${escapeHtml(h.created_by)}：${h.previous_quantity}→${h.extra_quantity}件；${escapeHtml(h.reason)}</p>`).join("")}</details>` : ""}`;
+      panel.querySelector("[data-quota-edit]").hidden=!q.canEdit;panel.querySelector("[data-quota-quantity]").value=String(q.extraQuantity);panel.querySelector("[data-quota-reason]").value="";
+      status.textContent=action==="save" ? "額度已確認開放。門市更新可申請狀態後即可人工新增，仍須依原流程送審。" : q.canEdit ? "查詢完成，請填寫本批額外開放總量與原因。" : "查詢完成；本批無可編輯門市或供應資料未知，不能調整額度。";
+    } catch(error){status.textContent=(saved ? "額度已保存，但更新畫面失敗；請使用更新可申請狀態。" : "")+error.message;}
+    finally {state.dialogBusy=false;buttons.forEach(b=>b.disabled=b.dataset.quotaAction==="save" && !panel._quota?.canEdit);}
+  }
+
   async function openBatch(id) {
     const query = state.config.storeCode ? `?store=${state.config.storeCode}` : "";
     state.activeBatch = await api(`/batches/${encodeURIComponent(id)}${query}`);
@@ -1576,7 +1651,7 @@
     const scheduleText = Object.values(schedule).map((row) => `${row.storeCode} 本批${row.currentArrivalDate}／下一輪${row.nextArrivalDate}`).join("；");
     const activeCorrection = p.storeStatuses.find((row) => row.correction_mode);
     const correctionNotice = activeCorrection ? `<p class="result-alert warn"><strong>${activeCorrection.correction_mode === "store" ? "已退回門市修改" : "總部更正中"}：</strong>${escapeHtml(activeCorrection.store_code)}・第${escapeHtml(activeCorrection.correction_revision)}版・${escapeHtml(activeCorrection.correction_reason || "未填原因")}。原核准內容已保留，重新核准後才可產生ERP。</p>` : "";
-    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>${state.config.role === "store" ? "本店回覆期限" : "共同回覆期限"}：${escapeHtml(deadlineLabel(replyDeadline(p,p.storeStatuses.find(row=>row.store_code===state.config.storeCode))))}（台北時間）・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${correctionNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${skuFilterBar("batch", state.batchSku)}${replyDeadlinePanel(p)}${approvedCorrectionPanel(p)}${statusOverview(p)}${itemTable(p)}${replyExtensionHistory(p)}<div class="detail-actions">${detailActions(p)}</div><p id="dialog-status" class="status-line"></p>`;
+    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>${state.config.role === "store" ? "本店回覆期限" : "共同回覆期限"}：${escapeHtml(deadlineLabel(replyDeadline(p,p.storeStatuses.find(row=>row.store_code===state.config.storeCode))))}（台北時間）・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${correctionNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${skuFilterBar("batch", state.batchSku)}${replyDeadlinePanel(p)}${approvedCorrectionPanel(p)}${statusOverview(p)}${supplyQuotaPanel(p)}${itemTable(p)}${replyExtensionHistory(p)}<div class="detail-actions">${detailActions(p)}</div><section data-blocking-list class="blocking-list result-alert danger" aria-live="polite" hidden></section><p id="dialog-status" class="status-line"></p>`;
     $("batch-detail").querySelector(".detail-actions").insertAdjacentHTML("beforebegin", perStoreActions(p));
     $("batch-detail").querySelectorAll("textarea.reason-input").forEach(autoSizeReasonField);
     $("batch-dialog").showModal();
@@ -1601,6 +1676,13 @@
       applySkuFilter("batch", "");
       return;
     }
+    const jump=event.target.closest("[data-blocking-jump]");
+    if(jump){
+      const row=[...$("batch-detail").querySelectorAll("tr[data-blocking-index]")].find(r=>r.dataset.blockingIndex===jump.dataset.blockingJump);
+      if(row){const search=$("batch-detail").querySelector('[data-sku-filter-scope="batch"]');if(search)search.value="";applyStoreFilter("batch",state.config.role==="store" ? state.config.storeCode : "all");applySkuFilter("batch","");row.hidden=false;row.classList.add("blocking-target");row.scrollIntoView({block:"center",behavior:"smooth"});const field=row.querySelector('[data-reason]:not(:disabled),[data-hq-reason]:not(:disabled)') || row.querySelector("input:not(:disabled)");field?.focus({preventScroll:true});setTimeout(()=>row.classList.remove("blocking-target"),2500);}
+      return;
+    }
+    const quota=event.target.closest("[data-quota-action]");if(quota){await handleQuotaAction(quota.dataset.quotaAction);return;}
     const localAction = event.target.closest("[data-local-action]");
     if (localAction?.dataset.localAction === "add-item") { await addManualItem(); return; }
     const unsavedRemove = event.target.closest("[data-remove-unsaved]");
