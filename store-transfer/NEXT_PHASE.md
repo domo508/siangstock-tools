@@ -1,5 +1,15 @@
 # 門市週調撥｜需求與待辦
 
+## 2026-11-09 剩餘可直接新增量提示：已部署與正式驗收
+
+功能25ca662已發布正式分支feature/company-tools-static-site；Zeabur 6af1e62103a5d9114765b3dd completed/success；Worker 15362bff-0548-48ad-bcf4-5ec736d76e6c。週調撥20261109-transfer-bulk-release-r3、主採購20261109-procurement-transfer-bulk-r3與首頁20261109-transfer-bulk-entry-r3同步。此紀錄取代下方發布準備狀態。原批次重載新版即可，不需重建。
+
+搜尋卡片有量顯示「可直接人工新增，不需額外開放」，明列本批六店共用剩餘可新增量；無額外安全保留量僅不能勾選開放，不代表不能人工新增。零量、未知、批次不可編輯各自說明，實際新增仍經既有檢核。正式W46唯讀核對P11041：原可供應13063－既有分配100＝剩12963件，綠色提示正確；A41251剩0件，明列無量且無額外保留。未執行實際開放、申請、核准、ERP或寄信。
+
+型別生成／tsc、全套70份1014項測試與Worker打包通過。本機320／390px無水平溢出；正式舊r2頁已顯示新版阻擋，未重載或清除同仁未存草稿。Chrome確認version.json為r3、200、no-store/max-age=0/must-revalidate及CF DYNAMIC；HTML快取設定未改，本次未另取HTML回應標頭證據。
+
+正式D1部署前後所有結果集完全一致：採購33批／revision80／金額5178455.1；調撥14批／revision182／3959列／建議5688／門市確認2409／核准欄1679；缺貨13982列14851件；額度2列與5事件，以及所有門市狀態與ERP時間均一致。無資料庫遷移、權限或計算規則變更。私有證據.local-context/verification/20261109-transfer-direct-supply/，正式畫面formal-direct.jpg。回復基準Git cb1b06e與Worker bd0f320d-63ac-4611-8135-7d29a8e5bf92，勿回復業務資料。根工作區其他變更保留，本輪只同步現況文件。
+
 ## 2026-11-09 搜尋卡片顯示剩餘可直接新增量（已授權部署，發布準備）
 
 使用者要求避免「沒有安全保留量可額外開放」被誤認為不能調撥；使用者本輪已明確授權正式發布；先前僅修改的授權狀態已更新。正式仍cb1b06e／transfer-bulk-release-r2與Worker bd0f320d-63ac-4611-8135-7d29a8e5bf92。修改位於隔離工作區.local-context/work/transfer-bulk-release-20261109，正在提交與發布，正式驗收完成後補記。
