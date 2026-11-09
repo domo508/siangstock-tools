@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261109-transfer-supply-release-r1";
+  const APP_VERSION = "20261109-transfer-bulk-release-r2";
   const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -1583,7 +1583,7 @@
 
   function supplyQuotaPanel(p) {
     const editable=["open","review"].includes(p.batch.status);
-    return `<section class="result-section supply-quota-panel" data-quota-panel><h3>${state.config.role === "store" ? "更新可申請狀態" : "查詢品號／開放調撥額度"}</h3><p>${state.config.role === "store" ? "總部開放額度後可更新本批品號狀態；已填寫但未保存的數量與原因會保留。" : "只開放本批六店共用的安全保留額度，不自動新增商品或改量。已核准／已產ERP內容仍須走原更正程序。"}</p>${state.config.role === "store" ? "" : `<div class="quota-fields"><label>ERP品號<input data-quota-sku maxlength="80" autocomplete="off"></label><button type="button" class="secondary-button" data-quota-action="lookup">查詢品號</button></div><div data-quota-result hidden></div><div class="quota-fields" data-quota-edit hidden><label>本批額外開放總量<input data-quota-quantity type="number" min="0" step="1"></label><label>開放／調整原因<textarea data-quota-reason maxlength="300" rows="2"></textarea></label><button type="button" class="primary-button" data-quota-action="save" ${editable ? "" : "disabled"}>確認開放</button></div>`}<button type="button" class="secondary-button" data-quota-action="refresh">更新可申請狀態</button><p data-quota-status role="status" class="status-line"></p></section>`;
+    return `<section class="result-section supply-quota-panel" data-quota-panel><h3>${state.config.role === "store" ? "更新可申請狀態" : "查詢品號／開放調撥額度"}</h3><p>${state.config.role === "store" ? "總部開放額度後可更新本批品號狀態；已填寫但未保存的數量與原因會保留。" : "只開放本批六店共用的安全保留額度，不自動新增商品或改量。已核准／已產ERP內容仍須走原更正程序。"}</p>${state.config.role === "store" ? "" : `<div class="quota-fields"><label>ERP品號<input data-quota-sku maxlength="80" autocomplete="off"></label><button type="button" class="secondary-button" data-quota-action="lookup">查詢品號</button></div><div data-quota-result hidden></div><div class="quota-fields" data-quota-edit hidden><label>本批額外開放總量<input data-quota-quantity type="number" min="0" step="1"></label><label>開放／調整原因<textarea data-quota-reason maxlength="300" rows="2"></textarea></label><button type="button" class="primary-button" data-quota-action="save" ${editable ? "" : "disabled"}>確認開放</button></div>`}${state.config.role === "store" ? "" : `<div data-bulk-supply></div>`}<button type="button" class="secondary-button" data-quota-action="refresh">更新可申請狀態</button><p data-quota-status role="status" class="status-line"></p></section>`;
   }
 
   async function refreshBatchSupply() {
@@ -1612,7 +1612,7 @@
   async function handleQuotaAction(action) {
     if(state.dialogBusy) return;
     const panel=$("batch-detail").querySelector("[data-quota-panel]"), status=panel.querySelector("[data-quota-status]");
-    const buttons=[...panel.querySelectorAll("button")]; buttons.forEach(b=>b.disabled=true);state.dialogBusy=true;
+    const buttons=[...panel.querySelectorAll("button")].map(b=>[b,b.disabled]); buttons.forEach(([b])=>b.disabled=true);state.dialogBusy=true;
     status.textContent="讀取本批最新供應狀態…"; let saved=false;
     try {
       if(action==="refresh") {await refreshBatchSupply(); status.textContent="可申請狀態已更新；尚未保存的數量與原因已保留。";return;}
@@ -1636,7 +1636,7 @@
       panel.querySelector("[data-quota-edit]").hidden=!q.canEdit;panel.querySelector("[data-quota-quantity]").value=String(q.extraQuantity);panel.querySelector("[data-quota-reason]").value="";
       status.textContent=action==="save" ? "額度已確認開放。門市更新可申請狀態後即可人工新增，仍須依原流程送審。" : q.canEdit ? "查詢完成，請填寫本批額外開放總量與原因。" : "查詢完成；本批無可編輯門市或供應資料未知，不能調整額度。";
     } catch(error){status.textContent=(saved ? "額度已保存，但更新畫面失敗；請使用更新可申請狀態。" : "")+error.message;}
-    finally {state.dialogBusy=false;buttons.forEach(b=>b.disabled=b.dataset.quotaAction==="save" && !panel._quota?.canEdit);}
+    finally {state.dialogBusy=false;buttons.forEach(([b,disabled])=>b.disabled=b.dataset.quotaAction==="save" ? !panel._quota?.canEdit : disabled);}
   }
 
   async function openBatch(id) {
@@ -1655,6 +1655,8 @@
     $("batch-detail").querySelector(".detail-actions").insertAdjacentHTML("beforebegin", perStoreActions(p));
     $("batch-detail").querySelectorAll("textarea.reason-input").forEach(autoSizeReasonField);
     $("batch-dialog").showModal();
+    const bulkHost=$("batch-detail").querySelector("[data-bulk-supply]");
+    if(bulkHost) window.StoreTransferBulkSupply.mount(bulkHost,{api,batchId:p.batch.id,refresh:refreshBatchSupply,isBusy:()=>Boolean(state.dialogBusy),setBusy:value=>{state.dialogBusy=value;}});
     applyStoreFilter("batch", state.batchStore);
     refreshDialogQuantityWarnings();
   }

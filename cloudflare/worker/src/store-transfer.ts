@@ -182,7 +182,7 @@ function storeReplyDeadline(batch: Record<string, unknown>, store: Record<string
 async function extendStoreReply(request: Request, env: StoreTransferEnv, batchId: string, requestedStore: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (request.headers.get("X-Store-Transfer-Version") !== "20261109-transfer-supply-release-r1") throw new RequestValidationError("回覆期限功能已有新版，請重新載入最新版。", 409);
+  if (request.headers.get("X-Store-Transfer-Version") !== "20261109-transfer-bulk-release-r2") throw new RequestValidationError("回覆期限功能已有新版，請重新載入最新版。", 409);
   const storeCode = visibleStore(requestedStore, who.role, who.storeCode);
   if (!storeCode) throw new RequestValidationError("必須指定門市。");
   const input = await readBody(request, 8192);
@@ -1174,7 +1174,7 @@ async function openApprovedCorrection(request: Request, env: StoreTransferEnv, b
 async function approveBatch(request: Request, env: StoreTransferEnv, batchId: string, saveOnly = false, requestedStore?: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261109-transfer-supply-release-r1") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
+  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261109-transfer-bulk-release-r2") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
   const batch = await env.DB.prepare("SELECT status, revision, proposal_date, arrival_schedule FROM store_transfer_batches WHERE id = ? AND deleted_at IS NULL").bind(batchId).first<Record<string, unknown>>();
   if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
   if (!["open", "review"].includes(String(batch.status))) throw new RequestValidationError("此批次目前不可核准。", 409);
@@ -1565,7 +1565,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
     return json({ hasMore:rows.results.length>100, plans:await Promise.all(rows.results.slice(0,100).map(async raw=>{const row=raw as Record<string,unknown>,current=await currentActivityRecord(env,row);const {source,config,...metadata}=row;return {...metadata,status:current.status,startProposalDate:current.config.startProposalDate || "",...("settingsOutdated" in current?{settingsOutdated:true}:{})};})) });
   }
   requireSameOrigin(request,env);
-  if(request.headers.get("X-Store-Transfer-Version") !== "20261109-transfer-supply-release-r1") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
+  if(request.headers.get("X-Store-Transfer-Version") !== "20261109-transfer-bulk-release-r2") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
   const body = await readBody(request,3_000_000), now = new Date().toISOString();
   if (request.method === "POST" && !id) {
     const source = activitySource(body.source), planId = crypto.randomUUID();
@@ -1616,7 +1616,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
 
 async function supplyRelease(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
   const who=await actor(request,env); assertHq(who.role);
-  if(request.method==="PUT") { requireSameOrigin(request,env); if(request.headers.get("X-Store-Transfer-Version")!=="20261109-transfer-supply-release-r1") throw new RequestValidationError("額度功能已有新版，請重新載入最新版。",409); }
+  if(request.method==="PUT") { requireSameOrigin(request,env); if(request.headers.get("X-Store-Transfer-Version")!=="20261109-transfer-bulk-release-r2") throw new RequestValidationError("額度功能已有新版，請重新載入最新版。",409); }
   const sku=text(new URL(request.url).searchParams.get("sku"),"ERP品號",80).toUpperCase();
   if(!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) throw new RequestValidationError("ERP品號格式錯誤。");
   const batch=await env.DB.prepare("SELECT status,revision FROM store_transfer_batches WHERE id=? AND deleted_at IS NULL").bind(batchId).first<Record<string,unknown>>();
@@ -1647,6 +1647,77 @@ async function supplyRelease(request: Request, env: StoreTransferEnv, batchId: s
   return json({sku,extraQuantity:next,expectedRevision:revision+1});
 }
 
+// Keyword selection is read from this batch snapshot; a single CAS protects the
+// complete release set and its per-SKU audit rows. No business quantity is changed.
+async function bulkSupplyRelease(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
+  const who=await actor(request,env); assertHq(who.role);
+  if(request.method==="PUT") {
+    requireSameOrigin(request,env);
+    if(request.headers.get("X-Store-Transfer-Version")!=="20261109-transfer-bulk-release-r2") throw new RequestValidationError("批次開放已有新版，請重新載入最新版。",409);
+  }
+  const batch=await env.DB.prepare("SELECT status,revision FROM store_transfer_batches WHERE id=? AND deleted_at IS NULL").bind(batchId).first<{status:string;revision:number}>();
+  if(!batch) throw new RequestValidationError("找不到此週調撥批次。",404);
+  const editable=await env.DB.prepare("SELECT COUNT(*) n FROM store_transfer_store_status WHERE batch_id=? AND status NOT IN ('approved','closed') AND erp_created_at IS NULL").bind(batchId).first<{n:number}>();
+  const canEdit=["open","review"].includes(batch.status) && Number(editable?.n || 0)>0;
+  const baseSql=`SELECT c.sku,c.product_name,c.hq_available,c.hq_reserve,c.hq_releasable,
+    COALESCE(r.extra_quantity,0) extra_quantity,COALESCE(u.quantity,0) allocated
+    FROM store_transfer_batch_product_catalog c
+    LEFT JOIN store_transfer_supply_releases r ON r.batch_id=c.batch_id AND r.sku=c.sku
+    LEFT JOIN (SELECT sku,SUM(COALESCE(hq_approved_quantity,store_confirmed_quantity,suggested_quantity)) quantity FROM store_transfer_items WHERE batch_id=? GROUP BY sku) u ON u.sku=c.sku
+    WHERE c.batch_id=?`;
+  if(request.method==="GET") {
+    const url=new URL(request.url), mode=url.searchParams.get("mode") || "name";
+    if(!["name","sku"].includes(mode)) throw new RequestValidationError("查詢方式無效。");
+    const query=text(url.searchParams.get("q"),"查詢文字",80).toLowerCase();
+    const tokens=query.split(/\s+/).filter(Boolean);
+    const column=mode==="sku" ? "c.sku" : "c.product_name";
+    const found=await env.DB.prepare(`${baseSql} AND NOT EXISTS (SELECT 1 FROM json_each(?) term WHERE instr(lower(${column}),term.value)=0) ORDER BY c.sku COLLATE NOCASE LIMIT 10001`).bind(batchId,batchId,JSON.stringify(tokens)).all<Record<string,unknown>>();
+    if(found.results.length>10000) throw new RequestValidationError("搜尋超過10,000個品號，請增加關鍵字縮小範圍，不會截斷結果。",413);
+    const rows=found.results.map(c=>{
+      let error="";
+      try {validateRelease(c.hq_available,c.hq_reserve,c.hq_releasable,Number(c.extra_quantity),Number(c.allocated));} catch(e){error=e instanceof Error?e.message:"供應資料無法確認";}
+      // Existing over-allocation may be resolved by increasing the quota; invalid
+      // base data, however, must never become selectable.
+      let known=true;try{validateRelease(c.hq_available,c.hq_reserve,c.hq_releasable,Number(c.hq_reserve),0);}catch{known=false;}
+      const selectable=canEdit && known && Number(c.hq_reserve)>0;
+      return {sku:c.sku,productName:c.product_name,available:c.hq_available,reserve:c.hq_reserve,baseReleasable:c.hq_releasable,extraQuantity:c.extra_quantity,allocated:c.allocated,maxExtra:known?Number(c.hq_reserve):null,canEdit:selectable,blockedReason:!canEdit?"本批沒有可編輯門市":!known?error || "本批供應資料未知或不一致":Number(c.hq_reserve)<=0?"沒有安全保留量可額外開放":""};
+    });
+    return json({rows,total:rows.length,expectedRevision:batch.revision,query,mode});
+  }
+  if(!canEdit) throw new RequestValidationError("本批沒有可編輯門市，不能批次開放額度。",409);
+  const body=await readBody(request,1_500_000),reason=text(body.reason,"開放原因");
+  if(!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision!==batch.revision) throw new RequestValidationError("批次已由其他同事更新；請重新搜尋並核對，不會開放部分品號。",409);
+  if(!Array.isArray(body.items) || !body.items.length || body.items.length>10000) throw new RequestValidationError("請選取1至10,000個品號。");
+  const items=body.items.map((value:unknown)=>{
+    if(!value || typeof value!=="object") throw new RequestValidationError("開放品項格式錯誤。");
+    const row=value as Record<string,unknown>,sku=text(row.sku,"ERP品號",80).toUpperCase();
+    if(!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku) || typeof row.extraQuantity!=="number") throw new RequestValidationError(`${sku}：品號或開放量格式錯誤。`);
+    return {sku,extraQuantity:quantity(row.extraQuantity,`${sku}開放量`)};
+  });
+  if(new Set(items.map(r=>r.sku)).size!==items.length) throw new RequestValidationError("同一品號不能重複開放。");
+  const rows=await env.DB.prepare(`${baseSql} AND c.sku IN (SELECT json_extract(value,'$.sku') FROM json_each(?))`).bind(batchId,batchId,JSON.stringify(items)).all<Record<string,unknown>>();
+  const bySku=new Map(rows.results.map(row=>[String(row.sku),row]));
+  for(const item of items){
+    const c=bySku.get(item.sku);
+    if(!c) throw new RequestValidationError(`${item.sku}：不在本批商品資料中，整批尚未開放。`,409);
+    try{validateRelease(c.hq_available,c.hq_reserve,c.hq_releasable,item.extraQuantity,Number(c.allocated));}
+    catch(e){throw new RequestValidationError(`${item.sku}：${e instanceof Error?e.message:"無法開放"} 整批尚未開放。`,409);}
+  }
+  const now=new Date().toISOString(),payload=JSON.stringify(items),revision=batch.revision;
+  await guardedBatch(env,batchId,revision,[
+    // Keep the existing UNIQUE(batch_id,batch_revision) audit contract: each SKU
+    // receives a consecutive revision, in the same transaction as the final CAS.
+    env.DB.prepare(`INSERT INTO store_transfer_supply_release_events(batch_id,sku,previous_quantity,extra_quantity,reason,batch_revision,created_at,created_by)
+      SELECT ?,json_extract(j.value,'$.sku'),COALESCE(r.extra_quantity,0),json_extract(j.value,'$.extraQuantity'),?,?+CAST(j.key AS INTEGER)+1,?,?
+      FROM json_each(?) j LEFT JOIN store_transfer_supply_releases r ON r.batch_id=? AND r.sku=json_extract(j.value,'$.sku')`).bind(batchId,reason,revision,now,who.email,payload,batchId),
+    env.DB.prepare(`INSERT INTO store_transfer_supply_releases(batch_id,sku,extra_quantity,reason,updated_at,updated_by)
+      SELECT ?,json_extract(value,'$.sku'),json_extract(value,'$.extraQuantity'),?,?,? FROM json_each(?) WHERE 1
+      ON CONFLICT(batch_id,sku) DO UPDATE SET extra_quantity=excluded.extra_quantity,reason=excluded.reason,updated_at=excluded.updated_at,updated_by=excluded.updated_by`).bind(batchId,reason,now,who.email,payload),
+    env.DB.prepare("UPDATE store_transfer_batches SET revision=revision+?,updated_at=?,updated_by=? WHERE id=?").bind(items.length,now,who.email,batchId)
+  ]);
+  return json({count:items.length,totalExtra:items.reduce((n,r)=>n+r.extraQuantity,0),expectedRevision:revision+items.length});
+}
+
 export async function storeTransferRoute(request: Request, env: StoreTransferEnv): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/store-transfer")) return null;
@@ -1675,6 +1746,8 @@ export async function storeTransferRoute(request: Request, env: StoreTransferEnv
   if (collaborationMatch && request.method === "DELETE") return deleteCollaborationDraft(request, env, decodeURIComponent(collaborationMatch[1]));
   if (url.pathname === "/api/store-transfer/batches" && request.method === "GET") return listBatches(request, env);
   if (url.pathname === "/api/store-transfer/batches" && request.method === "POST") return createBatch(request, env);
+  const bulkSupplyMatch=url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/supply-releases$/);
+  if(bulkSupplyMatch && ["GET","PUT"].includes(request.method)) return bulkSupplyRelease(request,env,decodeURIComponent(bulkSupplyMatch[1]));
   const supplyReleaseMatch=url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/supply-release$/);
   if(supplyReleaseMatch && ["GET","PUT"].includes(request.method)) return supplyRelease(request,env,decodeURIComponent(supplyReleaseMatch[1]));
   const manualItemFactMatch = url.pathname.match(/^\/api\/store-transfer\/batches\/([^/]+)\/manual-item-fact$/);

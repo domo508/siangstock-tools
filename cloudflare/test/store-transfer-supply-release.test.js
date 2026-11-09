@@ -12,7 +12,7 @@ const id = 'TR-PER-STORE';
 const hq = 'siang01@siangapato.com.tw';
 const email = { R00: 'tpzssa@siangapato.com.tw', R01: 'txg_sianga_pato@siangapato.com.tw' };
 async function call(path, method = 'GET', body, actor = hq) {
-  return storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer${path}`, { method, headers: { Origin: 'https://siangstock.com', 'Content-Type': 'application/json', 'X-Test-Email': actor, 'X-Store-Transfer-Version': '20261109-transfer-supply-release-r1' }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
+  return storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer${path}`, { method, headers: { Origin: 'https://siangstock.com', 'Content-Type': 'application/json', 'X-Test-Email': actor, 'X-Store-Transfer-Version': '20261109-transfer-bulk-release-r2' }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
 }
 const detail = async () => (await call(`/batches/${id}`)).json();
 const items = store => ['PASS', 'EDIT', 'ZERO'].map(sku => ({storeCode:store,sku,productName:`合成${sku}`,suggestedQuantity:2,itemType:'regular',calculationDate:'2026-11-04',decisionSnapshot:{hqAvailable:20,hqReleasable:20,hqSupplyCeiling:20}}));
@@ -97,4 +97,43 @@ it('既有列加量及總部人工新增都採有效額度；歸零不以預設�
  await expect(call(`/batches/${id}/hq-save`,'PUT',{items:rows,expectedRevision:p.batch.revision})).rejects.toThrow(/可供應/);
  rows.at(-1).approvedQuantity=1;expect((await call(`/batches/${id}/hq-save`,'PUT',{items:rows,expectedRevision:p.batch.revision})).status).toBe(200);
  await expect(add('R00',3)).rejects.toThrow(/供應/);
+});
+
+function bulkFixture(n=60){for(let i=0;i<n;i++)sql.prepare("INSERT INTO store_transfer_batch_product_catalog(batch_id,sku,product_name,hq_available,hq_reserve,hq_releasable,created_at) VALUES(?,?,?,?,?,?,'2026-11-02')").run(id,`BULK${String(i).padStart(3,'0')}`,`合成系列天絲 ${i}`,20,15,5);}
+async function searchBulk(q='合成系列天絲',actor=hq,mode='name'){return (await call(`/batches/${id}/supply-releases?q=${encodeURIComponent(q)}&mode=${mode}`,'GET',undefined,actor)).json();}
+async function putBulk(items,revision,reason='合成系列需求',actor=hq){return call(`/batches/${id}/supply-releases`,'PUT',{items,expectedRevision:revision,reason},actor);}
+it('批次60品號原子開放且逐品號稽核，搜尋本批品名及品號，不改申請建議',async()=>{
+ bulkFixture();const before=await detail(),p=await searchBulk();expect(p.total).toBe(60);expect(p.rows.every(r=>r.canEdit && r.maxExtra===15)).toBe(true);
+ expect((await searchBulk('系列天絲 12')).rows.map(r=>r.sku)).toEqual(['BULK012']);expect((await searchBulk('bulk00',hq,'sku')).total).toBe(10);expect((await searchBulk('%')).total).toBe(0);
+ expect(await (await putBulk(p.rows.map(r=>({sku:r.sku,extraQuantity:3})),p.expectedRevision)).json()).toMatchObject({count:60,totalExtra:180});
+ const audit=sql.prepare('SELECT batch_revision,previous_quantity,extra_quantity FROM store_transfer_supply_release_events').all();expect(audit).toHaveLength(60);expect(new Set(audit.map(r=>r.batch_revision)).size).toBe(60);expect(audit.every(r=>r.previous_quantity===0 && r.extra_quantity===3)).toBe(true);
+ const after=await detail();expect(after.items).toEqual(before.items);expect(after.batch.suggested_quantity).toBe(before.batch.suggested_quantity);expect(after.batch.revision).toBe(before.batch.revision+60);expect((await searchBulk()).rows.every(r=>r.extraQuantity===3)).toBe(true);
+ const q=await (await call(`/batches/${id}/supply-release?sku=BULK000`)).json();expect((await call(`/batches/${id}/supply-release?sku=BULK000`,'PUT',{extraQuantity:2,reason:'合成減少',expectedRevision:q.expectedRevision})).status).toBe(200);
+});
+it('任一品號超量／不存在／重複／空值／未知供應／空原因及門市權限均整批拒絕',async()=>{
+ bulkFixture(3);const p=await searchBulk(),items=p.rows.map(r=>({sku:r.sku,extraQuantity:2}));
+ await expect(searchBulk('天絲',email.R00)).rejects.toThrow(/總部/);await expect(putBulk(items,p.expectedRevision,'原因',email.R00)).rejects.toThrow(/總部/);
+ for(const bad of [[...items,{sku:'UNKNOWN',extraQuantity:1}],items.map((r,i)=>({...r,extraQuantity:i?2:16})),[items[0],items[0]],items.map((r,i)=>({...r,extraQuantity:i?2:null})),items.map((r,i)=>({...r,extraQuantity:i?2:1.1}))])await expect(putBulk(bad,p.expectedRevision)).rejects.toThrow();
+ await expect(putBulk(items,p.expectedRevision,'')).rejects.toThrow(/原因/);
+ sql.prepare("UPDATE store_transfer_batch_product_catalog SET hq_reserve=NULL WHERE sku='BULK001'").run();expect((await searchBulk()).rows.find(r=>r.sku==='BULK001').canEdit).toBe(false);await expect(putBulk(items,p.expectedRevision)).rejects.toThrow(/BULK001/);
+ sql.prepare("UPDATE store_transfer_batches SET status='approved' WHERE id=?").run(id);await expect(putBulk(items,p.expectedRevision)).rejects.toThrow(/沒有可編輯/);
+ expect(sql.prepare('SELECT COUNT(*) n FROM store_transfer_supply_releases').get().n).toBe(0);expect(sql.prepare('SELECT COUNT(*) n FROM store_transfer_supply_release_events').get().n).toBe(0);
+});
+it('批次競爭及中途寫入故障會回滾所有額度與稽核',async()=>{
+ bulkFixture(3);const p=await searchBulk(),items=p.rows.map(r=>({sku:r.sku,extraQuantity:2}));beforeTransaction=()=>sql.prepare('UPDATE store_transfer_batches SET revision=revision+1 WHERE id=?').run(id);
+ await expect(putBulk(items,p.expectedRevision)).rejects.toThrow(/更新/);expect(sql.prepare('SELECT COUNT(*) n FROM store_transfer_supply_release_events').get().n).toBe(0);
+ const latest=await searchBulk();sql.exec("CREATE TRIGGER fail_bulk BEFORE INSERT ON store_transfer_supply_releases WHEN NEW.sku='BULK001' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;");
+ await expect(putBulk(items,latest.expectedRevision)).rejects.toThrow(/synthetic failure/);expect(sql.prepare('SELECT COUNT(*) n FROM store_transfer_supply_releases').get().n).toBe(0);expect(sql.prepare('SELECT COUNT(*) n FROM store_transfer_supply_release_events').get().n).toBe(0);expect((await detail()).batch.revision).toBe(latest.expectedRevision);
+});
+it('批次開放接續門市共用、歸零、送出、總部核准與實際XLSX／ERP守恆',async()=>{
+ quotaFixture();const p=await searchBulk('安全保留');await putBulk([{sku:'RELEASE',extraQuantity:3}],p.expectedRevision);await add('R00',2);await expect(add('R01',2)).rejects.toThrow(/供應/);await add('R01',1);
+ const q=await searchBulk('安全保留');await expect(putBulk([{sku:'RELEASE',extraQuantity:2}],q.expectedRevision)).rejects.toThrow(/低於/);await add('R00',0);await add('R00',0,true);await add('R01',1,true);
+ const d=await detail();await call(`/batches/${id}/approve`,'POST',{expectedRevision:d.batch.revision,items:d.items.map(i=>({storeCode:i.store_code,sku:i.sku,itemType:i.item_type,approvedQuantity:i.store_confirmed_quantity ?? i.suggested_quantity,reason:'合成覆核'}))});
+ const files=browser.StoreTransferWorkflow.prepareExports(await detail(),['R00','R01'],browser.StoreTransferCore,browser.XLSX);expect(files).toHaveLength(2);
+ for(const f of files){const wb=browser.XLSX.read(browser.XLSX.write(f.workbook,{type:'array',bookType:'xlsx'}),{type:'array',cellDates:true,cellStyles:true,nodim:true});expect(browser.XLSX.utils.sheet_to_json(wb.Sheets['通用貨品數量']).reduce((s,r)=>s+Number(r.數量),0)).toBe(f.filename.includes('_R00_')?6:7);}
+});
+it('批次開放保留同源／版本防護，舊版與過時查詢不得寫入',async()=>{
+ bulkFixture(2);const p=await searchBulk(),body={items:p.rows.map(r=>({sku:r.sku,extraQuantity:1})),reason:'合成需求',expectedRevision:p.expectedRevision};
+ for(const headers of [{Origin:'https://elsewhere.example','X-Store-Transfer-Version':'20261109-transfer-bulk-release-r2'},{Origin:'https://siangstock.com','X-Store-Transfer-Version':'old'}]) await expect(storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer/batches/${id}/supply-releases`,{method:'PUT',headers:{...headers,'Content-Type':'application/json','X-Test-Email':hq},body:JSON.stringify(body)}),env)).rejects.toThrow();
+ await expect(putBulk(body.items,p.expectedRevision+1)).rejects.toThrow(/更新/);expect(sql.prepare('SELECT COUNT(*) n FROM store_transfer_supply_releases').get().n).toBe(0);
 });
