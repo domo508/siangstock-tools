@@ -4,9 +4,10 @@ import vm from 'node:vm';
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 vi.mock('../worker/src/access',()=>({verifyCompanyUser:vi.fn(async r=>{if(!r.headers.get('X-Test-Email'))throw new Error('需要登入');return r.headers.get('X-Test-Email');}),verifyAdmin:vi.fn()}));
 import { procurementRoute } from '../worker/src/procurement';
-const ctx={console,Uint8Array,ArrayBuffer,TextEncoder,TextDecoder};vm.createContext(ctx);
+const ctx={console,Uint8Array,ArrayBuffer,TextEncoder,TextDecoder,setTimeout,clearTimeout,setImmediate,clearImmediate};vm.createContext(ctx);
 vm.runInContext(readFileSync('../procurement-planning/assets/xlsx-js-style.bundle.js','utf8'),ctx);const W=ctx.XLSX;
 for(const path of ['../inventory/assets/xlsx.full.min.js','../procurement-planning/core.js','../procurement-planning/puyouma-order.js'])vm.runInContext(readFileSync(path,'utf8'),ctx);
+vm.runInContext(readFileSync('../cost-analysis/assets/jszip.min.js','utf8'),ctx);
 const R=ctx.XLSX,api=ctx.PuyoumaOrder,core=ctx.ProcurementPlanningCore;
 const roundtrip=wb=>R.read(W.write(wb,{type:'array',bookType:'xlsx',cellStyles:true}),{type:'array',cellDates:true,cellStyles:true,nodim:true});
 function source(data=[['V2','B2','供應商名稱二',200,0],['V1','B1','供應商名稱一',100,20]]){
@@ -19,6 +20,17 @@ describe('普優瑪專屬格式',()=>{
   const p=payload(),s=source(),before=JSON.stringify([p,s]);const result=api.buildOrder(p,s,W,{shipmentDate:'2026-11-06'}),out=roundtrip(result.workbook),rows=R.utils.sheet_to_json(out.Sheets['普'],{header:1,defval:''});
   expect(out.SheetNames).toEqual(['普']);expect(rows).toEqual([['產品編號','編號','商品名稱','成品價','最新\n庫存\n11/9','11/6出貨','排序'],['V2','B2','供應商名稱二',200,0,5,1],['V1','B1','供應商名稱一',100,20,3,2]]);
   expect(result.quantity).toBe(8);expect(JSON.stringify([p,s])).toBe(before);expect(out.Sheets['普'].E1.s.fgColor.rgb).toBe('FFCC99');expect(out.Sheets['普']['!cols'][2].wch).toBeGreaterThan(50);
+ });
+ it('多行庫存欄首保留在表格，但不寫入會觸發Excel修復的核心描述換行',async()=>{
+  const result=api.buildOrder(payload(),source(),W,{shipmentDate:'2026-11-06'});
+  const zip=await ctx.JSZip.loadAsync(W.write(result.workbook,{type:'array',bookType:'xlsx',compression:true}));
+  const props=await zip.file('docProps/core.xml').async('string');
+  expect(props).not.toContain('xml:space');
+  expect(props).toContain('庫存欄：最新 庫存 11/9。');
+  expect(props).toContain('SYNTH-PUY v2');
+  expect(result.workbook.Sheets['普'].E1.v).toBe('最新\n庫存\n11/9');
+  const rows=R.utils.sheet_to_json(roundtrip(result.workbook).Sheets['普'],{header:1,defval:''});
+  expect(rows.slice(1).reduce((sum,row)=>sum+row[5],0)).toBe(8);
  });
  it.each(['','2026-02-30','2026-13-01','11/6','2026-11-06junk'])('空白或無效日期%s阻擋',date=>expect(()=>api.buildOrder(payload(),source(),W,{shipmentDate:date})).toThrow(/日期/));
  it('只用確認採購量，ERP預設0不誤判取消；確認0不回退，其他供應商不混入',()=>{

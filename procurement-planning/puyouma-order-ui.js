@@ -9,7 +9,7 @@
       let valid = false; try { api.shipmentDate(date.value); valid = true; } catch (_) { /* A blank date is deliberately required. */ }
       download.disabled = busy || !payload || !source || !valid;
       date.disabled = busy; file.disabled = busy;
-      find("load").disabled = busy; find("authorize").disabled = busy;
+      find("load").disabled = busy || Boolean(source); find("authorize").disabled = busy || Boolean(source);
     }
     async function batchData(id) {
       const response = await fetch(`/api/procurement/batches/${encodeURIComponent(id)}/supplier-order`, { cache: "no-store", headers: { Accept: "application/json" } });
@@ -18,6 +18,7 @@
       return result;
     }
     async function loadSource(authorize = false) {
+      if (busy || source) return;
       const run = sequence; source = null; busy = true; update(); sourceStatus.textContent = "正在讀取最新普優瑪寄庫表…";
       try {
         if (!(await ensureCurrent())) throw new Error("請先確認或重新載入最新版，資料保留。");
@@ -26,7 +27,7 @@
         const result = await googleSources.loadPuyoumaConsignment(getConfig(), reader);
         if (run !== sequence) return;
         source = api.parseSource(result.workbook, reader, core);
-        sourceStatus.textContent = `已讀取線上寄庫表；庫存欄：${source.currentHeader}。讀取時間：${new Date(result.metadata.fetchedAt).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" })}（台北）。`;
+        sourceStatus.textContent = `寄庫資料已就緒。已讀取線上寄庫表；庫存欄：${source.currentHeader}。讀取時間：${new Date(result.metadata.fetchedAt).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" })}（台北）。`;
         message(date.value ? "下一步：核對批次與出貨日期後，按「確認匯出」。" : "下一步：填寫出貨日期，再按「確認匯出」。");
       } catch (error) { if (run === sequence) { sourceStatus.textContent = `來源尚未就緒：${error.message}`; message("下一步：完成寄庫來源讀取並填寫出貨日期。"); } }
       finally { if (run === sequence) { busy = false; update(); } }
@@ -41,7 +42,7 @@
         if (!(await ensureCurrent())) throw new Error("請先確認或重新載入最新版，資料保留。");
         const workbook = await readWorkbook(selected); if (run !== sequence) return;
         source = api.parseSource(workbook, reader, core);
-        sourceStatus.textContent = `手動寄庫來源：${selected.name}；庫存欄：${source.currentHeader}。請確認這是最新寄庫表。`;
+        sourceStatus.textContent = `寄庫資料已就緒。手動寄庫來源：${selected.name}；庫存欄：${source.currentHeader}。請確認這是最新寄庫表。`;
         message(date.value ? "下一步：核對批次與出貨日期後，按「確認匯出」。" : "下一步：填寫出貨日期。");
       } catch (error) { if (run === sequence) { sourceStatus.textContent = `手動來源失敗：${error.message}`; message("下一步：修正寄庫表後重新選檔。"); } }
       finally { if (run === sequence) { busy = false; update(); } }

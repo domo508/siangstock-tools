@@ -67,15 +67,17 @@
     sheet["!margins"] = { left: .3, right: .3, top: .5, bottom: .5, header: .2, footer: .2 };
     for (let r = 0; r < data.length; r++) for (let c = 0; c < 7; c++) {
       const cell = sheet[XLSX.utils.encode_cell({ r, c })];
-      cell.s = { fill: { patternType: "solid", fgColor: { rgb: "FFFFFF" } }, font: { name: "微軟正黑體", sz: 11, bold: r === 0, color: { rgb: "000000" } }, alignment: { vertical: "center", horizontal: c < 3 ? "left" : "center", wrapText: true }, border: Object.fromEntries(["top", "bottom", "left", "right"].map(side => [side, { style: "thin", color: { rgb: "D8E4E8" } }])) };
-      if (r === 0 && c < 5) cell.s.fill = { patternType: "solid", fgColor: { rgb: c === 4 ? "FFCC99" : "C0C0C0" } };
+      cell.s = { fill: { patternType: "solid", fgColor: { rgb: "FFFFFFFF" } }, font: { name: "微軟正黑體", sz: 11, bold: r === 0, color: { rgb: "FF000000" } }, alignment: { vertical: "center", horizontal: c < 3 ? "left" : "center", wrapText: true }, border: Object.fromEntries(["top", "bottom", "left", "right"].map(side => [side, { style: "thin", color: { rgb: "FFD8E4E8" } }])) };
+      if (r === 0 && c < 5) cell.s.fill = { patternType: "solid", fgColor: { rgb: c === 4 ? "FFFFCC99" : "FFC0C0C0" } };
       if (r > 0 && c >= 3) cell.z = c === 3 ? "#,##0.##" : "#,##0.###";
     }
     const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, sheet, "普");
     const quantity = rows.reduce((total, row) => total + row.quantity, 0);
     const exported = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }).slice(1);
     if (exported.length !== rows.length || exported.reduce((total, row) => total + Number(row[5]), 0) !== quantity) throw new Error("匯出品項或數量核對失敗，已停止下載。");
-    workbook.Props = { Title: "普優瑪專屬採購單", Subject: `${batch.id} v${batch.revision}；出貨${date.iso}；${rows.length}品號／${quantity}件`, Comments: `庫存欄：${source.currentHeader}。價格及庫存來自本次讀取寄庫表；下載不代表再次下單。` };
+    // Keep core metadata on one line: Excel rejects the writer's xml:space
+    // attribute on a multiline dc:description. The visible stock header stays multiline.
+    workbook.Props = { Title: "普優瑪專屬採購單", Subject: `${batch.id} v${batch.revision}；出貨${date.iso}；${rows.length}品號／${quantity}件`, Comments: `庫存欄：${text(source.currentHeader).replace(/\s+/g, " ")}。價格及庫存來自本次讀取寄庫表；下載不代表再次下單。` };
     return { workbook, rows, quantity, shipmentDate: date.iso, fileName: `${String(batch.id).replace(/[\\/:*?"<>|]/g, "-")}_普優瑪_${date.iso}_採購單.xlsx` };
   }
   global.PuyoumaOrder = { isPuyouma, shipmentDate, parseSource, buildOrder };
