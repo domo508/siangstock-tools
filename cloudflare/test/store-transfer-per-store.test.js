@@ -12,7 +12,7 @@ const id = 'TR-PER-STORE';
 const hq = 'siang01@siangapato.com.tw';
 const email = { R00: 'tpzssa@siangapato.com.tw', R01: 'txg_sianga_pato@siangapato.com.tw' };
 async function call(path, method = 'GET', body, actor = hq) {
-  return storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer${path}`, { method, headers: { Origin: 'https://siangstock.com', 'Content-Type': 'application/json', 'X-Test-Email': actor, 'X-Store-Transfer-Version': '20261111-transfer-change-filter-r1' }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
+  return storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer${path}`, { method, headers: { Origin: 'https://siangstock.com', 'Content-Type': 'application/json', 'X-Test-Email': actor, 'X-Store-Transfer-Version': '20261111-transfer-change-filter-r2' }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
 }
 const detail = async () => (await call(`/batches/${id}`)).json();
 const items = store => ['PASS', 'EDIT', 'ZERO'].map(sku => ({storeCode:store,sku,productName:`合成${sku}`,suggestedQuantity:2,itemType:'regular',calculationDate:'2026-11-04',decisionSnapshot:{hqAvailable:20,hqReleasable:20,hqSupplyCeiling:20,...(sku==='PASS'?{salesBasisVersion:2,warehouseDemandSales42:42,replenishmentSales42:46}:{} )}}));

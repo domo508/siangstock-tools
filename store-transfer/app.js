@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261111-transfer-change-filter-r1";
+  const APP_VERSION = "20261111-transfer-change-filter-r2";
   const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", batchChangesOnly: false, files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -956,6 +956,12 @@
     return `${start}<td data-label="品項">${itemIdentity(row)}</td><td data-label="系統建議" class="decision-quantity">${row.suggestedQuantity}</td><td data-label="建議後">${escapeHtml(row.systemSellThroughDate)}</td><td data-label="到貨風險"><span class="risk-label ${row.preArrivalStockoutRisk ? "warn" : "safe"}">${row.preArrivalStockoutRisk ? "有缺貨空窗" : "可支撐到店"}</span></td></tr>${detailRow(id, 6, [evidence(row.salesBasisVersion === 2 ? "近42天現場／納入補貨的總倉配貨" : "近42天現場／B3銷售", `${row.localSales42}／${row.salesBasisVersion === 2 ? row.warehouseDemandSales42 : row.b3Sales42}件`), evidence("現有實體庫存", `${row.physicalInventory}件`), evidence("待發貨／在途", `${row.pendingSubmittedQuantity}／${row.inTransitQuantity}件`), evidence("目標／不可售展示", `${Number(row.targetQuantity).toFixed(1)}／${row.displayQuantity}件`), evidence("本批／下一輪到店", `${row.currentArrivalDate}／${row.nextArrivalDate}`), evidence("系統判斷", row.ruleSummary, true)].join(""))}`;
   }
 
+  function renderB3Audit(calculation) {
+    $("b3-audit").hidden = !calculation.b3Audit.pendingCount && calculation.salesBasisVersion !== 2;
+    $("b3-audit").innerHTML = calculation.b3Audit.pendingCount ? `<strong>B3待人工確認：</strong>${calculation.b3Audit.pendingRows.slice(0, 20).map((row) => `${escapeHtml(row.storeCode)}／${escapeHtml(row.sku)}／來源單${escapeHtml(row.sourceOrder || "未填")}`).join("、")}${calculation.b3Audit.pendingCount > 20 ? "…" : ""}。這些資料未納入B3與門市能力。` : "";
+    if (calculation.salesBasisVersion === 2) $("b3-audit").insertAdjacentHTML("beforeend", `<p>總倉配貨補貨判斷：${calculation.b3Audit.warehouseDemandIncludedCount}筆納入；備註開頭@排除，其後文字不影響。近42天現場銷售加符合規則的總倉配貨作為需求基準，B3不再重複加一次；缺少備註欄會停止計算。</p>`);
+  }
+
   async function calculate() {
     if (!(await checkRuntimeVersion())) return;
     const stores = selectedStores(); if (!stores.length) throw new Error("請至少勾選一間門市。");
@@ -1039,9 +1045,7 @@
       $("publish-collaboration-button").disabled = mode !== "comparison";
       const impact = state.calculation.companyImpact;
       $("company-impact").innerHTML = `<strong>寬承／寬沐成本流向：</strong>寬沐調撥收貨${impact.kuanmuTransferCount}筆、B3代出${impact.kuanmuB3Count}筆；原始供貨成本${formatCurrency(impact.kuanmuBaseCost)}，寬承對寬沐計價參考${formatCurrency(impact.kuanmuIntercompanyRevenue)}（成本×1.11）。合併檢視時抵銷公司間計價，只保留原始成本。`;
-      $("b3-audit").hidden = !state.calculation.b3Audit.pendingCount;
-      $("b3-audit").innerHTML = state.calculation.b3Audit.pendingCount ? `<strong>B3待人工確認：</strong>${state.calculation.b3Audit.pendingRows.slice(0, 20).map((row) => `${escapeHtml(row.storeCode)}／${escapeHtml(row.sku)}／來源單${escapeHtml(row.sourceOrder || "未填")}`).join("、")}${state.calculation.b3Audit.pendingCount > 20 ? "…" : ""}。這些資料未納入B3與門市能力。` : "";
-      if (state.calculation.salesBasisVersion === 2) $("b3-audit").insertAdjacentHTML("beforeend", `<p>總倉配貨補貨判斷：${state.calculation.b3Audit.warehouseDemandIncludedCount}筆納入；備註開頭@排除，其後文字不影響。近42天現場銷售加符合規則的總倉配貨作為需求基準，B3不再重複加一次；缺少備註欄會停止計算。</p>`);
+      renderB3Audit(state.calculation);
       $("calculation-rows").innerHTML = state.calculation.regularRows.length ? state.calculation.regularRows.map((row) => previewRow(row, "regular")).join("") : '<tr><td colspan="6">本週沒有一般必要補貨。</td></tr>';
       $("special-stock-results").hidden = !state.calculation.specialStockRows.length;
       $("special-stock-rows").innerHTML = state.calculation.specialStockRows.map((row) => previewRow(row, "special")).join("");

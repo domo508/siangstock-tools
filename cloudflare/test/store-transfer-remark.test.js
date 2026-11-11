@@ -62,3 +62,5 @@ describe('備註開頭@與週補貨需求',()=>{
   expect(JSON.stringify(run(a).regularRows)).not.toContain('一般備註');
  });
 });
+
+it('補貨備註規則提示在配對皆成功時仍顯示，舊版無提醒維持收合',()=>{const src=readFileSync('../store-transfer/app.js','utf8'),fn=src.match(/  function renderB3Audit\([^]*?\n  \}/)[0],el={hidden:true,innerHTML:'',insertAdjacentHTML(_p,text){this.innerHTML+=text;}};const c={$:()=>el,escapeHtml:x=>x};vm.createContext(c);vm.runInContext(fn,c);c.renderB3Audit({salesBasisVersion:2,b3Audit:{pendingCount:0,warehouseDemandIncludedCount:1}});expect(el.hidden).toBe(false);expect(el.innerHTML).toContain('1筆納入');c.renderB3Audit({salesBasisVersion:1,b3Audit:{pendingCount:0}});expect(el.hidden).toBe(true);});
