@@ -12,10 +12,10 @@ const id = 'TR-PER-STORE';
 const hq = 'siang01@siangapato.com.tw';
 const email = { R00: 'tpzssa@siangapato.com.tw', R01: 'txg_sianga_pato@siangapato.com.tw' };
 async function call(path, method = 'GET', body, actor = hq) {
-  return storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer${path}`, { method, headers: { Origin: 'https://siangstock.com', 'Content-Type': 'application/json', 'X-Test-Email': actor, 'X-Store-Transfer-Version': '20261109-transfer-bulk-release-r3' }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
+  return storeTransferRoute(new Request(`https://siangstock.com/api/store-transfer${path}`, { method, headers: { Origin: 'https://siangstock.com', 'Content-Type': 'application/json', 'X-Test-Email': actor, 'X-Store-Transfer-Version': '20261111-transfer-change-filter-r1' }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
 }
 const detail = async () => (await call(`/batches/${id}`)).json();
-const items = store => ['PASS', 'EDIT', 'ZERO'].map(sku => ({storeCode:store,sku,productName:`合成${sku}`,suggestedQuantity:2,itemType:'regular',calculationDate:'2026-11-04',decisionSnapshot:{hqAvailable:20,hqReleasable:20,hqSupplyCeiling:20}}));
+const items = store => ['PASS', 'EDIT', 'ZERO'].map(sku => ({storeCode:store,sku,productName:`合成${sku}`,suggestedQuantity:2,itemType:'regular',calculationDate:'2026-11-04',decisionSnapshot:{hqAvailable:20,hqReleasable:20,hqSupplyCeiling:20,...(sku==='PASS'?{salesBasisVersion:2,warehouseDemandSales42:42,replenishmentSales42:46}:{} )}}));
 const storeRows = store => items(store).map(item => ({...item,confirmedQuantity:2,reason:''}));
 async function submit(store) { return call(`/batches/${id}/stores/${store}/submit`, 'PUT', {items:storeRows(store)}, email[store]); }
 async function approve(store, changed=false) {
@@ -302,3 +302,5 @@ it('同週重建不可取消部分核准批次，原門市與ERP紀錄不變',as
   const after=await detail();expect(after.batch).toEqual(p.batch);expect(after.storeStatuses).toEqual(p.storeStatuses);expect(after.events).toEqual(p.events);
   expect(sql.prepare("SELECT COUNT(*) n FROM store_transfer_batches WHERE id='TR-NEW'").get().n).toBe(0);
 });
+
+it('新補貨銷售快照經正式API保存後仍保留數字，不保存備註原文',async()=>{const p=await detail(),snap=JSON.parse(p.items.find(i=>i.sku==='PASS').decision_snapshot);expect(snap).toMatchObject({salesBasisVersion:2,warehouseDemandSales42:42,replenishmentSales42:46});expect(snap.remark).toBeUndefined();});

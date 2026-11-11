@@ -1,7 +1,7 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261109-transfer-bulk-release-r3";
-  const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
+  const APP_VERSION = "20261111-transfer-change-filter-r1";
+  const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", batchChangesOnly: false, files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
   const outputXlsx = globalThis.ProcurementXlsxWriter || inputXlsx;
@@ -416,6 +416,7 @@
       decisionSnapshot: {
         ...(row.activityDemandSchedule ? {activityDemandSchedule:row.activityDemandSchedule,activityAdditionalQuantity:row.activityAdditionalQuantity || 0} : {}),
         localSales42: row.localSales42, b3Sales42: row.b3Sales42,
+        ...(row.salesBasisVersion === 2 ? {salesBasisVersion:2,replenishmentSales42:row.replenishmentSales42,warehouseDemandSales42:row.warehouseDemandSales42} : {}),
         physicalInventory: row.physicalInventory, pendingSubmittedQuantity: row.pendingSubmittedQuantity,
         inTransitQuantity: row.inTransitQuantity, currentQuantity: row.currentInventory,
         targetQuantity: row.targetQuantity,
@@ -592,6 +593,36 @@
     return `<section class="sku-search-toolbar" aria-label="依ERP品號搜尋"><label><span>搜尋ERP品號</span><input type="search" value="${escapeHtml(query)}" placeholder="輸入完整或部分品號，例如 A101110" autocomplete="off" data-sku-filter-scope="${scope}"></label><button class="secondary-button compact" type="button" data-clear-sku-filter="${scope}">清除</button><p class="status-line" data-sku-filter-summary>輸入品號後，會彙總分配門市、筆數與件數。</p></section>`;
   }
 
+  function changeFilterBar() {
+    if (state.config.role === "store") return "";
+    return `<section class="change-filter-toolbar" aria-label="異動品項篩選"><button type="button" class="store-filter-button" data-changes-only aria-pressed="false">只看異動品項</button><p>搭配上方門市與品號篩選，查看人工新增、改量、取消或填寫原因的商品（含總部覆核異動）。只篩選畫面，不改變核准與匯出範圍。</p><p data-change-filter-summary role="status" aria-live="polite"></p></section>`;
+  }
+
+  function rowHasChanges(row) {
+    if (!row.dataset.itemType) return false;
+    if (row.dataset.manual === "true") return true;
+    const suggested = Number(row.dataset.suggested || 0);
+    const confirmed = row.querySelector("[data-confirmed]");
+    const approved = row.querySelector("[data-approved]");
+    const confirmedQuantity = confirmed ? Number(confirmed.value) : suggested;
+    const approvedQuantity = approved ? Number(approved.value) : confirmedQuantity;
+    return confirmedQuantity !== suggested || approvedQuantity !== confirmedQuantity
+      || ["[data-reason]", "[data-hq-reason]"].some(selector => String(row.querySelector(selector)?.value || "").trim());
+  }
+
+  function refreshChangeFilterSummary(root) {
+    const summary = root.querySelector("[data-change-filter-summary]");
+    if (!summary) return;
+    const rows = [...root.querySelectorAll("tr[data-item-type]")].filter(row => !row.hidden);
+    const changed = rows.filter(rowHasChanges).length;
+    summary.textContent = state.batchChangesOnly
+      ? changed ? `目前顯示 ${changed} 筆異動品項（含取消量0）。${rows.length > changed ? "編輯後恢復原量的列暫時保留，重新篩選後更新。" : "再次點選可顯示全部。"}` : "目前範圍沒有異動品項；可切換門市、清除品號或關閉異動篩選。"
+      : `目前顯示 ${rows.length} 筆商品，其中 ${changed} 筆有異動（含取消量0）。`;
+    const button = root.querySelector("[data-changes-only]");
+    button?.setAttribute("aria-pressed", String(state.batchChangesOnly));
+    button?.classList.toggle("is-active", Boolean(state.batchChangesOnly));
+  }
+
   function allocationQuantity(row, scope) {
     if (scope === "batch") {
       const approved = row.querySelector("[data-approved]");
@@ -653,7 +684,8 @@
     root.querySelectorAll("[data-store-row]").forEach((row) => {
       const storeMatches = storeCode === "all" || row.dataset.store === storeCode;
       const skuMatches = !skuQuery || String(row.dataset.sku || "").toLocaleUpperCase("en-US").includes(skuQuery);
-      row.hidden = !(storeMatches && skuMatches);
+      const changeMatches = scope !== "batch" || state.config.role === "store" || !state.batchChangesOnly || rowHasChanges(row);
+      row.hidden = !(storeMatches && skuMatches && changeMatches);
     });
     refreshShortageProductSummaries(root);
     syncQuantityWarningVisibility(root);
@@ -667,6 +699,7 @@
       section.hidden = rows.length > 0 && !rows.some((row) => !row.hidden);
     });
     refreshSkuFilterSummary(scope);
+    if (scope === "batch") refreshChangeFilterSummary(root);
   }
 
   function syncQuantityWarningVisibility(root) {
@@ -920,7 +953,7 @@
     const start = `<tr data-store-row data-store="${escapeHtml(row.storeCode)}" data-sku="${escapeHtml(row.sku)}"${allocation}><td class="decision-toggle-cell" data-label="判斷依據">${detailButton(id)}</td><td data-label="門市">${row.storeCode}</td>`;
     if (kind === "special") return `${start}<td data-label="品項">${itemIdentity(row)}</td><td data-label="系統建議" class="decision-quantity">${row.suggestedQuantity}</td><td data-label="建議後">${escapeHtml(row.systemSellThroughDate)}</td></tr>${detailRow(id, 5, [evidence("近42天現場銷售", `${row.localSales42}件`), evidence("現有實體庫存", `${row.physicalInventory}件`), evidence("待發貨／在途", `${row.pendingSubmittedQuantity}／${row.inTransitQuantity}件`), evidence("系統判斷", row.ruleSummary, true)].join(""))}`;
     if (kind === "consumable") return `${start}<td data-label="品項">${itemIdentity(row)}</td><td data-label="系統建議" class="decision-quantity">${row.suggestedQuantity / 100}箱／${row.suggestedQuantity}個</td><td data-label="建議後">${escapeHtml(row.systemSellThroughDate)}</td></tr>${detailRow(id, 5, [evidence("現有實體庫存", `${row.physicalInventory}個`), evidence("待發貨／在途", `${row.pendingSubmittedQuantity}／${row.inTransitQuantity}個`), evidence("週均耗用", `${row.averageWeeklyUsage.toFixed(1)}個`), evidence("系統判斷", row.ruleSummary, true)].join(""))}`;
-    return `${start}<td data-label="品項">${itemIdentity(row)}</td><td data-label="系統建議" class="decision-quantity">${row.suggestedQuantity}</td><td data-label="建議後">${escapeHtml(row.systemSellThroughDate)}</td><td data-label="到貨風險"><span class="risk-label ${row.preArrivalStockoutRisk ? "warn" : "safe"}">${row.preArrivalStockoutRisk ? "有缺貨空窗" : "可支撐到店"}</span></td></tr>${detailRow(id, 6, [evidence("近42天現場／B3銷售", `${row.localSales42}／${row.b3Sales42}件`), evidence("現有實體庫存", `${row.physicalInventory}件`), evidence("待發貨／在途", `${row.pendingSubmittedQuantity}／${row.inTransitQuantity}件`), evidence("目標／不可售展示", `${Number(row.targetQuantity).toFixed(1)}／${row.displayQuantity}件`), evidence("本批／下一輪到店", `${row.currentArrivalDate}／${row.nextArrivalDate}`), evidence("系統判斷", row.ruleSummary, true)].join(""))}`;
+    return `${start}<td data-label="品項">${itemIdentity(row)}</td><td data-label="系統建議" class="decision-quantity">${row.suggestedQuantity}</td><td data-label="建議後">${escapeHtml(row.systemSellThroughDate)}</td><td data-label="到貨風險"><span class="risk-label ${row.preArrivalStockoutRisk ? "warn" : "safe"}">${row.preArrivalStockoutRisk ? "有缺貨空窗" : "可支撐到店"}</span></td></tr>${detailRow(id, 6, [evidence(row.salesBasisVersion === 2 ? "近42天現場／納入補貨的總倉配貨" : "近42天現場／B3銷售", `${row.localSales42}／${row.salesBasisVersion === 2 ? row.warehouseDemandSales42 : row.b3Sales42}件`), evidence("現有實體庫存", `${row.physicalInventory}件`), evidence("待發貨／在途", `${row.pendingSubmittedQuantity}／${row.inTransitQuantity}件`), evidence("目標／不可售展示", `${Number(row.targetQuantity).toFixed(1)}／${row.displayQuantity}件`), evidence("本批／下一輪到店", `${row.currentArrivalDate}／${row.nextArrivalDate}`), evidence("系統判斷", row.ruleSummary, true)].join(""))}`;
   }
 
   async function calculate() {
@@ -1008,6 +1041,7 @@
       $("company-impact").innerHTML = `<strong>寬承／寬沐成本流向：</strong>寬沐調撥收貨${impact.kuanmuTransferCount}筆、B3代出${impact.kuanmuB3Count}筆；原始供貨成本${formatCurrency(impact.kuanmuBaseCost)}，寬承對寬沐計價參考${formatCurrency(impact.kuanmuIntercompanyRevenue)}（成本×1.11）。合併檢視時抵銷公司間計價，只保留原始成本。`;
       $("b3-audit").hidden = !state.calculation.b3Audit.pendingCount;
       $("b3-audit").innerHTML = state.calculation.b3Audit.pendingCount ? `<strong>B3待人工確認：</strong>${state.calculation.b3Audit.pendingRows.slice(0, 20).map((row) => `${escapeHtml(row.storeCode)}／${escapeHtml(row.sku)}／來源單${escapeHtml(row.sourceOrder || "未填")}`).join("、")}${state.calculation.b3Audit.pendingCount > 20 ? "…" : ""}。這些資料未納入B3與門市能力。` : "";
+      if (state.calculation.salesBasisVersion === 2) $("b3-audit").insertAdjacentHTML("beforeend", `<p>總倉配貨補貨判斷：${state.calculation.b3Audit.warehouseDemandIncludedCount}筆納入；備註開頭@排除，其後文字不影響。近42天現場銷售加符合規則的總倉配貨作為需求基準，B3不再重複加一次；缺少備註欄會停止計算。</p>`);
       $("calculation-rows").innerHTML = state.calculation.regularRows.length ? state.calculation.regularRows.map((row) => previewRow(row, "regular")).join("") : '<tr><td colspan="6">本週沒有一般必要補貨。</td></tr>';
       $("special-stock-results").hidden = !state.calculation.specialStockRows.length;
       $("special-stock-rows").innerHTML = state.calculation.specialStockRows.map((row) => previewRow(row, "special")).join("");
@@ -1269,7 +1303,7 @@
       const supplyCeiling = Number(snapshot.hqSupplyCeiling ?? snapshot.hqReleasable ?? snapshot.hqAvailable ?? 0);
       const otherAllocated = Number(payload.supplyUsage?.[item.sku]?.otherAllocated || 0);
       const evidenceContent = [
-        hasSnapshot ? evidence("近42天現場／B3銷售", `${Number(snapshot.localSales42 || 0)}／${Number(snapshot.b3Sales42 || 0)}件`) : evidence("近42天推估", Number(item.daily_usage || 0) > 0 ? `約${(Number(item.daily_usage) * 42).toFixed(1)}件` : "舊批次未保存"),
+        hasSnapshot ? evidence(snapshot.salesBasisVersion === 2 ? "近42天現場／納入補貨的總倉配貨" : "近42天現場／B3銷售", `${Number(snapshot.localSales42 || 0)}／${Number(snapshot.salesBasisVersion === 2 ? snapshot.warehouseDemandSales42 || 0 : snapshot.b3Sales42 || 0)}件`) : evidence("近42天推估", Number(item.daily_usage || 0) > 0 ? `約${(Number(item.daily_usage) * 42).toFixed(1)}件` : "舊批次未保存"),
         hasInventoryBreakdown ? evidence("現有實體庫存", `${Number(snapshot.physicalInventory)}件`) : evidence("現有實體庫存", "舊批次未保存，需以原始檔重算"),
         hasInventoryBreakdown ? evidence("待發貨／在途", `${Number(snapshot.pendingSubmittedQuantity)}／${Number(snapshot.inTransitQuantity)}件`) : evidence("待發貨／在途", "舊批次未保存，需以原始檔重算"),
         hasInventoryBreakdown ? evidence("計算可用量", `${Number(snapshot.currentQuantity)}件`) : evidence("調撥前可售基準", `${Number(item.base_quantity || 0).toFixed(1)}件`),
@@ -1501,6 +1535,7 @@
     if (badgeBox) badgeBox.innerHTML = labels.map((label) => `<span>${escapeHtml(label)}</span>`).join("");
     const button = row.querySelector("[data-remove-item]");
     if (button) button.textContent = removed ? "恢復此品項" : "移除此品項";
+    refreshChangeFilterSummary($("batch-detail"));
   }
 
   function updateDialogProjection(event) {
@@ -1645,13 +1680,14 @@
     const p = state.activeBatch;
     state.batchStore = state.config.role === "store" ? state.config.storeCode : "all";
     state.batchSku = "";
+    state.batchChangesOnly = false;
     const storeCodes = p.storeStatuses.map((row) => row.store_code);
     const supersededNotice = p.batch.status === "cancelled" ? '<p class="result-alert warn"><strong>本批次已被新版取代。</strong>資料仍完整保留供查閱，但門市與總部都不能再修改、送出或核准。</p>' : "";
     const schedule = (() => { try { return JSON.parse(p.batch.arrival_schedule || "{}"); } catch { return {}; } })();
     const scheduleText = Object.values(schedule).map((row) => `${row.storeCode} 本批${row.currentArrivalDate}／下一輪${row.nextArrivalDate}`).join("；");
     const activeCorrection = p.storeStatuses.find((row) => row.correction_mode);
     const correctionNotice = activeCorrection ? `<p class="result-alert warn"><strong>${activeCorrection.correction_mode === "store" ? "已退回門市修改" : "總部更正中"}：</strong>${escapeHtml(activeCorrection.store_code)}・第${escapeHtml(activeCorrection.correction_revision)}版・${escapeHtml(activeCorrection.correction_reason || "未填原因")}。原核准內容已保留，重新核准後才可產生ERP。</p>` : "";
-    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>${state.config.role === "store" ? "本店回覆期限" : "共同回覆期限"}：${escapeHtml(deadlineLabel(replyDeadline(p,p.storeStatuses.find(row=>row.store_code===state.config.storeCode))))}（台北時間）・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${correctionNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${skuFilterBar("batch", state.batchSku)}${replyDeadlinePanel(p)}${approvedCorrectionPanel(p)}${statusOverview(p)}${supplyQuotaPanel(p)}${itemTable(p)}${replyExtensionHistory(p)}<div class="detail-actions">${detailActions(p)}</div><section data-blocking-list class="blocking-list result-alert danger" aria-live="polite" hidden></section><p id="dialog-status" class="status-line"></p>`;
+    $("batch-detail").innerHTML = `<p class="eyebrow">${escapeHtml(p.batch.week_key)}</p><h2>${escapeHtml(p.batch.id)}</h2><p>${state.config.role === "store" ? "本店回覆期限" : "共同回覆期限"}：${escapeHtml(deadlineLabel(replyDeadline(p,p.storeStatuses.find(row=>row.store_code===state.config.storeCode))))}（台北時間）・批次狀態：${escapeHtml(batchStatusLabel(p.batch.status))}</p>${scheduleText ? `<p class="status-line">到店日快照：${escapeHtml(scheduleText)}</p>` : ""}${supersededNotice}${correctionNotice}${storeFilterBar("batch", storeCodes, state.batchStore)}${skuFilterBar("batch", state.batchSku)}${changeFilterBar()}${replyDeadlinePanel(p)}${approvedCorrectionPanel(p)}${statusOverview(p)}${supplyQuotaPanel(p)}${itemTable(p)}${replyExtensionHistory(p)}<div class="detail-actions">${detailActions(p)}</div><section data-blocking-list class="blocking-list result-alert danger" aria-live="polite" hidden></section><p id="dialog-status" class="status-line"></p>`;
     $("batch-detail").querySelector(".detail-actions").insertAdjacentHTML("beforebegin", perStoreActions(p));
     $("batch-detail").querySelectorAll("textarea.reason-input").forEach(autoSizeReasonField);
     $("batch-dialog").showModal();
@@ -1671,6 +1707,12 @@
     if (detailToggle) { toggleDecisionDetail(detailToggle); return; }
     const filterButton = event.target.closest('[data-store-filter-scope="batch"]');
     if (filterButton) { applyStoreFilter("batch", filterButton.dataset.storeFilter); return; }
+    const changesOnly = event.target.closest("[data-changes-only]");
+    if (changesOnly && state.config.role !== "store") {
+      state.batchChangesOnly = !state.batchChangesOnly;
+      applyResultFilters("batch");
+      return;
+    }
     const clearSku = event.target.closest('[data-clear-sku-filter="batch"]');
     if (clearSku) {
       const input = $("batch-detail").querySelector('[data-sku-filter-scope="batch"]');
@@ -1681,14 +1723,14 @@
     const jump=event.target.closest("[data-blocking-jump]");
     if(jump){
       const row=[...$("batch-detail").querySelectorAll("tr[data-blocking-index]")].find(r=>r.dataset.blockingIndex===jump.dataset.blockingJump);
-      if(row){const search=$("batch-detail").querySelector('[data-sku-filter-scope="batch"]');if(search)search.value="";applyStoreFilter("batch",state.config.role==="store" ? state.config.storeCode : "all");applySkuFilter("batch","");row.hidden=false;row.classList.add("blocking-target");row.scrollIntoView({block:"center",behavior:"smooth"});const field=row.querySelector('[data-reason]:not(:disabled),[data-hq-reason]:not(:disabled)') || row.querySelector("input:not(:disabled)");field?.focus({preventScroll:true});setTimeout(()=>row.classList.remove("blocking-target"),2500);}
+      if(row){state.batchChangesOnly=false;const search=$("batch-detail").querySelector('[data-sku-filter-scope="batch"]');if(search)search.value="";applyStoreFilter("batch",state.config.role==="store" ? state.config.storeCode : "all");applySkuFilter("batch","");row.hidden=false;row.classList.add("blocking-target");row.scrollIntoView({block:"center",behavior:"smooth"});const field=row.querySelector('[data-reason]:not(:disabled),[data-hq-reason]:not(:disabled)') || row.querySelector("input:not(:disabled)");field?.focus({preventScroll:true});setTimeout(()=>row.classList.remove("blocking-target"),2500);}
       return;
     }
     const quota=event.target.closest("[data-quota-action]");if(quota){await handleQuotaAction(quota.dataset.quotaAction);return;}
     const localAction = event.target.closest("[data-local-action]");
     if (localAction?.dataset.localAction === "add-item") { await addManualItem(); return; }
     const unsavedRemove = event.target.closest("[data-remove-unsaved]");
-    if (unsavedRemove) { const row = unsavedRemove.closest("tr"), warning = row.nextElementSibling?.matches("[data-quantity-warning]") ? row.nextElementSibling : null; warning?.remove(); row.remove(); refreshSkuFilterSummary("batch"); refreshDialogQuantityWarnings(); return; }
+    if (unsavedRemove) { const row = unsavedRemove.closest("tr"), warning = row.nextElementSibling?.matches("[data-quantity-warning]") ? row.nextElementSibling : null; warning?.remove(); row.remove(); applyResultFilters("batch"); refreshDialogQuantityWarnings(); return; }
     const removeItem = event.target.closest("[data-remove-item]");
     if (removeItem) { removeDialogItem(removeItem); return; }
     const button = event.target.closest("[data-action]"); if (!button) return;

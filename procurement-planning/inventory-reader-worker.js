@@ -1,6 +1,6 @@
 "use strict";
 
-importScripts("../inventory/assets/xlsx.full.min.js", "core.js?v=20261109-procurement-transfer-bulk-r3", "inventory-stream-reader.js?v=20261005-inventory-stream-r1");
+importScripts("../inventory/assets/xlsx.full.min.js", "core.js?v=20261111-procurement-change-filter-r1", "inventory-stream-reader.js?v=20261005-inventory-stream-r1");
 
 const STREAM_THRESHOLD_BYTES = 450 * 1024 * 1024;
 

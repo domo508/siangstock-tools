@@ -690,6 +690,9 @@
     return { status: "calculated", eligibleRate, forecastOrders, forecastGifts: Math.ceil(forecastOrders * giftsPerOrder) };
   }
 
+  // @ is an order-level carry-away exception, not an inventory or HQ-cost exclusion.
+  function startsWithCarryAwayMarker(value) { return String(value ?? "").trimStart().startsWith("@"); }
+
   function buildSuggestions(input) {
     const stores = input.storeCodes || STORE_ORDER;
     const proposalDate = input.proposalDate || input.sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "");
@@ -721,6 +724,9 @@
     };
     const inventory = new Map();
     for (const row of input.inventory.records) inventory.set(`${row.warehouseCode}|${row.sku}`, (inventory.get(`${row.warehouseCode}|${row.sku}`) || 0) + row.quantity);
+    for (const report of input.sales) {
+      if (report.hasRemarkColumn === false) throw new Error(`${report.fileName || "銷售明細"}缺少「備註」欄，無法判斷總倉配貨是否納入補貨；請重新匯出含備註的銷售檔。`);
+    }
     const regularSales = input.sales.flatMap((report) => report.records);
     const takeSales = input.sales.flatMap((report) => report.takeRecords || []);
     const dedupe = (rows, take = false) => {
@@ -732,14 +738,20 @@
         seen.add(key); return true;
       });
     };
+    const orderKey = row => `${row.warehouseCode}|${row.sourceOrder || row.posOrder || row.pickupOrder || ""}`;
+    // Read flags before deduplication: a duplicate copy must not discard an @ exception.
+    const markedOrders = new Set([...regularSales, ...takeSales].filter(row => startsWithCarryAwayMarker(row.remark) && (row.sourceOrder || row.posOrder || row.pickupOrder)).map(orderKey));
+    const newSalesBasis = input.sales.some(report => report.hasRemarkColumn === true);
+    const warehouseDemandEligible = row => Object.prototype.hasOwnProperty.call(row, "remark")
+      && !startsWithCarryAwayMarker(row.remark) && !markedOrders.has(orderKey(row));
     const primarySales = dedupe(regularSales);
     const uniqueTakeSales = dedupe(takeSales, true);
-    const orderKeys = new Set(primarySales.filter((row) => row.saleType === "訂貨" && row.sourceOrder).map((row) => `${row.sourceOrder}|${row.sku}`));
+    const orderKeys = new Set(primarySales.filter((row) => row.saleType === "訂貨" && row.sourceOrder).map((row) => `${row.warehouseCode}|${row.sourceOrder}|${row.sku}`));
     const b3PendingRows = [];
     const matchedTakeSales = uniqueTakeSales.filter((row) => {
       const eligible = /^R\d{2}$/.test(row.warehouseCode || "") && row.shipWarehouseCode === "T00" && row.saleType === "取貨";
       if (!eligible) return false;
-      const matched = Boolean(row.sourceOrder) && orderKeys.has(`${row.sourceOrder}|${row.sku}`);
+      const matched = Boolean(row.sourceOrder) && orderKeys.has(`${row.warehouseCode}|${row.sourceOrder}|${row.sku}`);
       if (!matched) b3PendingRows.push({ storeCode: row.warehouseCode, sku: row.sku, sourceOrder: row.sourceOrder || "", pickupOrder: row.pickupOrder || "", quantity: Number(row.deductQuantity || row.quantity || 0), reason: "來源單號＋ERP品號無法配對門市訂貨" });
       return matched;
     });
@@ -753,7 +765,14 @@
     const latest = input.sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "");
     if (!latest) throw new Error("銷售明細沒有可辨識的結帳日期。");
 
-    const local = new Map(), b3 = new Map(), activeWeeks = new Map();
+    const representedOrderItems = new Set(matchedTakeSales.map(row => `${orderKey(row)}|${row.sku}`));
+    const eligibleWarehouseRows = new Set([
+      ...matchedTakeSales.filter(warehouseDemandEligible),
+      ...primarySales.filter(row => /^R\d{2}$/.test(row.warehouseCode || "") && row.shipWarehouseCode === "T00"
+        && ["銷貨", "退貨"].includes(row.saleType) && !representedOrderItems.has(`${orderKey(row)}|${row.sku}`) && warehouseDemandEligible(row))
+    ]);
+    const local = new Map(), b3 = new Map(), warehouseDemand = new Map(), activeWeeks = new Map();
+    const demandSales42 = key => Math.max(0, (local.get(key) || 0) + (warehouseDemand.get(key) || 0));
     const hqUsage14 = new Map(), hqUsage42 = new Map(), hqUsage84 = new Map();
     const hqDirect14 = new Map(), hqDirect42 = new Map(), hqDirect84 = new Map();
     for (const row of sales) {
@@ -762,12 +781,17 @@
       const qty = Number(row.deductQuantity || row.quantity || 0);
       const store = row.warehouseCode;
       if (stores.includes(store) && age < 42) {
-        if (row.shipWarehouseCode === store) {
+        if (row.shipWarehouseCode === store && !(newSalesBasis && row.saleType === "訂貨" && representedOrderItems.has(`${orderKey(row)}|${row.sku}`))) {
           const key = `${store}|${row.sku}`; local.set(key, (local.get(key) || 0) + qty);
           if (qty > 0) { if (!activeWeeks.has(key)) activeWeeks.set(key, new Set()); activeWeeks.get(key).add(Math.floor(age / 7)); }
         } else if (row.shipWarehouseCode === "T00" && row.saleType === "取貨") {
           const key = `${store}|${row.sku}`; b3.set(key, (b3.get(key) || 0) + qty);
         }
+      }
+      if (stores.includes(store) && age < 42 && eligibleWarehouseRows.has(row)) {
+        const key = `${store}|${row.sku}`;
+        warehouseDemand.set(key, (warehouseDemand.get(key) || 0) + qty);
+        if (qty > 0) { if (!activeWeeks.has(key)) activeWeeks.set(key, new Set()); activeWeeks.get(key).add(Math.floor(age / 7)); }
       }
       const hqDirect = row.shipWarehouseCode === "T00" && !/^R\d{2}$/.test(store || "");
       const b3Take = row.shipWarehouseCode === "T00" && row.saleType === "取貨";
@@ -817,7 +841,7 @@
       const groups = new Map();
       for (const [sku, master] of masterBySku) {
         if (isTransferExcluded(sku, store) || master.sellThroughStop || excludedFromRegularTransfer(master) || !isSingleDuvet(master)) continue;
-        const sold = Math.max(0, local.get(`${store}|${sku}`) || 0);
+        const sold = demandSales42(`${store}|${sku}`);
         if (!(sold > 0)) continue;
         const group = `${singleDuvetType(master)}|${materialName(master)}`;
         if (!groups.has(group)) groups.set(group, []);
@@ -834,9 +858,10 @@
       for (const [sku, master] of masterBySku) {
         if (isTransferExcluded(sku, store) || CONSUMABLES[sku] || excludedFromRegularTransfer(master)) continue;
         const key = `${store}|${sku}`, local42 = Math.max(0, local.get(key) || 0), b342 = Math.max(0, b3.get(key) || 0);
-        const performance = local42 + b342, weeks = activeWeeks.get(key)?.size || 0;
+        const replenishmentSales42 = demandSales42(key);
+        const performance = newSalesBasis ? replenishmentSales42 : local42 + b342, weeks = activeWeeks.get(key)?.size || 0;
         const tier = performance >= 12 && weeks >= 4 ? "熱銷" : performance >= 4 && weeks >= 2 ? "穩定" : "低銷";
-        const daily = local42 / 42;
+        const daily = replenishmentSales42 / 42;
         const schedule = scheduleByStore[store];
         let target = daily * schedule.coverageDays;
         const activityApplies = activity?.active && activity.has(store, sku);
@@ -853,7 +878,7 @@
         }
         const rule = storeDisplayException(store, sku, input.storeDisplayExceptions) || stockRule(master, input.storeInventory);
         if (rule?.role === "排除規則") continue;
-        const ruleApplies = appliesToStore(rule, store, local42);
+        const ruleApplies = appliesToStore(rule, store, replenishmentSales42);
         const appliesDisplay = ruleApplies && rule?.role === "不可售展示";
         const minimum = ruleApplies && rule?.role === "可售最低庫存" ? rule.quantity : 0;
         let display = appliesDisplay ? rule.quantity : 0;
@@ -889,6 +914,7 @@
         if (!need) continue;
         const row = {
           storeCode: store, sku, productName: master.name, localSales42: local42, b3Sales42: b342,
+          ...(newSalesBasis ? {salesBasisVersion:2, warehouseDemandSales42:Math.max(0,warehouseDemand.get(key) || 0),replenishmentSales42} : {}),
           currentInventory: current, physicalInventory, pendingSubmittedQuantity, inTransitQuantity,
           tier, targetQuantity: Math.max(target, minimum, specialNeed), displayQuantity: display,
           displayGap, sellableNeed, rawNeed: need, itemType,
@@ -898,14 +924,14 @@
           ...(activityApplies ? {activityPlanId:activity.planId,activityPlanRevision:activity.revision,activityEvidence,activityDemandIncrease:Math.max(0,target-daily*schedule.coverageDays),activityDemandSchedule:Array.from({length:Math.max(0,daysBetween(activity.timing.usableDate,activity.timing.protectionEnd)+1)},(_,i)=>{const d=globalThis.StoreTransferActivity.add(activity.timing.usableDate,i);return [d,activity.demand(store,sku,d,d,daily),i===0?0:activityTimeline.inbound.filter(t=>globalThis.StoreTransferActivity.add(t.date,2)===d).reduce((s,t)=>s+t.quantity,0)];})} : {}),
           systemSellThroughDate: projectedSellThroughDate(schedule.currentArrivalDate, Math.max(0, sellable - daily * schedule.preArrivalDays), Math.max(0, need - displayGap), daily),
           isSellThroughStop: Boolean(master.sellThroughStop),
-          ruleSummary: [activityEvidence, itemType === "special_stock" ? `${singleDuvetType(master)}／${materialName(master)}前2名花色；建議維持1件，非必要調撥` : `${tier}；保護${schedule.coverageDays}天至${schedule.nextArrivalDate}`, displayGap ? `展示缺口${displayGap}件另補` : "", rule?.note, displaySuppressedReason, pendingSubmittedQuantity ? `${calculationMode === "comparison" ? "A/B測試排除待發貨" : "待發貨"}${pendingSubmittedQuantity}件` : "", inTransitQuantity ? `發貨在途${inTransitQuantity}件` : "", daily > 0 && sellable < daily * schedule.preArrivalDays ? `本批${schedule.currentArrivalDate}到店前有缺貨風險` : ""].filter(Boolean).join("；")
+          ruleSummary: [newSalesBasis ? `近42天補貨判斷${replenishmentSales42}件（現場${local42}＋符合備註規則總倉配貨${Math.max(0,warehouseDemand.get(key) || 0)}）；備註開頭@不納入` : "", activityEvidence, itemType === "special_stock" ? `${singleDuvetType(master)}／${materialName(master)}前2名花色；建議維持1件，非必要調撥` : `${tier}；保護${schedule.coverageDays}天至${schedule.nextArrivalDate}`, displayGap ? `展示缺口${displayGap}件另補` : "", rule?.note, displaySuppressedReason, pendingSubmittedQuantity ? `${calculationMode === "comparison" ? "A/B測試排除待發貨" : "待發貨"}${pendingSubmittedQuantity}件` : "", inTransitQuantity ? `發貨在途${inTransitQuantity}件` : "", daily > 0 && sellable < daily * schedule.preArrivalDays ? `本批${schedule.currentArrivalDate}到店前有缺貨風險` : ""].filter(Boolean).join("；")
         };
         if (!needsBySku.has(sku)) needsBySku.set(sku, []); needsBySku.get(sku).push(row);
       }
     }
 
     function allocateRows(rows, available) {
-      const weights = combinedAllocationWeights(Object.fromEntries(rows.map((row) => [row.storeCode, row.localSales42 + row.b3Sales42 || 1])));
+      const weights = combinedAllocationWeights(Object.fromEntries(rows.map((row) => [row.storeCode, (row.replenishmentSales42 ?? (row.localSales42 + row.b3Sales42)) || 1])));
       const allocated = Object.fromEntries(rows.map((row) => [row.storeCode, 0]));
       for (let unit = 0; unit < available; unit += 1) {
         const open = rows.filter((row) => allocated[row.storeCode] < row.rawNeed).sort((a, b) => (weights[b.storeCode] / (allocated[b.storeCode] + 1)) - (weights[a.storeCode] / (allocated[a.storeCode] + 1)) || STORE_ORDER.indexOf(a.storeCode) - STORE_ORDER.indexOf(b.storeCode));
@@ -930,7 +956,7 @@
       let remaining = protection.releasable;
       for (const type of ["regular", "special_stock"]) {
         let rows = allRows.filter((row) => row.itemType === type);
-        if (isS && protection.level === "無周轉") rows = rows.filter((row) => row.localSales42 > 0);
+        if (isS && protection.level === "無周轉") rows = rows.filter((row) => (row.replenishmentSales42 ?? row.localSales42) > 0);
         const allocated = allocateRows(rows, remaining);
         const used = Object.values(allocated).reduce((sum, value) => sum + value, 0);
         remaining = Math.max(0, remaining - used);
@@ -994,7 +1020,7 @@
           const preArrivalEnd = preArrivalEndCandidate < activity.endDate ? preArrivalEndCandidate : activity.endDate;
           const preArrivalDays = consumptionStart <= preArrivalEnd ? daysBetween(consumptionStart, preArrivalEnd) + 1 : 0;
           const recentUsage = sales.reduce((sum, row) => {
-            if (row.warehouseCode !== storeCode || row.shipWarehouseCode !== storeCode || row.sku !== sku) return sum;
+            if (row.warehouseCode !== storeCode || !(row.shipWarehouseCode === storeCode || eligibleWarehouseRows.has(row)) || row.sku !== sku) return sum;
             const age = daysBetween(row.date, latest);
             return age >= 0 && age < 21 ? sum + Math.max(0, Number(row.deductQuantity || row.quantity || 0)) : sum;
           }, 0);
@@ -1152,7 +1178,8 @@
       const b3Sales42 = Math.max(0, b3.get(compoundKey) || 0);
       const schedule = scheduleByStore[storeCode];
       const rule = storeDisplayException(storeCode, sku, input.storeDisplayExceptions) || stockRule(master, input.storeInventory);
-      const ruleApplies = rule && appliesToStore(rule, storeCode, localSales42);
+      const replenishmentSales42 = demandSales42(compoundKey);
+      const ruleApplies = rule && appliesToStore(rule, storeCode, replenishmentSales42);
       let displayQuantity = ruleApplies && rule.role === "不可售展示" ? Number(rule.quantity || 0) : 0;
       let displaySuppressedReason = "";
       if (master.sellThroughStop && displayQuantity > 0) {
@@ -1162,7 +1189,7 @@
       }
       const physicalInventory = Math.max(0, inventory.get(compoundKey) || 0);
       const inTransitQuantity = Math.max(0, inTransitInbound.get(compoundKey) || 0);
-      const baseSellableQuantity = Math.max(0, physicalInventory + inTransitQuantity - displayQuantity - (localSales42 / 42) * (schedule?.preArrivalDays || 0));
+      const baseSellableQuantity = Math.max(0, physicalInventory + inTransitQuantity - displayQuantity - (replenishmentSales42 / 42) * (schedule?.preArrivalDays || 0));
       return {
         storeCode, sku,
         productName: systemRow?.productName || master.name || submittedRows.find((row) => row.storeCode === storeCode && row.sku === sku)?.productName || "",
@@ -1172,18 +1199,18 @@
         inTransitQuantity: systemRow?.inTransitQuantity ?? inTransitQuantity,
         localSales42: systemRow?.localSales42 ?? localSales42,
         b3Sales42: systemRow?.b3Sales42 ?? b3Sales42,
-        dailySales: systemRow?.dailySales ?? localSales42 / 42,
+        dailySales: systemRow?.dailySales ?? replenishmentSales42 / 42,
         baseSellableQuantity: systemRow?.baseSellableQuantity ?? baseSellableQuantity,
         calculationDate: systemRow?.calculationDate || schedule?.currentArrivalDate || latest,
         suggestedQuantity: Number(systemRow?.suggestedQuantity || 0),
-        systemSellThroughDate: systemRow?.systemSellThroughDate || projectedSellThroughDate(schedule?.currentArrivalDate || latest, baseSellableQuantity, 0, localSales42 / 42),
+        systemSellThroughDate: systemRow?.systemSellThroughDate || projectedSellThroughDate(schedule?.currentArrivalDate || latest, baseSellableQuantity, 0, replenishmentSales42 / 42),
         itemType: systemRow?.itemType || "regular",
         ruleSummary: systemRow?.ruleSummary || [rule?.name, rule?.role, ruleApplies ? `適用${rule.quantity || 0}件` : "", displaySuppressedReason].filter(Boolean).join("；")
       };
     });
     const manualItemKeys = new Set([
       ...[...inventory.entries()].filter(([key, quantity]) => stores.includes(key.split("|")[0]) && Number(quantity) > 0).map(([key]) => key),
-      ...[...local.keys()], ...[...b3.keys()], ...[...submittedInbound.keys()], ...[...inTransitInbound.keys()],
+      ...[...local.keys()], ...[...warehouseDemand.keys()], ...[...b3.keys()], ...[...submittedInbound.keys()], ...[...inTransitInbound.keys()],
       ...rows.map((row) => `${row.storeCode}|${row.sku}`), ...shortageRows.map((row) => `${row.storeCode}|${row.sku}`)
     ]);
     const manualItemFacts = [...manualItemKeys].filter((compoundKey) => {
@@ -1195,7 +1222,8 @@
       const schedule = scheduleByStore[storeCode];
       const localSales42 = Math.max(0, local.get(compoundKey) || 0);
       const rule = storeDisplayException(storeCode, sku, input.storeDisplayExceptions) || stockRule(master, input.storeInventory);
-      const ruleApplies = rule && appliesToStore(rule, storeCode, localSales42);
+      const replenishmentSales42 = demandSales42(compoundKey);
+      const ruleApplies = rule && appliesToStore(rule, storeCode, replenishmentSales42);
       let displayQuantity = ruleApplies && rule.role === "不可售展示" ? Number(rule.quantity || 0) : 0;
       if (master.sellThroughStop && displayQuantity > 0) {
         const hqAvailableForDisplay = Math.max(0, Math.floor((inventory.get(`T00|${sku}`) || 0) - (pendingOutbound.get(`T00|${sku}`) || 0)));
@@ -1206,7 +1234,7 @@
       const pending = Math.max(0, submittedInbound.get(compoundKey) || 0);
       const inTransit = Math.max(0, inTransitInbound.get(compoundKey) || 0);
       const current = Math.max(0, physicalInventory + includedInbound(compoundKey));
-      const dailyUsage = localSales42 / 42;
+      const dailyUsage = replenishmentSales42 / 42;
       const displayGap = Math.max(0, displayQuantity - current);
       const baseQuantity = Math.max(0, current - displayQuantity - dailyUsage * (schedule?.preArrivalDays || 0));
       const minimum = ruleApplies && rule?.role === "可售最低庫存" ? Number(rule.quantity || 0) : 0;
@@ -1215,7 +1243,7 @@
       const rawNeed = displayGap + Math.max(0, Math.ceil(Math.max(target, minimum) - sellable - 1e-9));
       let systemReason = systemDecisionByKey.get(compoundKey) || "";
       if (!systemReason && rawNeed <= 0) {
-        if (rule?.role === "可售最低庫存" && !ruleApplies && localSales42 <= 0) systemReason = "近42天現場銷售0件，可售最低庫存規則不適用；本次總需求0件";
+        if (rule?.role === "可售最低庫存" && !ruleApplies && replenishmentSales42 <= 0) systemReason = "近42天補貨判斷銷售0件，可售最低庫存規則不適用；本次總需求0件";
         else if (pending + inTransit > 0) systemReason = `待發貨／在途${pending + inTransit}件已抵足需求；本次總需求0件`;
         else if (current > 0) systemReason = `門市現有庫存${current}件已滿足需求；本次總需求0件`;
         else systemReason = "依現行規則未形成補貨需求；本次總需求0件";
@@ -1228,12 +1256,14 @@
       const exclusionReason = transferExclusionReason(exclusionDecision);
       if (exclusionReason) systemReason = exclusionReason;
       const activityNeed = activity?.active ? needsBySku.get(sku)?.find(row=>row.storeCode===storeCode && row.activityPlanId) : null;
+      if(newSalesBasis) systemReason=`近42天補貨判斷${replenishmentSales42}件（現場${localSales42}＋符合備註規則總倉配貨${Math.max(0,warehouseDemand.get(compoundKey) || 0)}）；${systemReason}`;
       if(activityNeed && !exclusionReason) systemReason=`${activityNeed.activityEvidence}；${systemReason || "依活動逐日需求計算"}`;
       return {
         storeCode, sku, productName: master.name || "", calculationDate: schedule?.currentArrivalDate || latest,
         baseQuantity:activityNeed?.baseSellableQuantity ?? baseQuantity, displayGap, dailyUsage,
         physicalInventory, pendingSubmittedQuantity: pending, inTransitQuantity: inTransit,
-        currentQuantity: current, localSales42, b3Sales42: Math.max(0, b3.get(compoundKey) || 0),
+        currentQuantity: current, localSales42,
+        ...(newSalesBasis ? {salesBasisVersion:2,warehouseDemandSales42:Math.max(0,warehouseDemand.get(compoundKey) || 0),replenishmentSales42} : {}), b3Sales42: Math.max(0, b3.get(compoundKey) || 0),
         targetQuantity: activityNeed?.targetQuantity ?? Math.max(target, minimum), displayQuantity,
         currentArrivalDate: schedule?.currentArrivalDate || latest,
         nextArrivalDate: schedule?.nextArrivalDate || latest,
@@ -1258,7 +1288,8 @@
     return {
       latestSalesDate: latest, proposalDate, scheduleByStore, calculationMode, rows, regularRows, specialStockRows, activityRows, consumableRows, shortageRows, consumableSnapshots, pendingTransferRows, comparisonFacts, manualItemFacts, manualItemCatalog,
       marketingWarnings,
-      b3Audit: { matchedCount: matchedTakeSales.length, pendingCount: b3PendingRows.length, pendingRows: b3PendingRows },
+      salesBasisVersion: newSalesBasis ? 2 : 1,
+      b3Audit: { warehouseDemandIncludedCount:eligibleWarehouseRows.size, warehouseDemandExcludedCount:matchedTakeSales.filter(row=>!eligibleWarehouseRows.has(row)).length, matchedCount: matchedTakeSales.length, pendingCount: b3PendingRows.length, pendingRows: b3PendingRows },
       companyImpact: {
         kuanmuB3Count: matchedKuanmuB3.length, kuanmuB3BaseCost,
         kuanmuTransferCount: kuanmuReceivedTransfers.length, kuanmuTransferBaseCost,
@@ -1437,11 +1468,11 @@
       row.sku, row.productName, row.documentCode, row.status, row.quantity, row.openedDate || "", row.shippedDate || "",
       row.includedInCalculation ? "已納入抵扣" : "未納入抵扣"
     ]);
-    addSheet("本次調撥建議", "提交待發貨與發貨審核在途只抵扣需求，不併入本次新增調撥量。", ["品項分類", "ERP品號", "品名", "現有實體庫存", "待發貨量", "在途量", "近42天現場銷售", "目標庫存", "展示最低量", "本次系統建議調撥量", "本批預計到店", "下一輪預計到店", "建議後可售至", "判斷分析"], suggestionRows, [16, 15, 38, 13, 12, 12, 15, 12, 13, 18, 16, 16, 20, 55]);
+    addSheet("本次調撥建議", `提交待發貨與發貨審核在途只抵扣需求，不併入本次新增調撥量。${calculation.salesBasisVersion === 2 ? "補貨依據＝現場銷售＋符合備註規則的總倉配貨；備註開頭@排除。現場銷售欄仍只列現場，合計見判斷分析。" : ""}`, ["品項分類", "ERP品號", "品名", "現有實體庫存", "待發貨量", "在途量", "近42天現場銷售", "目標庫存", "展示最低量", "本次系統建議調撥量", "本批預計到店", "下一輪預計到店", "建議後可售至", "判斷分析"], suggestionRows, [16, 15, 38, 13, 12, 12, 15, 12, 13, 18, 16, 16, 20, 55]);
     addSheet("缺貨未配", "總倉暫時無法配足的必要需求，不會混入門市確認量或ERP調撥檔。", ["品項分類", "ERP品號", "品名", "需求量", "已配量", "未配量", "本批預計到店", "下一輪預計到店", "未配原因", "後續狀態"], shortageRows, [16, 15, 38, 12, 12, 12, 16, 16, 48, 18]);
     addSheet("待發貨與在途", "提交列為待發貨、發貨審核列為在途；兩者已抵扣正式補貨需求。", ["ERP品號", "品名", "調撥單號", "狀態", "數量", "開單日", "發貨日", "本次計算"], pendingRows, [15, 38, 20, 14, 10, 14, 14, 18]);
     return workbook;
   }
 
-  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, isCustomTransferSku, isCombinationTransferSku, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, storeDisplayException, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook, buildFormalWorkbook };
+  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, startsWithCarryAwayMarker, isCustomTransferSku, isCombinationTransferSku, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, storeDisplayException, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook, buildFormalWorkbook };
 });

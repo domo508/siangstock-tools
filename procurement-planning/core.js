@@ -215,7 +215,8 @@
         ecommercePlatform: ["電商平台"],
         posOrder: ["POS單", "POS單號"],
         sourceOrder: ["來源單號"],
-        pickupOrder: ["取貨單號"]
+        pickupOrder: ["取貨單號"],
+        remark: ["備註", "訂單備註", "單據備註", "明細備註"]
       },
       required: ["saleType", "transactionDate", "sku", "salesQuantity"]
     }
@@ -1162,7 +1163,8 @@
             storeCostAmount: parseNumber(valueAt(row, selected.mapping, "storeCostAmount")) || 0,
             registeredWarehouseCostAmount: parseNumber(valueAt(row, selected.mapping, "registeredWarehouseCostAmount")) || 0,
             sourceOrder: String(valueAt(row, selected.mapping, "sourceOrder") || "").trim(),
-            pickupOrder: String(valueAt(row, selected.mapping, "pickupOrder") || "").trim()
+            pickupOrder: String(valueAt(row, selected.mapping, "pickupOrder") || "").trim(),
+            remark: String(valueAt(row, selected.mapping, "remark") || "").trimStart()
           });
         }
         continue;
@@ -1202,13 +1204,14 @@
         ecommercePlatform: String(valueAt(row, selected.mapping, "ecommercePlatform") || "").trim(),
         posOrder: String(valueAt(row, selected.mapping, "posOrder") || "").trim(),
         sourceOrder: String(valueAt(row, selected.mapping, "sourceOrder") || "").trim(),
-        pickupOrder: String(valueAt(row, selected.mapping, "pickupOrder") || "").trim()
+        pickupOrder: String(valueAt(row, selected.mapping, "pickupOrder") || "").trim(),
+            remark: String(valueAt(row, selected.mapping, "remark") || "").trimStart()
       };
       records.push(record);
       if (!minDate || date < minDate) minDate = date;
       if (!maxDate || date > maxDate) maxDate = date;
     }
-    return { fileName: options.fileName || "", sheetName: selected.name, records, takeRecords, excluded, minDate, maxDate };
+    return { fileName: options.fileName || "", sheetName: selected.name, hasRemarkColumn: selected.mapping.remark != null, records, takeRecords, excluded, minDate, maxDate };
   }
 
   function deduplicateReportRows(reports, rowSelector, signature) {

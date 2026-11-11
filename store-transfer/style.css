@@ -434,3 +434,7 @@ html, body { max-width: 100%; overflow-x: clip; }
 .quota-availability.warn { background:#fff6e3;color:#785b20; }
 .quota-availability.muted { background:#f2f5f7;color:#526b7c; }
 .quota-product-facts strong { display:block;width:100%;color:#17324d; }
+
+.change-filter-toolbar { margin:1rem 0; padding:1rem; border:1px solid #cbdde7; border-radius:14px; background:#f5f9fb; min-width:0; }
+.change-filter-toolbar p { margin:.65rem 0 0; line-height:1.65; overflow-wrap:anywhere; }
+.change-filter-toolbar button { max-width:100%; white-space:normal; }
