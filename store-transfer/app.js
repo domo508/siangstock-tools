@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261111-transfer-change-filter-r2";
+  const APP_VERSION = "20261111-transfer-change-filter-r3";
   const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", batchChangesOnly: false, files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -962,9 +962,18 @@
     if (calculation.salesBasisVersion === 2) $("b3-audit").insertAdjacentHTML("beforeend", `<p>總倉配貨補貨判斷：${calculation.b3Audit.warehouseDemandIncludedCount}筆納入；備註開頭@排除，其後文字不影響。近42天現場銷售加符合規則的總倉配貨作為需求基準，B3不再重複加一次；缺少備註欄會停止計算。</p>`);
   }
 
+  function beginCalculationPreview() {
+    // A failed replacement calculation must never publish the previous input's result.
+    state.calculation = null;
+    state.formalCalculation = null;
+    $("calculation-results").hidden = true;
+    $("publish-button").disabled = true;
+  }
+
   async function calculate() {
     if (!(await checkRuntimeVersion())) return;
     const stores = selectedStores(); if (!stores.length) throw new Error("請至少勾選一間門市。");
+    beginCalculationPreview();
     $("calculate-button").disabled = true; $("hq-status").textContent = "正在本機讀取與計算，檔案不會上傳…";
     try {
       const masterFile = state.files.master, marketingFile = state.files.marketing, inventoryFile = $("inventory-file").files[0], transferFile = $("transfer-file").files[0], salesFiles = [...$("sales-files").files];
