@@ -14,7 +14,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261111-procurement-change-filter-r3";
+  const APP_VERSION = "20261113-procurement-overreceipt-r1";
   const state = {
     importProgress: null, shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -313,7 +313,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261111-procurement-change-filter-r3");
+        const worker = new Worker("inventory-reader-worker.js?v=20261113-procurement-overreceipt-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1081,7 +1081,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261111-procurement-change-filter-r3");
+      const worker = new Worker("seasonal-model-worker.js?v=20261113-procurement-overreceipt-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -3158,6 +3158,8 @@
         lirongConsignment = unavailableConsignmentSource("力榮寄庫表", error.message);
       }
       const pendingReports = pendingWorkbooks.map((workbook, index) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: state.pendingFiles[index]?.name || "未到貨採購單" }));
+      const overReceiptRows = pendingReports.flatMap(report => report.records || []).filter(row => Number(row.overReceivedQuantity || 0) > 0);
+      const overReceiptNote = overReceiptRows.length ? ` 提醒：採購來源有${overReceiptRows.length}列超收、共${formatNumber(overReceiptRows.reduce((sum, row) => sum + row.overReceivedQuantity, 0))}件；這些列未交抵扣為0，原始資料與實收量保留，請核對ERP差異。` : "";
       state.purchaseStatusSummary = core.summarizePurchaseReports(pendingReports, elements.month.value);
       const salesReports = salesWorkbooks.map((workbook, index) => core.parseSalesWorkbook(workbook, XLSX, { fileName: state.salesFiles[index]?.name || "銷售明細" }));
       state.costSummary = core.summarizeCompanyCostFlows({
@@ -3174,7 +3176,7 @@
         await syncErpReconciliations(pendingReports);
         await loadLedger();
         createMonthEndReport(validation);
-        setStatus(`月底結算驗證完成：本月至今成本耗用${formatCurrencyPrecise(state.costSummary.managementCostToDate)}，實際收貨成本${formatCurrencyPrecise(state.costSummary.actualReceiptCost)}；未產生採購建議。`, "success");
+        setStatus(`月底結算驗證完成：本月至今成本耗用${formatCurrencyPrecise(state.costSummary.managementCostToDate)}，實際收貨成本${formatCurrencyPrecise(state.costSummary.actualReceiptCost)}；未產生採購建議。${overReceiptNote}`, "success");
         renderCostSnapshotStatus(); renderBudget();
         return;
       }
@@ -3245,7 +3247,7 @@
       const inventoryNote = inventory.diagnostics?.collapsedZeroDuplicateRows
         ? ` 庫存預檢已合併${formatNumber(inventory.diagnostics.collapsedZeroDuplicateRows)}列因尺碼／條碼展開的零庫存資料；各門市店倉均保留。`
         : " 庫存預檢完成；各門市店倉均保留。";
-      setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。${springFestivalNote}${duplicateNote}${streamNote}${inventoryNote}`, "success");
+      setStatus(`完成：${analysis.totals.suggestedSkuCount}個SKU，建議金額${formatCurrency(analysis.totals.suggestedPurchaseAmount)}。${springFestivalNote}${duplicateNote}${streamNote}${inventoryNote}${overReceiptNote}`, "success");
       await syncDetectedCustomOrders(pendingReports, master);
       await savePendingSnapshot(pendingReports);
       await syncErpReconciliations(pendingReports);

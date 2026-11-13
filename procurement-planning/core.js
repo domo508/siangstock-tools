@@ -862,11 +862,17 @@
       const orderedQuantity = parseNumber(valueAt(row, selected.mapping, selected.mapping.orderedQuantity == null ? "remainingQuantity" : "orderedQuantity"));
       if (!sku || /^(?:合計|總計|小計)$/.test(sku)) continue;
       if (orderedQuantity == null || orderedQuantity < 0) throw new Error(`採購單第${index + 1}列 ${sku}數量格式錯誤，請修正後重匯完整清單。`);
-      const deliveredQuantity = Math.max(0, Number(parseNumber(valueAt(row, selected.mapping, "deliveredQuantity")) || 0));
+      const deliveredCell = parseNumber(valueAt(row, selected.mapping, "deliveredQuantity"));
+      const deliveredQuantity = Math.max(0, Number(deliveredCell || 0));
       const remainingCell = parseNumber(valueAt(row, selected.mapping, "remainingQuantity"));
+      // ERP may report ordered - delivered below zero for an over-receipt.
+      // Require both explicit quantities and a matching balance before accepting it.
+      const verifiedOverReceipt = selected.mapping.orderedQuantity != null && deliveredCell != null
+        && deliveredCell > orderedQuantity && remainingCell != null && remainingCell < 0
+        && Math.abs(remainingCell - (orderedQuantity - deliveredCell)) <= 1e-9;
       for (const field of ["deliveredQuantity", "remainingQuantity"]) {
         const raw = valueAt(row, selected.mapping, field);
-        if (raw !== "" && raw != null && (parseNumber(raw) == null || parseNumber(raw) < 0)) throw new Error(`採購單第${index + 1}列 ${sku}${field === "remainingQuantity" ? "未交" : "已交"}數量格式錯誤，請修正後重匯完整清單。`);
+        if (raw !== "" && raw != null && (parseNumber(raw) == null || (parseNumber(raw) < 0 && !(field === "remainingQuantity" && verifiedOverReceipt)))) throw new Error(`採購單第${index + 1}列 ${sku}${field === "remainingQuantity" ? "未交" : "已交"}數量格式錯誤，請修正後重匯完整清單。`);
       }
       const status = String(valueAt(row, selected.mapping, "status") || "").normalize("NFKC").trim();
       const statusKey = normalizeText(status);
@@ -901,6 +907,8 @@
         orderedQuantity: Math.max(0, Number(orderedQuantity || 0)),
         deliveredQuantity,
         remainingQuantity: Math.max(0, rawRemainingQuantity),
+        sourceRemainingQuantity: remainingCell,
+        overReceivedQuantity: Math.max(0, deliveredQuantity - orderedQuantity),
         unitCost,
         amount: amount || 0,
         orderedAmount: orderedAmount == null ? (unitCost == null ? 0 : Number(orderedQuantity || 0) * unitCost) : orderedAmount,
@@ -5077,6 +5085,9 @@
       ...Object.entries(recommendations.meta?.sourceHashes || {}).map(([source, hash]) => [`來源SHA-256：${source}`, String(hash)]),
       ["五來源日期檢核", sourceDateCheck?.status || "未提供", sourceDateCheck?.message || "下載前請確認庫存、未到貨、期間調撥、寄庫與銷售截止日。"],
       ...(sourceDateCheck?.status === "PASS" ? [] : [["使用限制", "資料時點未通過檢核；本檔只供串接驗收，不可直接下單。"]]),
+      ...(recommendations.validation?.pending?.records || [])
+        .filter(row => Number(row.overReceivedQuantity || 0) > 0 && supplierIncluded(row.supplier))
+        .map(row => ["採購超收提醒", `${row.documentCode || "未提供單號"}／${row.sku}：採購${row.orderedQuantity}、已交${row.deliveredQuantity}、超收${row.overReceivedQuantity}件；原始未交${row.sourceRemainingQuantity ?? "未提供"}，未交抵扣0。請核對ERP差異，未自動調整庫存或核准差異。`]),
       [],
       ["指標", "結果"],
       ["分析SKU", selectedTotals.analyzedSkuCount],

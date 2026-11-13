@@ -346,3 +346,19 @@ describe('國外春節供應空窗與活動逐日接續',()=>{
   expect(high.totals.suggestedPurchaseAmount).toBe(high.suggestedRows.reduce((sum,row)=>sum+row.suggestedPurchaseAmount,0));
  });
 });
+
+it('超收來源在建議與XLSX摘要保留提醒，未改量與人工回匯既有基準不變',()=>{
+ const pending=core.parsePendingPurchaseWorkbook(roundtrip(workbook([
+  ['採購單號','狀態','貨號','品名','採購數量','已交數量','未交數量'],
+  ['SYNTH-OVER','部分到貨','A1','合成床包',20,24,-4]
+ ])),XLSX);
+ const baseline=run({pendingReports:[]}),result=run({pendingReports:[pending]});
+ expect(result.rows.map(r=>[r.sku,r.suggestedPurchaseQty,r.suggestedPurchaseAmount])).toEqual(baseline.rows.map(r=>[r.sku,r.suggestedPurchaseQty,r.suggestedPurchaseAmount]));
+ result.validation={pending:core.aggregatePendingReports([pending])};
+ const report=roundtrip(core.buildRecommendationWorkbook(result,writer));
+ const warning=XLSX.utils.sheet_to_json(report.Sheets['01_採購摘要'],{header:1}).find(r=>r[0]==='採購超收提醒');
+ expect(warning[1]).toContain('原始未交-4');expect(warning[1]).toContain('超收4件');expect(warning[1]).toContain('未交抵扣0');
+ const review=core.reviewReturnedWorkbook(report,XLSX,{baselineBySku:new Map(result.rows.map(r=>[r.sku,r]))});
+ const original=core.reviewReturnedWorkbook(roundtrip(core.buildRecommendationWorkbook(baseline,writer)),XLSX,{baselineBySku:new Map(baseline.rows.map(r=>[r.sku,r]))});
+ expect(JSON.stringify(review)).toBe(JSON.stringify(original));
+});

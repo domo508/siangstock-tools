@@ -1,10 +1,8 @@
 /*
-  Content-Security-Policy: default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
   Referrer-Policy: no-referrer
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
-  Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Resource-Policy: same-origin
 
 /store-orders
@@ -62,9 +60,11 @@
 
 /
   Cache-Control: no-store, max-age=0, must-revalidate
+  Content-Security-Policy: default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'
 
 /index.html
   Cache-Control: no-store, max-age=0, must-revalidate
+  Content-Security-Policy: default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; worker-src 'none'
 
 /homepage/version.json
   Cache-Control: no-store, max-age=0, must-revalidate
@@ -76,6 +76,12 @@
   Cache-Control: public, max-age=31536000, immutable
 
 /homepage/20261026-departments-r1.css
+  Cache-Control: public, max-age=31536000, immutable
+
+/homepage/20261111-change-filter-entry-r3.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/homepage/20261111-change-filter-entry-r3.css
   Cache-Control: public, max-age=31536000, immutable
 
 
@@ -280,3 +286,9 @@
 
 /inventory/rules-admin/*
   Cache-Control: no-store, max-age=0, must-revalidate
+
+/homepage/20261113-overreceipt-entry-r1.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/homepage/20261113-overreceipt-entry-r1.css
+  Cache-Control: public, max-age=31536000, immutable
