@@ -1056,3 +1056,6 @@ r51發布前補驗：新版不可變OCR worker另補同原版的最小CSP路徑�
 採購來源僅在採購量、已交量及負未交量算式一致時接受超收，未交抵扣歸0；保留原始未交、實收及超收量，前台與採購摘要顯示提醒，ERP差異仍須確認。不一致、缺少獨立數量或非數字維持整檔阻擋。原1113檔313列完整通過，22列超收99件，有效未交719件；其餘欄位與原始檔SHA守恆。完整73份1052項及型別通過。
 
 前台沿用11/12已切換的Cloudflare Static Assets Worker `siangstock-tools-static-assets`，API維持`siangstock-inventory-rules`。本輪收錄遷移工作區既有的靜態封裝、設定與測試；安全標頭與正式c78c4dab逐字相同，僅新增新版首頁immutable資產。主採購20261113-procurement-overreceipt-r1、首頁20261113-overreceipt-entry-r1。無資料遷移、既有批次改寫、ERP下單或寄信。正式發布結果及限制另補驗收紀錄。
+
+
+2026-11-13發布驗收：功能019acf5已推送正式分支，Static Assets Worker eae20914-a856-4dd4-9f8c-6365ef373853與API Worker 3e4d51a5-621d-45ef-a0a2-dba52bc116aa均100%正式。公司登入、新版core/app資產查詢、正式version.json、新版首頁入口及超收手冊通過。API部署重新套用routes因既有token無routes權限而失敗，但Cloudflare控制台已逐一核對五條既有routes全部保留，未擴權或修改路由；正式採購頁讀取成功。既有安全標頭與遷移版本相同，新增首頁immutable路徑經全套測試驗證；本輪未另擷取登入後wire response headers。原始檔313列/22列超收99件/有效未交719件與欄位守恆；未代用正式四檔重新產生母批次、核准或寄信。回復時前後端同步至Static c78c4dab-fad0-4305-b82c-1038788f7fc6與API a1b8f9e5-46fc-400f-8a04-824e00e90c2f，保留D1與原批次。私有證據.local-context/verification/20261113-procurement-overreceipt。
