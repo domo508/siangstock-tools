@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261115-transfer-newproduct-r2";
+  const APP_VERSION = "20261115-transfer-newproduct-card-r1";
   const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", batchChangesOnly: false, files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;

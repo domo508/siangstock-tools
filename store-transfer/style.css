@@ -456,3 +456,7 @@ html, body { max-width: 100%; overflow-x: clip; }
 .new-product-line input:disabled,.new-product-line textarea:disabled { background:#f0f6f8; }
 #new-product-panel>summary { color:var(--navy); font-weight:700; padding-block:8px; }
 #new-product-panel>summary:focus-visible { outline:3px solid var(--blue); outline-offset:3px; }
+
+#new-product-panel>summary { overflow-wrap:anywhere; line-height:1.7; cursor:pointer; }
+.new-product-summary { display:inline; margin-inline-start:12px; color:var(--muted); font-weight:500; font-size:.9em; }
+@media(max-width:700px){ .new-product-summary { display:block; margin-inline-start:0; } }

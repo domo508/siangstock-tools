@@ -1,5 +1,18 @@
 (function(root){
  'use strict';
+ // Counts use saved, role-scoped API rows, independent of display filters and drafts.
+ function summaryText(rows){
+ const counts={store:0,hq:0,stock:0,erp:0};
+ for(const r of rows){
+  if(r.status==='store_confirmation'){counts[r.store_status==='submitted'?'hq':'store']++;continue;}
+  if(r.status!=='waiting_stock')continue;
+  const approved=Number(r.approved_quantity??0),committed=Number(r.committed_quantity||0),dispatched=Number(r.dispatched_quantity||0);
+  if(approved>committed)counts.stock++;
+  if(Math.min(approved,committed)>dispatched)counts.erp++;
+ }
+ const parts=[['store','待門市確認'],['hq','待總部覆核'],['stock','等待到貨／待配'],['erp','待週調撥出貨']].filter(([k])=>counts[k]).map(([k,label])=>`${label} ${counts[k]}筆`);
+ return parts.length?parts.join('・'):'目前無待處理新品首配';
+ }
  function mount({api,config,checkRuntimeVersion}){
  const host=document.getElementById('new-product-panel');if(!host)return;
  host.hidden=false;let all=[],drafts=new Map(),busy=false;
@@ -8,7 +21,7 @@
  const key=r=>`${r.id}|${r.store_code}|${r.sku}`;
  function draft(r){return drafts.get(key(r))||{quantity:Number(store?r.confirmed_quantity??r.suggested_quantity:r.approved_quantity??r.confirmed_quantity??r.suggested_quantity),reason:String(store?r.store_reason||'':r.hq_reason||'')};}
  function rowChanged(r){const d=draft(r),base=Number(store?r.suggested_quantity:r.confirmed_quantity??r.suggested_quantity);return root.NewProductAllocation.changed(r)||d.quantity!==base||Boolean(d.reason);}
- function render(){const filter=document.getElementById('new-product-store').value,only=document.getElementById('new-product-changed').checked;content.replaceChildren();
+ function render(){document.getElementById('new-product-summary').textContent=summaryText(all);const filter=document.getElementById('new-product-store').value,only=document.getElementById('new-product-changed').checked;content.replaceChildren();
  const plans=[...new Set(all.map(r=>r.id))];
  if(!plans.length){content.innerHTML='<p>目前沒有已核准採購的新品首配。新品完成採購核准後會出現在此處。</p>';return;}
  for(const id of plans){const rows=all.filter(r=>r.id===id),first=rows[0],visible=rows.filter(r=>(filter==='all'||r.store_code===filter)&&(!only||rowChanged(r)));
@@ -24,7 +37,7 @@
  if(!visible.length){const empty=document.createElement('p');empty.textContent='此篩選下沒有品項；可取消「只看異動品項」查看完整內容。';section.append(empty);}
  const actions=document.createElement('div');actions.className='detail-actions';if(!ready){const buttons=store?[['save','暫存'],['submit','送出總部覆核']]:[['approve','核定首配，等待到貨']];for(const [action,label]of buttons){const button=document.createElement('button');button.type='button';button.className=action==='save'?'secondary-button':'primary-button';button.textContent=label;button.disabled=busy||(store&&rows.every(r=>r.store_status==='submitted'))||(!store&&rows.some(r=>r.store_status!=='submitted'));button.addEventListener('click',()=>save(id,action,section));actions.append(button);}}else{const p=document.createElement('p');p.textContent=complete?'本批首配流程已完成，後續依一般週補貨規則判斷。':fullyClaimed?'已核定量均已帶入週調撥，請接續原週批次處理；不重複開量。':store?'已核定，等待總部安排到貨後出貨；無需重複送出。':'下一步：匯入最新庫存並產生本週建議；有可釋出量時，自動帶入首配待配量。';actions.append(p);}section.append(actions);content.append(section);}
  }
- async function load(){try{status.textContent='正在讀取新品首配…';const response=await api('/new-products');all=response.rows;render();status.textContent=drafts.size?'已讀取最新版本並保留未保存輸入；請比對目前門市確認量後再送出。':'已讀取新品首配；依目前狀態確認需求或等待到貨。';}catch(error){status.textContent=`新品首配讀取失敗：${error.message}`;}}
+ async function load(){try{status.textContent='正在讀取新品首配…';document.getElementById('new-product-summary').textContent='正在讀取待處理筆數…';const response=await api('/new-products');all=response.rows;render();status.textContent=drafts.size?'已讀取最新版本並保留未保存輸入；請比對目前門市確認量後再送出。':'已讀取新品首配；依目前狀態確認需求或等待到貨。';}catch(error){document.getElementById('new-product-summary').textContent='待處理筆數讀取失敗，請展開更新列表';status.textContent=`新品首配讀取失敗：${error.message}`;}}
  async function save(id,action,section){if(busy||!(await checkRuntimeVersion()))return;const rows=all.filter(r=>r.id===id);const message=document.createElement('p');message.className='status-line';message.setAttribute('role','status');section.append(message);let saved=false,locked=[];try{const items=rows.map(r=>{const d=draft(r);root.NewProductAllocation.quantity(d.quantity);if(d.quantity!==Number(store?r.suggested_quantity:r.confirmed_quantity??r.suggested_quantity)&&!d.reason.trim())throw Error(`${r.store_code}／${r.sku}調整數量請填原因。`);return {storeCode:r.store_code,sku:r.sku,quantity:d.quantity,reason:d.reason};});busy=true;locked=[...content.querySelectorAll('button')].map(b=>[b,b.disabled]);locked.forEach(([b])=>b.disabled=true);message.textContent='正在保存，請稍候…';
  const result=await fetch(`/api/store-transfer/new-products/${encodeURIComponent(id)}/${action}`,{method:'PUT',headers:{'Content-Type':'application/json','X-New-Product-Version':'20261115-new-product-allocation-r2'},body:JSON.stringify({expectedRevision:rows[0].revision,storeCode:config.storeCode,items}),cache:'no-store'});const response=await result.json();if(!result.ok)throw Error(response.error||`HTTP ${result.status}`);saved=true;
  // Only successful saving clears drafts. Refreshing a different plan cannot discard unsaved work.
@@ -32,5 +45,5 @@
  }catch(error){message.textContent=saved?`新品資料已保存，但重新讀取失敗：${error.message}；請更新列表確認，勿重複送出。`:`保存未完成：${error.message}；輸入已保留。`;message.setAttribute('role','alert');status.textContent=message.textContent;}finally{busy=false;locked.forEach(([b,disabled])=>{if(b.isConnected)b.disabled=disabled;});}}
  document.getElementById('new-product-refresh').addEventListener('click',load);document.getElementById('new-product-changed').addEventListener('change',render);const sel=document.getElementById('new-product-store');sel.innerHTML=(store?'':'<option value="all">全部門市</option>')+Object.entries(config.stores).filter(([code])=>!store||code===config.storeCode).map(([code,v])=>`<option value="${e(code)}">${e(code)} ${e(v.name)}</option>`).join('');sel.addEventListener('change',render);load();
  }
- root.NewProductAllocationUI={mount};
+ root.NewProductAllocationUI={mount,summaryText};
 })(globalThis);

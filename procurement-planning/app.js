@@ -2050,7 +2050,7 @@
       const source = structuredClone(transferActivitySource());
       source.originParentId=state.parentBatchId;
       for (const month of source.months) if(!(month.retailTarget>0)) throw new Error(`${month.month}沒有可提供的實體門市需求，請先確認目標及歷史資料。`);
-      const send=async body=>fetch("/api/store-transfer/activity-plans", { method:"POST", cache:"no-store", headers:{Accept:"application/json","Content-Type":"application/json","X-Store-Transfer-Version":"20261115-transfer-newproduct-r2"},body:JSON.stringify(body) });
+      const send=async body=>fetch("/api/store-transfer/activity-plans", { method:"POST", cache:"no-store", headers:{Accept:"application/json","Content-Type":"application/json","X-Store-Transfer-Version":"20261115-transfer-newproduct-card-r1"},body:JSON.stringify(body) });
       let response=await send({source}), result=await response.json();
       if(response.status===409 && result.existingId && confirm(`${result.error}\n\n確認更新此活動來源？`)) {response=await send({source,expectedRevision:result.existingRevision});result=await response.json();}
       if (!response.ok) throw new Error(result.error || "提供活動草稿失敗；須具備週調撥總部權限。");

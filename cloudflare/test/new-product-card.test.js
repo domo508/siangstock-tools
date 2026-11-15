@@ -1,0 +1,10 @@
+import {it,expect} from 'vitest';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+const context={};vm.createContext(context);vm.runInContext(readFileSync('../store-transfer/new-products-ui.js','utf8'),context);
+const summary=context.NewProductAllocationUI.summaryText;
+const row=(extra={})=>({id:'P1',store_code:'R00',sku:'DEMO',status:'store_confirmation',store_status:'pending',...extra});
+it('卡片位於步驟後、總部工作台與門市批次前；原生預設收合',()=>{const html=readFileSync('../store-transfer/index.html','utf8');const at=html.indexOf('<details id="new-product-panel"');expect(at).toBeGreaterThan(html.indexOf('aria-label="使用步驟"'));expect(at).toBeLessThan(html.indexOf('<section id="hq-panel"'));expect(html.slice(at,html.indexOf('>',at))).not.toMatch(/\bopen\b/);expect(html).toContain('id="new-product-summary"');});
+it('空白、已完成及核定0不列為待處理，未核准的取消仍待覆核',()=>{expect(summary([])).toBe('目前無待處理新品首配');expect(summary([row({status:'waiting_stock',approved_quantity:0}),row({status:'waiting_stock',approved_quantity:2,committed_quantity:2,dispatched_quantity:2})])).toBe('目前無待處理新品首配');expect(summary([row({store_status:'submitted',confirmed_quantity:0})])).toBe('待總部覆核 1筆');});
+it('以門市品項計筆；部分配貨同時等待與待ERP，不改寫輸入',()=>{const rows=[row(),row({store_status:'saved'}),row({store_status:'submitted'}),row({status:'waiting_stock',approved_quantity:10,committed_quantity:2,dispatched_quantity:0})];const before=JSON.stringify(rows);expect(summary(rows)).toBe('待門市確認 2筆・待總部覆核 1筆・等待到貨／待配 1筆・待週調撥出貨 1筆');expect(JSON.stringify(rows)).toBe(before);});
+it('只依已授權範圍統計；已全帶入不誤稱等待到貨',()=>{const rows=[row({store_code:'R06'}),row({store_code:'R00',store_status:'submitted'})];expect(summary(rows.filter(r=>r.store_code==='R06'))).toBe('待門市確認 1筆');expect(summary([row({status:'waiting_stock',approved_quantity:3,committed_quantity:3,dispatched_quantity:2})])).toBe('待週調撥出貨 1筆');});
