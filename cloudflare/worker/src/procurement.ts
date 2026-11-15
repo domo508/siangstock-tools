@@ -1,3 +1,4 @@
+import { sendNewProductNotices } from './new-product-notifications';
 import {newProductSeedStatements,activateNewProductStatements,newProductProcurementSetup} from './new-products';
 import { verifyAdmin, verifyCompanyUser, type AccessConfig } from "./access";
 import { RequestValidationError } from "./schema";
@@ -1573,7 +1574,20 @@ function encodeBase64Url(value: string): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-async function notify(request: Request, env: ProcurementEnv, batchId: string): Promise<Response> {
+async function notify(request:Request,env:ProcurementEnv,batchId:string):Promise<Response>{
+ const summary=await notifySummary(request,env,batchId);
+ const plan=await env.DB.prepare('SELECT id FROM new_product_plans WHERE procurement_batch_id=?').bind(batchId).first<{id:string}>();
+ if(!plan)return summary;
+ // Both summary and store notices are retried independently; approval is already committed.
+ const access=await verifyApprover(request,env);
+ try{
+  const result=await sendNewProductNotices(request,env,plan.id,access.email);
+  if(result.remaining)return json({error:`新品門市通知待處理：${result.errors?.join('；')||'仍有未寄送門市'}。核准與首配資料已保留。`,newProductNotifications:result},502);
+  const data=await summary.json<Record<string,unknown>>();return json({...data,newProductNotifications:result},summary.status);
+ }catch(error){return json({error:error instanceof Error?error.message:'新品門市通知暫時失敗；核准資料已保留。'},502);}
+}
+
+async function notifySummary(request: Request, env: ProcurementEnv, batchId: string): Promise<Response> {
   requireSameOrigin(request, env);
   const access = await verifyApprover(request, env);
   const row = await env.DB.prepare("SELECT n.id notification_id, n.event_type, n.retry_count, n.recipient notification_recipient, e.amount_before event_amount_before, e.amount_delta event_amount_delta, e.amount_after event_amount_after, e.reason event_reason, e.created_at event_created_at, e.created_by event_created_by, b.* FROM procurement_notifications n JOIN procurement_events e ON e.id = n.event_id JOIN procurement_batches b ON b.id = n.batch_id WHERE n.batch_id = ? AND n.status != 'sent' ORDER BY n.id DESC LIMIT 1").bind(batchId).first<Record<string, unknown>>();

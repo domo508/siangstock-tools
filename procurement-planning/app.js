@@ -14,7 +14,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261115-procurement-crossmonth-r1";
+  const APP_VERSION = "20261116-procurement-newproduct-notice-r1";
   const state = {
     importProgress: null, shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -313,7 +313,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261115-procurement-crossmonth-r1");
+        const worker = new Worker("inventory-reader-worker.js?v=20261116-procurement-newproduct-notice-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1081,7 +1081,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261115-procurement-crossmonth-r1");
+      const worker = new Worker("seasonal-model-worker.js?v=20261116-procurement-newproduct-notice-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -1688,8 +1688,8 @@
       setWorkflowStatus(`正在核准批次${batchId}…`);
       await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/approve`, { idempotencyKey: `${batchId}:approve` });
       approved = true;
-      await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() });
-      setWorkflowStatus(`批次${batchId}已核准，摘要已寄送給siang01。`, "success");
+      const noticeResult=await postJson(`/api/procurement/batches/${encodeURIComponent(batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() });
+      setWorkflowStatus(`批次${batchId}已核准，摘要已寄送給siang01。${noticeResult?.newProductNotifications?.total?`新品首配門市通知已寄${noticeResult.newProductNotifications.sent}封。`:""}`, "success");
     } catch (error) {
       if (approved) handleSummarySendFailure(error, { run: () => retryLedgerNotification(batchId, button), isCurrent: () => true });
       setWorkflowStatus(`${approved ? "核准與台帳已完成；摘要待重送" : "核准失敗"}：${error.message}`, "error");
@@ -2050,7 +2050,7 @@
       const source = structuredClone(transferActivitySource());
       source.originParentId=state.parentBatchId;
       for (const month of source.months) if(!(month.retailTarget>0)) throw new Error(`${month.month}沒有可提供的實體門市需求，請先確認目標及歷史資料。`);
-      const send=async body=>fetch("/api/store-transfer/activity-plans", { method:"POST", cache:"no-store", headers:{Accept:"application/json","Content-Type":"application/json","X-Store-Transfer-Version":"20261115-transfer-newproduct-card-r1"},body:JSON.stringify(body) });
+      const send=async body=>fetch("/api/store-transfer/activity-plans", { method:"POST", cache:"no-store", headers:{Accept:"application/json","Content-Type":"application/json","X-Store-Transfer-Version":"20261116-transfer-newproduct-hq-r1"},body:JSON.stringify(body) });
       let response=await send({source}), result=await response.json();
       if(response.status===409 && result.existingId && confirm(`${result.error}\n\n確認更新此活動來源？`)) {response=await send({source,expectedRevision:result.existingRevision});result=await response.json();}
       if (!response.ok) throw new Error(result.error || "提供活動草稿失敗；須具備週調撥總部權限。");
@@ -3276,7 +3276,7 @@
       if(!setupResponse.ok||!setup.storeInventory||!Array.isArray(setup.displayExceptions))throw new Error(setup.error||'新品展示規則未取得。');
       for(const row of analysis.rows) row.newProductAllocation = globalThis.NewProductAllocation.draft(row,state.baseAnalysis.rows,setup.storeInventory,setup.displayExceptions);
       if(!(await checkRuntimeVersion())) throw new Error('新品登錄前請先重新載入最新版。');
-      await postJson('/api/procurement/new-products/register',{items:analysis.rows.filter(r=>Object.keys(r.newProductAllocation.stores).length).map(r=>({sku:r.sku,name:r.name,listedDate:r.listedDate}))},{'X-New-Product-Version':'20261115-new-product-allocation-r2'});
+      await postJson('/api/procurement/new-products/register',{items:analysis.rows.filter(r=>Object.keys(r.newProductAllocation.stores).length).map(r=>({sku:r.sku,name:r.name,listedDate:r.listedDate}))},{'X-New-Product-Version':'20261116-new-product-allocation-r3'});
       activateSpecialAnalysis(analysis, "新品首批採購建議");
     } catch (error) {
       elements.specialWorkflowStatus.textContent = `新品首批停止：${error.message}`;
@@ -3782,9 +3782,10 @@
         try { await operation(); } catch (error) { followUpWarnings.push(error.message); }
       }
       try {
-        await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() });
+        const noticeResult=await postJson(`/api/procurement/batches/${encodeURIComponent(state.batchId)}/notify`, {}, { "X-Google-Access-Token": googleSources.token() });
+        const newProductNoticeText=noticeResult?.newProductNotifications?.total?`新品首配門市通知本次已寄${noticeResult.newProductNotifications.sent}封。`:"";
         elements.retryNotification.disabled = true; await loadLedger().catch(() => false);
-        setWorkflowStatus(`正式核准完成，額度摘要郵件已寄送；現在可下載ERP採購檔。${followUpWarnings.length ? ` 附帶同步待處理：${followUpWarnings.join("；")}` : ""}`, followUpWarnings.length ? "warning" : "success");
+        setWorkflowStatus(`正式核准完成，額度摘要郵件已寄送；${newProductNoticeText}現在可下載ERP採購檔。${followUpWarnings.length ? ` 附帶同步待處理：${followUpWarnings.join("；")}` : ""}`, followUpWarnings.length ? "warning" : "success");
       } catch (error) {
         elements.retryNotification.disabled = false;
         handleSummarySendFailure(error, currentSummaryAction(retryNotification));

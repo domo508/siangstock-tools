@@ -1,3 +1,4 @@
+import { STORES } from './store-transfer-stores';
 import { newProductRoute, newProductClaimStatements } from './new-products';
 import { verifyCompanyUser, type AccessConfig } from "./access";
 import { RequestValidationError } from "./schema";
@@ -12,14 +13,7 @@ type ItemType = "regular" | "activity_gift" | "special_stock" | "consumable";
 
 const ADMIN = "siang01@siangapato.com.tw";
 const COLLABORATION_FINALIZERS = new Set([ADMIN, "service1@siangapato.com.tw"]);
-const STORES = Object.freeze({
-  R00: { name: "台北中山門市", email: "tpzssa@siangapato.com.tw", company: "寬承", relationship: "直營" },
-  R01: { name: "台中北屯門市", email: "txg_sianga_pato@siangapato.com.tw", company: "寬承", relationship: "直營" },
-  R03: { name: "新竹東區門市", email: "hcedsa@siangapato.com.tw", company: "寬沐", relationship: "加盟" },
-  R10: { name: "新莊門市", email: "r09_siangstore@siangapato.com.tw", company: "寬沐", relationship: "加盟" },
-  R07: { name: "誠品480門市", email: "r07_siangstore@siangapato.com.tw", company: "寬沐", relationship: "加盟" },
-  R06: { name: "文心秀泰門市", email: "r06_siangstore@siangapato.com.tw", company: "寬沐", relationship: "加盟" }
-});
+
 const ITEM_TYPES = new Set<ItemType>(["regular", "activity_gift", "special_stock", "consumable"]);
 const CONSUMABLE_SKUS = new Set(["P11041", "P11042", "P11043"]);
 type StoreCode = keyof typeof STORES;
@@ -184,7 +178,7 @@ function storeReplyDeadline(batch: Record<string, unknown>, store: Record<string
 async function extendStoreReply(request: Request, env: StoreTransferEnv, batchId: string, requestedStore: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (request.headers.get("X-Store-Transfer-Version") !== "20261115-transfer-newproduct-card-r1") throw new RequestValidationError("回覆期限功能已有新版，請重新載入最新版。", 409);
+  if (request.headers.get("X-Store-Transfer-Version") !== "20261116-transfer-newproduct-hq-r1") throw new RequestValidationError("回覆期限功能已有新版，請重新載入最新版。", 409);
   const storeCode = visibleStore(requestedStore, who.role, who.storeCode);
   if (!storeCode) throw new RequestValidationError("必須指定門市。");
   const input = await readBody(request, 8192);
@@ -608,8 +602,11 @@ async function listBatches(request: Request, env: StoreTransferEnv): Promise<Res
   const who = await actor(request, env);
   const scope = visibleStore(new URL(request.url).searchParams.get("store"), who.role, who.storeCode);
   const result = scope
-    ? await env.DB.prepare("SELECT b.*, s.status store_status, (SELECT COUNT(*) FROM store_transfer_shortages x WHERE x.batch_id = b.id AND x.store_code = s.store_code AND x.unfilled_quantity > 0) shortage_count, (SELECT COALESCE(SUM(x.unfilled_quantity), 0) FROM store_transfer_shortages x WHERE x.batch_id = b.id AND x.store_code = s.store_code) unfilled_quantity FROM store_transfer_batches b JOIN store_transfer_store_status s ON s.batch_id = b.id WHERE s.store_code = ? AND b.deleted_at IS NULL ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").bind(scope).all()
+    ? await env.DB.prepare("SELECT b.*, s.status store_status, (SELECT COUNT(*) FROM store_transfer_shortages x WHERE x.batch_id = b.id AND x.store_code = s.store_code AND x.unfilled_quantity > 0) shortage_count, (SELECT COALESCE(SUM(x.unfilled_quantity), 0) FROM store_transfer_shortages x WHERE x.batch_id = b.id AND x.store_code = s.store_code) unfilled_quantity FROM store_transfer_batches b JOIN store_transfer_store_status s ON s.batch_id = b.id WHERE s.store_code = ? AND b.deleted_at IS NULL AND (EXISTS (SELECT 1 FROM store_transfer_items i WHERE i.batch_id=b.id AND i.store_code=s.store_code AND NOT EXISTS(SELECT 1 FROM new_product_weekly_items n WHERE n.batch_id=i.batch_id AND n.store_code=i.store_code AND n.sku=i.sku)) OR EXISTS(SELECT 1 FROM store_transfer_shortages x WHERE x.batch_id=b.id AND x.store_code=s.store_code)) ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").bind(scope).all()
     : await env.DB.prepare("SELECT b.*, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id) store_total, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'submitted') store_submitted, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.status = 'approved') store_approved, (SELECT COUNT(*) FROM store_transfer_store_status s WHERE s.batch_id = b.id AND s.erp_created_at IS NOT NULL) store_erp_created, (SELECT COUNT(*) FROM store_transfer_shortages x WHERE x.batch_id = b.id AND x.unfilled_quantity > 0) shortage_count, (SELECT COALESCE(SUM(x.unfilled_quantity), 0) FROM store_transfer_shortages x WHERE x.batch_id = b.id) unfilled_quantity, (SELECT COUNT(*) FROM store_transfer_notifications n WHERE n.batch_id = b.id) notification_total, (SELECT COUNT(*) FROM store_transfer_notifications n WHERE n.batch_id = b.id AND n.status = 'sent') notification_sent, (SELECT COUNT(*) FROM store_transfer_notifications n WHERE n.batch_id = b.id AND n.status = 'failed') notification_failed FROM store_transfer_batches b WHERE b.deleted_at IS NULL ORDER BY b.updated_at DESC, b.created_at DESC LIMIT 100").all();
+  if(who.role==='store')for(const row of result.results){
+   const totals=await env.DB.prepare(`SELECT COUNT(*) item_count,COALESCE(SUM(i.suggested_quantity),0) suggested_quantity,COALESCE(SUM(COALESCE(i.hq_approved_quantity,i.store_confirmed_quantity,i.suggested_quantity)),0) approved_quantity FROM store_transfer_items i WHERE i.batch_id=? AND i.store_code=? AND NOT EXISTS(SELECT 1 FROM new_product_weekly_items n WHERE n.batch_id=i.batch_id AND n.store_code=i.store_code AND n.sku=i.sku)`).bind(row.id,scope).first();Object.assign(row,totals);
+  }
   return json({ batches: result.results, scope });
 }
 
@@ -645,11 +642,15 @@ async function detail(request: Request, env: StoreTransferEnv, batchId: string):
     const base = Number(snapshot.hqSupplyCeiling ?? snapshot.hqReleasable ?? release.base_releasable);
     return {...row, decision_snapshot: JSON.stringify({...snapshot, hqSupplyCeiling: releasedCeiling(base,release), supplyReleaseOpen: release.extra_quantity>0})};
   });
-  const visibleItems = who.role === "store" ? items.results.map((row) => ({
+  const newProductRows=await env.DB.prepare('SELECT * FROM new_product_weekly_items WHERE batch_id=?').bind(batchId).all<Record<string,unknown>>();
+  const newProductByKey=new Map(newProductRows.results.map(r=>[`${r.store_code}|${r.sku}`,r]));
+  const scopedItems=items.results.filter(r=>who.role!=='store'||!newProductByKey.has(`${r.store_code}|${r.sku}`));
+  if(who.role!=='store')for(const row of scopedItems){const first=newProductByKey.get(`${row.store_code}|${row.sku}`);if(first)row.new_product_allocation=first;}
+  const visibleItems = who.role === "store" ? scopedItems.map((row) => ({
     ...row,
     rule_summary: /人工新增/.test(String(row.rule_summary || "")) ? String(row.rule_summary) : "門市週調撥系統判斷",
     system_reason: storeFacingReason(row.system_reason || row.rule_summary, Number(row.suggested_quantity || 0))
-  })) : items.results;
+  })) : scopedItems;
   const visibleShortages = who.role === "store" ? shortages.results.map((row) => ({ ...row, reason: storeFacingReason(row.reason, Number(row.allocated_quantity || 0)) })) : shortages.results;
   const replyExtensions = scope
     ? await env.DB.prepare("SELECT store_code, previous_deadline_at, deadline_at, reason, created_at, created_by FROM store_transfer_reply_extensions WHERE batch_id = ? AND store_code = ? ORDER BY id DESC LIMIT 100").bind(batchId, scope).all()
@@ -664,6 +665,7 @@ async function manualItemFact(request: Request, env: StoreTransferEnv, batchId: 
   if (!scope) throw new RequestValidationError("必須指定門市。");
   const sku = text(url.searchParams.get("sku"), "ERP品號", 80).toLocaleUpperCase("en-US");
   if (!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) throw new RequestValidationError("ERP品號格式錯誤。");
+  if(who.role==='store'&&await env.DB.prepare('SELECT 1 found FROM new_product_weekly_items WHERE batch_id=? AND store_code=? AND sku=?').bind(batchId,scope,sku).first())throw new RequestValidationError('本品項首配由總部處理，本週不需再次人工申請。',409);
   const batchStore = await env.DB.prepare("SELECT b.proposal_date, b.arrival_schedule FROM store_transfer_store_status s JOIN store_transfer_batches b ON b.id = s.batch_id WHERE s.batch_id = ? AND s.store_code = ? AND b.deleted_at IS NULL").bind(batchId, scope).first<Record<string, unknown>>();
   if (!batchStore) throw new RequestValidationError("此批次沒有這間門市。", 404);
   const row = await env.DB.prepare("SELECT * FROM store_transfer_manual_item_facts WHERE batch_id = ? AND store_code = ? AND sku = ?").bind(batchId, scope, sku).first<Record<string, unknown>>();
@@ -750,6 +752,7 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
       ? item.decisionSnapshot as Record<string, unknown> : {};
     if(Array.isArray(rawSnapshot.activityDemandSchedule) && rawSnapshot.activityDemandSchedule.length>60) throw new RequestValidationError("活動逐日需求過長。");
     const decisionSnapshot = JSON.stringify({
+      ...(rawSnapshot.newProductProjectionBasis?{newProductProjectionBasis:String(rawSnapshot.newProductProjectionBasis).slice(0,80)}:{}),
       ...(Array.isArray(rawSnapshot.activityDemandSchedule) ? {activityAdditionalQuantity:quantity(rawSnapshot.activityAdditionalQuantity || 0,"活動增加量"),activityDemandSchedule:rawSnapshot.activityDemandSchedule.map((raw:unknown)=>{
         if(!Array.isArray(raw) || ![2,3].includes(raw.length)) throw new RequestValidationError("活動逐日需求格式錯誤。");
         return [dateText(raw[0],"活動需求日"),nonnegativeNumber(raw[1],"活動日需求"),...(raw.length===3 ? [nonnegativeNumber(raw[2],"後續及時到貨")]:[])];
@@ -895,17 +898,19 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'created', ?, ?, ?)").bind(id, `建立${stores.length}間門市、${normalized.length}筆建議、${normalizedShortages.length}筆缺貨未配`, now, who.email)
   ];
   statements.push(...await newProductClaimStatements(env,id,input.newProductClaims,normalized,input.newProductReconfirmed===true));
-  if(Array.isArray(input.newProductClaims) && input.newProductClaims.length){
-    statements.push(env.DB.prepare(`UPDATE store_transfer_items SET store_confirmed_quantity=suggested_quantity,store_reason='' WHERE batch_id=? AND EXISTS(SELECT 1 FROM new_product_transfer_claims c WHERE c.batch_id=store_transfer_items.batch_id AND c.store_code=store_transfer_items.store_code AND c.sku=store_transfer_items.sku)`).bind(id));
-    statements.push(env.DB.prepare(`UPDATE store_transfer_store_status SET status='submitted' WHERE batch_id=? AND NOT EXISTS(SELECT 1 FROM store_transfer_items i WHERE i.batch_id=store_transfer_store_status.batch_id AND i.store_code=store_transfer_store_status.store_code AND NOT EXISTS(SELECT 1 FROM new_product_transfer_claims c WHERE c.batch_id=i.batch_id AND c.store_code=i.store_code AND c.sku=i.sku))`).bind(id));
-  }
+  statements.push(env.DB.prepare(`UPDATE store_transfer_items SET store_confirmed_quantity=suggested_quantity,store_reason='' WHERE batch_id=? AND EXISTS(SELECT 1 FROM new_product_weekly_items c WHERE c.batch_id=store_transfer_items.batch_id AND c.store_code=store_transfer_items.store_code AND c.sku=store_transfer_items.sku)`).bind(id));
+  statements.push(env.DB.prepare(`UPDATE store_transfer_store_status SET status='submitted' WHERE batch_id=? AND EXISTS(SELECT 1 FROM new_product_weekly_items n WHERE n.batch_id=store_transfer_store_status.batch_id AND n.store_code=store_transfer_store_status.store_code) AND NOT EXISTS(SELECT 1 FROM store_transfer_items i WHERE i.batch_id=store_transfer_store_status.batch_id AND i.store_code=store_transfer_store_status.store_code AND NOT EXISTS(SELECT 1 FROM new_product_weekly_items c WHERE c.batch_id=i.batch_id AND c.store_code=i.store_code AND c.sku=i.sku))`).bind(id));
+  statements.push(env.DB.prepare(`UPDATE store_transfer_batches SET status='review' WHERE id=? AND EXISTS(SELECT 1 FROM new_product_weekly_items n WHERE n.batch_id=store_transfer_batches.id) AND NOT EXISTS(SELECT 1 FROM store_transfer_store_status s WHERE s.batch_id=? AND s.status NOT IN ('submitted','approved'))`).bind(id,id));
+  statements.push(env.DB.prepare(`DELETE FROM store_transfer_notifications WHERE batch_id=? AND status!='sent' AND NOT EXISTS(SELECT 1 FROM store_transfer_items i WHERE i.batch_id=store_transfer_notifications.batch_id AND i.store_code=store_transfer_notifications.store_code AND NOT EXISTS(SELECT 1 FROM new_product_weekly_items n WHERE n.batch_id=i.batch_id AND n.store_code=i.store_code AND n.sku=i.sku)) AND NOT EXISTS(SELECT 1 FROM store_transfer_shortages x WHERE x.batch_id=store_transfer_notifications.batch_id AND x.store_code=store_transfer_notifications.store_code)`).bind(id));
+
   try { await env.DB.batch(statements); }
   catch (error) {
     if (/new_product_claim_conflict/.test(String(error))) throw new RequestValidationError("新品首配量已被其他批次占用，請重新計算後再建立。",409);
     if (/CHECK constraint failed.*revision/i.test(String(error))) throw new RequestValidationError("本週舊批次已有部分門市核准或產生ERP，不能直接取代；請接續原批次處理其餘門市。", 409);
     throw error;
   }
-  return json({ id, status: "open", stores, itemCount: normalized.length, shortageCount: normalizedShortages.length }, 201);
+  const createdState=await env.DB.prepare("SELECT status FROM store_transfer_batches WHERE id=?").bind(id).first<{status:string}>();
+  return json({ id, status: createdState?.status||"open", stores, itemCount: normalized.length, shortageCount: normalizedShortages.length }, 201);
 }
 
 async function sendBatchNotifications(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
@@ -913,7 +918,7 @@ async function sendBatchNotifications(request: Request, env: StoreTransferEnv, b
   const who = await actor(request, env); assertHq(who.role);
   const batch = await env.DB.prepare("SELECT id, week_key, proposal_date, response_due_at, created_by FROM store_transfer_batches WHERE id = ? AND deleted_at IS NULL").bind(batchId).first<Record<string, unknown>>();
   if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
-  const notifications = await env.DB.prepare("SELECT id, store_code, recipient, status FROM store_transfer_notifications WHERE batch_id = ? AND status != 'sent' ORDER BY store_code").bind(batchId).all<Record<string, unknown>>();
+  const notifications = await env.DB.prepare("SELECT id, store_code, recipient, status FROM store_transfer_notifications WHERE batch_id = ? AND status != 'sent' AND (EXISTS(SELECT 1 FROM store_transfer_items i WHERE i.batch_id=store_transfer_notifications.batch_id AND i.store_code=store_transfer_notifications.store_code AND NOT EXISTS(SELECT 1 FROM new_product_weekly_items n WHERE n.batch_id=i.batch_id AND n.store_code=i.store_code AND n.sku=i.sku)) OR EXISTS(SELECT 1 FROM store_transfer_shortages x WHERE x.batch_id=store_transfer_notifications.batch_id AND x.store_code=store_transfer_notifications.store_code)) ORDER BY store_code").bind(batchId).all<Record<string, unknown>>();
   if (!notifications.results.length) return json({ status: "sent", sent: 0, failed: 0, remaining: 0 });
 
   const failAll = async (stage: string, message: string, status: number) => {
@@ -935,7 +940,7 @@ async function sendBatchNotifications(request: Request, env: StoreTransferEnv, b
   const sender = String(identity.email || "").toLocaleLowerCase("en-US");
   if (sender !== who.email) return failAll("Google授權檢查", "Google授權帳號必須與目前公司登入帳號相同。", 403);
 
-  const totals = await env.DB.prepare("SELECT s.store_code, COUNT(i.id) item_count, COALESCE(SUM(i.suggested_quantity), 0) suggested_quantity, (SELECT COUNT(*) FROM store_transfer_shortages x WHERE x.batch_id = s.batch_id AND x.store_code = s.store_code AND x.unfilled_quantity > 0) shortage_count, (SELECT COALESCE(SUM(x.unfilled_quantity), 0) FROM store_transfer_shortages x WHERE x.batch_id = s.batch_id AND x.store_code = s.store_code) unfilled_quantity FROM store_transfer_store_status s LEFT JOIN store_transfer_items i ON i.batch_id = s.batch_id AND i.store_code = s.store_code WHERE s.batch_id = ? GROUP BY s.batch_id, s.store_code").bind(batchId).all<Record<string, unknown>>();
+  const totals = await env.DB.prepare("SELECT s.store_code, COUNT(i.id) item_count, COALESCE(SUM(i.suggested_quantity), 0) suggested_quantity, (SELECT COUNT(*) FROM store_transfer_shortages x WHERE x.batch_id = s.batch_id AND x.store_code = s.store_code AND x.unfilled_quantity > 0) shortage_count, (SELECT COALESCE(SUM(x.unfilled_quantity), 0) FROM store_transfer_shortages x WHERE x.batch_id = s.batch_id AND x.store_code = s.store_code) unfilled_quantity FROM store_transfer_store_status s LEFT JOIN store_transfer_items i ON i.batch_id = s.batch_id AND i.store_code = s.store_code AND NOT EXISTS(SELECT 1 FROM new_product_weekly_items n WHERE n.batch_id=i.batch_id AND n.store_code=i.store_code AND n.sku=i.sku) WHERE s.batch_id = ? GROUP BY s.batch_id, s.store_code").bind(batchId).all<Record<string, unknown>>();
   const totalsByStore = new Map(totals.results.map((row) => [String(row.store_code), row]));
   const due = new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", dateStyle: "medium", timeStyle: "short", hourCycle: "h23" }).format(new Date(String(batch.response_due_at)));
   const toolUrl = `${new URL(request.url).origin}/store-transfer/`;
@@ -1022,7 +1027,9 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
   if (input.expectedRevision != null && Number(input.expectedRevision) !== Number(batch.revision)) throw new RequestValidationError("批次已由其他同事更新，請重新整理後再試。", 409);
   if (!Array.isArray(input.items) || input.items.length > 2000) throw new RequestValidationError("確認明細格式錯誤。");
   const allExisting = await env.DB.prepare("SELECT store_code, sku, item_type, suggested_quantity, store_confirmed_quantity, hq_approved_quantity, store_reason, rule_summary, decision_snapshot FROM store_transfer_items WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
-  const existing = { results: allExisting.results.filter((row) => String(row.store_code) === storeCode) };
+  const hqOnly=await env.DB.prepare('SELECT sku FROM new_product_weekly_items WHERE batch_id=? AND store_code=?').bind(batchId,storeCode).all<{sku:string}>();
+  const hqOnlySkus=new Set(hqOnly.results.map(r=>r.sku));
+  const existing = { results: allExisting.results.filter((row) => String(row.store_code) === storeCode&&!hqOnlySkus.has(String(row.sku))) };
   const manualFactsResult = await env.DB.prepare("SELECT * FROM store_transfer_manual_item_facts WHERE batch_id = ? AND store_code = ?").bind(batchId, storeCode).all<Record<string, unknown>>();
   const manualFacts = new Map(manualFactsResult.results.map((row) => [String(row.sku), row]));
   const catalogResult = await env.DB.prepare("SELECT sku, product_name, hq_available, hq_reserve, hq_releasable, auto_exclusions FROM store_transfer_batch_product_catalog WHERE batch_id = ?").bind(batchId).all<Record<string, unknown>>();
@@ -1045,6 +1052,11 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
     const snapshot = parseJson(row.decision_snapshot);
     if (Object.prototype.hasOwnProperty.call(snapshot, "hqSupplyCeiling")) supplyCeilingBySku.set(sku, Math.max(supplyCeilingBySku.get(sku) || 0, Number(snapshot.hqSupplyCeiling || 0)));
   });
+  for(const row of allExisting.results.filter(r=>String(r.store_code)===storeCode&&hqOnlySkus.has(String(r.sku)))){
+   const sku=String(row.sku),snapshot=parseJson(row.decision_snapshot);
+   requestedBySku.set(sku,(requestedBySku.get(sku)||0)+Number(row.hq_approved_quantity??row.store_confirmed_quantity??row.suggested_quantity));
+   if(Object.prototype.hasOwnProperty.call(snapshot,'hqSupplyCeiling'))supplyCeilingBySku.set(sku,Math.max(supplyCeilingBySku.get(sku)||0,Number(snapshot.hqSupplyCeiling||0)));
+  }
   let addedCount = 0;
   let removedCount = 0;
   const existingUpdates: Record<string, unknown>[] = [];
@@ -1053,6 +1065,7 @@ async function saveStore(request: Request, env: StoreTransferEnv, batchId: strin
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestValidationError("確認明細格式錯誤。");
     const item = raw as Record<string, unknown>;
     const sku = text(item.sku, "ERP品號", 80).toLocaleUpperCase("en-US");
+    if(hqOnlySkus.has(sku))throw new RequestValidationError(`${sku}新品首配由總部出貨覆核，門市不需再次申請。`,409);
     const type = itemType(item.itemType);
     const key = `${sku}\u0000${type}`;
     if (seen.has(key)) throw new RequestValidationError(`${sku}確認明細重複。`);
@@ -1183,7 +1196,7 @@ async function openApprovedCorrection(request: Request, env: StoreTransferEnv, b
 async function approveBatch(request: Request, env: StoreTransferEnv, batchId: string, saveOnly = false, requestedStore?: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261115-transfer-newproduct-card-r1") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
+  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261116-transfer-newproduct-hq-r1") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
   const batch = await env.DB.prepare("SELECT status, revision, proposal_date, arrival_schedule FROM store_transfer_batches WHERE id = ? AND deleted_at IS NULL").bind(batchId).first<Record<string, unknown>>();
   if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
   if (!["open", "review"].includes(String(batch.status))) throw new RequestValidationError("此批次目前不可核准。", 409);
@@ -1574,7 +1587,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
     return json({ hasMore:rows.results.length>100, plans:await Promise.all(rows.results.slice(0,100).map(async raw=>{const row=raw as Record<string,unknown>,current=await currentActivityRecord(env,row);const {source,config,...metadata}=row;return {...metadata,status:current.status,startProposalDate:current.config.startProposalDate || "",...("settingsOutdated" in current?{settingsOutdated:true}:{})};})) });
   }
   requireSameOrigin(request,env);
-  if(request.headers.get("X-Store-Transfer-Version") !== "20261115-transfer-newproduct-card-r1") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
+  if(request.headers.get("X-Store-Transfer-Version") !== "20261116-transfer-newproduct-hq-r1") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
   const body = await readBody(request,3_000_000), now = new Date().toISOString();
   if (request.method === "POST" && !id) {
     const source = activitySource(body.source), planId = crypto.randomUUID();
@@ -1625,7 +1638,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
 
 async function supplyRelease(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
   const who=await actor(request,env); assertHq(who.role);
-  if(request.method==="PUT") { requireSameOrigin(request,env); if(request.headers.get("X-Store-Transfer-Version")!=="20261115-transfer-newproduct-card-r1") throw new RequestValidationError("額度功能已有新版，請重新載入最新版。",409); }
+  if(request.method==="PUT") { requireSameOrigin(request,env); if(request.headers.get("X-Store-Transfer-Version")!=="20261116-transfer-newproduct-hq-r1") throw new RequestValidationError("額度功能已有新版，請重新載入最新版。",409); }
   const sku=text(new URL(request.url).searchParams.get("sku"),"ERP品號",80).toUpperCase();
   if(!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) throw new RequestValidationError("ERP品號格式錯誤。");
   const batch=await env.DB.prepare("SELECT status,revision FROM store_transfer_batches WHERE id=? AND deleted_at IS NULL").bind(batchId).first<Record<string,unknown>>();
@@ -1662,7 +1675,7 @@ async function bulkSupplyRelease(request: Request, env: StoreTransferEnv, batchI
   const who=await actor(request,env); assertHq(who.role);
   if(request.method==="PUT") {
     requireSameOrigin(request,env);
-    if(request.headers.get("X-Store-Transfer-Version")!=="20261115-transfer-newproduct-card-r1") throw new RequestValidationError("批次開放已有新版，請重新載入最新版。",409);
+    if(request.headers.get("X-Store-Transfer-Version")!=="20261116-transfer-newproduct-hq-r1") throw new RequestValidationError("批次開放已有新版，請重新載入最新版。",409);
   }
   const batch=await env.DB.prepare("SELECT status,revision FROM store_transfer_batches WHERE id=? AND deleted_at IS NULL").bind(batchId).first<{status:string;revision:number}>();
   if(!batch) throw new RequestValidationError("找不到此週調撥批次。",404);

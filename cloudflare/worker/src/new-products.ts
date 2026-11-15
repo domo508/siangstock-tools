@@ -1,7 +1,8 @@
+import { newProductNoticeStatements, sendNewProductNotices } from './new-product-notifications';
 import { RequestValidationError } from './schema';
 type Env = { DB:D1Database };
 type Who = {email:string;role:string;storeCode:string|null};
-export const NEW_PRODUCT_VERSION='20261115-new-product-allocation-r2';
+export const NEW_PRODUCT_VERSION='20261116-new-product-allocation-r3';
 export const NEW_PRODUCT_STORES=['R00','R01','R03','R06','R07','R10'];
 function fail(message:string,status=400):never{throw new RequestValidationError(message,status);}
 function object(v:unknown):Record<string,unknown>{if(!v||typeof v!=='object'||Array.isArray(v))fail('新品首配資料格式錯誤。');return v as Record<string,unknown>;}
@@ -31,7 +32,7 @@ export function newProductSeedStatements(env:Env,batchId:string,value:unknown,ap
  statements.push(env.DB.prepare("INSERT INTO new_product_events(plan_id,action,payload,created_at,created_by) SELECT ?,'seed',?,?,? WHERE EXISTS(SELECT 1 FROM new_product_plans WHERE id=?)").bind(id,JSON.stringify(normalized),now,actor,id));return statements;
 }
 
-export function activateNewProductStatements(env:Env,batchId:string,actor:string,now:string){return [env.DB.prepare("UPDATE new_product_plans SET status='store_confirmation',updated_at=?,updated_by=?,revision=revision+1 WHERE procurement_batch_id=? AND status='pending_purchase' AND EXISTS(SELECT 1 FROM procurement_batches WHERE id=? AND status='approved')").bind(now,actor,batchId,batchId)];}
+export function activateNewProductStatements(env:Env,batchId:string,actor:string,now:string){return [env.DB.prepare("UPDATE new_product_plans SET status='store_confirmation',updated_at=?,updated_by=?,revision=revision+1 WHERE procurement_batch_id=? AND status='pending_purchase' AND EXISTS(SELECT 1 FROM procurement_batches WHERE id=? AND status='approved')").bind(now,actor,batchId,batchId),...newProductNoticeStatements(env,batchId,now)];}
 export async function newProductCalculationState(env:Env){
  const rows=await env.DB.prepare(`SELECT r.*,p.revision,p.status,p.updated_at approved_at,b.status purchase_status,g.listed_date,g.first_stock_date,
  r.archived_dispatched_quantity + COALESCE((SELECT SUM(u.quantity) FROM new_product_claim_usage u WHERE u.plan_id=r.plan_id AND u.store_code=r.store_code AND u.sku=r.sku),0) committed_quantity,
@@ -46,17 +47,19 @@ export async function newProductRoute(request:Request,env:Env,who:Who):Promise<R
  if(request.method==='GET'&&path==='/calculation'){if(who.role==='store')fail('僅總部可讀取新品計算資料。',403);return reply(await newProductCalculationState(env));}
  if(request.method==='GET'&&(path===''||path==='/')){
  const rows=await env.DB.prepare(`SELECT p.id,p.revision,p.status,p.procurement_batch_id,p.updated_at,s.store_code,s.status store_status,
+ (SELECT COUNT(*) FROM new_product_notifications n WHERE n.plan_id=p.id) notice_total, (SELECT COUNT(*) FROM new_product_notifications n WHERE n.plan_id=p.id AND n.status IN ('sent','not_required')) notice_sent,
  r.sku,r.name,r.suggested_quantity,r.confirmed_quantity,r.approved_quantity,r.store_reason,r.hq_reason,r.evidence,
  (r.archived_dispatched_quantity + (SELECT COALESCE(SUM(u.quantity),0) FROM new_product_claim_usage u WHERE u.plan_id=r.plan_id AND u.store_code=r.store_code AND u.sku=r.sku)) committed_quantity,
  (r.archived_dispatched_quantity + (SELECT COALESCE(SUM(u.quantity),0) FROM new_product_claim_usage u WHERE u.plan_id=r.plan_id AND u.store_code=r.store_code AND u.sku=r.sku AND u.erp_created=1)) dispatched_quantity
  FROM new_product_plans p JOIN procurement_batches b ON b.id=p.procurement_batch_id JOIN new_product_store_status s ON s.plan_id=p.id
  JOIN new_product_plan_rows r ON r.plan_id=p.id AND r.store_code=s.store_code
- WHERE b.status IN ('approved','erp_created','received') AND (?='' OR r.store_code=?) ORDER BY p.created_at DESC,p.id,r.store_code,r.sku`).bind(who.storeCode||'',who.storeCode||'').all();return reply({rows:rows.results});}
+ WHERE b.status IN ('approved','erp_created','received') AND (?='' OR r.store_code=?) AND (?=0 OR p.status='store_confirmation') ORDER BY p.created_at DESC,p.id,r.store_code,r.sku`).bind(who.storeCode||'',who.storeCode||'',who.role==='store'?1:0).all();return reply({rows:rows.results});}
  if(!['PUT','POST'].includes(request.method))fail('新品操作不存在。',404);
  if(request.headers.get('X-New-Product-Version')!==NEW_PRODUCT_VERSION)fail('新品首配已有新版，請重新載入最新版。',409);
  if(!/^application\/json(?:\s*;|$)/i.test(request.headers.get('Content-Type')||''))fail('Content-Type 必須是 application/json。',415);
  const raw=await request.text();if(new TextEncoder().encode(raw).length>500000)fail('新品首配資料過大。',413);let body:Record<string,unknown>;try{body=object(JSON.parse(raw));}catch{fail('新品首配JSON格式錯誤。');}
  if(path==='/register'||path==='/observe'){if(who.role==='store')fail('只有總部可維護新品來源。',403);return registerNewProducts(env,body,who.email,path==='/observe');}
+ const notice=path.match(/^\/([^/]+)\/notifications\/send$/);if(notice){if(who.role==='store')fail('只有總部可重送新品門市通知。',403);const result=await sendNewProductNotices(request,env,decodeURIComponent(notice[1]),who.email);return reply({...result,...(result.remaining?{error:result.errors?.join('；')||'仍有未寄送門市'}:{})},result.remaining?502:200);}
  const match=path.match(/^\/([^/]+)\/(save|submit|approve)$/);if(!match)fail('新品操作不存在。',404);
  const id=decodeURIComponent(match[1]),action=match[2],revision=qty(body.expectedRevision);
  const plan=await env.DB.prepare('SELECT p.*,b.status purchase_status FROM new_product_plans p JOIN procurement_batches b ON b.id=p.procurement_batch_id WHERE p.id=?').bind(id).first<Record<string,unknown>>();
@@ -74,13 +77,15 @@ export async function newProductRoute(request:Request,env:Env,who:Who):Promise<R
  for(const r of updates)stmts.push(env.DB.prepare(`UPDATE new_product_plan_rows SET ${action==='approve'?'approved_quantity=?,hq_reason=?':'confirmed_quantity=?,store_reason=?'} WHERE plan_id=? AND store_code=? AND sku=?`).bind(r.quantity,r.reason,id,r.storeCode,r.sku));
  if(action==='approve')stmts.push(env.DB.prepare("UPDATE new_product_plans SET status='waiting_stock' WHERE id=?").bind(id));
  else stmts.push(env.DB.prepare('UPDATE new_product_store_status SET status=? WHERE plan_id=? AND store_code=?').bind(action==='submit'?'submitted':'saved',id,store));
+ if(action==='submit')stmts.push(env.DB.prepare("UPDATE new_product_notifications SET status='not_required',error_summary='門市已完成確認，無需再通知' WHERE plan_id=? AND store_code=? AND status IN ('pending','failed')").bind(id,store));
  stmts.push(env.DB.prepare('INSERT INTO new_product_events(plan_id,action,payload,created_at,created_by) VALUES(?,?,?,?,?)').bind(id,action,JSON.stringify(updates),now,who.email));
  try{await env.DB.batch(stmts);}catch(e){if(/CHECK constraint/.test(String(e)))fail('新品首配已更新，請重新讀取比對，原輸入尚未送出。',409);throw e;}
  return reply({id,revision:revision+1,status:action==='approve'?'waiting_stock':'store_confirmation'});
 }
 export async function newProductClaimStatements(env:Env,batchId:string,claims:unknown,normalized:{storeCode:string;sku:string;suggested:number;itemType:string}[],reconfirmed=false){
  if(claims==null)claims=[];if(!Array.isArray(claims)||claims.length>5000)fail('新品出貨來源錯誤。');
- const live=await env.DB.prepare(`SELECT r.plan_id,r.store_code,r.sku,r.approved_quantity,r.archived_dispatched_quantity,
+ const live=await env.DB.prepare(`SELECT p.revision,r.plan_id,r.store_code,r.sku,r.approved_quantity,r.archived_dispatched_quantity,
+ (r.archived_dispatched_quantity+(SELECT COALESCE(SUM(u.quantity),0) FROM new_product_claim_usage u WHERE u.plan_id=r.plan_id AND u.store_code=r.store_code AND u.sku=r.sku AND u.erp_created=1)) dispatched,
  (SELECT COALESCE(SUM(u.quantity),0) FROM new_product_claim_usage u WHERE u.plan_id=r.plan_id AND u.store_code=r.store_code AND u.sku=r.sku) used
  FROM new_product_plan_rows r JOIN new_product_plans p ON p.id=r.plan_id JOIN procurement_batches b ON b.id=p.procurement_batch_id
  WHERE p.status='waiting_stock' AND b.status IN ('approved','erp_created','received')`).all<Record<string,unknown>>();
@@ -96,6 +101,14 @@ export async function newProductClaimStatements(env:Env,batchId:string,claims:un
  if(Date.now()-Date.parse(String(p.updated_at))>=14*86400000&&!reconfirmed)fail('新品首配核定已超過14天，請核對本週庫存、銷售及待配量後勾選重新確認。',409);
  out.push(env.DB.prepare("UPDATE new_product_plans SET revision=CASE WHEN revision=? AND status='waiting_stock' THEN revision ELSE 0 END WHERE id=?").bind(p.revision,id));
  out.push(env.DB.prepare('INSERT INTO new_product_transfer_claims(batch_id,plan_id,store_code,sku,quantity) VALUES(?,?,?,?,?)').bind(batchId,id,sc,sku,n));
+ }
+ // Separate presentation ownership from first-allocation usage: weekly demand above
+ // the remaining allocation is still HQ-only, but never enlarges the first pool.
+ for(const r of live.results){
+  if(Number(r.approved_quantity)<=Number(r.dispatched))continue;
+  if(!normalized.some(i=>i.itemType==='regular'&&i.storeCode===r.store_code&&i.sku===r.sku))continue;
+  out.push(env.DB.prepare("UPDATE new_product_plans SET revision=CASE WHEN revision=? AND status='waiting_stock' AND EXISTS(SELECT 1 FROM procurement_batches b WHERE b.id=new_product_plans.procurement_batch_id AND b.status IN ('approved','erp_created','received')) THEN revision ELSE 0 END WHERE id=?").bind(r.revision,r.plan_id));
+  out.push(env.DB.prepare('INSERT INTO new_product_weekly_items(batch_id,store_code,sku,plan_id,first_approved_quantity,remaining_quantity) VALUES(?,?,?,?,?,?)').bind(batchId,r.store_code,r.sku,r.plan_id,r.approved_quantity,Math.max(0,Number(r.approved_quantity)-Number(r.used)-Number(r.archived_dispatched_quantity))));
  }
  return out;
 }

@@ -40,6 +40,13 @@
   if(days>=14||!reference)return actual;
   const weight=days/14;return actual*weight+reference*(1-weight);
  }
+ function projectionReference(ctx,store,sku,daily){
+  const r=ctx.facts.get(`${store}|${sku}`);if(!r||r.status!=='waiting_stock'||Number(r.approved_quantity)<=Number(r.dispatched_quantity))return null;
+  const days=r.first_stock_date&&ctx.latest?Math.max(1,(Date.parse(ctx.latest)-Date.parse(r.first_stock_date))/86400000+1):0;
+  const reference=Math.max(0,Number(r.reference_daily||0));
+  if(daily>0)return {daily,basis:reference&&days<14?'依新品實銷／相似商品綜合估算':'依新品實銷估算'};
+  return reference&&(!Number(r.committed_quantity)||days<14)?{daily:reference,basis:'依相似商品估算'}:{daily:0,basis:'資料不足，暫無法推估'};
+ }
  function changed(row){return Number(row.confirmed_quantity??row.suggested_quantity)!==Number(row.suggested_quantity)||Number(row.approved_quantity??row.confirmed_quantity??row.suggested_quantity)!==Number(row.confirmed_quantity??row.suggested_quantity)||Boolean(String(row.store_reason||'').trim()||String(row.hq_reason||'').trim());}
- root.NewProductAllocation={STORES,intendedStores,quantity,draft,context,need,claims,weeklyDaily,changed};
+ root.NewProductAllocation={STORES,intendedStores,quantity,draft,context,need,claims,weeklyDaily,projectionReference,changed};
 })(globalThis);

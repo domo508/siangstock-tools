@@ -460,3 +460,8 @@ html, body { max-width: 100%; overflow-x: clip; }
 #new-product-panel>summary { overflow-wrap:anywhere; line-height:1.7; cursor:pointer; }
 .new-product-summary { display:inline; margin-inline-start:12px; color:var(--muted); font-weight:500; font-size:.9em; }
 @media(max-width:700px){ .new-product-summary { display:block; margin-inline-start:0; } }
+
+.change-filter-toolbar label { display:inline-flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin:0 .75rem .5rem 0; max-width:100%; }
+.change-filter-toolbar select { font:inherit; max-width:100%; border:1px solid var(--line); border-radius:10px; padding:.6rem; color:var(--ink); background:white; }
+[data-new-product-excess] { display:block; white-space:normal; overflow-wrap:anywhere; line-height:1.6; color:#8a5b12; }
+.workflow-table .manual-item-badge { max-width:100%; white-space:normal; overflow-wrap:anywhere; }

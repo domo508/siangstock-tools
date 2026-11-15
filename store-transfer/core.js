@@ -911,11 +911,15 @@
         const sellableNeed = activityTimeline ? Math.max(activityTimeline.need - displayGap, Math.ceil(minimum-sellable), 0) : Math.max(0, Math.ceil(Math.max(target, minimum) - sellable - 1e-9));
         const normalNeed = displayGap + sellableNeed;
         const specialNeed = specialTopTwo.has(key) ? Math.max(0, Number(specialTopTwo.get(key)) - sellable) : 0;
-        const itemType = !newProductContext?.approved.has(key) && specialNeed > 0 && normalNeed <= specialNeed ? "special_stock" : "regular";
+        const firstFact=newProductContext?.facts.get(key);
+        const firstAllocationActive=firstFact?.status==='waiting_stock'&&Number(firstFact.approved_quantity)>Number(firstFact.dispatched_quantity);
+        const itemType = !firstAllocationActive && specialNeed > 0 && normalNeed <= specialNeed ? "special_stock" : "regular";
         const ordinaryNeed = itemType === "special_stock" ? specialNeed : normalNeed;
         const need = newProductContext ? globalThis.NewProductAllocation.need(newProductContext,store,sku,ordinaryNeed,daily) : ordinaryNeed;
         if (!need) continue;
+        const projectionReference=newProductContext?globalThis.NewProductAllocation.projectionReference(newProductContext,store,sku,daily):null;
         const row = {
+          ...(projectionReference?{newProductProjectionDaily:projectionReference.daily,newProductProjectionBasis:projectionReference.basis}:{}),
           storeCode: store, sku, productName: master.name, localSales42: local42, b3Sales42: b342,
           ...(newSalesBasis ? {salesBasisVersion:2, warehouseDemandSales42:Math.max(0,warehouseDemand.get(key) || 0),replenishmentSales42} : {}),
           currentInventory: current, physicalInventory, pendingSubmittedQuantity, inTransitQuantity,
@@ -968,11 +972,11 @@
           const systemDecisionReason = supplyDecisionReason(row.rawNeed, suggested, protection, hqAvailable, isS);
           systemDecisionByKey.set(`${row.storeCode}|${sku}`, systemDecisionReason);
           if (suggested > 0) {
-            const output = { ...row, suggestedQuantity: suggested, hqAvailable, hqReserve: protection.reserve, hqReleasable: protection.releasable, hqSupplyCeiling: protection.releasable, systemSellThroughDate: newProductContext?.approved.has(`${row.storeCode}|${sku}`) && !row.dailySales ? "新品首配，待累積銷售後推估" : projectedSellThroughDate(row.calculationDate, row.baseSellableQuantity, Math.max(0, suggested - row.displayGap), row.dailySales), systemDecisionReason, ruleSummary: `${newProductContext?.approved.has(`${row.storeCode}|${sku}`) ? "新品首配（已完成首次需求覆核）；" : ""}${row.ruleSummary}；${isS ? "S品" : "總部安全庫存"}${protection.reason}，可釋出${protection.releasable}件${suggested < row.rawNeed ? "；總倉不足依70/30分配" : ""}` };
+            const output = { ...row, suggestedQuantity: suggested, hqAvailable, hqReserve: protection.reserve, hqReleasable: protection.releasable, hqSupplyCeiling: protection.releasable, systemSellThroughDate: row.newProductProjectionBasis ? (row.newProductProjectionDaily>0?`${projectedSellThroughDate(row.calculationDate,row.baseSellableQuantity,Math.max(0,suggested-row.displayGap),row.newProductProjectionDaily)}（${row.newProductProjectionBasis}）`:"資料不足，暫無法推估") : projectedSellThroughDate(row.calculationDate, row.baseSellableQuantity, Math.max(0, suggested - row.displayGap), row.dailySales), systemDecisionReason, ruleSummary: `${newProductContext?.approved.has(`${row.storeCode}|${sku}`) ? "新品首配（已完成首次需求覆核）；" : ""}${row.ruleSummary}；${isS ? "S品" : "總部安全庫存"}${protection.reason}，可釋出${protection.releasable}件${suggested < row.rawNeed ? "；總倉不足依70/30分配" : ""}` };
             (type === "special_stock" ? specialStockRows : regularRows).push(output);
           }
           const unfilled = Math.max(0, row.rawNeed - suggested);
-          if (type === "regular" && unfilled > 0 && !newProductContext?.approved.has(`${row.storeCode}|${sku}`)) shortageRows.push({ storeCode: row.storeCode, sku, productName: row.productName, demandQuantity: row.rawNeed, allocatedQuantity: suggested, unfilledQuantity: unfilled, itemType: "regular", currentArrivalDate: row.currentArrivalDate, nextArrivalDate: row.nextArrivalDate, followUpStatus: "待回拋主採購", systemDecisionReason, reason: isS ? `S品僅可釋出${protection.releasable}件；${protection.reason}` : protection.reserve > 0 ? `總部安全庫存保留${protection.reserve}件；總倉可釋出${protection.releasable}件` : `總倉可用${hqAvailable}件，不足全部門市需求` });
+          if (type === "regular" && unfilled > 0 && !row.newProductProjectionBasis) shortageRows.push({ storeCode: row.storeCode, sku, productName: row.productName, demandQuantity: row.rawNeed, allocatedQuantity: suggested, unfilledQuantity: unfilled, itemType: "regular", currentArrivalDate: row.currentArrivalDate, nextArrivalDate: row.nextArrivalDate, followUpStatus: "待回拋主採購", systemDecisionReason, reason: isS ? `S品僅可釋出${protection.releasable}件；${protection.reason}` : protection.reserve > 0 ? `總部安全庫存保留${protection.reserve}件；總倉可釋出${protection.releasable}件` : `總倉可用${hqAvailable}件，不足全部門市需求` });
         }
       }
     }
