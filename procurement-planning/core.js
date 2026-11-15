@@ -4086,6 +4086,8 @@
         seasonalReliability: seasonalReliabilityFromRows(selected?.rows || []),
         adoptedFirstMonthDemandQty: Math.ceil(daily * 30),
         comparisonNote: "系統採用成熟同類既有季節調整結果；不重複加乘季節倍率",
+        storeDailyByCode: Object.fromEntries(["R00","R01","R03","R06","R07","R10"].map(code=>[code,
+          Math.max(0,Number(trimmedMean((selected?.rows || []).map(peer=>Number(peer.storeDailyByCode?.[code] || 0)*((peer.sellThroughStop||peer.discontinued)?0.5:1))) || 0))])),
         sampleCount,
         label: selected?.label || "同類樣本不足",
         referenceScope: selected?.scope || "同類樣本不足",

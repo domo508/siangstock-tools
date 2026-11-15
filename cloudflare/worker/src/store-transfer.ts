@@ -1,3 +1,4 @@
+import { newProductRoute, newProductClaimStatements } from './new-products';
 import { verifyCompanyUser, type AccessConfig } from "./access";
 import { RequestValidationError } from "./schema";
 import { assertCurrentActivity } from "./procurement-activities";
@@ -33,6 +34,7 @@ async function guardedBatch(env: StoreTransferEnv, batchId: string, revision: nu
   try { return await env.DB.batch([batchWriteGuard(env, batchId, revision), ...statements]); }
   catch (error) {
     if (/CHECK constraint failed.*revision/i.test(String(error))) throw new RequestValidationError("批次已由其他同事更新，請重新整理後再試。", 409);
+    if (/new_product_claim_conflict/.test(String(error))) throw new RequestValidationError("新品首配量已被其他批次占用，請更新資料並核對待配量。",409);
     throw error;
   }
 }
@@ -182,7 +184,7 @@ function storeReplyDeadline(batch: Record<string, unknown>, store: Record<string
 async function extendStoreReply(request: Request, env: StoreTransferEnv, batchId: string, requestedStore: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (request.headers.get("X-Store-Transfer-Version") !== "20261111-transfer-change-filter-r3") throw new RequestValidationError("回覆期限功能已有新版，請重新載入最新版。", 409);
+  if (request.headers.get("X-Store-Transfer-Version") !== "20261115-transfer-newproduct-r2") throw new RequestValidationError("回覆期限功能已有新版，請重新載入最新版。", 409);
   const storeCode = visibleStore(requestedStore, who.role, who.storeCode);
   if (!storeCode) throw new RequestValidationError("必須指定門市。");
   const input = await readBody(request, 8192);
@@ -892,8 +894,14 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
     ...stores.map((storeCode) => env.DB.prepare("INSERT INTO store_transfer_notifications (batch_id, store_code, recipient, status, created_at) VALUES (?, ?, ?, 'pending', ?)").bind(id, storeCode, STORES[storeCode].email, now)),
     env.DB.prepare("INSERT INTO store_transfer_events (batch_id, event_type, summary, created_at, created_by) VALUES (?, 'created', ?, ?, ?)").bind(id, `建立${stores.length}間門市、${normalized.length}筆建議、${normalizedShortages.length}筆缺貨未配`, now, who.email)
   ];
+  statements.push(...await newProductClaimStatements(env,id,input.newProductClaims,normalized,input.newProductReconfirmed===true));
+  if(Array.isArray(input.newProductClaims) && input.newProductClaims.length){
+    statements.push(env.DB.prepare(`UPDATE store_transfer_items SET store_confirmed_quantity=suggested_quantity,store_reason='' WHERE batch_id=? AND EXISTS(SELECT 1 FROM new_product_transfer_claims c WHERE c.batch_id=store_transfer_items.batch_id AND c.store_code=store_transfer_items.store_code AND c.sku=store_transfer_items.sku)`).bind(id));
+    statements.push(env.DB.prepare(`UPDATE store_transfer_store_status SET status='submitted' WHERE batch_id=? AND NOT EXISTS(SELECT 1 FROM store_transfer_items i WHERE i.batch_id=store_transfer_store_status.batch_id AND i.store_code=store_transfer_store_status.store_code AND NOT EXISTS(SELECT 1 FROM new_product_transfer_claims c WHERE c.batch_id=i.batch_id AND c.store_code=i.store_code AND c.sku=i.sku))`).bind(id));
+  }
   try { await env.DB.batch(statements); }
   catch (error) {
+    if (/new_product_claim_conflict/.test(String(error))) throw new RequestValidationError("新品首配量已被其他批次占用，請重新計算後再建立。",409);
     if (/CHECK constraint failed.*revision/i.test(String(error))) throw new RequestValidationError("本週舊批次已有部分門市核准或產生ERP，不能直接取代；請接續原批次處理其餘門市。", 409);
     throw error;
   }
@@ -1175,7 +1183,7 @@ async function openApprovedCorrection(request: Request, env: StoreTransferEnv, b
 async function approveBatch(request: Request, env: StoreTransferEnv, batchId: string, saveOnly = false, requestedStore?: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261111-transfer-change-filter-r3") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
+  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261115-transfer-newproduct-r2") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
   const batch = await env.DB.prepare("SELECT status, revision, proposal_date, arrival_schedule FROM store_transfer_batches WHERE id = ? AND deleted_at IS NULL").bind(batchId).first<Record<string, unknown>>();
   if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
   if (!["open", "review"].includes(String(batch.status))) throw new RequestValidationError("此批次目前不可核准。", 409);
@@ -1566,7 +1574,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
     return json({ hasMore:rows.results.length>100, plans:await Promise.all(rows.results.slice(0,100).map(async raw=>{const row=raw as Record<string,unknown>,current=await currentActivityRecord(env,row);const {source,config,...metadata}=row;return {...metadata,status:current.status,startProposalDate:current.config.startProposalDate || "",...("settingsOutdated" in current?{settingsOutdated:true}:{})};})) });
   }
   requireSameOrigin(request,env);
-  if(request.headers.get("X-Store-Transfer-Version") !== "20261111-transfer-change-filter-r3") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
+  if(request.headers.get("X-Store-Transfer-Version") !== "20261115-transfer-newproduct-r2") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
   const body = await readBody(request,3_000_000), now = new Date().toISOString();
   if (request.method === "POST" && !id) {
     const source = activitySource(body.source), planId = crypto.randomUUID();
@@ -1617,7 +1625,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
 
 async function supplyRelease(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
   const who=await actor(request,env); assertHq(who.role);
-  if(request.method==="PUT") { requireSameOrigin(request,env); if(request.headers.get("X-Store-Transfer-Version")!=="20261111-transfer-change-filter-r3") throw new RequestValidationError("額度功能已有新版，請重新載入最新版。",409); }
+  if(request.method==="PUT") { requireSameOrigin(request,env); if(request.headers.get("X-Store-Transfer-Version")!=="20261115-transfer-newproduct-r2") throw new RequestValidationError("額度功能已有新版，請重新載入最新版。",409); }
   const sku=text(new URL(request.url).searchParams.get("sku"),"ERP品號",80).toUpperCase();
   if(!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) throw new RequestValidationError("ERP品號格式錯誤。");
   const batch=await env.DB.prepare("SELECT status,revision FROM store_transfer_batches WHERE id=? AND deleted_at IS NULL").bind(batchId).first<Record<string,unknown>>();
@@ -1654,7 +1662,7 @@ async function bulkSupplyRelease(request: Request, env: StoreTransferEnv, batchI
   const who=await actor(request,env); assertHq(who.role);
   if(request.method==="PUT") {
     requireSameOrigin(request,env);
-    if(request.headers.get("X-Store-Transfer-Version")!=="20261111-transfer-change-filter-r3") throw new RequestValidationError("批次開放已有新版，請重新載入最新版。",409);
+    if(request.headers.get("X-Store-Transfer-Version")!=="20261115-transfer-newproduct-r2") throw new RequestValidationError("批次開放已有新版，請重新載入最新版。",409);
   }
   const batch=await env.DB.prepare("SELECT status,revision FROM store_transfer_batches WHERE id=? AND deleted_at IS NULL").bind(batchId).first<{status:string;revision:number}>();
   if(!batch) throw new RequestValidationError("找不到此週調撥批次。",404);
@@ -1723,6 +1731,10 @@ async function bulkSupplyRelease(request: Request, env: StoreTransferEnv, batchI
 export async function storeTransferRoute(request: Request, env: StoreTransferEnv): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/store-transfer")) return null;
+  if (url.pathname === '/api/store-transfer/new-products' || url.pathname.startsWith('/api/store-transfer/new-products/')) {
+    if(request.method!=='GET') requireSameOrigin(request,env);
+    return newProductRoute(request,env,await actor(request,env));
+  }
   const commitmentsMatch=url.pathname.match(/^\/api\/store-transfer\/activity-plans\/([a-zA-Z0-9-]+)\/commitments$/);
   if(commitmentsMatch && request.method==="GET") {
     const who=await actor(request,env);assertHq(who.role);
@@ -1783,6 +1795,9 @@ export async function storeTransferRoute(request: Request, env: StoreTransferEnv
 export async function cleanupStoreTransfers(env: StoreTransferEnv): Promise<void> {
   const expired = "SELECT id FROM store_transfer_batches WHERE created_at < datetime('now', '-12 months')";
   await env.DB.batch([
+    env.DB.prepare(`UPDATE new_product_plan_rows SET archived_dispatched_quantity=archived_dispatched_quantity+(SELECT COALESCE(SUM(u.quantity),0) FROM new_product_claim_usage u WHERE u.plan_id=new_product_plan_rows.plan_id AND u.store_code=new_product_plan_rows.store_code AND u.sku=new_product_plan_rows.sku AND u.erp_created=1 AND u.batch_id IN (${expired}))`),
+    env.DB.prepare(`DELETE FROM new_product_transfer_claims WHERE batch_id IN (${expired})`),
+    env.DB.prepare("DELETE FROM new_product_events WHERE created_at < datetime('now','-12 months')"),
     env.DB.prepare(`DELETE FROM store_transfer_notifications WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_events WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_corrections WHERE batch_id IN (${expired})`),

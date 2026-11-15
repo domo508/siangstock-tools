@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261111-transfer-change-filter-r3";
+  const APP_VERSION = "20261115-transfer-newproduct-r2";
   const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", batchChangesOnly: false, files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -526,6 +526,7 @@
   }
 
   async function publishCollaboration() {
+    if(state.formalCalculation?.newProductClaims?.length) throw new Error("本批包含新品首配待配量，請使用正式補貨模式接續，避免A/B協作重複開量。");
     const stores = selectedStores();
     const payload = buildCollaborationPayload(stores);
     const existing = state.collaborationDrafts.find((draft) => draft.weekKey === payload.weekKey && draft.status === "draft");
@@ -970,6 +971,11 @@
     $("publish-button").disabled = true;
   }
 
+  async function newProductObserve(skus,observedOn){
+    if(!(await checkRuntimeVersion())) throw new Error('請重新載入最新版。');
+    const response=await fetch('/api/store-transfer/new-products/observe',{method:'POST',headers:{'Content-Type':'application/json','X-New-Product-Version':'20261115-new-product-allocation-r2'},body:JSON.stringify({observedOn,items:skus.map(sku=>({sku}))})});
+    const result=await response.json();if(!response.ok)throw new Error(result.error||'新品庫存狀態保存失敗。');
+  }
   async function calculate() {
     if (!(await checkRuntimeVersion())) return;
     const stores = selectedStores(); if (!stores.length) throw new Error("請至少勾選一間門市。");
@@ -1023,7 +1029,14 @@
         $("activity-inbound-dates").innerHTML=pending.map(d=>`<label><span>既有調撥 ${escapeHtml(d)} 確認預計到店日（另加2日緩衝）</span><input type="date" data-inbound-document="${escapeHtml(d)}" value="${escapeHtml(activityInboundDates[d] || "")}"></label>`).join("");
         if(pending.some(d=>!activityInboundDates[d])) throw new Error("請先在活動卡片確認既有調撥到店日，再重新計算；不能把未知到貨視為已可供應。");
       }
+      const newProducts = await api("/new-products/calculation");
+      const observedContext=globalThis.NewProductAllocation.context(newProducts,inventory,stores);
+      if(mode==='formal' && observedContext.hasStock.size){
+        const observed=[...observedContext.hasStock].filter(sku=>observedContext.registry.has(sku)&&!observedContext.registry.get(sku).first_stock_date);
+        if(observed.length) await newProductObserve(observed,$("proposal-date").value);
+      }
       const calculationInput = {
+        newProducts,
         activityPlan,activityInventoryDate:$("activity-inventory-date").value,activityInboundDates,
         storeCodes: stores,
         master,
@@ -1039,6 +1052,8 @@
         storeDisplayExceptions: state.config.displayExceptions || []
       };
       state.calculation = transferCore.buildSuggestions(calculationInput);
+      const staleNewProduct=(newProducts.rows||[]).some(r=>(state.calculation.newProductClaims||[]).some(c=>c.planId===r.plan_id)&&r.status==='waiting_stock'&&Number(r.approved_quantity||0)>Number(r.committed_quantity||0)&&Date.now()-Date.parse(r.approved_at)>=14*86400000);
+      $("new-product-reconfirm-panel").hidden=!staleNewProduct;$("new-product-reconfirmed").checked=false;
       state.formalCalculation = mode === "comparison" ? transferCore.buildSuggestions({ ...calculationInput, calculationMode: "formal" }) : state.calculation;
       state.calculationStore = "all";
       state.calculationSku = "";
@@ -1096,6 +1111,7 @@
     const weekKey = $("week-key").value, proposalDate = $("proposal-date").value, localLock = $("lock-at").value;
     if (!weekKey || !proposalDate || !localLock) throw new Error("請填妥週次、建議產生日與鎖定時間。");
     if (Date.parse(localLock) <= Date.now()) throw new Error("門市回覆鎖定時間已經過期；請改成下一個工作日的未來時間後再建立批次。");
+    if(!$("new-product-reconfirm-panel").hidden&&!$("new-product-reconfirmed").checked)throw new Error("新品首配已等待超過14天，請先核對本週需求並勾選重新確認。");
     $("publish-button").disabled = true;
     try {
       let notificationAuthorizationError = "";
@@ -1105,7 +1121,7 @@
       }
       const id = `TR-${weekKey}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
       $("hq-status").textContent = "正在建立正式批次；大型缺貨清單會以精簡格式安全寫入…";
-      await api("/batches", { method: "POST", body: { id, weekKey, proposalDate, responseDueAt: new Date(localLock).toISOString(), lockAt: new Date(localLock).toISOString(), items: compactBatchItems(state.calculation.rows), shortages: compactBatchShortages(state.calculation.shortageRows), manualItemFacts: compactManualItemFacts(state.calculation.manualItemFacts), manualItemCatalog: compactManualItemCatalog(state.calculation.manualItemCatalog), arrivalSchedule: state.calculation.scheduleByStore, activityReconciled:$("activity-prior-reconciled").checked } });
+      await api("/batches", { method: "POST", body: { id, weekKey, proposalDate, responseDueAt: new Date(localLock).toISOString(), lockAt: new Date(localLock).toISOString(), newProductReconfirmed:$("new-product-reconfirmed").checked, newProductClaims: state.calculation.newProductClaims || [], items: compactBatchItems(state.calculation.rows), shortages: compactBatchShortages(state.calculation.shortageRows), manualItemFacts: compactManualItemFacts(state.calculation.manualItemFacts), manualItemCatalog: compactManualItemCatalog(state.calculation.manualItemCatalog), arrivalSchedule: state.calculation.scheduleByStore, activityReconciled:$("activity-prior-reconciled").checked } });
       let notificationText = "";
       try {
         if (notificationAuthorizationError) throw new Error(notificationAuthorizationError);
@@ -1830,6 +1846,7 @@
         if (state.config.permissions?.canManageRules) { $("rules-link").hidden = false; $("transfer-rules-link").hidden = false; }
         if (!state.config.googleOAuthClientId) { $("google-connect-button").disabled = true; $("source-status").textContent = "正式環境尚未設定 Google OAuth，用手動備援仍可操作。"; }
       }
+      window.NewProductAllocationUI.mount({api,config:state.config,checkRuntimeVersion});
       await loadPendingPurchases();
       await Promise.all([loadBatches(), ...(state.config.permissions?.canCollaborate ? [loadCollaborationDrafts()] : [])]);
       if (state.config.role === "store" && location.hash === "#display-exceptions") await showDisplayExceptions();

@@ -1059,3 +1059,14 @@ r51發布前補驗：新版不可變OCR worker另補同原版的最小CSP路徑�
 
 
 2026-11-13發布驗收：功能019acf5已推送正式分支，Static Assets Worker eae20914-a856-4dd4-9f8c-6365ef373853與API Worker 3e4d51a5-621d-45ef-a0a2-dba52bc116aa均100%正式。公司登入、新版core/app資產查詢、正式version.json、新版首頁入口及超收手冊通過。API部署重新套用routes因既有token無routes權限而失敗，但Cloudflare控制台已逐一核對五條既有routes全部保留，未擴權或修改路由；正式採購頁讀取成功。既有安全標頭與遷移版本相同，新增首頁immutable路徑經全套測試驗證；本輪未另擷取登入後wire response headers。原始檔313列/22列超收99件/有效未交719件與欄位守恆；未代用正式四檔重新產生母批次、核准或寄信。回復時前後端同步至Static c78c4dab-fad0-4305-b82c-1038788f7fc6與API a1b8f9e5-46fc-400f-8a04-824e00e90c2f，保留D1與原批次。私有證據.local-context/verification/20261113-procurement-overreceipt。
+
+
+## 2026-11-15 新品首配開發完成，待正式部署
+
+已依本輪「可開始設計開發」授權，在隔離分支codex/new-product-allocation-20261115開發，基準正式69ffe53；未commit、push或部署。工作區：.local-context/work/new-product-allocation-20261115。
+
+主採購新品名單登錄後，未首次觀察到總倉正庫存前不列一般缺貨未配；新品採購核准自動啟用門市首配，依指定門市、相似品模型及展示例外產生草稿。門市確認→總部首次核定→等待庫存→最近週調撥帶入→總部第二次覆核與ERP。兩階段均保留單店／全部門市及異動篩選，篩選不減少保存或匯出範圍；部分配貨、首配0、跨週占用、同週取代、後續追加去重及歷史清理守恆受控。若先到貨但首次覆核未完成，不自動跳過核定；只有新品列的門市沿用首配確認，可直接進第二次總部覆核。
+
+驗收：74份1071項全套測試（新增19個新品情境）、Cloudflare型別生成與完整tsc、Worker dry-run、Static Assets封裝6680檔及5個入口JS/CSS完整性通過。合成首配4件＝本週配出3件＋待配1件；真實XLSX寫入重讀、同週取代及12個月歸檔後守恆。實際DOM元件1280／390／320px無整頁溢出；篩選1列但送出2列，CAS衝突與更新後仍保留輸入4，門市0量原因／舊版阻擋與完成狀態通過。靜態封裝使用臨時Git索引驗證新模組及首頁資產，沒有修改真實索引。
+
+正式未異動：0058未套用、無真實採購／調撥／寄信／ERP。正式UI唯讀嘗試停在Google登入，未宣稱正式交易／快取已驗收。後續須授權後同步0058、API與Static Assets，完成正式新舊頁、快取、安全與合成完整流程。舊新品採購缺首配資料者不自動補造或回寫。操作／設計見隔離工作區store-transfer/NEW_PRODUCT_ALLOCATION.md；證據.local-context/verification/20261115-newproduct-development/report.json。

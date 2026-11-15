@@ -438,3 +438,21 @@ html, body { max-width: 100%; overflow-x: clip; }
 .change-filter-toolbar { margin:1rem 0; padding:1rem; border:1px solid #cbdde7; border-radius:14px; background:#f5f9fb; min-width:0; }
 .change-filter-toolbar p { margin:.65rem 0 0; line-height:1.65; overflow-wrap:anywhere; }
 .change-filter-toolbar button { max-width:100%; white-space:normal; }
+
+/* New-product allocation uses independent rows and wrapping reason fields. */
+#new-product-panel { margin-block:24px; padding:24px; border:1px solid var(--line); border-radius:24px; background:#fff; }
+.new-product-plan { border-top:1px solid var(--line); margin-top:20px; padding-top:16px; }
+.new-product-filters { display:flex; flex-wrap:wrap; gap:18px; align-items:center; margin-block:16px; }
+.new-product-filters label { display:flex; align-items:center; gap:8px; }
+.new-product-line { display:grid; grid-template-columns:minmax(160px,2fr) minmax(110px,1fr) minmax(90px,1fr) minmax(130px,1.5fr); gap:16px; padding:16px 8px; border-bottom:1px solid var(--line); align-items:start; }
+.new-product-line > * { min-width:0; overflow-wrap:anywhere; }
+.new-product-line input,.new-product-line textarea { width:100%; min-width:0; box-sizing:border-box; }
+.new-product-line textarea { resize:vertical; white-space:pre-wrap; overflow-wrap:anywhere; }
+.new-product-line.is-adjusted { background:#fff0ed; }
+@media(max-width:700px){ .new-product-line { grid-template-columns:1fr 1fr; } .new-product-line>div:first-child { grid-column:1/-1; } #new-product-panel { padding:16px; } }
+@media(max-width:360px){ .new-product-line { grid-template-columns:1fr; } .new-product-filters label { flex-wrap:wrap; } }
+.new-product-line input,.new-product-line textarea,.new-product-filters select { font:inherit; color:var(--ink); background:#fff; border:1px solid #bfd2dd; border-radius:10px; padding:10px 12px; }
+.new-product-line label { display:grid; gap:6px; }
+.new-product-line input:disabled,.new-product-line textarea:disabled { background:#f0f6f8; }
+#new-product-panel>summary { color:var(--navy); font-weight:700; padding-block:8px; }
+#new-product-panel>summary:focus-visible { outline:3px solid var(--blue); outline-offset:3px; }

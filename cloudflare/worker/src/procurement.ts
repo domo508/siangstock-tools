@@ -1,3 +1,4 @@
+import {newProductSeedStatements,activateNewProductStatements,newProductProcurementSetup} from './new-products';
 import { verifyAdmin, verifyCompanyUser, type AccessConfig } from "./access";
 import { RequestValidationError } from "./schema";
 import { activityRegistryRoute } from "./procurement-activities";
@@ -1352,9 +1353,11 @@ async function submit(request: Request, env: ProcurementEnv): Promise<Response> 
         .bind(item.id, item.approved, item.approved, item.now, actor, `${item.idempotencyKey}:event`),
       ...activityMapping,
       ...item.storeNeeds.map((row) => env.DB.prepare("INSERT INTO procurement_batch_store_needs (batch_id, store_code, sku, covered_quantity, created_at) VALUES (?, ?, ?, ?, ?)").bind(item.id, row.storeCode, row.sku, row.quantity, item.now)),
-      ...item.approvedItems.map((row) => env.DB.prepare("INSERT INTO procurement_batch_items (batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, remaining_quantity, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(item.id, row.sku, row.name, row.supplier, row.quantity, row.unitCost, row.amount, row.quantity, item.now))
+      ...item.approvedItems.map((row) => env.DB.prepare("INSERT INTO procurement_batch_items (batch_id, sku, name, supplier, approved_quantity, unit_cost, approved_amount, remaining_quantity, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(item.id, row.sku, row.name, row.supplier, row.quantity, row.unitCost, row.amount, row.quantity, item.now)),
+      ...(item.workflowType === "new_product" ? newProductSeedStatements(env,item.id,input.newProductAllocation,item.approvedItems,actor,item.now) : [])
     ]);
   } catch (error) {
+    if (/UNIQUE constraint failed: new_product_plan_rows/.test(String(error))) throw new RequestValidationError("本品項已有新品首配來源，請接續原新品首配，不能重複建立。",409);
     const existing = await env.DB.prepare("SELECT id, status FROM procurement_batches WHERE idempotency_key = ?").bind(item.idempotencyKey).first();
     if (existing) return json({ batch: existing, duplicate: true }, 200);
     throw error;
@@ -1416,7 +1419,7 @@ async function approve(request: Request, env: ProcurementEnv, batchId: string): 
   const input = await body(request);
   const key = string(input.idempotencyKey, "冪等鍵", 120);
   const now = new Date().toISOString();
-  const before = await env.DB.prepare("SELECT id, status, approved_amount, payment_schedule FROM procurement_batches WHERE id = ?").bind(batchId).first<Record<string, unknown>>();
+  const before = await env.DB.prepare("SELECT id, status, workflow_type, approved_amount, payment_schedule FROM procurement_batches WHERE id = ?").bind(batchId).first<Record<string, unknown>>();
   if (!before) throw new RequestValidationError("找不到採購批次。", 404);
   const paymentEntries = normalizedPaymentSchedule(parseJsonText(String(before.payment_schedule || "[]")) || []);
   const commitment = initialCommitmentAmounts(paymentEntries, Number(before.approved_amount || 0));
@@ -1424,7 +1427,8 @@ async function approve(request: Request, env: ProcurementEnv, batchId: string): 
     env.DB.prepare("UPDATE procurement_batches SET status = 'approved', recognized_commitment_amount = ?, pending_commitment_amount = ?, approved_at = ?, approved_by = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND status = 'pending_approval'").bind(commitment.recognized, commitment.pending, now, actor, now, batchId),
     env.DB.prepare("INSERT OR IGNORE INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) SELECT id, 'approved', 0, approved_amount, approved_amount, '正式核准', ?, ?, ? FROM procurement_batches WHERE id = ? AND status = 'approved' AND approved_at = ? AND approved_by = ?").bind(now, actor, key, batchId, now, actor),
     env.DB.prepare("INSERT OR IGNORE INTO procurement_notifications (batch_id, event_id, event_type, recipient, status, created_at) SELECT ?, id, 'approved', ?, 'pending', ? FROM procurement_events WHERE idempotency_key = ?").bind(batchId, access.settings.notificationRecipient, now, key),
-    ...initialRecognitionStatements(env, batchId, paymentEntries, actor, now)
+    ...initialRecognitionStatements(env, batchId, paymentEntries, actor, now),
+    ...(before.workflow_type === "new_product" ? activateNewProductStatements(env,batchId,actor,now) : [])
   ]);
   if (Number(result[0].meta.changes || 0) === 0) {
     const existing = await env.DB.prepare("SELECT id, status, approved_at, approved_by FROM procurement_batches WHERE id = ?").bind(batchId).first();
@@ -1702,6 +1706,10 @@ export async function procurementRoute(request: Request, env: ProcurementEnv): P
   if(new URL(request.url).pathname.startsWith("/api/procurement/activities"))return activityRegistryRoute(request,env,{read:()=>verifyCompanyUser(request,procurementAccess(env)),write:()=>verifyApprover(request,env),origin:()=>requireSameOrigin(request,env),body:()=>body(request)});
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/procurement")) return null;
+  if((url.pathname==='/api/procurement/new-products/config'&&request.method==='GET')||(url.pathname==='/api/procurement/new-products/register'&&request.method==='POST')){
+    if(request.method!=='GET')requireSameOrigin(request,env);
+    return newProductProcurementSetup(request,env,await verifyCompanyUser(request,procurementAccess(env)));
+  }
   const supplierOrderMatch = url.pathname.match(/^\/api\/procurement\/batches\/([^/]+)\/supplier-order$/);
   if (supplierOrderMatch && request.method === "GET") return supplierOrder(request, env, decodeURIComponent(supplierOrderMatch[1]));
   if (url.pathname === "/api/procurement/config" && request.method === "GET") return config(request, env);
