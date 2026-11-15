@@ -1070,3 +1070,14 @@ r51發布前補驗：新版不可變OCR worker另補同原版的最小CSP路徑�
 驗收：74份1071項全套測試（新增19個新品情境）、Cloudflare型別生成與完整tsc、Worker dry-run、Static Assets封裝6680檔及5個入口JS/CSS完整性通過。合成首配4件＝本週配出3件＋待配1件；真實XLSX寫入重讀、同週取代及12個月歸檔後守恆。實際DOM元件1280／390／320px無整頁溢出；篩選1列但送出2列，CAS衝突與更新後仍保留輸入4，門市0量原因／舊版阻擋與完成狀態通過。靜態封裝使用臨時Git索引驗證新模組及首頁資產，沒有修改真實索引。
 
 正式未異動：0058未套用、無真實採購／調撥／寄信／ERP。正式UI唯讀嘗試停在Google登入，未宣稱正式交易／快取已驗收。後續須授權後同步0058、API與Static Assets，完成正式新舊頁、快取、安全與合成完整流程。舊新品採購缺首配資料者不自動補造或回寫。操作／設計見隔離工作區store-transfer/NEW_PRODUCT_ALLOCATION.md；證據.local-context/verification/20261115-newproduct-development/report.json。
+
+
+## 2026-11-15 新品14天首配正式發布 r2
+
+使用者「可部署」已授權本次發布。來源 d6242fa 已以非強制push同步正式 feature/company-tools-static-site；0058已套用。API 5f621dc3-c071-477d-aa79-ded9cec11c8e、Static e17bb26c-42e8-4cae-b571-715cfb277fc6 均100%。主採購20261115-procurement-newproduct-r2、週調撥／規則20261115-transfer-newproduct-r2、首頁20261115-newproduct-entry-r2。
+
+首配採14天可售需求、展示另計，主採購30天需求池與採購總量不改。首批後以新品觀察期間實際銷售逐步接續每週補貨，首配核定超過14天須重新核對。完整74份1074項與tsc、API dry-run及Static 6680檔封裝通過；封裝SHA256 0574c5f6ef4970c49c39072c368dbe14faa098cb8c19cf2a09e7e883dc3910bc。兩次覆核、單店／全部店及異動篩選沿用。
+
+正式D1部署前後核對：33採購批次、14調撥批次、3959品項列、建議5688件、門市有效6857件、總部有效6506件、採購核准金額5178455.1、規則版本36、80筆門市狀態及各列加權數量檢核完全一致。新增10個schema物件，首配計畫仍0；未代建正式單據、核准、ERP或寄信。舊批次不重算，缺來源的舊新品採購不自動補建。
+
+正式站及workers.dev未登入請求仍302至Access；未放寬驗證。登入後前台／新舊分頁與wire headers抽查尚待使用者完成Google登入，不能將發布成功當成已完成該項驗收。證據：.local-context/verification/20261115-newproduct-release。
