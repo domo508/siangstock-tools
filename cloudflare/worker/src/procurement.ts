@@ -680,6 +680,16 @@ async function fingerprintReceipt(erpReference: string, sku: string, receiptDate
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function erpReconciliationReferences(request: Request, env: ProcurementEnv): Promise<Response> {
+  await verifyCompanyUser(request, procurementAccess(env));
+  // Reconciliation follows ERP references across months; ledger display stays month-scoped.
+  const rows = await env.DB.prepare(`SELECT erp_reference FROM procurement_batches
+    WHERE status IN ('erp_created','received') AND erp_reference IS NOT NULL AND trim(erp_reference) != ''
+    UNION SELECT d.erp_reference FROM procurement_batch_erp_documents d JOIN procurement_batches b ON b.id=d.batch_id
+    WHERE b.status IN ('erp_created','received') AND trim(d.erp_reference) != ''`).all<{ erp_reference: string }>();
+  return json({ references: [...new Set(rows.results.map(row => row.erp_reference.trim()))].sort() });
+}
+
 async function reconcileErpOrders(request: Request, env: ProcurementEnv): Promise<Response> {
   requireSameOrigin(request, env);
   const actor = await verifyCompanyUser(request, procurementAccess(env));
@@ -1718,6 +1728,7 @@ export async function procurementRoute(request: Request, env: ProcurementEnv): P
   if (url.pathname === "/api/procurement/access-settings" && request.method === "GET") return accessSettings(request, env);
   if (url.pathname === "/api/procurement/access-settings" && request.method === "PUT") return saveAccessSettings(request, env);
   if (url.pathname === "/api/procurement/ledger" && request.method === "GET") return ledger(request, env);
+  if (url.pathname === "/api/procurement/erp-reconciliation-references" && request.method === "GET") return erpReconciliationReferences(request, env);
   if (url.pathname === "/api/procurement/erp-reconciliations" && request.method === "POST") return reconcileErpOrders(request, env);
   const reconciliationConfirmMatch = url.pathname.match(/^\/api\/procurement\/erp-reconciliations\/([^/]+)\/confirm$/);
   if (reconciliationConfirmMatch && request.method === "POST") return confirmErpReconciliation(request, env, decodeURIComponent(reconciliationConfirmMatch[1]));

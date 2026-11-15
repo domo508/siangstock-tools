@@ -14,7 +14,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261115-procurement-newproduct-r2";
+  const APP_VERSION = "20261115-procurement-crossmonth-r1";
   const state = {
     importProgress: null, shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -313,7 +313,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261115-procurement-newproduct-r2");
+        const worker = new Worker("inventory-reader-worker.js?v=20261115-procurement-crossmonth-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1081,7 +1081,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261115-procurement-newproduct-r2");
+      const worker = new Worker("seasonal-model-worker.js?v=20261115-procurement-crossmonth-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -2491,29 +2491,13 @@
     await loadStoreShortageNeeds();
   }
   async function syncErpReconciliations(pendingReports) {
-    const linkedReferences = new Set((state.ledger?.batches || []).filter((row) => ["erp_created", "received"].includes(row.status) && row.erp_reference).map((row) => String(row.erp_reference).trim()));
-    if (!linkedReferences.size) return { pendingCount: 0, missing: [] };
-    const grouped = new Map();
-    pendingReports.flatMap((report) => report.records || []).forEach((row) => {
-      const erpReference = String(row.documentCode || "").trim();
-      if (!linkedReferences.has(erpReference)) return;
-      const group = grouped.get(erpReference) || { erpReference, sourceStatus: "", documentClosed: false, fullyReceived: false, items: new Map() };
-      group.sourceStatus = row.status || group.sourceStatus;
-      group.documentClosed ||= Boolean(row.documentClosed);
-      group.fullyReceived ||= Boolean(row.fullyReceived);
-      const existing = group.items.get(row.sku);
-      if (existing && Math.abs(Number(existing.unitCost || 0) - Number(row.unitCost || 0)) >= 0.01) throw new Error(`${erpReference}的${row.sku}在完整採購檔出現不同未稅採購價。`);
-      const item = existing || { sku: row.sku, name: row.name || "", orderedQuantity: 0, unitCost: Number(row.unitCost || 0), orderedAmount: 0, deliveredQuantity: 0, remainingQuantity: 0, lifecycleStatus: "", receiptDate: "" };
-      item.orderedQuantity += Number(row.orderedQuantity || 0);
-      item.orderedAmount += Number(row.orderedAmount || 0) || Number(row.orderedQuantity || 0) * Number(row.unitCost || 0);
-      item.deliveredQuantity += Number(row.deliveredQuantity || 0);
-      item.remainingQuantity += Number(row.remainingQuantity || 0);
-      item.lifecycleStatus = row.status || item.lifecycleStatus;
-      if (String(row.receiptDate || "") > item.receiptDate) item.receiptDate = String(row.receiptDate || "");
-      group.items.set(row.sku, item); grouped.set(erpReference, group);
-    });
-    if (!grouped.size) return { pendingCount: 0, missing: [] };
-    const orders = [...grouped.values()].map((group) => ({ ...group, items: [...group.items.values()] }));
+    const response = await fetch("/api/procurement/erp-reconciliation-references", { headers: { Accept: "application/json" }, cache: "no-store" });
+    const referenceResult = await response.json();
+    if (!response.ok || !Array.isArray(referenceResult.references)) throw new Error(referenceResult.error || "無法取得跨月份ERP收貨比對清單，請保留檔案後重試。");
+    const orders = core.buildErpReconciliationOrders(pendingReports, referenceResult.references);
+    if (!orders.length) return { pendingCount: 0, missing: [] };
+    // Existing API accepts up to 200 documents. Match registered references only.
+    if (orders.length > 200) throw new Error("本次ERP收貨比對超過200張單，請依期間拆分完整採購來源後重試。");
     const result = await postJson("/api/procurement/erp-reconciliations", { orders });
     const pendingCount = (result.results || []).filter((row) => row.status === "pending").length;
     const missing = (result.results || []).filter((row) => row.status === "missing_baseline").map((row) => row.erpReference);

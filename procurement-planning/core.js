@@ -173,7 +173,7 @@
         remark: ["備註", "明細備註"],
         purchaseDate: ["採購日期", "開單日期", "建立日期"],
         expectedDeliveryDate: ["預計交貨時間", "預計交貨日期", "預計到貨日期", "交期"],
-        receiptDate: ["收貨單開單日", "實際交貨日期", "到貨日期", "收貨日期", "全都到貨日期"],
+        receiptDate: ["收貨單開單日", "收貨單開單日期", "實際交貨日期", "到貨日期", "收貨日期", "全都到貨日期", "完全到貨日期", "全部到貨日期"],
         fullyReceived: ["已全部到貨", "全部到貨"],
         documentClosed: ["單據是否關閉", "單據已關閉", "已關閉", "結案"]
       },
@@ -855,6 +855,9 @@
     const hasLifecycleColumns = ["status", "deliveredQuantity", "remainingQuantity", "receiptDate", "fullyReceived", "documentClosed"]
       .some((field) => selected.mapping[field] != null);
     const isAffirmative = (value) => /^(?:是|有|true|yes|y|1|已關閉|已完成|完成)$/i.test(String(value == null ? "" : value).normalize("NFKC").trim());
+    const receiptHeaders = SCHEMAS.pending.fields.receiptDate.map(normalizeHeader);
+    const receiptColumns = receiptHeaders.map(alias => selected.headers.findIndex(header => normalizeHeader(header) === alias)).filter(index => index >= 0);
+    if (!receiptColumns.length && selected.mapping.receiptDate != null) receiptColumns.push(selected.mapping.receiptDate);
     const records = [];
     for (let index = selected.headerRowIndex + 1; index < selected.rows.length; index += 1) {
       const row = selected.rows[index];
@@ -894,7 +897,13 @@
       const customText = `${metadata.remark} ${remark}`.trim();
       const automaticProcurementExcluded = isAutomaticProcurementExcludedItem(sku, name);
       const isCustomOrder = /客製/.test(customText) || isCustomerCustomItem(sku, name);
-      const receiptDate = parseDateValue(valueAt(row, selected.mapping, "receiptDate"));
+      // Receiving date has priority over the document's completion timestamp.
+      // Header order must not cause an empty completion column to mask receipts.
+      const receiptDate = receiptColumns.map(column => {
+        const raw = row[column];
+        if (raw == null || raw === "" || raw === 0 || String(raw).trim() === "0") return "";
+        return parseDateValue(raw);
+      }).find(Boolean) || "";
       const expectedDeliveryDate = parseDateValue(valueAt(row, selected.mapping, "expectedDeliveryDate")) || parseDateValue(metadata.deliveryDate);
       records.push({
         sourceRow: index + 1,
@@ -1262,6 +1271,30 @@
 
   function deduplicatePendingReports(reports) {
     return deduplicateReportRows(reports, (report) => report.records, pendingRowSignature);
+  }
+
+  function buildErpReconciliationOrders(reports, references) {
+    const linked = new Set(references.map(value => String(value).trim()).filter(Boolean));
+    const grouped = new Map();
+    for (const row of deduplicatePendingReports(reports).records) {
+      const erpReference = String(row.documentCode || "").trim();
+      if (!linked.has(erpReference)) continue;
+      const group = grouped.get(erpReference) || { erpReference, sourceStatus: "", documentClosed: true, fullyReceived: true, items: new Map() };
+      group.sourceStatus = row.status || group.sourceStatus;
+      group.documentClosed &&= Boolean(row.documentClosed);
+      group.fullyReceived &&= Boolean(row.fullyReceived) || Number(row.remainingQuantity) <= 0;
+      const existing = group.items.get(row.sku);
+      if (existing && Math.abs(existing.unitCost - Number(row.unitCost || 0)) >= 0.01) throw new Error(`${erpReference}的${row.sku}在完整採購檔出現不同未稅採購價。`);
+      const item = existing || { sku: row.sku, name: row.name || "", orderedQuantity: 0, unitCost: Number(row.unitCost || 0), orderedAmount: 0, deliveredQuantity: 0, remainingQuantity: 0, lifecycleStatus: "", receiptDate: "" };
+      item.orderedQuantity += Number(row.orderedQuantity || 0);
+      item.orderedAmount += Number(row.orderedAmount || 0) || Number(row.orderedQuantity || 0) * Number(row.unitCost || 0);
+      item.deliveredQuantity += Number(row.deliveredQuantity || 0);
+      item.remainingQuantity += Number(row.remainingQuantity || 0);
+      item.lifecycleStatus = row.status || item.lifecycleStatus;
+      if (String(row.receiptDate || "") > item.receiptDate) item.receiptDate = String(row.receiptDate || "");
+      group.items.set(row.sku, item); grouped.set(erpReference, group);
+    }
+    return [...grouped.values()].map(group => ({ ...group, items: [...group.items.values()] }));
   }
 
   function findHeaderTable(workbook, XLSX, sheetNames, requiredHeaders) {
@@ -5813,6 +5846,7 @@
     parseProductMasterWorkbook,
     parseInventoryWorkbook,
     parsePendingPurchaseWorkbook,
+    buildErpReconciliationOrders,
     buildTemporaryAdditionalPurchaseRows,
     parseTransferWorkbook,
     parseNewProductWorkbook,

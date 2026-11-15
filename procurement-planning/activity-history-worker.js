@@ -1,5 +1,5 @@
 "use strict";
-importScripts("../inventory/assets/xlsx.full.min.js", "core.js?v=20261115-procurement-newproduct-r2", "activity-planning.js?v=20261115-procurement-newproduct-r2");
+importScripts("../inventory/assets/xlsx.full.min.js", "core.js?v=20261115-procurement-crossmonth-r1", "activity-planning.js?v=20261115-procurement-crossmonth-r1");
 let builder = null;
 self.onmessage = (event) => {
   const message = event.data || {};

@@ -15,7 +15,7 @@ beforeEach(()=>{
  env={ALLOWED_ORIGINS:'https://siangstock.com',DB:{prepare(q){let args=[];return {bind(...a){args=a;return this;},async first(){return sql.prepare(q).get(...args)||null;},async all(){return {results:sql.prepare(q).all(...args)};},async run(){return {meta:{changes:Number(sql.prepare(q).run(...args).changes)}};}};},async batch(stmts){sql.exec('BEGIN');try{const out=[];for(const s of stmts)out.push(await s.run());sql.exec('COMMIT');return out;}catch(e){sql.exec('ROLLBACK');throw e;}}}};
 });
 afterEach(()=>sql.close());
-const save=(rows,version='20261115-procurement-newproduct-r2')=>procurementRoute(new Request('https://siangstock.com/api/procurement/pending-purchase-snapshot',{method:'PUT',headers:{Origin:'https://siangstock.com','Content-Type':'application/json','X-Test-Email':'operator@example.test','X-Procurement-Version':version},body:JSON.stringify({sourceDate:'2026-11-06',rows})}),env);
+const save=(rows,version='20261115-procurement-crossmonth-r1')=>procurementRoute(new Request('https://siangstock.com/api/procurement/pending-purchase-snapshot',{method:'PUT',headers:{Origin:'https://siangstock.com','Content-Type':'application/json','X-Test-Email':'operator@example.test','X-Procurement-Version':version},body:JSON.stringify({sourceDate:'2026-11-06',rows})}),env);
 it('正式XLSX往返：草稿、取消、結案、全到排除，部分到貨只算剩餘，沒有單號保留商品總量',async()=>{
  const report=parse([['採購單號','狀態','貨號','品名','採購數量','已交數量','未交數量','預計交貨日期'],['PO1','主管審核','N1','合成',20,5,15,'2026-11-09'],['PO2','部分到貨','N1','合成',10,5,5,'2026-11-16'],['','主管審核','N2','無單號',8,0,8,''],...['新單','草稿','已取消','作廢','已結案','全部到貨'].map((status,i)=>['DROP'+i,status,'N1','不列入',99,0,99,'2026-11-09'])]);
  const agg=c.aggregatePendingReports([report,report]);expect(agg.bySku.get('N1').quantity).toBe(20);expect(agg.bySku.get('N2').quantity).toBe(8);
@@ -68,4 +68,45 @@ it('實際核准API保留批次承諾與摘要通知，但不把關聯數量當�
  expect(sql.prepare("SELECT covered_quantity,status FROM store_transfer_procurement_needs WHERE sku='N1'").get()).toMatchObject({covered_quantity:0,status:'waiting_merge'});
  expect((await readPendingPurchaseSnapshot(env.DB)).available).toBe(false);
  expect(sql.prepare("SELECT COUNT(*) n FROM procurement_notifications WHERE batch_id='SYNTH-APPROVE'").get().n).toBe(1);
+});
+
+const receiptHeaders=['採購單號','狀態','貨號','品名','採購數量','交貨數量','未交數量','未稅採購價','採購額','全都到貨日期','收貨單開單日','單據是否關閉','全部到貨'];
+function seedCrossMonth(id='CROSS',month='2026-10',status='erp_created',ref='PO-CROSS'){
+ sql.prepare(`INSERT INTO procurement_batches(id,analysis_month,supplier_summary,payment_schedule,warning_summary,blocked_amount,status,suggested_amount,manual_amount,approved_amount,adjustment_amount,budget_amount,payment_current_month,payment_future_months,created_at,created_by,updated_at,idempotency_key,erp_reference) VALUES(?,?, '["合成供應商"]','[]','',0,?,100,100,100,0,100,100,0,'2026-10-25','test','2026-10-25',?,?)`).run(id,month,status,id,ref);
+ sql.prepare("INSERT INTO procurement_batch_items(batch_id,sku,name,supplier,approved_quantity,unit_cost,approved_amount,erp_quantity,received_quantity,remaining_quantity,lifecycle_status,updated_at) VALUES(?,'N1','合成新品','合成供應商',10,10,100,10,0,10,'等待到貨','2026-10-25')").run(id);
+}
+const requestProc=(path,method='GET',data)=>procurementRoute(new Request('https://siangstock.com/api/procurement'+path,{method,headers:{Origin:'https://siangstock.com','Content-Type':'application/json','X-Test-Email':'operator@example.test'},...(data?{body:JSON.stringify(data)}:{})}),env);
+it('同時有全到日期與收貨日期的實際XLSX，優先收貨單日期，不受欄位順序或0影響',()=>{
+ const rows=parse([receiptHeaders,['PO-CROSS','部分到貨','N1','合成新品',10,8,2,10,100,0,'2026-11-02','是','否'],['PO-FULL','已全部到貨','N2','全到',10,10,0,10,100,'2026-11-05','2026-11-03','否','是'],['PO-FALLBACK','已全部到貨','N3','舊格式',10,10,0,10,100,'2026-11-04','','否','是'],['PO-NODATE','部分到貨','N4','缺日期',10,8,2,10,100,0,0,'否','否']]).records;
+ expect(rows.map(r=>r.receiptDate)).toEqual(['2026-11-02','2026-11-03','2026-11-04','']);
+ expect(rows[0]).toMatchObject({documentClosed:true,deliveredQuantity:8,remainingQuantity:2,quantity:0});
+});
+it('跨月份收貨參照含舊月份及供應商子單，不混入未建ERP或撤銷批次，月台帳範圍不變',async()=>{
+ seedCrossMonth();seedCrossMonth('NOV','2026-11','erp_created','PO-NOV');seedCrossMonth('OLD','2026-09','received','PO-OLD');seedCrossMonth('VOID','2026-10','revoked','PO-VOID');seedCrossMonth('APPROVED','2026-10','approved','PO-NOERP');
+ sql.exec("INSERT INTO procurement_batch_erp_documents(batch_id,supplier,erp_reference,status,updated_at) VALUES('CROSS','子供應商','PO-SUB','erp_created','2026-10-25')");
+ const references=(await(await requestProc('/erp-reconciliation-references')).json()).references;
+ expect(references).toEqual(['PO-CROSS','PO-NOV','PO-OLD','PO-SUB']);
+ const ledger=await(await requestProc('/ledger?month=2026-11')).json();expect(ledger.batches.map(r=>r.id)).toEqual(['NOV']);
+});
+it('10月採購11月收貨：真實XLSX解析接續實際API，關閉短收不冒充全數收齊，付款按收貨日且重試不重複',async()=>{
+ seedCrossMonth();const report=parse([receiptHeaders,['PO-CROSS','部分到貨','N1','合成新品',10,8,2,10,100,0,'2026-11-02','是','否']]);
+ const refs=(await(await requestProc('/erp-reconciliation-references')).json()).references;
+ const orders=c.buildErpReconciliationOrders([report,report],refs);expect(orders).toHaveLength(1);expect(orders[0].items[0]).toMatchObject({orderedQuantity:10,deliveredQuantity:8,remainingQuantity:2,receiptDate:'2026-11-02'});
+ const before=sql.prepare('SELECT approved_amount FROM procurement_batches').get().approved_amount;
+ expect((await requestProc('/erp-reconciliations','POST',{orders})).ok).toBe(true);
+ expect(sql.prepare('SELECT status,approved_amount FROM procurement_batches').get()).toMatchObject({status:'received',approved_amount:before});
+ expect(sql.prepare('SELECT received_quantity,remaining_quantity FROM procurement_batch_items').get()).toMatchObject({received_quantity:8,remaining_quantity:2});
+ expect(sql.prepare('SELECT receipt_date,quantity_delta,payment_amount FROM procurement_receipt_events').get()).toMatchObject({receipt_date:'2026-11-02',quantity_delta:8,payment_amount:80});
+ await requestProc('/erp-reconciliations','POST',{orders});expect(sql.prepare('SELECT COUNT(*) n FROM procurement_receipt_events').get().n).toBe(1);
+ expect(sql.prepare('SELECT COUNT(*) n FROM procurement_payment_events').get().n).toBe(1);
+});
+it('未關閉混合全到及部分到貨仍等待餘量，不因一列全到就關閉整張單',async()=>{
+ seedCrossMonth();sql.exec("INSERT INTO procurement_batch_items(batch_id,sku,name,supplier,approved_quantity,unit_cost,approved_amount,updated_at) VALUES('CROSS','N2','合成','合成供應商',10,10,100,'2026-10-25')");
+ const report=parse([receiptHeaders,['PO-CROSS','部分到貨','N1','合成新品',10,8,2,10,100,0,'2026-11-02','否','否'],['PO-CROSS','部分到貨','N2','合成',10,10,0,10,100,'2026-11-02','2026-11-02','否','是']]);const orders=c.buildErpReconciliationOrders([report],['PO-CROSS']);expect(orders[0].fullyReceived).toBe(false);
+ await requestProc('/erp-reconciliations','POST',{orders});expect(sql.prepare('SELECT status FROM procurement_batches').get().status).toBe('erp_created');
+});
+it('沒有有效日期仍保留未知，不製造收貨付款事件；數量價格差異仍待人工確認',async()=>{
+ seedCrossMonth();let orders=c.buildErpReconciliationOrders([parse([receiptHeaders,['PO-CROSS','部分到貨','N1','合成新品',10,8,2,10,100,0,0,'否','否']])],['PO-CROSS']);
+ const result=await(await requestProc('/erp-reconciliations','POST',{orders})).json();expect(result.results[0].missingReceiptDates).toEqual(['N1']);expect(sql.prepare('SELECT COUNT(*) n FROM procurement_payment_events').get().n).toBe(0);
+ orders[0].items[0].orderedQuantity=11;await requestProc('/erp-reconciliations','POST',{orders});expect(sql.prepare("SELECT COUNT(*) n FROM procurement_erp_reconciliations WHERE status='pending'").get().n).toBe(1);
 });
