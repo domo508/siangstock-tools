@@ -465,3 +465,21 @@ html, body { max-width: 100%; overflow-x: clip; }
 .change-filter-toolbar select { font:inherit; max-width:100%; border:1px solid var(--line); border-radius:10px; padding:.6rem; color:var(--ink); background:white; }
 [data-new-product-excess] { display:block; white-space:normal; overflow-wrap:anywhere; line-height:1.6; color:#8a5b12; }
 .workflow-table .manual-item-badge { max-width:100%; white-space:normal; overflow-wrap:anywhere; }
+
+/* Performance summaries share the existing CIS and never widen the page. */
+.performance-controls,.performance-cards,.performance-stores{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));margin:1rem 0}
+.performance-controls label,.performance-source label{display:flex;flex-direction:column;gap:.45rem;min-width:0;margin:.6rem 0}
+.performance-controls input,.performance-controls select,.performance-source input[type=date]{width:100%;min-width:0;max-width:100%;padding:.7rem;border:1px solid var(--line,#d8e4e8);border-radius:12px;background:white;font:inherit;color:inherit}
+.performance-card,.performance-store-result{min-width:0;overflow-wrap:anywhere;background:#f4f9fa;border:1px solid #d8e4e8;border-radius:18px;padding:1rem}
+.performance-card h3{font-size:1rem;margin:0 0 .8rem}.performance-card strong{font-size:1.7rem;color:#176b87}.performance-card p,.performance-card small{display:block;margin:.6rem 0;line-height:1.6}
+#performance-panel p,#performance-panel summary{overflow-wrap:anywhere;white-space:normal;line-height:1.7}#performance-panel summary{cursor:pointer;font-weight:700}#performance-status{padding:.8rem;background:#fbf8f1;border-radius:12px}#performance-custom[hidden]{display:none}
+.performance-weeks p{border-top:1px solid #d8e4e8;padding-top:.6rem}
+.performance-source summary{cursor:pointer;font-weight:700;color:#176b87;padding:.3rem 0}.performance-source{margin:1rem 0}.performance-source label{overflow-wrap:anywhere;white-space:normal}
+.performance-controls{align-items:end}.performance-controls button{min-height:48px;align-self:end;margin-bottom:.6rem}.performance-cards{grid-template-columns:repeat(5,minmax(0,1fr))}
+@media(max-width:950px){.performance-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:520px){.performance-cards{grid-template-columns:minmax(0,1fr)}}
+
+.regional-supervisor [data-weekly-view][hidden]{display:none!important}
+#supervisor-detail .performance-store-result{margin:1rem 0}#supervisor-detail p{overflow-wrap:anywhere;white-space:normal;line-height:1.7}
+
+#supervisor-new-products summary{cursor:pointer;font-weight:700}#supervisor-new-rows .performance-store-result{margin:1rem 0}#supervisor-new-products p{overflow-wrap:anywhere;white-space:normal;line-height:1.7}

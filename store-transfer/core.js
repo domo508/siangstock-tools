@@ -693,37 +693,8 @@
   // @ is an order-level carry-away exception, not an inventory or HQ-cost exclusion.
   function startsWithCarryAwayMarker(value) { return String(value ?? "").trimStart().startsWith("@"); }
 
-  function buildSuggestions(input) {
-    const stores = input.storeCodes || STORE_ORDER;
-    const proposalDate = input.proposalDate || input.sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "");
-    const scheduleByStore = Object.fromEntries(stores.map((store) => [store, storeSchedule(proposalDate, store, input.storeInventory || {}, input.approvalDate || "")]));
-    const masterBySku = input.master.bySku;
-    const activity = input.activityPlan ? (() => {
-      if (!globalThis.StoreTransferActivity) throw new Error("活動調撥模組未載入，請重新載入最新版。");
-      if (input.calculationMode === "comparison") throw new Error("活動備貨僅適用正式補貨；A/B測試請先取消活動。");
-      const ctx = globalThis.StoreTransferActivity.prepare(input.activityPlan, proposalDate, input.approvalDate, input.storeInventory || {});
-      if (!globalThis.StoreTransferActivity.validDate(input.activityInventoryDate) || input.activityInventoryDate > proposalDate || input.activityInventoryDate < input.activityPlan.source.asOfDate) throw new Error("請填寫不早於活動基準且不晚於開單日的最新庫存快照日期。");
-      return ctx;
-    })() : null;
-    if (activity?.active) for (const store of stores) Object.assign(scheduleByStore[store], {
-      currentArrivalDate: activity.timing.arrivalDate,
-      nextArrivalDate: globalThis.StoreTransferActivity.add(activity.timing.nextUsableDate, -2),
-      activityPlanId: activity.planId, activityPlanRevision: activity.revision,
-      activityUsableDate: activity.timing.usableDate, activityProtectionEnd: activity.timing.protectionEnd,
-      activityBufferDays: 2, activityName: activity.name, activityApprovalDate: activity.timing.approvalDate
-    });
-    const transferExclusions = transferExclusionSkus(input.storeInventory);
-    const applicabilityRules = normalizedApplicabilityRules(input.storeInventory);
-    const isTransferExcluded = (sku, storeCode = "") => {
-      const normalized = String(sku || "").normalize("NFKC").trim().toUpperCase();
-      if (isCustomTransferSku(normalized) || isCombinationTransferSku(normalized)) return true;
-      if (specialBeddingProductReason({ ...masterBySku.get(normalized), sku: normalized })) return true;
-      if (transferExclusions.has(normalized)) return true;
-      if (!storeCode || !applicabilityRules.length) return false;
-      return transferApplicabilityDecision({ transferExclusions: [], applicabilityRules }, masterBySku.get(normalized) || { sku: normalized, name: "" }, storeCode, proposalDate).excluded;
-    };
-    const inventory = new Map();
-    for (const row of input.inventory.records) inventory.set(`${row.warehouseCode}|${row.sku}`, (inventory.get(`${row.warehouseCode}|${row.sku}`) || 0) + row.quantity);
+  function salesEvidence(reports) {
+    const input = { sales: reports };
     for (const report of input.sales) {
       if (report.hasRemarkColumn === false) throw new Error(`${report.fileName || "銷售明細"}缺少「備註」欄，無法判斷總倉配貨是否納入補貨；請重新匯出含備註的銷售檔。`);
     }
@@ -755,22 +726,57 @@
       if (!matched) b3PendingRows.push({ storeCode: row.warehouseCode, sku: row.sku, sourceOrder: row.sourceOrder || "", pickupOrder: row.pickupOrder || "", quantity: Number(row.deductQuantity || row.quantity || 0), reason: "來源單號＋ERP品號無法配對門市訂貨" });
       return matched;
     });
-    const matchedKuanmuB3 = matchedTakeSales.filter((row) => STORE_COMPANY[row.warehouseCode] === "寬沐");
-    const rowCost = (row) => Number(row.purchaseCostAmount || row.storeCostAmount || row.registeredWarehouseCostAmount || 0)
-      || Number(masterBySku.get(row.sku)?.unitCost || 0) * Number(row.deductQuantity || row.quantity || 0);
-    const kuanmuB3BaseCost = matchedKuanmuB3.reduce((sum, row) => sum + rowCost(row), 0);
-    const kuanmuReceivedTransfers = input.transfer.records.filter((row) => row.sourceWarehouseCode === "T00" && STORE_COMPANY[row.destinationWarehouseCode] === "寬沐" && row.status === "收貨審核");
-    const kuanmuTransferBaseCost = kuanmuReceivedTransfers.reduce((sum, row) => sum + Number(masterBySku.get(row.sku)?.unitCost || 0) * Number(row.quantity || 0), 0);
-    const sales = [...primarySales, ...matchedTakeSales];
-    const latest = input.sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "");
-    if (!latest) throw new Error("銷售明細沒有可辨識的結帳日期。");
-
     const representedOrderItems = new Set(matchedTakeSales.map(row => `${orderKey(row)}|${row.sku}`));
     const eligibleWarehouseRows = new Set([
       ...matchedTakeSales.filter(warehouseDemandEligible),
       ...primarySales.filter(row => /^R\d{2}$/.test(row.warehouseCode || "") && row.shipWarehouseCode === "T00"
         && ["銷貨", "退貨"].includes(row.saleType) && !representedOrderItems.has(`${orderKey(row)}|${row.sku}`) && warehouseDemandEligible(row))
     ]);
+    return { primarySales, matchedTakeSales, b3PendingRows, newSalesBasis, representedOrderItems, eligibleWarehouseRows, sales: [...primarySales, ...matchedTakeSales] };
+  }
+
+  function buildSuggestions(input) {
+    const stores = input.storeCodes || STORE_ORDER;
+    const proposalDate = input.proposalDate || input.sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "");
+    const scheduleByStore = Object.fromEntries(stores.map((store) => [store, storeSchedule(proposalDate, store, input.storeInventory || {}, input.approvalDate || "")]));
+    const masterBySku = input.master.bySku;
+    const activity = input.activityPlan ? (() => {
+      if (!globalThis.StoreTransferActivity) throw new Error("活動調撥模組未載入，請重新載入最新版。");
+      if (input.calculationMode === "comparison") throw new Error("活動備貨僅適用正式補貨；A/B測試請先取消活動。");
+      const ctx = globalThis.StoreTransferActivity.prepare(input.activityPlan, proposalDate, input.approvalDate, input.storeInventory || {});
+      if (!globalThis.StoreTransferActivity.validDate(input.activityInventoryDate) || input.activityInventoryDate > proposalDate || input.activityInventoryDate < input.activityPlan.source.asOfDate) throw new Error("請填寫不早於活動基準且不晚於開單日的最新庫存快照日期。");
+      return ctx;
+    })() : null;
+    if (activity?.active) for (const store of stores) Object.assign(scheduleByStore[store], {
+      currentArrivalDate: activity.timing.arrivalDate,
+      nextArrivalDate: globalThis.StoreTransferActivity.add(activity.timing.nextUsableDate, -2),
+      activityPlanId: activity.planId, activityPlanRevision: activity.revision,
+      activityUsableDate: activity.timing.usableDate, activityProtectionEnd: activity.timing.protectionEnd,
+      activityBufferDays: 2, activityName: activity.name, activityApprovalDate: activity.timing.approvalDate
+    });
+    const transferExclusions = transferExclusionSkus(input.storeInventory);
+    const applicabilityRules = normalizedApplicabilityRules(input.storeInventory);
+    const isTransferExcluded = (sku, storeCode = "") => {
+      const normalized = String(sku || "").normalize("NFKC").trim().toUpperCase();
+      if (isCustomTransferSku(normalized) || isCombinationTransferSku(normalized)) return true;
+      if (specialBeddingProductReason({ ...masterBySku.get(normalized), sku: normalized })) return true;
+      if (transferExclusions.has(normalized)) return true;
+      if (!storeCode || !applicabilityRules.length) return false;
+      return transferApplicabilityDecision({ transferExclusions: [], applicabilityRules }, masterBySku.get(normalized) || { sku: normalized, name: "" }, storeCode, proposalDate).excluded;
+    };
+    const inventory = new Map();
+    for (const row of input.inventory.records) inventory.set(`${row.warehouseCode}|${row.sku}`, (inventory.get(`${row.warehouseCode}|${row.sku}`) || 0) + row.quantity);
+    const { primarySales, matchedTakeSales, b3PendingRows, newSalesBasis, representedOrderItems, eligibleWarehouseRows, sales } = salesEvidence(input.sales);
+    const matchedKuanmuB3 = matchedTakeSales.filter((row) => STORE_COMPANY[row.warehouseCode] === "寬沐");
+    const rowCost = (row) => Number(row.purchaseCostAmount || row.storeCostAmount || row.registeredWarehouseCostAmount || 0)
+      || Number(masterBySku.get(row.sku)?.unitCost || 0) * Number(row.deductQuantity || row.quantity || 0);
+    const kuanmuB3BaseCost = matchedKuanmuB3.reduce((sum, row) => sum + rowCost(row), 0);
+    const kuanmuReceivedTransfers = input.transfer.records.filter((row) => row.sourceWarehouseCode === "T00" && STORE_COMPANY[row.destinationWarehouseCode] === "寬沐" && row.status === "收貨審核");
+    const kuanmuTransferBaseCost = kuanmuReceivedTransfers.reduce((sum, row) => sum + Number(masterBySku.get(row.sku)?.unitCost || 0) * Number(row.quantity || 0), 0);
+    const latest = input.sales.reduce((max, report) => report.maxDate > max ? report.maxDate : max, "");
+    if (!latest) throw new Error("銷售明細沒有可辨識的結帳日期。");
+
+    const orderKey = row => `${row.warehouseCode}|${row.sourceOrder || row.posOrder || row.pickupOrder || ""}`;
     const local = new Map(), b3 = new Map(), warehouseDemand = new Map(), activeWeeks = new Map();
     const demandSales42 = key => Math.max(0, (local.get(key) || 0) + (warehouseDemand.get(key) || 0));
     const hqUsage14 = new Map(), hqUsage42 = new Map(), hqUsage84 = new Map();
@@ -1482,5 +1488,5 @@
     return workbook;
   }
 
-  return { STORE_ORDER, STORE_COMPANY, CONSUMABLES, startsWithCarryAwayMarker, isCustomTransferSku, isCombinationTransferSku, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, storeDisplayException, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook, buildFormalWorkbook };
+  return { salesEvidence, STORE_ORDER, STORE_COMPANY, CONSUMABLES, startsWithCarryAwayMarker, isCustomTransferSku, isCombinationTransferSku, previousWorkingDay, nextWorkingDay, storeSchedule, allocateQuantity, combinedAllocationWeights, stockRule, storeDisplayException, projectedSellThroughDate, sStockProtection, generalHqStockProtection, parseMarketingWorkbook, buildSuggestions, buildErpWorkbook, buildComparisonReport, buildComparisonWorkbook, buildFormalWorkbook };
 });

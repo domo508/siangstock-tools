@@ -1,6 +1,6 @@
 (function(global){
  "use strict";
- const VERSION='20261116-procurement-newproduct-notice-r1';
+ const VERSION='20261116-procurement-transfer-performance-r1';
  function comparable(s){return JSON.stringify({name:s.name,startDate:s.startDate,endDate:s.endDate,scope:s.scope,monthlyTargets:Object.fromEntries(Object.entries(s.monthlyTargets||{}).sort().map(([m,t])=>[m,{amount:t.amount,retailAmount:t.retailAmount==null?null:t.retailAmount}]))});}
  function create(options){
   const q=s=>document.querySelector(s),box=q('#activity-registry'),select=q('#activity-registry-select'),status=q('#activity-registry-status');

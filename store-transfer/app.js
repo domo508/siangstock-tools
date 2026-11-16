@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261116-transfer-newproduct-hq-r1";
+  const APP_VERSION = "20261116-transfer-performance-r1";
   const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", batchChangesOnly: false, batchSource:"all", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -1058,6 +1058,9 @@
         storeDisplayExceptions: state.config.displayExceptions || []
       };
       state.calculation = transferCore.buildSuggestions(calculationInput);
+      if (mode === 'formal' && $('performance-collect').checked) state.calculation.performanceSnapshot = globalThis.StoreTransferPerformance.buildSnapshot(calculationInput,state.calculation,{
+        inventoryDate:$('performance-inventory-date').value,salesStart:$('performance-sales-start').value,salesEnd:$('performance-sales-end').value,remarkSince:$('performance-remark-since').value,complete:$('performance-complete').checked
+      });
       const staleNewProduct=(newProducts.rows||[]).some(r=>(state.calculation.newProductClaims||[]).some(c=>c.planId===r.plan_id)&&r.status==='waiting_stock'&&Number(r.approved_quantity||0)>Number(r.committed_quantity||0)&&Date.now()-Date.parse(r.approved_at)>=14*86400000);
       $("new-product-reconfirm-panel").hidden=!staleNewProduct;$("new-product-reconfirmed").checked=false;
       state.formalCalculation = mode === "comparison" ? transferCore.buildSuggestions({ ...calculationInput, calculationMode: "formal" }) : state.calculation;
@@ -1127,7 +1130,7 @@
       }
       const id = `TR-${weekKey}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
       $("hq-status").textContent = "正在建立正式批次；大型缺貨清單會以精簡格式安全寫入…";
-      await api("/batches", { method: "POST", body: { id, weekKey, proposalDate, responseDueAt: new Date(localLock).toISOString(), lockAt: new Date(localLock).toISOString(), newProductReconfirmed:$("new-product-reconfirmed").checked, newProductClaims: state.calculation.newProductClaims || [], items: compactBatchItems(state.calculation.rows), shortages: compactBatchShortages(state.calculation.shortageRows), manualItemFacts: compactManualItemFacts(state.calculation.manualItemFacts), manualItemCatalog: compactManualItemCatalog(state.calculation.manualItemCatalog), arrivalSchedule: state.calculation.scheduleByStore, activityReconciled:$("activity-prior-reconciled").checked } });
+      await api("/batches", { method: "POST", body: { performanceSnapshot:state.calculation.performanceSnapshot || null, id, weekKey, proposalDate, responseDueAt: new Date(localLock).toISOString(), lockAt: new Date(localLock).toISOString(), newProductReconfirmed:$("new-product-reconfirmed").checked, newProductClaims: state.calculation.newProductClaims || [], items: compactBatchItems(state.calculation.rows), shortages: compactBatchShortages(state.calculation.shortageRows), manualItemFacts: compactManualItemFacts(state.calculation.manualItemFacts), manualItemCatalog: compactManualItemCatalog(state.calculation.manualItemCatalog), arrivalSchedule: state.calculation.scheduleByStore, activityReconciled:$("activity-prior-reconciled").checked } });
       let notificationText = "";
       try {
         if (notificationAuthorizationError) throw new Error(notificationAuthorizationError);
@@ -1137,7 +1140,7 @@
         notificationText = `；批次已建立，但門市通知尚未全部寄出：${error.message}`;
       }
       $("hq-status").textContent = `已建立批次${id}${notificationText}；同週舊的未完成批次已改為僅供查閱，門市重新登入即可看到新版確認清單。`;
-      $("calculation-results").hidden = true; state.calculation = null; await loadBatches();
+      $("calculation-results").hidden = true; state.calculation = null; await loadBatches(); state.performanceUI?.refresh();
     } finally { $("publish-button").disabled = false; }
   }
 
@@ -1835,6 +1838,17 @@
       if (!(await checkRuntimeVersion())) return;
       if (!inputXlsx || !outputXlsx || !parser || !transferCore || !googleSources || !xlsxPreflight || !window.StoreTransferWorkflow) throw new Error("工具元件載入失敗，請重新整理頁面。");
       state.config = await api("/config");
+      if(state.config.role==='supervisor') {
+        document.body.classList.add('regional-supervisor');
+        $('account-badge').textContent=`${state.config.email}・區域督導（唯讀）`;
+        document.querySelectorAll('[data-weekly-view]').forEach(section=>{section.hidden=!['performance-panel','supervisor-batches','supervisor-new-products'].includes(section.id)&&!section.classList.contains('hero');});
+        $('page-title').textContent='查看區域門市庫存與缺貨成效';
+        $('hero-description').textContent=`可查看 ${Object.entries(state.config.stores).map(([code,s])=>`${code} ${s.name}`).join('、')}；可比較區域合計或單店，可查看所屬區域新品首配及週調撥批次明細，不能修改、送出、核准或匯出調撥。`;
+        state.performanceUI=globalThis.StoreTransferPerformanceUI.mount({api,checkRuntimeVersion});
+        globalThis.StoreTransferSupervisorUI.mount({api,config:state.config,checkRuntimeVersion});
+        globalThis.CompanyGuidance?.refresh();
+        return;
+      }
       $("account-badge").textContent = `${state.config.email}・${state.config.role === "store" ? state.config.storeCode : state.config.role === "admin" ? "最高權限" : "總部"}`;
       $("refresh-button").disabled = false;
       if (state.config.role === "store") {
@@ -1854,6 +1868,7 @@
         if (state.config.permissions?.canManageRules) { $("rules-link").hidden = false; $("transfer-rules-link").hidden = false; }
         if (!state.config.googleOAuthClientId) { $("google-connect-button").disabled = true; $("source-status").textContent = "正式環境尚未設定 Google OAuth，用手動備援仍可操作。"; }
       }
+      state.performanceUI=globalThis.StoreTransferPerformanceUI.mount({api,checkRuntimeVersion});
       window.NewProductAllocationUI.mount({api,config:state.config,checkRuntimeVersion,sendNotice:async id=>{
         if(!googleSources.token())await authorizeGoogle();
         return api(`/new-products/${encodeURIComponent(id)}/notifications/send`,{method:'POST',body:{},googleAccessToken:googleSources.token(),headers:{'X-New-Product-Version':'20261116-new-product-allocation-r3'}});
@@ -1990,12 +2005,19 @@
   $("calculation-results").addEventListener("input", (event) => {
     if (event.target.matches('[data-sku-filter-scope="calculation"]')) applySkuFilter("calculation", event.target.value);
   });
+  document.querySelectorAll('.performance-source input').forEach(field=>field.addEventListener('change',()=>{
+    if(state.calculation){state.calculation=null;state.formalCalculation=null;$('calculation-results').hidden=true;$('hq-status').textContent='成效來源日期已變更，請重新產生建議；已保存的批次不受影響。';}
+  }));
   start();
 
   // Read-only readiness for the shared guide; no calculation or write is performed here.
-  globalThis.CompanyGuidance?.register({ statuses: '#hq-status,#source-status,#activity-plan-status,#activity-save-status,#display-exception-dialog-status,#display-exception-page-status,#batch-detail [role="status"],#collaboration-detail [role="status"]', resolve() {
+  globalThis.CompanyGuidance?.register({ statuses: '#supervisor-new-status,#supervisor-status,#performance-status,#hq-status,#source-status,#activity-plan-status,#activity-save-status,#display-exception-dialog-status,#display-exception-page-status,#batch-detail [role="status"],#collaboration-detail [role="status"]', resolve() {
     const S=globalThis.CompanyGuidance.step;
     if (!state.config) return S('先確認公司帳號', '正在取得角色與可查看門市；失敗時請看帳號訊息。', '#account-badge');
+    if(state.config.role==='supervisor'&&document.activeElement?.closest('#supervisor-new-products'))return S('唯讀查看區域新品首配','可切換區域／單店查看建議、確認、首次核定與待配狀態；不需再次確認或核准。','#supervisor-new-store');
+    if(state.config.role==='supervisor'&&document.activeElement?.closest('#supervisor-batches'))return S('唯讀查看區域批次','選擇區域或單店，再按批次查看數量、異動與原因；不能修改或送出。','#supervisor-store');
+    if(state.config.role==='supervisor') return S('查看所屬區域成效', '可選區域合計或單店及比較區間；本帳號唯讀，不需進行補貨建議或覆核。', '#performance-period');
+    if(document.activeElement?.closest('#performance-panel')) return S('查看週調撥成效', '選擇門市與比較區間；資料不足時先核對來源覆蓋。更新只讀取，不更改批次。', '#performance-period');
     if ($('display-exception-dialog').open) return S('設定本店展示例外', '確認貨號、展示數量與原因，再自行儲存；不會變更其他門市。', '#display-exception-form');
     if ($('batch-dialog').open) return S('核對目前調撥批次', '依本批狀態核對數量、原因及可用操作；確認、核准與下載仍須自行按下。', '#batch-detail');
     if ($('collaboration-dialog').open) return S('核對 A/B 協作內容', '請先核對差異與人工決策，再依原有權限操作。', '#collaboration-detail');
