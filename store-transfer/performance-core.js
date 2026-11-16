@@ -1,7 +1,7 @@
 /* Aggregates only; no customer/order/remark text is retained or transmitted. */
 (function(root,factory){const api=factory();root.StoreTransferPerformance=api;if(typeof module==='object'&&module.exports)module.exports=api;})(globalThis,function(){
 'use strict';
-const VERSION='20261116-transfer-performance-r2', SCHEMA=1;
+const VERSION='20261116-transfer-store-names-r1', SCHEMA=1;
 const validDate=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&!Number.isNaN(Date.parse(s+'T00:00:00Z'))&&new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
 const add=(s,n)=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);};
 const days=(a,b)=>Math.round((Date.parse(b+'T00:00:00Z')-Date.parse(a+'T00:00:00Z'))/86400000)+1;

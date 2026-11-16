@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261116-transfer-performance-r2";
+  const APP_VERSION = "20261116-transfer-store-names-r1";
   const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", batchChangesOnly: false, batchSource:"all", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -658,7 +658,7 @@
       follow_up_status: row.followUpStatus || "待回拋主採購"
     }));
     return globalThis.ProcurementShortageBatch.groupProducts(normalized).map(group => {
-      const details = group.rows.map(row => `<tr data-store-row data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" data-needed-by="${escapeHtml(row.needed_by || row.next_arrival_date || "")}" data-shortage-quantity="${Number(row.unfilled_quantity || 0)}"><td>${escapeHtml(row.store_code)}</td><td>${Number(row.demand_quantity || 0)}</td><td>${Number(row.allocated_quantity || 0)}</td><td>${Number(row.unfilled_quantity || 0)}</td><td>${escapeHtml(state.config.role === "store" ? storeFacingSystemReason(row.reason, row.allocated_quantity) : row.reason)}</td><td>${escapeHtml(String(row.follow_up_status || "待回拋主採購").replace("已由採購覆蓋待到貨", "有歷史採購關聯；未交以ERP清單為準"))}</td></tr>`).join("");
+      const details = group.rows.map(row => `<tr data-store-row data-store="${escapeHtml(row.store_code)}" data-sku="${escapeHtml(row.sku)}" data-needed-by="${escapeHtml(row.needed_by || row.next_arrival_date || "")}" data-shortage-quantity="${Number(row.unfilled_quantity || 0)}"><td class="shortage-store-cell"><span class="shortage-store-code">${escapeHtml(row.store_code)}</span>${state.config.stores[row.store_code]?.name ? `<small class="shortage-store-name">${escapeHtml(state.config.stores[row.store_code].name)}</small>` : ""}</td><td>${Number(row.demand_quantity || 0)}</td><td>${Number(row.allocated_quantity || 0)}</td><td>${Number(row.unfilled_quantity || 0)}</td><td>${escapeHtml(state.config.role === "store" ? storeFacingSystemReason(row.reason, row.allocated_quantity) : row.reason)}</td><td>${escapeHtml(String(row.follow_up_status || "待回拋主採購").replace("已由採購覆蓋待到貨", "有歷史採購關聯；未交以ERP清單為準"))}</td></tr>`).join("");
       const needed = group.earliestNeededBy || "待確認";
       return `<article class="shortage-product-card" data-shortage-product data-shortage-product-sku="${escapeHtml(group.sku)}"><div class="shortage-product-heading"><div><strong>${escapeHtml(group.sku)}</strong><span>${escapeHtml(group.name)}</span></div><strong data-shortage-total>未配 ${group.unfilled}件</strong></div><div class="shortage-store-list" data-shortage-stores></div><p data-shortage-needed>補貨需要日（最早）：${escapeHtml(needed)}（週調撥下一輪到店日）</p>${globalThis.ProcurementShortageBatch.renderPendingInfo(group.sku, state.pendingPurchaseSnapshot, escapeHtml)}<details><summary>查看各店需求、原因與後續狀態</summary><div class="result-table-wrap"><table class="transfer-table compact-table"><thead><tr><th>門市</th><th>需求量</th><th>已配量</th><th>未配不足量</th><th>原因</th><th>後續狀態</th></tr></thead><tbody>${details}</tbody></table></div></details></article>`;
     }).join("");
