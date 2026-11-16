@@ -1475,6 +1475,31 @@
       .some((value) => normalized.endsWith(value.replace(/^FF(?=.{6}$)/, "")) || normalized === value);
   }
 
+  function selectConsignmentStockColumn(columns, options = {}) {
+    const asOf = parseDateValue(options.asOfDate) || new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    const year = Number(asOf.slice(0, 4)), asOfMonth = Number(asOf.slice(5, 7));
+    const candidates = columns.filter(({ header }) => /庫存|現貨/.test(String(header)) && !/排程|製作|下單|新增|預計|完工|出貨|入庫|待交/.test(String(header))).map(column => {
+      const raw = String(column.header).normalize('NFKC').trim();
+      const dateText = raw.replace(/最新|目前|期末|總庫存|寄庫現貨|庫存數量|剩餘庫存|可用庫存|庫存|現貨/g, '').replace(/[\s()（）【】\[\]]/g, '');
+      let y = null, m = null, d = null, match;
+      if ((match = dateText.match(/^(\d{4})[年/.-](\d{1,2})[月/.-](\d{1,2})日?$/)) || (match = dateText.match(/^(\d{4})(\d{2})(\d{2})$/))) [,y,m,d] = match.map(Number);
+      else if ((match = dateText.match(/^(\d{1,2})[月/.-](\d{1,2})日?$/)) || (match = dateText.match(/^(\d{2})(\d{2})$/))) { m = Number(match[1]); d = Number(match[2]); y = year - (m - asOfMonth >= 6 ? 1 : 0); }
+      else if (dateText !== '') throw new Error('寄庫庫存欄位待確認：無法辨識日期「' + raw + '」；未沿用舊庫存。');
+      let date = '';
+      if (y != null) {
+        date = String(y).padStart(4,'0') + '-' + String(m).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+        if (m < 1 || m > 12 || d < 1 || d > 31 || new Date(date + 'T00:00:00Z').toISOString().slice(0,10) !== date) throw new Error('寄庫庫存欄位待確認：日期無效「' + raw + '」。');
+        if (date > asOf) throw new Error('寄庫庫存欄位待確認：「' + raw + '」晚於資料截止日' + asOf + '，可能為預排庫存；未沿用舊庫存。');
+      }
+      return { ...column, date };
+    });
+    if (!candidates.length) return null;
+    if (candidates.length > 1 && candidates.some(column => !column.date)) throw new Error('寄庫庫存欄位待確認：多個庫存欄含無日期欄（' + candidates.map(c => c.header).join('、') + '）；未猜測最新欄。');
+    candidates.sort((a,b) => b.date.localeCompare(a.date));
+    if (candidates.length > 1 && candidates[0].date === candidates[1].date) throw new Error('寄庫庫存欄位待確認：同日存在多個庫存欄（' + candidates.filter(c => c.date === candidates[0].date).map(c => c.header).join('、') + '）。');
+    return candidates[0];
+  }
+
   function parseConsignmentWorkbook(workbook, XLSX, options = {}) {
     const sheetName = workbook.SheetNames.includes("庫存+下單") ? "庫存+下單" : workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
@@ -1501,11 +1526,8 @@
       spec: findColumn(["規格"]),
       unitCost: findColumn(["成品價", "採購價"])
     };
-    let currentColumn = null;
-    headers.forEach((header, index) => {
-      const normalized = normalizeHeader(header);
-      if (normalized.includes("最新") && normalized.includes("庫存")) currentColumn = index;
-    });
+    const stockColumn = selectConsignmentStockColumn(headers.map((header,index) => ({header,index})).filter(({header}) => /最新/.test(header) && /庫存/.test(header)), options);
+    const currentColumn = stockColumn?.index ?? null;
     if (columns.sku == null || columns.supplierSku == null || columns.name == null || currentColumn == null) {
       throw new Error("寄倉表缺少「產品編號、編號、商品名稱、最新庫存」欄位。");
     }
@@ -1582,6 +1604,7 @@
       fileName: options.fileName || "",
       sheetName,
       currentHeader: headers[currentColumn],
+      currentStockDate: stockColumn?.date || "",
       records,
       exceptions,
       confirmedExclusions,
@@ -1600,7 +1623,6 @@
     });
     const skuPattern = /^(?:erp|翔仔)?(?:品號|貨號)$|^編號$/;
     const namePattern = /商品名稱|品名/;
-    const primaryStockPatterns = [/最新.*庫存/, /寄庫.*現貨/, /^現貨$/, /庫存數量/, /^(?:\d{2,4}|\d{1,2}月\d{1,2}日?)庫存$/];
     const fallbackStockPatterns = [/剩餘庫存/, /可用庫存/];
     const matchesAny = (value, patterns) => patterns.some((pattern) => pattern.test(normalizeHeader(value)));
     const candidates = [];
@@ -1616,16 +1638,16 @@
           const blockEnd = skuColumns[blockIndex + 1] ?? headers.length;
           const blockColumns = headers.map((header, index) => ({ header, index })).filter(({ index }) => index >= skuColumn && index < blockEnd);
           const nameColumn = blockColumns.find(({ header }) => namePattern.test(normalizeHeader(header)))?.index ?? -1;
-          const primaryCurrent = blockColumns.find(({ header }) => matchesAny(header, primaryStockPatterns));
-          const fallbackCurrent = blockColumns.find(({ header }) => matchesAny(header, fallbackStockPatterns));
-          const current = primaryCurrent || fallbackCurrent;
-          if (nameColumn < 0 || !current) continue;
+          if (nameColumn < 0) continue;
+          const current = selectConsignmentStockColumn(blockColumns, options);
+          if (!current) continue;
+          const primaryCurrent = !matchesAny(current.header, fallbackStockPatterns);
           const supplierSkuColumn = blockColumns.find(({ header }) => /供應商貨號|產品編號/.test(normalizeHeader(header)))?.index ?? -1;
           const scheduleColumns = blockColumns.filter(({ header, index }) => index !== current.index && /(排程|製作|下單|新增|預計.*(?:入庫|完工)|完工)/.test(normalizeHeader(header)));
           const dataRows = rows.slice(headerRowIndex + 1).filter((row) => normalizeSku(row[skuColumn])).length;
           candidates.push({
             sheetName, rows, headerRowIndex, headers, skuColumn, supplierSkuColumn, nameColumn,
-            currentColumn: current.index, scheduleColumns, fallbackStock: !primaryCurrent,
+            currentColumn: current.index, stockDate: current.date, scheduleColumns, fallbackStock: !primaryCurrent,
             score: (primaryCurrent ? 1000 : 500) + (scheduleColumns.length ? 100 : 0) + Math.min(dataRows, 99)
           });
         }
@@ -1670,7 +1692,7 @@
     if (selected.fallbackStock) corrections.push(`自動將「${headers[currentColumn]}」辨識為寄庫現貨備援欄`);
     return {
       fileName: options.fileName || "", sheetName, headerRowIndex: headerRowIndex + 1,
-      currentHeader: headers[currentColumn], corrections, dataAvailable: true,
+      currentHeader: headers[currentColumn], currentStockDate: selected.stockDate || "", corrections, dataAvailable: true,
       records, bySku: new Map(records.map((row) => [row.sku, row]))
     };
   }
@@ -5117,6 +5139,7 @@
       ["分批釋放規則", recommendations.checkpoint === "month-start" ? "熱銷70%／穩定50%／低銷0%" : "依本次最新缺口100%重算"],
       ["採購流程", recommendations.meta?.workflowLabel || "一般採購建議"],
       ["固定來源模式", recommendations.meta?.sourceMode || "未標示"],
+      ...Object.entries(recommendations.meta?.consignmentSources || {}).map(([source, detail]) => [source === "lirong" ? "力榮採用庫存欄" : "普優瑪採用庫存欄", detail.header, detail.date || "欄名未提供日期"]),
       ...Object.entries(recommendations.meta?.sourceHashes || {}).map(([source, hash]) => [`來源SHA-256：${source}`, String(hash)]),
       ["五來源日期檢核", sourceDateCheck?.status || "未提供", sourceDateCheck?.message || "下載前請確認庫存、未到貨、期間調撥、寄庫與銷售截止日。"],
       ...(sourceDateCheck?.status === "PASS" ? [] : [["使用限制", "資料時點未通過檢核；本檔只供串接驗收，不可直接下單。"]]),

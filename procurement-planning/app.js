@@ -14,7 +14,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261116-procurement-transfer-performance-r2";
+  const APP_VERSION = "20261116-procurement-stock-date-r1";
   const state = {
     importProgress: null, shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -313,7 +313,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261116-procurement-transfer-performance-r2");
+        const worker = new Worker("inventory-reader-worker.js?v=20261116-procurement-stock-date-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1081,7 +1081,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261116-procurement-transfer-performance-r2");
+      const worker = new Worker("seasonal-model-worker.js?v=20261116-procurement-stock-date-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -2567,7 +2567,7 @@
       let puyouma;
       try {
         if (!state.consignmentWorkbook) throw new Error("固定來源未取得");
-        puyouma = core.parseConsignmentWorkbook(state.consignmentWorkbook, XLSX);
+        puyouma = core.parseConsignmentWorkbook(state.consignmentWorkbook, XLSX, { asOfDate: elements.consignmentDate.value || today() });
       } catch (error) {
         const sourceError = identifySourceError(error, "puyouma", "內容解析");
         optionalWarnings.push(sourceError);
@@ -2577,7 +2577,7 @@
       let lirong;
       try {
         if (!state.lirongConsignmentWorkbook) throw new Error("固定來源未取得");
-        lirong = core.parseLirongConsignmentWorkbook(state.lirongConsignmentWorkbook, XLSX);
+        lirong = core.parseLirongConsignmentWorkbook(state.lirongConsignmentWorkbook, XLSX, { asOfDate: elements.consignmentDate.value || today() });
       } catch (error) {
         const sourceError = identifySourceError(error, "lirong", "內容解析");
         optionalWarnings.push(sourceError);
@@ -2592,11 +2592,11 @@
       }
       updateSourceProgress("marketing", "success", "已取得並完成內容驗證");
       if (!puyouma.unavailable) updateSourceProgress("puyouma", "success", `已取得並讀取${puyouma.records.length}列`);
-      if (!lirong.unavailable) updateSourceProgress("lirong", "success", `已取得並讀取${lirong.records.length}列${lirong.corrections.length ? `；${lirong.corrections.join("、")}` : ""}`);
+      if (!lirong.unavailable) updateSourceProgress("lirong", "success", `已取得並讀取${lirong.records.length}列；採用「${lirong.currentHeader}」${lirong.corrections.length ? `；${lirong.corrections.join("、")}` : ""}`);
       elements.masterFileName.textContent = `自動：${sources.master.metadata.name}・${sourceProof(sources.master.metadata.id, sources.master.metadata)}`;
       elements.marketingFileName.textContent = `自動：整體行銷策略・${sourceProof(sources.marketingMetadata.fileId, sources.marketingMetadata)}`;
       elements.consignmentFileName.textContent = puyouma.unavailable ? `未驗證：${puyouma.unavailableReason}` : `自動：庫存+下單／庫存布，共${puyouma.records.length}列・${sourceProof(sources.puyoumaMetadata.spreadsheetId, sources.puyoumaMetadata)}`;
-      elements.lirongConsignmentFileName.textContent = lirong.unavailable ? `未驗證：${lirong.unavailableReason}` : `自動：${sources.lirongMetadata.selectedSheet || lirong.sheetName || "力榮寄庫"}，共${lirong.records.length}列・${sourceProof(sources.lirongMetadata.spreadsheetId, sources.lirongMetadata)}`;
+      elements.lirongConsignmentFileName.textContent = lirong.unavailable ? `未驗證：${lirong.unavailableReason}` : `自動：${sources.lirongMetadata.selectedSheet || lirong.sheetName || "力榮寄庫"}，共${lirong.records.length}列・採用「${lirong.currentHeader}」・${sourceProof(sources.lirongMetadata.spreadsheetId, sources.lirongMetadata)}`;
       const validationMessage = masterValidation.invalidCount
         ? `固定 Google 資料源已完成格式檢核；${masterValidation.hardInvalidCount}列缺供應商、正數進貨價或MOQ並停止自動採購，${masterValidation.statusReviewCount}列貨品狀態空白仍顯示試算建議；僅提示主檔待補，未改量不需原因。`
         : "固定 Google 資料源已完成格式檢核；本次採用自動來源。";
@@ -3132,12 +3132,12 @@
       let consignment;
       let lirongConsignment;
       try {
-        consignment = consignmentWorkbook ? core.parseConsignmentWorkbook(consignmentWorkbook, XLSX, { fileName: "普優瑪寄庫" }) : unavailableConsignmentSource("普優瑪寄庫表", "本次未取得");
+        consignment = consignmentWorkbook ? core.parseConsignmentWorkbook(consignmentWorkbook, XLSX, { fileName: "普優瑪寄庫", asOfDate: elements.consignmentDate.value || today() }) : unavailableConsignmentSource("普優瑪寄庫表", "本次未取得");
       } catch (error) {
         consignment = unavailableConsignmentSource("普優瑪寄庫表", error.message);
       }
       try {
-        lirongConsignment = lirongWorkbook ? core.parseLirongConsignmentWorkbook(lirongWorkbook, XLSX, { fileName: "力榮寄庫" }) : unavailableConsignmentSource("力榮寄庫表", "本次未取得");
+        lirongConsignment = lirongWorkbook ? core.parseLirongConsignmentWorkbook(lirongWorkbook, XLSX, { fileName: "力榮寄庫", asOfDate: elements.consignmentDate.value || today() }) : unavailableConsignmentSource("力榮寄庫表", "本次未取得");
       } catch (error) {
         lirongConsignment = unavailableConsignmentSource("力榮寄庫表", error.message);
       }
@@ -3199,6 +3199,7 @@
       });
       analysis.meta = {
         month: elements.month.value, checkpoint: elements.checkpoint.value, sourceMode: state.consignmentWorkbook ? "Google自動" : "手動備援",
+        consignmentSources: { puyouma: { header: consignment.currentHeader || "未驗證", date: consignment.currentStockDate || "" }, lirong: { header: lirongConsignment.currentHeader || "未驗證", date: lirongConsignment.currentStockDate || "" } },
         seasonalModel: state.modelMetadata ? { ...state.modelMetadata, refreshMonth: modelRefreshMonth(), status: "本次沿用／已更新" } : null,
         sourceHashes: state.sourceMetadata ? {
           master: state.sourceMetadata.master.metadata.sha256,

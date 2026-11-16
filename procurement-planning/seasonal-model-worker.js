@@ -1,6 +1,6 @@
 "use strict";
 
-importScripts("../inventory/assets/xlsx.full.min.js", "core.js?v=20261116-procurement-transfer-performance-r2", "seasonal-model.js?v=20260914-seasonal-wape-r2");
+importScripts("../inventory/assets/xlsx.full.min.js", "core.js?v=20261116-procurement-stock-date-r1", "seasonal-model.js?v=20260914-seasonal-wape-r2");
 
 let builder = null;
 let latestResult = null;

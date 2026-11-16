@@ -3079,3 +3079,18 @@ describe('ERP未交量為唯一採購抵扣來源',()=>{
   request.covered_quantity=500;expect(h.remainingNeed(request)).toBe(48);
  });
 });
+
+it('最新力榮零庫存遵守S品保護，新分析不回寫既有結果',()=>{
+ const master=makeMaster();const m=master.bySku.get('A1');m.supplier='力榮';m.name='合成床包(S)';m.sellThroughStop=true;
+ const book=value=>{const w=XLSX.utils.book_new();XLSX.utils.book_append_sheet(w,XLSX.utils.aoa_to_sheet([['貨號','品名','8/20庫存','0828總庫存'],['A1','合成床包',40,value]]),'下單');return XLSX.read(XLSX.write(w,{type:'array',bookType:'xlsx'}),{type:'array',cellDates:true,cellStyles:true,nodim:true});};
+ const input={master,inventory:makeInventory(),pendingReports:[],consignment:makeConsignment(),salesReports:[makeSales()],model:makeForecastModel(),blacklist:[],asOfDate:'2026-08-28',checkpoint:'mid-month'};
+ const source=core.parseLirongConsignmentWorkbook(book(40),XLSX,{asOfDate:'2026-08-28'});
+ const before=core.buildProcurementRecommendations({...input,lirongConsignment:source}),saved=JSON.stringify(before);
+ const latest=core.parseLirongConsignmentWorkbook(book(0),XLSX,{asOfDate:'2026-08-28'});
+ const after=core.buildProcurementRecommendations({...input,lirongConsignment:latest});
+ expect(after.rows.find(r=>r.sku==='A1')).toMatchObject({consignmentCurrentQty:0,suggestedPurchaseQty:0,sellThroughStop:true});
+ expect(JSON.stringify(before)).toBe(saved);
+ after.meta={consignmentSources:{lirong:{header:latest.currentHeader,date:latest.currentStockDate}}};
+ const w=core.buildRecommendationWorkbook(after,XLSX,{selectedSuppliers:['力榮']});
+ expect(XLSX.utils.sheet_to_json(w.Sheets['01_採購摘要'],{header:1})).toContainEqual(['力榮採用庫存欄','0828總庫存','2026-08-28']);
+});
