@@ -1,5 +1,5 @@
 import {supervisorStores,supervisorBatches,supervisorNewProducts} from './store-transfer-supervisors';
-import {performanceStatements,readPerformance} from './store-transfer-performance';
+import {performanceStatements,readPerformance,salesPerformanceContext,saveSalesPerformance} from './store-transfer-performance';
 import { STORES } from './store-transfer-stores';
 import { newProductRoute, newProductClaimStatements } from './new-products';
 import { verifyCompanyUser, type AccessConfig } from "./access";
@@ -189,7 +189,7 @@ function storeReplyDeadline(batch: Record<string, unknown>, store: Record<string
 async function extendStoreReply(request: Request, env: StoreTransferEnv, batchId: string, requestedStore: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (request.headers.get("X-Store-Transfer-Version") !== "20261116-transfer-performance-r1") throw new RequestValidationError("回覆期限功能已有新版，請重新載入最新版。", 409);
+  if (request.headers.get("X-Store-Transfer-Version") !== "20261116-transfer-performance-r2") throw new RequestValidationError("回覆期限功能已有新版，請重新載入最新版。", 409);
   const storeCode = visibleStore(requestedStore, who.role, who.storeCode);
   if (!storeCode) throw new RequestValidationError("必須指定門市。");
   const input = await readBody(request, 8192);
@@ -711,7 +711,7 @@ async function createBatch(request: Request, env: StoreTransferEnv): Promise<Res
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
   const input = await readBody(request, 10_000_000);
-  if(input.performanceSnapshot != null && request.headers.get('X-Store-Transfer-Version')!=='20261116-transfer-performance-r1') throw new RequestValidationError('成效資料已有新版，請重新載入最新版後再計算。',409);
+  if(input.performanceSnapshot != null && request.headers.get('X-Store-Transfer-Version')!=='20261116-transfer-performance-r2') throw new RequestValidationError('成效資料已有新版，請重新載入最新版後再計算。',409);
   const collaborationId = String(input.collaborationId || "").normalize("NFKC").trim();
   const collaborationRevision = Number(input.collaborationRevision || 0);
   let collaboration: Record<string, unknown> | null = null;
@@ -1209,7 +1209,7 @@ async function openApprovedCorrection(request: Request, env: StoreTransferEnv, b
 async function approveBatch(request: Request, env: StoreTransferEnv, batchId: string, saveOnly = false, requestedStore?: string): Promise<Response> {
   requireSameOrigin(request, env);
   const who = await actor(request, env); assertHq(who.role);
-  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261116-transfer-performance-r1") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
+  if (requestedStore && request.headers.get("X-Store-Transfer-Version") !== "20261116-transfer-performance-r2") throw new RequestValidationError("逐店核准已有新版，請重新載入最新版。", 409);
   const batch = await env.DB.prepare("SELECT status, revision, proposal_date, arrival_schedule FROM store_transfer_batches WHERE id = ? AND deleted_at IS NULL").bind(batchId).first<Record<string, unknown>>();
   if (!batch) throw new RequestValidationError("找不到此週調撥批次。", 404);
   if (!["open", "review"].includes(String(batch.status))) throw new RequestValidationError("此批次目前不可核准。", 409);
@@ -1600,7 +1600,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
     return json({ hasMore:rows.results.length>100, plans:await Promise.all(rows.results.slice(0,100).map(async raw=>{const row=raw as Record<string,unknown>,current=await currentActivityRecord(env,row);const {source,config,...metadata}=row;return {...metadata,status:current.status,startProposalDate:current.config.startProposalDate || "",...("settingsOutdated" in current?{settingsOutdated:true}:{})};})) });
   }
   requireSameOrigin(request,env);
-  if(request.headers.get("X-Store-Transfer-Version") !== "20261116-transfer-performance-r1") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
+  if(request.headers.get("X-Store-Transfer-Version") !== "20261116-transfer-performance-r2") throw new RequestValidationError("活動功能已有新版，請重新載入最新版。",409);
   const body = await readBody(request,3_000_000), now = new Date().toISOString();
   if (request.method === "POST" && !id) {
     const source = activitySource(body.source), planId = crypto.randomUUID();
@@ -1651,7 +1651,7 @@ async function activityPlans(request: Request, env: StoreTransferEnv, id = ""): 
 
 async function supplyRelease(request: Request, env: StoreTransferEnv, batchId: string): Promise<Response> {
   const who=await actor(request,env); assertHq(who.role);
-  if(request.method==="PUT") { requireSameOrigin(request,env); if(request.headers.get("X-Store-Transfer-Version")!=="20261116-transfer-performance-r1") throw new RequestValidationError("額度功能已有新版，請重新載入最新版。",409); }
+  if(request.method==="PUT") { requireSameOrigin(request,env); if(request.headers.get("X-Store-Transfer-Version")!=="20261116-transfer-performance-r2") throw new RequestValidationError("額度功能已有新版，請重新載入最新版。",409); }
   const sku=text(new URL(request.url).searchParams.get("sku"),"ERP品號",80).toUpperCase();
   if(!/^[A-Z0-9][A-Z0-9._/-]{0,79}$/.test(sku)) throw new RequestValidationError("ERP品號格式錯誤。");
   const batch=await env.DB.prepare("SELECT status,revision FROM store_transfer_batches WHERE id=? AND deleted_at IS NULL").bind(batchId).first<Record<string,unknown>>();
@@ -1688,7 +1688,7 @@ async function bulkSupplyRelease(request: Request, env: StoreTransferEnv, batchI
   const who=await actor(request,env); assertHq(who.role);
   if(request.method==="PUT") {
     requireSameOrigin(request,env);
-    if(request.headers.get("X-Store-Transfer-Version")!=="20261116-transfer-performance-r1") throw new RequestValidationError("批次開放已有新版，請重新載入最新版。",409);
+    if(request.headers.get("X-Store-Transfer-Version")!=="20261116-transfer-performance-r2") throw new RequestValidationError("批次開放已有新版，請重新載入最新版。",409);
   }
   const batch=await env.DB.prepare("SELECT status,revision FROM store_transfer_batches WHERE id=? AND deleted_at IS NULL").bind(batchId).first<{status:string;revision:number}>();
   if(!batch) throw new RequestValidationError("找不到此週調撥批次。",404);
@@ -1772,6 +1772,8 @@ export async function storeTransferRoute(request: Request, env: StoreTransferEnv
     if(request.method!=='GET') requireSameOrigin(request,env);
     return newProductRoute(request,env,await actor(request,env));
   }
+  if(url.pathname==='/api/store-transfer/performance-import-context'&&request.method==='GET'){const who=await actor(request,env);assertHq(who.role);return json(await salesPerformanceContext(env.DB,url.searchParams.get('batch')||''));}
+  if(url.pathname==='/api/store-transfer/performance-sales'&&request.method==='POST'){requireSameOrigin(request,env);const who=await actor(request,env);assertHq(who.role);if(request.headers.get('X-Store-Transfer-Version')!=='20261116-transfer-performance-r2')throw new RequestValidationError('請重新載入最新版。',409);return json(await saveSalesPerformance(env.DB,await readBody(request),who.email));}
   if (url.pathname === '/api/store-transfer/performance' && request.method === 'GET') {
     const who=await actor(request,env);
     return json({...(await readPerformance(env.DB,who)),role:who.role,storeCode:who.storeCode || null,stores:Object.fromEntries(Object.entries(STORES).filter(([code])=>who.role!=='store'||code===who.storeCode).map(([code,s])=>[code,{name:s.name}]))});
@@ -1852,6 +1854,7 @@ export async function cleanupStoreTransfers(env: StoreTransferEnv): Promise<void
     env.DB.prepare(`DELETE FROM store_transfer_items WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_store_status WHERE batch_id IN (${expired})`),
     env.DB.prepare(`DELETE FROM store_transfer_performance_snapshots WHERE batch_id IN (${expired})`),
+    env.DB.prepare(`DELETE FROM store_transfer_sales_performance WHERE batch_id IN (${expired}) OR created_at < datetime('now', '-12 months')`),
     env.DB.prepare(`DELETE FROM store_transfer_batches WHERE id IN (${expired})`),
     env.DB.prepare("DELETE FROM store_transfer_collaboration_drafts WHERE created_at < datetime('now', '-12 months')"),
     env.DB.prepare("DELETE FROM store_transfer_consumable_snapshots WHERE snapshot_date < date('now', '-12 months')"),

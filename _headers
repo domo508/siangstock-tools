@@ -287,8 +287,8 @@
 /inventory/rules-admin/*
   Cache-Control: no-store, max-age=0, must-revalidate
 
-/homepage/20261116-transfer-performance-entry-r1.js
+/homepage/20261116-transfer-performance-entry-r2.js
   Cache-Control: public, max-age=31536000, immutable
 
-/homepage/20261116-transfer-performance-entry-r1.css
+/homepage/20261116-transfer-performance-entry-r2.css
   Cache-Control: public, max-age=31536000, immutable

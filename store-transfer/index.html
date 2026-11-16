@@ -9,7 +9,7 @@
   <title>門市週補貨與調撥｜翔仔居家</title>
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="../cost-analysis/style.css">
-  <link rel="stylesheet" href="style.css?v=20261116-transfer-performance-r1">
+  <link rel="stylesheet" href="style.css?v=20261116-transfer-performance-r2">
   <link rel="stylesheet" href="/live-guidance/style.css?v=20261103-guidance-compact-r6">
 </head>
 <body>
@@ -55,8 +55,8 @@
 
     <section id="performance-panel" class="panel" data-weekly-view aria-labelledby="performance-title">
       <details><summary id="performance-title">週調撥成效｜庫存與缺貨趨勢</summary>
-      <p>總部可比較全部門市；門市只看自己的數據。指標以當次週調撥適用商品為範圍，並非全商品會計庫存。更新只讀取摘要，不會分析、改量或重建批次。基準起日先依首次正式載入日10/12設定，可調整以排除上線前測試；不足完整比較期時不硬算。</p>
-      <div class="performance-controls"><label>正式成效基準起日<input id="performance-baseline" type="date" value="2026-10-12"></label><label>適用門市<select id="performance-store" aria-label="成效門市"></select></label><label>比較區間<select id="performance-period"><option value="4w">近4週對前4週</option><option value="wow">WoW：完整週對前週</option><option value="mom">MoM：完整月對前月</option><option value="mtd">本月至今對上月同期</option><option value="8w">近8週對前8週</option><option value="custom">自訂期間對前一等長期間</option></select></label><button id="performance-refresh" class="secondary-button" type="button">更新成效資料</button></div>
+      <p>總部可比較全部門市；門市只看自己的數據。指標以當次週調撥適用商品為範圍，並非全商品會計庫存。更新只讀取摘要，不會分析、改量或重建批次。系統依比較區間自動納入本期與前期所需資料，不需另設基準起日；實際缺少資料時會提示，不補成0。</p>
+      <div class="performance-controls"><label>適用門市<select id="performance-store" aria-label="成效門市"></select></label><label>比較區間<select id="performance-period"><option value="4w">近4週對前4週</option><option value="wow">WoW：完整週對前週</option><option value="mom">MoM：完整月對前月</option><option value="mtd">本月至今對上月同期</option><option value="8w">近8週對前8週</option><option value="custom">自訂期間對前一等長期間</option></select></label><button id="performance-refresh" class="secondary-button" type="button">更新成效資料</button></div>
       <div id="performance-custom" class="performance-controls" hidden><label>本期開始<input id="performance-start" type="date"></label><label>本期結束<input id="performance-end" type="date"></label></div>
       <p id="performance-range"></p><p id="performance-status" role="status" aria-live="polite">完成公司帳號驗證後顯示。</p>
       <div id="performance-cards" class="performance-cards"></div><div id="performance-trend" class="performance-stores"></div>
@@ -79,7 +79,7 @@
       <p id="supervisor-status" role="status" aria-live="polite"></p><div id="supervisor-batch-list" class="performance-controls"></div><div id="supervisor-detail"></div>
     </section>
     <section id="hq-panel" class="panel" data-weekly-view hidden aria-labelledby="hq-title">
-      <div class="section-heading"><div><p class="eyebrow">總部工作台</p><h2 id="hq-title">建立本週調撥建議</h2></div><div class="heading-actions"><p>依實際建立日排下一個工作日回覆；遇公司不作業日自動順延，總部核准後第2天預計到店。</p><div class="heading-rule-links"><a id="transfer-rules-link" class="secondary-button compact" href="rules/?deploy=20261116-transfer-performance-r1" hidden>周調撥適用／排除規則</a><a id="rules-link" class="secondary-button compact" href="../procurement-planning/rules-admin/?from=store-transfer&amp;deploy=20261116-transfer-performance-r1#store-inventory" hidden>展示／最低庫存規則</a></div></div></div>
+      <div class="section-heading"><div><p class="eyebrow">總部工作台</p><h2 id="hq-title">建立本週調撥建議</h2></div><div class="heading-actions"><p>依實際建立日排下一個工作日回覆；遇公司不作業日自動順延，總部核准後第2天預計到店。</p><div class="heading-rule-links"><a id="transfer-rules-link" class="secondary-button compact" href="rules/?deploy=20261116-transfer-performance-r2" hidden>周調撥適用／排除規則</a><a id="rules-link" class="secondary-button compact" href="../procurement-planning/rules-admin/?from=store-transfer&amp;deploy=20261116-transfer-performance-r2#store-inventory" hidden>展示／最低庫存規則</a></div></div></div>
       <div class="period-grid">
         <label><span>本週週次</span><input id="week-key" type="week" required></label>
         <label><span>建議產生日</span><input id="proposal-date" type="date" required></label>
@@ -120,10 +120,14 @@
         <article class="upload-card"><h3>近12週銷售</h3><p>可多選；大型檔會逐份輕量讀取，計算門市現場淨銷售、B3與14／42／84天消耗。</p><p class="file-guidance"><strong>建議每月拆分：</strong>每月一份、各檔保留相同表頭；選檔時可一次多選，系統會自動合併計算。</p><label class="file-button">選擇銷售明細<input id="sales-files" type="file" accept=".xlsx,.xls" multiple></label><p class="file-name" data-for="sales-files">尚未選擇</p></article>
         <article class="upload-card"><h3>期間調撥單</h3><p>正式補貨將提交列為待發貨、發貨審核列為在途；A/B模式另行排除提交。</p><label class="file-button">選擇期間調撥單<input id="transfer-file" type="file" accept=".xlsx,.xls"></label><p class="file-name" data-for="transfer-file">尚未選擇</p></article>
       </div>
-        <details class="upload-card performance-source"><summary>成效指標來源日期（選填）</summary><div class="performance-controls"><p>確認後隨本次正式批次保存門市日彙總，不傳原檔、訂單或備註原文。未填不影響原補貨流程，但不新增成效快照；舊批次不回寫。</p>
+        <details class="upload-card performance-source"><summary>庫存成效快照日期（選填；銷售摘要自動保存）</summary><div class="performance-controls"><p>確認後隨本次正式批次保存門市日彙總，不傳原檔、訂單或備註原文。未填不影響原補貨流程；銷售摘要仍自動保存，庫存快照需核對日期後另存。舊批次可由下方獨立補匯銷售。</p>
         <label><input id="performance-collect" type="checkbox"> 本次同步累積成效指標</label>
         <label>庫存實際快照日<input id="performance-inventory-date" type="date"></label><label>完整銷售期間開始<input id="performance-sales-start" type="date"></label><label>完整銷售期間結束<input id="performance-sales-end" type="date"></label><label>無@視為缺貨轉寄的作業啟用日<input id="performance-remark-since" type="date"></label>
         <label><input id="performance-complete" type="checkbox"> 已確認本次所選門市與起迄期間資料完整（無銷售日仍以0件保存）</label></div></details>
+      <p id="performance-auto-status" class="status-line" role="status" aria-live="polite">正式讀取銷售並產生建議時，會自動保存可辨識日期的銷售成效，不需勾選。</p><button id="performance-auto-retry" class="secondary-button" type="button" hidden>重試保存銷售成效</button>
+      <details id="performance-import" class="upload-card" hidden><summary>歷史成效資料補匯（不重建批次）</summary><p>以原正式批次的商品範圍核對銷售，只保存各店每日數字；不更動調撥量、核准或ERP。需完整門市報表，原始檔留在本機。銷售檔不含歷史庫存；本次也不推估歷史成本。</p>
+      <div class="performance-controls"><label>原正式批次<select id="performance-import-batch"></select></label><button id="performance-import-refresh" class="secondary-button" type="button">更新可補匯批次</button><label>完整銷售開始<input id="performance-import-start" type="date" required></label><label>完整銷售結束<input id="performance-import-end" type="date" required></label><label>無@為缺貨轉寄的啟用日<input id="performance-import-remark" type="date" value="2026-11-11" required></label><label class="file-button">選擇歷史銷售檔<input id="performance-import-files" type="file" accept=".xlsx,.xls" multiple></label></div>
+      <label><input id="performance-import-complete" type="checkbox">確認上述期間涵蓋本批全部門市、包含銷貨及退貨等完整資料；期間內沒有交易的門市日期可視為0。</label><p id="performance-import-status" class="status-line" role="status" aria-live="polite"></p><button id="performance-import-save" class="primary-button" type="button">讀取並補匯銷售成效</button></details>
       <div class="action-row"><button id="calculate-button" class="primary-button" type="button" disabled>產生本週調撥建議</button><p id="hq-status" class="status-line">請先備妥兩項固定來源及三類本次資料。</p></div>
       <div id="calculation-results" class="calculation-results" hidden>
         <div class="section-heading compact"><div><h3>本週建議預覽</h3><p id="calculation-summary"></p></div><button id="publish-button" class="primary-button" type="button">建立門市確認批次</button></div>
@@ -222,22 +226,23 @@
   <script src="../procurement-planning/assets/xlsx-js-style.bundle.js"></script>
   <script src="../procurement-planning/xlsx-style-runtime.js"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
-  <script src="../procurement-planning/core.js?v=20261116-procurement-transfer-performance-r1"></script>
+  <script src="../procurement-planning/core.js?v=20261116-procurement-transfer-performance-r2"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="../procurement-planning/google-sources.js?v=20261116-procurement-transfer-performance-r1"></script>
-  <script src="activity.js?v=20261116-transfer-performance-r1"></script>
-  <script src="workflow.js?v=20261116-transfer-performance-r1"></script>
-  <script src="core.js?v=20261116-transfer-performance-r1"></script>
+  <script src="../procurement-planning/google-sources.js?v=20261116-procurement-transfer-performance-r2"></script>
+  <script src="activity.js?v=20261116-transfer-performance-r2"></script>
+  <script src="workflow.js?v=20261116-transfer-performance-r2"></script>
+  <script src="core.js?v=20261116-transfer-performance-r2"></script>
   <script src="xlsx-preflight.js?v=20260916-xlsx-reader-r1"></script>
   <script src="/live-guidance/progress.js?v=20261103-guidance-compact-r6"></script>
 <script src="/live-guidance/app.js?v=20261103-guidance-compact-r6"></script>
-  <script src="../procurement-planning/shortage-batch.js?v=20261116-procurement-transfer-performance-r1"></script>
-  <script src="bulk-supply.js?v=20261116-transfer-performance-r1"></script>
+  <script src="../procurement-planning/shortage-batch.js?v=20261116-procurement-transfer-performance-r2"></script>
+  <script src="bulk-supply.js?v=20261116-transfer-performance-r2"></script>
   <script src="new-products-core.js?v=20261116-new-product-allocation-r3"></script>
-  <script src="new-products-ui.js?v=20261116-transfer-performance-r1"></script>
-  <script src="performance-core.js?v=20261116-transfer-performance-r1"></script>
-  <script src="performance-ui.js?v=20261116-transfer-performance-r1"></script>
-  <script src="supervisor-ui.js?v=20261116-transfer-performance-r1"></script>
-  <script src="app.js?v=20261116-transfer-performance-r1"></script>
+  <script src="new-products-ui.js?v=20261116-transfer-performance-r2"></script>
+  <script src="performance-core.js?v=20261116-transfer-performance-r2"></script>
+  <script src="performance-import.js?v=20261116-transfer-performance-r2"></script>
+  <script src="performance-ui.js?v=20261116-transfer-performance-r2"></script>
+  <script src="supervisor-ui.js?v=20261116-transfer-performance-r2"></script>
+  <script src="app.js?v=20261116-transfer-performance-r2"></script>
 </body>
 </html>

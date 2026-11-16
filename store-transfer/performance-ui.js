@@ -9,8 +9,8 @@ function mount({api,checkRuntimeVersion}){
   const storeCodes=byStore.value==='all'?Object.keys(data.stores):[byStore.value];
   const latest=[...data.snapshots.map(s=>s.salesEnd),...data.supply.map(s=>s.date)].sort().at(-1);
   if(!latest){status.textContent='尚無可比較資料。總部下次正式計算時可確認來源日期，隨批次保存成效摘要；不需重建舊批次。';cards.replaceChildren();trend.replaceChildren();return;}
-  const baseline=$('performance-baseline').value;if(!core.validDate(baseline)||baseline>latest)throw Error('請設定不晚於資料最新日的正式成效基準起日。');
-  const snapshots=data.snapshots.filter(s=>s.inventoryDate>=baseline).map(s=>({...s,stores:s.stores.map(r=>({...r,daily:r.daily.filter(d=>d.date>=baseline)}))})),supply=data.supply.filter(r=>r.date>=baseline);
+  // Each comparison measures its own calendar; never truncate evidence at a manual launch date.
+  const snapshots=data.snapshots,supply=data.supply;
   const mode=$('performance-period').value,p=core.periods(mode,latest,$('performance-start').value,$('performance-end').value);
   const a=core.measure(snapshots,supply,storeCodes,p.current),b=core.measure(snapshots,supply,storeCodes,p.previous);
   $('performance-range').textContent=`本期 ${p.current.join('～')} ／ 前期 ${p.previous.join('～')}；資料最新日 ${latest}。`;
@@ -28,7 +28,7 @@ function mount({api,checkRuntimeVersion}){
   try{if(!(await checkRuntimeVersion()))throw Error('請先重新載入最新版。');const next=await api('/performance');if(seq!==sequence)return;data=next;const markerDates=[...new Set(data.snapshots.map(s=>s.remarkSince).filter(Boolean))];if(markerDates.length===1&&!$('performance-remark-since').value)$('performance-remark-since').value=markerDates[0];const currentStore=byStore.value;byStore.replaceChildren();if(data.role!=='store'){const option=text('option',data.role==='supervisor'?'所屬區域全部門市':'全部門市');option.value='all';byStore.append(option);}for(const [code,store]of Object.entries(data.stores)){const option=text('option',`${code} ${store.name}`);option.value=code;byStore.append(option);}if(currentStore==='all'&&data.role!=='store'||data.stores[currentStore])byStore.value=currentStore;render();}
   catch(error){data=null;cards.replaceChildren();trend.replaceChildren();status.textContent=`讀取失敗：${error.message}；可稍後按更新成效資料，原批次不受影響。`;}
   finally{busy=false;$('performance-refresh').disabled=false;}}
- for(const id of ['performance-baseline','performance-store','performance-period','performance-start','performance-end'])$(id).addEventListener('change',()=>{$('performance-custom').hidden=$('performance-period').value!=='custom';render();});
+ for(const id of ['performance-store','performance-period','performance-start','performance-end'])$(id).addEventListener('change',()=>{$('performance-custom').hidden=$('performance-period').value!=='custom';render();});
  $('performance-refresh').addEventListener('click',load);load();return{refresh:load};
 }
 globalThis.StoreTransferPerformanceUI={mount};

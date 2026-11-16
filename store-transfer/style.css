@@ -483,3 +483,7 @@ html, body { max-width: 100%; overflow-x: clip; }
 #supervisor-detail .performance-store-result{margin:1rem 0}#supervisor-detail p{overflow-wrap:anywhere;white-space:normal;line-height:1.7}
 
 #supervisor-new-products summary{cursor:pointer;font-weight:700}#supervisor-new-rows .performance-store-result{margin:1rem 0}#supervisor-new-products p{overflow-wrap:anywhere;white-space:normal;line-height:1.7}
+
+/* Keep the accessible file input inside its label; generic date-input sizing must not expand it. */
+#performance-import .file-button{position:relative;overflow:hidden;max-width:100%}
+#performance-import .file-button input[type=file]{position:absolute;width:1px;height:1px;max-width:1px;padding:0;border:0;opacity:0}

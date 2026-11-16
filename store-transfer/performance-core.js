@@ -1,7 +1,7 @@
 /* Aggregates only; no customer/order/remark text is retained or transmitted. */
 (function(root,factory){const api=factory();root.StoreTransferPerformance=api;if(typeof module==='object'&&module.exports)module.exports=api;})(globalThis,function(){
 'use strict';
-const VERSION='20261116-transfer-performance-r1', SCHEMA=1;
+const VERSION='20261116-transfer-performance-r2', SCHEMA=1;
 const validDate=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&!Number.isNaN(Date.parse(s+'T00:00:00Z'))&&new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
 const add=(s,n)=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);};
 const days=(a,b)=>Math.round((Date.parse(b+'T00:00:00Z')-Date.parse(a+'T00:00:00Z'))/86400000)+1;
@@ -49,12 +49,28 @@ function buildSnapshot(input,calculation,meta,core=rootCore()){
  });
  return{schemaVersion:SCHEMA,inventoryDate,salesStart,salesEnd,remarkSince,costBasis:'snapshot-master-estimate',stores};
 }
+function buildSalesSummary(reports,catalog,storeCodes,meta={},master=null,core=rootCore()){
+ if(!reports.length||reports.some(r=>Number(r.excluded?.['缺品號或日期']||0)>0))throw Error('銷售檔有缺品號或日期列，請修正後重試；尚未保存。');
+ const evidence=core.salesEvidence(reports),key=r=>`${r.warehouseCode}|${r.sourceOrder||r.posOrder||r.pickupOrder||''}|${r.sku}`;
+ const sourceDates=[...new Set([...reports.flatMap(r=>[...(r.records||[]),...(r.takeRecords||[])])].map(r=>r.date).filter(validDate))].sort();
+ if(!sourceDates.length)throw Error('銷售檔沒有有效日期，不能保存摘要。');
+ const salesStart=meta.salesStart||sourceDates[0],salesEnd=meta.salesEnd||sourceDates.at(-1),complete=meta.complete===true,remarkSince=meta.remarkSince||'2026-11-11';dates(salesStart,salesEnd);
+ const hq=new Set([...evidence.matchedTakeSales,...evidence.primarySales.filter(r=>r.shipWarehouseCode==='T00'&&['銷貨','退貨'].includes(r.saleType)&&!evidence.representedOrderItems.has(key(r)))]);
+ const stores=storeCodes.map(storeCode=>{const eligible=new Set(catalog.filter(r=>!r.autoExclusions?.[storeCode]).map(r=>r.sku));
+ const covered=complete?dates(salesStart,salesEnd):[...new Set(reports.flatMap(r=>[...(r.records||[]),...(r.takeRecords||[])]).filter(r=>r.warehouseCode===storeCode).map(r=>r.date))].filter(d=>validDate(d)&&d>=salesStart&&d<=salesEnd).sort();
+ const daily=new Map(covered.map(date=>[date,{date,localQty:0,localCost:0,localCostKnown:true,warehouseStockoutQty:date>=remarkSince?0:null,warehouseServiceQty:0}]));
+ for(const r of evidence.sales){if(r.warehouseCode!==storeCode||!eligible.has(r.sku)||!daily.has(r.date))continue;const d=daily.get(r.date),qty=Number(r.deductQuantity||r.quantity||0),cost=Number(master?.bySku?.get(r.sku)?.unitCost);if(!Number.isFinite(qty))throw Error('銷售數量無效。');
+ if(r.shipWarehouseCode===storeCode&&!(r.saleType==='訂貨'&&evidence.representedOrderItems.has(key(r)))){d.localQty+=qty;if(Number.isFinite(cost)&&cost>0)d.localCost+=qty*cost;else if(qty)d.localCostKnown=false;}
+ else if(hq.has(r)){if(!reports.every(r=>r.hasRemarkColumn===true)){d.warehouseStockoutQty=null;}else if(evidence.eligibleWarehouseRows.has(r)){if(d.warehouseStockoutQty!==null)d.warehouseStockoutQty+=qty;}else d.warehouseServiceQty+=qty;}}
+ return{storeCode,unmatchedCount:evidence.b3PendingRows.filter(r=>r.storeCode===storeCode).length,daily:[...daily.values()].map(d=>({...d,localCost:d.localCostKnown?d.localCost:null}))};});
+ return{schemaVersion:1,batchId:meta.batchId||null,salesStart,salesEnd,remarkSince,complete,stores};
+}
 function rootCore(){return globalThis.StoreTransferCore;}
 const ratio=(a,b)=>b>0?a/b:null;
 function measure(snapshots,supply,storeCodes,range){
  const [start,end]=range,calendar=dates(start,end),selected=new Set(storeCodes),byStore=new Map(storeCodes.map(s=>[s,{points:new Map(),daily:new Map()}]));
  // API orders oldest to newest. Updated source for the same date replaces, never adds.
- for(const snapshot of [...snapshots].sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt))||String(a.batchId).localeCompare(String(b.batchId))))for(const s of snapshot.stores){if(!selected.has(s.storeCode))continue;const bucket=byStore.get(s.storeCode);bucket.points.set(snapshot.inventoryDate,s);for(const d of s.daily)bucket.daily.set(d.date,{...d,unmatchedCount:s.unmatchedCount});}
+ for(const snapshot of [...snapshots].sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt))||String(a.batchId).localeCompare(String(b.batchId))))for(const s of snapshot.stores){if(!selected.has(s.storeCode))continue;const bucket=byStore.get(s.storeCode);if(snapshot.inventoryAvailable!==false)bucket.points.set(snapshot.inventoryDate,s);for(const d of s.daily)bucket.daily.set(d.date,{...d,unmatchedCount:s.unmatchedCount});}
  let inv=0,pointCount=0,stagnant=0,sellable=0,demand=0,stockouts=0,local=0,hq=0,service=0,cost=0;
  let salesComplete=true,remarkComplete=true,costComplete=true,inventoryComplete=true,turnoverComplete=true;const quality=[];
  for(const [store,bucket] of byStore){const points=[...bucket.points].filter(([date])=>date>=start&&date<=end).sort(([a],[b])=>a.localeCompare(b));
@@ -71,5 +87,5 @@ function measure(snapshots,supply,storeCodes,range){
  return{turnover:turnoverComplete&&inventoryComplete&&salesComplete&&costComplete&&cost>0?inv/cost*calendar.length:null,stockout:pointCount&&inventoryComplete?ratio(stockouts,demand):null,warehouse:remarkComplete&&salesComplete?ratio(Math.max(0,hq),Math.max(0,local)+Math.max(0,hq)+Math.max(0,service)):null,stagnant:pointCount&&inventoryComplete&&costComplete?ratio(stagnant,sellable):null,fill:relevant.length&&!pending?ratio(covered,need):null,need:need,covered:covered,points:pointCount,salesDays:calendar.length,quality:[...quality,...(pending?['仍有門市尚未核准']:[]),...(!relevant.length?['本期間無有效批次']:[])],localQty:salesComplete?local:null,warehouseQty:remarkComplete&&salesComplete?hq:null};
 }
 function delta(current,previous,rate=false){if(current==null||previous==null)return{value:null,text:'無完整比較基準'};if(rate)return{value:(current-previous)*100,text:`${(current-previous)*100>=0?'+':''}${((current-previous)*100).toFixed(1)} 個百分點`};if(previous===0)return{value:null,text:current===0?'與前期相同':'前期為0，不計增減率'};const v=(current-previous)/Math.abs(previous)*100;return{value:v,text:`${v>=0?'+':''}${v.toFixed(1)}%`};}
-return{VERSION,SCHEMA,validDate,add,days,dates,periods,buildSnapshot,measure,delta};
+return{VERSION,SCHEMA,validDate,add,days,dates,periods,buildSnapshot,buildSalesSummary,measure,delta};
 });

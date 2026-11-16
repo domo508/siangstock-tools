@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261116-transfer-performance-r1";
+  const APP_VERSION = "20261116-transfer-performance-r2";
   const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", batchChangesOnly: false, batchSource:"all", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -1061,6 +1061,10 @@
       if (mode === 'formal' && $('performance-collect').checked) state.calculation.performanceSnapshot = globalThis.StoreTransferPerformance.buildSnapshot(calculationInput,state.calculation,{
         inventoryDate:$('performance-inventory-date').value,salesStart:$('performance-sales-start').value,salesEnd:$('performance-sales-end').value,remarkSince:$('performance-remark-since').value,complete:$('performance-complete').checked
       });
+      if(mode==='formal'&&state.performanceImport){
+        try{const payload=globalThis.StoreTransferPerformance.buildSalesSummary(sales,state.calculation.manualItemCatalog,stores,{remarkSince:$('performance-remark-since').value||'2026-11-11'},master);await state.performanceImport.saveAutomatic(payload);}
+        catch(error){$('performance-auto-status').textContent=`銷售成效尚未保存：${error.message}；原補貨結果不變，請修正來源後重新讀取，或使用歷史補匯。`;}
+      }
       const staleNewProduct=(newProducts.rows||[]).some(r=>(state.calculation.newProductClaims||[]).some(c=>c.planId===r.plan_id)&&r.status==='waiting_stock'&&Number(r.approved_quantity||0)>Number(r.committed_quantity||0)&&Date.now()-Date.parse(r.approved_at)>=14*86400000);
       $("new-product-reconfirm-panel").hidden=!staleNewProduct;$("new-product-reconfirmed").checked=false;
       state.formalCalculation = mode === "comparison" ? transferCore.buildSuggestions({ ...calculationInput, calculationMode: "formal" }) : state.calculation;
@@ -1869,6 +1873,7 @@
         if (!state.config.googleOAuthClientId) { $("google-connect-button").disabled = true; $("source-status").textContent = "正式環境尚未設定 Google OAuth，用手動備援仍可操作。"; }
       }
       state.performanceUI=globalThis.StoreTransferPerformanceUI.mount({api,checkRuntimeVersion});
+      if(state.config.role!=='store')state.performanceImport=globalThis.StoreTransferPerformanceImport.mount({api,refresh:()=>state.performanceUI?.refresh(),readReports:async files=>{const reports=[];for(const file of files){await xlsxPreflight.assertSalesWorkbookSize(file);reports.push(parser.parseSalesWorkbook(await workbook(file),inputXlsx,{fileName:file.name}));await yieldToBrowser();}return reports;}});
       window.NewProductAllocationUI.mount({api,config:state.config,checkRuntimeVersion,sendNotice:async id=>{
         if(!googleSources.token())await authorizeGoogle();
         return api(`/new-products/${encodeURIComponent(id)}/notifications/send`,{method:'POST',body:{},googleAccessToken:googleSources.token(),headers:{'X-New-Product-Version':'20261116-new-product-allocation-r3'}});
@@ -2011,7 +2016,7 @@
   start();
 
   // Read-only readiness for the shared guide; no calculation or write is performed here.
-  globalThis.CompanyGuidance?.register({ statuses: '#supervisor-new-status,#supervisor-status,#performance-status,#hq-status,#source-status,#activity-plan-status,#activity-save-status,#display-exception-dialog-status,#display-exception-page-status,#batch-detail [role="status"],#collaboration-detail [role="status"]', resolve() {
+  globalThis.CompanyGuidance?.register({ statuses: '#supervisor-new-status,#supervisor-status,#performance-status,#performance-import-status,#performance-auto-status,#hq-status,#source-status,#activity-plan-status,#activity-save-status,#display-exception-dialog-status,#display-exception-page-status,#batch-detail [role="status"],#collaboration-detail [role="status"]', resolve() {
     const S=globalThis.CompanyGuidance.step;
     if (!state.config) return S('先確認公司帳號', '正在取得角色與可查看門市；失敗時請看帳號訊息。', '#account-badge');
     if(state.config.role==='supervisor'&&document.activeElement?.closest('#supervisor-new-products'))return S('唯讀查看區域新品首配','可切換區域／單店查看建議、確認、首次核定與待配狀態；不需再次確認或核准。','#supervisor-new-store');
