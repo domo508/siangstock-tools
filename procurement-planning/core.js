@@ -139,6 +139,8 @@
         mainCategory: ["主類別"],
         style1: ["1級款式"],
         style2: ["2級款式"],
+        styleCategory: ["款式類別"],
+        styleCategory2: ["款式類別2"],
         season: ["季節"],
         stockType: ["存貨種類"],
         productStatus: ["貨品狀態", "商品狀態"],
@@ -695,6 +697,8 @@
         mainCategory: String(valueAt(row, selected.mapping, "mainCategory") || "").trim(),
         style1: String(valueAt(row, selected.mapping, "style1") || "").trim(),
         style2: String(valueAt(row, selected.mapping, "style2") || "").trim(),
+        styleCategory: String(valueAt(row, selected.mapping, "styleCategory") || "").trim(),
+        styleCategory2: String(valueAt(row, selected.mapping, "styleCategory2") || "").trim(),
         season: String(valueAt(row, selected.mapping, "season") || "").trim(),
         stockType: String(valueAt(row, selected.mapping, "stockType") || "").trim(),
         productStatus: String(valueAt(row, selected.mapping, "productStatus") || "").trim(),
@@ -2175,6 +2179,8 @@
         mainCategory: String(masterRecord.mainCategory || "").trim(),
         style1: String(masterRecord.style1 || "").trim(),
         style2: String(masterRecord.style2 || "").trim(),
+        styleCategory: String(masterRecord.styleCategory || "").trim(),
+        styleCategory2: String(masterRecord.styleCategory2 || "").trim(),
         productStatus: String(masterRecord.productStatus || "").trim(),
         productStatusPendingReview: !String(masterRecord.productStatus || "").trim(),
         sellThroughStop: Boolean(masterRecord.sellThroughStop),
@@ -2403,7 +2409,19 @@
     return "其他";
   }
 
+  // Structured ERP category takes precedence over descriptive product text.
+  function structuredPuyoumaPurchaseTab(value) {
+    const material = String(value || "").normalize("NFKC").trim().split(/[_＿]/).pop().replace(/\s/g, "");
+    if (/^(天絲|天絲棉)$/.test(material)) return "天絲＋天絲棉";
+    if (/^(長絨棉|有機棉|華爾紗|精梳純棉|純棉|水洗棉|雙層紗)$/.test(material)) return "長絨棉";
+    return "";
+  }
+
   function classifyPuyoumaPurchaseTab(masterRecord, fallbackName = "") {
+    for (const value of [masterRecord?.styleCategory, masterRecord?.style2]) {
+      const tab = structuredPuyoumaPurchaseTab(value);
+      if (tab) return tab;
+    }
     const combined = [masterRecord?.name, masterRecord?.style1, masterRecord?.style2, fallbackName]
       .filter(Boolean).join(" ").replace(/\s/g, "");
     if (combined.includes("天絲")) return "天絲＋天絲棉";
@@ -3792,6 +3810,8 @@
         mainCategory: row.masterRecord?.mainCategory || "",
         style1: row.masterRecord?.style1 || "",
         style2: row.masterRecord?.style2 || "",
+        styleCategory: row.masterRecord?.styleCategory || "",
+        styleCategory2: row.masterRecord?.styleCategory2 || "",
         recent6Qty: row.demand.recent6Qty,
         recent12Qty: row.demand.recent12Qty,
         lastYear6Qty: row.demand.lastYear6Qty,
@@ -4228,6 +4248,8 @@
         parentMaterialCategory: newProductReference?.parentMaterialCategory || inferMaterialHierarchy(masterRecord, masterRecord.name).parentMaterialCategory,
         subMaterialCategory: newProductReference?.subMaterialCategory || inferMaterialHierarchy(masterRecord, masterRecord.name).subMaterialCategory,
         purchaseTab: classifyPuyoumaPurchaseTab(masterRecord, masterRecord.name),
+        styleCategory: masterRecord.styleCategory || "",
+        styleCategory2: masterRecord.styleCategory2 || "",
         recent6Qty: Number(existing?.recent6Qty || 0),
         recent12Qty: Number(existing?.recent12Qty || 0),
         lastYear6Qty: Number(existing?.lastYear6Qty || 0),
@@ -5077,6 +5099,16 @@
     return memberIds.length ? memberIds.includes(rowUnit.id) : rowUnit.id === workUnit.id;
   }
 
+  function canAddReclassifiedPuyoumaRow(row, workUnit) {
+    if (!row || !workUnit || !/普優[瑪碼]/.test(String(row.supplier || ""))) return false;
+    if (row.purchaseTab !== "無尺寸品項") return false;
+    const correctedTab = structuredPuyoumaPurchaseTab(row.styleCategory)
+      || structuredPuyoumaPurchaseTab(row.style2)
+      || structuredPuyoumaPurchaseTab(row.materialCategory);
+    if (!correctedTab || correctedTab === row.purchaseTab) return false;
+    return rowMatchesProcurementWorkUnit({ ...row, purchaseTab: correctedTab }, workUnit);
+  }
+
   function procurementWorkUnitIdsForReview(reviewRows, analysisRows = []) {
     const baselineBySku = new Map((analysisRows || []).map((row) => [normalizeSku(row?.sku), row]));
     const ids = new Set();
@@ -5510,7 +5542,9 @@
             ? "此母批次建立時尚未保存可人工新增品項目錄；為避免用現行主檔覆蓋舊快照，請重新建立母批次後再新增本品號。"
             : "ERP品號不在本次母批次的可人工新增品項目錄，無法補回供應商、進貨價、庫存、需求及寄庫資料。"
         });
-        if (baseline && !inCurrentScope) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: `ERP品號屬於「${procurementWorkUnitForRow(baseline)?.label || baseline.supplier || "其它採購範圍"}」，不可加入目前的採購批次。` });
+        const reclassifiedAddition = Boolean(manuallyAdded && !inCurrentScope && canAddReclassifiedPuyoumaRow(baseline, options.workUnit));
+        if (reclassifiedAddition) warnings.push({ type: "purchase_tab_correction", sheetName, sourceRow: source.__rowNum__ + 1, sku, message: `${sku}：依母批次保存的分類資料補入目前分批；原建議量、價格與庫存基準不變，原分批範圍仍納入重複批次檢查。` });
+        if (baseline && !inCurrentScope && !reclassifiedAddition) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: `ERP品號屬於「${procurementWorkUnitForRow(baseline)?.label || baseline.supplier || "其它採購範圍"}」，不可加入目前的採購批次。` });
         if (baseline) {
           if (!manuallyAdded && normalizeText(supplier) !== normalizeText(baseline.supplier)) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: `供應商與本次計算結果不同；此品號應屬「${baseline.supplier}」。` });
           if (Math.abs(Number(unitCost || 0) - Number(baseline.unitCost || 0)) >= 0.01) errors.push({ sheetName, sourceRow: (source.__rowNum__ + 1), sku, message: "進貨價與本次商品主檔不同，請重新產生報表。" });
@@ -5903,6 +5937,7 @@
     inferMaterialCategory,
     inferMaterialHierarchy,
     classifyPuyoumaPurchaseTab,
+    canAddReclassifiedPuyoumaRow,
     puyoumaConsignmentGroup,
     applyDemandModel,
     activityDemandScopeLabel,
