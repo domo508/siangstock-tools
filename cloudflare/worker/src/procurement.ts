@@ -530,6 +530,9 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
     documents.push(document); erpDocumentsByBatch.set(String(document.batch_id), documents);
   }
   const itemSummaryByBatch = new Map(itemSummaryRows.results.map((row) => [String(row.batch_id), row]));
+  const processedRows = batchIds.length
+    ? await env.DB.prepare(`SELECT batch_id, sku, approved_quantity FROM procurement_batch_items WHERE batch_id IN (${batchIds.map(() => "?").join(",")}) ORDER BY batch_id, sku`).bind(...batchIds).all<Record<string, unknown>>()
+    : { results: [] as Record<string, unknown>[] };
   const originalApprovalByBatch = new Map<string, number>();
   for (const row of approvedEventRows.results) {
     const batchId = String(row.batch_id);
@@ -549,6 +552,7 @@ async function ledger(request: Request, env: ProcurementEnv): Promise<Response> 
     return {
       ...row,
       work_unit_ids: parseJsonText(String(row.work_unit_ids || "[]")) || [],
+      processed_items: processedRows.results.filter(item => item.batch_id === row.id).map(item => ({ sku: item.sku, approved_quantity: item.approved_quantity })),
       supplier_summary: suppliers,
       erp_documents: documents,
       payment_schedule: parseJsonText(String(row.payment_schedule || "[]")),
@@ -1358,8 +1362,10 @@ async function submit(request: Request, env: ProcurementEnv): Promise<Response> 
   }
   try {
     await env.DB.batch([
-      env.DB.prepare("INSERT INTO procurement_batches (id, analysis_month, checkpoint, parent_batch_id, work_unit_ids, workflow_type, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, updated_at, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(item.id, item.analysisMonth, item.checkpoint, item.parentBatchId, item.workUnitIds, item.workflowType, item.supplierSummary, item.suggested, item.manual, item.blocked, item.approved, item.adjustment, item.budget, item.currentPayment, item.futurePayments, item.paymentSchedule, item.warning, item.now, actor, item.now, item.idempotencyKey),
+      // Keep the duplicate check inside this atomic batch. If it suppresses the
+      // parent insert, the following foreign key fails and rolls back all rows.
+      env.DB.prepare("INSERT INTO procurement_batches (id, analysis_month, checkpoint, parent_batch_id, work_unit_ids, workflow_type, supplier_summary, status, suggested_amount, manual_amount, blocked_amount, approved_amount, adjustment_amount, budget_amount, payment_current_month, payment_future_months, payment_schedule, warning_summary, created_at, created_by, updated_at, idempotency_key) SELECT ?, ?, ?, ?, ?, ?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (? = '' OR NOT EXISTS (SELECT 1 FROM procurement_batch_items i JOIN procurement_batches b ON b.id = i.batch_id WHERE b.parent_batch_id = ? AND b.status != 'revoked' AND i.approved_quantity > 0 AND i.sku IN (SELECT value FROM json_each(?))))")
+        .bind(item.id, item.analysisMonth, item.checkpoint, item.parentBatchId, item.workUnitIds, item.workflowType, item.supplierSummary, item.suggested, item.manual, item.blocked, item.approved, item.adjustment, item.budget, item.currentPayment, item.futurePayments, item.paymentSchedule, item.warning, item.now, actor, item.now, item.idempotencyKey, item.parentBatchId, item.parentBatchId, JSON.stringify(item.approvedItems.map(row => row.sku))),
       env.DB.prepare("INSERT INTO procurement_events (batch_id, event_type, amount_before, amount_delta, amount_after, reason, created_at, created_by, idempotency_key) VALUES (?, 'submitted', 0, ?, ?, '第二次回匯完成，待正式核准', ?, ?, ?)")
         .bind(item.id, item.approved, item.approved, item.now, actor, `${item.idempotencyKey}:event`),
       ...activityMapping,
@@ -1371,6 +1377,10 @@ async function submit(request: Request, env: ProcurementEnv): Promise<Response> 
     if (/UNIQUE constraint failed: new_product_plan_rows/.test(String(error))) throw new RequestValidationError("本品項已有新品首配來源，請接續原新品首配，不能重複建立。",409);
     const existing = await env.DB.prepare("SELECT id, status FROM procurement_batches WHERE idempotency_key = ?").bind(item.idempotencyKey).first();
     if (existing) return json({ batch: existing, duplicate: true }, 200);
+    if (item.parentBatchId) {
+      const conflict = await env.DB.prepare("SELECT i.sku, b.id FROM procurement_batch_items i JOIN procurement_batches b ON b.id = i.batch_id WHERE b.parent_batch_id = ? AND b.status != 'revoked' AND i.approved_quantity > 0 AND i.sku IN (SELECT value FROM json_each(?)) LIMIT 1").bind(item.parentBatchId, JSON.stringify(item.approvedItems.map(row => row.sku))).first<{ sku: string; id: string }>();
+      if (conflict) throw new RequestValidationError(`${conflict.sku}已在同母批次的${conflict.id}處理，請更新批次狀態並排除此品號，不能重複送出。`, 409);
+    }
     throw error;
   }
   return json({ batch: { id: item.id, status: "pending_approval" }, duplicate: false }, 201);

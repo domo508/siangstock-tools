@@ -14,7 +14,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261118-procurement-style-category-r1";
+  const APP_VERSION = "20261119-procurement-unit-progress-r1";
   const state = {
     importProgress: null, shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
@@ -313,7 +313,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261118-procurement-style-category-r1");
+        const worker = new Worker("inventory-reader-worker.js?v=20261119-procurement-unit-progress-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1081,7 +1081,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261118-procurement-style-category-r1");
+      const worker = new Worker("seasonal-model-worker.js?v=20261119-procurement-unit-progress-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -1251,7 +1251,7 @@
     return { parsed, invalidCount: hardInvalidCount + statusReviewCount, hardInvalidCount, statusReviewCount };
   }
   async function loadLedger() {
-    if (!state.config || !elements.month.value) return;
+    if (!state.config || !elements.month.value) return false;
     try {
       const response = await fetch(`/api/procurement/ledger?month=${encodeURIComponent(elements.month.value)}`, { headers: { Accept: "application/json" }, cache: "no-store" });
       const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
@@ -1265,10 +1265,13 @@
       renderErpReconciliations();
       renderResumeDrafts();
       renderBudget();
+      renderWorkUnitDashboard();
+      return true;
     } catch (error) {
       state.ledger = null; elements.ledgerStatus.textContent = `台帳同步失敗：${error.message}；為避免錯算，正式核准前請重新整理。`;
       elements.ledgerStatus.classList.add("error");
       renderGoogleAuthorizationStatus();
+      return false;
     }
   }
   function applyHistoryMode() {
@@ -2668,13 +2671,28 @@
   function ledgerStage(batch) {
     return ({ pending_approval: "pending_approval", approved: "approved", erp_created: "erp_created", received: "erp_created" })[batch?.status] || "analysis";
   }
+  function workUnitContinuation(unit) {
+    return core.procurementWorkUnitContinuation(state.analysis, unit, state.ledger?.batches || [], state.parentBatchId, state.workflowDrafts);
+  }
+  function planningWorkUnits() {
+    return core.listProcurementWorkUnits(state.analysis).map(unit => {
+      const continuation = workUnitContinuation(unit);
+      return continuation ? { ...unit, ...continuation, originalSkuCount: unit.skuCount, continuation: true } : unit;
+    });
+  }
+  function draftSelectedUnit(draft, unit) {
+    if (draft.activeWorkUnit) return workUnitMemberIds(draft.activeWorkUnit).includes(unit.id);
+    return String(draft.workUnitLabel || "").includes(unit.label);
+  }
   function workUnitDraft(unit) {
-    const local = state.workflowDrafts.find((row) => row.parentBatchId === state.parentBatchId && effectiveDraftWorkUnitIds(row).includes(unit.id));
+    const continuation = workUnitContinuation(unit);
+    const locals = state.workflowDrafts.filter((row) => row.parentBatchId === state.parentBatchId && effectiveDraftWorkUnitIds(row).includes(unit.id) && (!continuation || draftSelectedUnit(row, unit)));
+    const local = locals.find(row => draftSelectedUnit(row, unit));
     if (local) return local;
-    const shared = state.sharedDrafts.find((row) => row.parentBatchId === state.parentBatchId && (row.workUnitIds || []).includes(unit.id));
+    const shared = state.sharedDrafts.find((row) => row.parentBatchId === state.parentBatchId && (row.workUnitIds || []).includes(unit.id) && draftSelectedUnit(row, unit));
     if (shared) return { ...shared, sharedMetadataOnly: true, activeWorkUnit: { id: unit.id, memberIds: [unit.id], label: unit.label } };
-    const ledger = (state.ledger?.batches || []).find((row) => row.parent_batch_id === state.parentBatchId && (row.work_unit_ids || []).includes(unit.id) && row.status !== "revoked");
-    return ledger ? { id: ledger.id, batchId: ledger.id, stage: ledgerStage(ledger), activeWorkUnit: { id: unit.id, memberIds: [unit.id], label: unit.label } } : null;
+    const ledger = !continuation && (state.ledger?.batches || []).find((row) => row.parent_batch_id === state.parentBatchId && (row.work_unit_ids || []).includes(unit.id) && row.status !== "revoked");
+    return ledger ? { id: ledger.id, batchId: ledger.id, stage: ledgerStage(ledger), activeWorkUnit: { id: unit.id, memberIds: [unit.id], label: unit.label } } : locals[0] || null;
   }
   function matchingDraftWorkUnitIds(draft) {
     const ids = draft?.workUnitIds || effectiveDraftWorkUnitIds(draft);
@@ -2682,7 +2700,7 @@
   }
   function existingDraftForSelectedUnits(units) {
     const selectedIds = new Set(units.map((unit) => unit.id));
-    const overlaps = (draft) => matchingDraftWorkUnitIds(draft).some((id) => selectedIds.has(id));
+    const overlaps = (draft) => units.some(unit => matchingDraftWorkUnitIds(draft).includes(unit.id) && (!workUnitContinuation(unit) || draftSelectedUnit(draft, unit)));
     const local = state.workflowDrafts.find((draft) => draft.parentBatchId === state.parentBatchId && overlaps(draft));
     if (local) return local;
     const shared = state.sharedDrafts.find((draft) => draft.parentBatchId === state.parentBatchId && overlaps(draft));
@@ -2722,6 +2740,7 @@
       suppliers,
       supplier: suppliers[0] || "",
       label: sorted.map((unit) => unit.label).join("＋"),
+      excludedSkus: [...new Set(sorted.flatMap(unit => unit.excludedSkus || []))],
       skuCount: sorted.reduce((sum, unit) => sum + Number(unit.skuCount || 0), 0),
       quantity: sorted.reduce((sum, unit) => sum + Number(unit.quantity || 0), 0),
       amount: sorted.reduce((sum, unit) => sum + Number(unit.amount || 0), 0)
@@ -2729,7 +2748,7 @@
   }
   function renderWorkUnitDashboard() {
     if (!elements.workUnitList || !elements.workUnitTotal) return;
-    const units = state.analysis ? core.listProcurementWorkUnits(state.analysis) : [];
+    const units = state.analysis ? planningWorkUnits() : [];
     const total = units.reduce((sum, unit) => sum + Number(unit.amount || 0), 0);
     elements.workUnitTotal.textContent = units.length ? `${units.length}個審核單位・${formatCurrency(total)}` : "產生建議後顯示";
     const activeIds = new Set(workUnitMemberIds(state.activeWorkUnit));
@@ -2744,7 +2763,7 @@
       const title = document.createElement("strong"); title.textContent = unit.label;
       heading.append(checkbox, title);
       const detail = document.createElement("small"); detail.textContent = `${formatNumber(unit.skuCount)}個SKU・${formatNumber(unit.quantity)}件・${formatCurrency(unit.amount)}`;
-      const status = document.createElement("span"); status.className = "work-unit-status"; status.textContent = draft ? workflowStageLabel(draft.stage) : "尚未開始";
+      const status = document.createElement("span"); status.className = "work-unit-status"; status.textContent = draft ? workflowStageLabel(draft.stage) : unit.continuation ? `部分品項已處理，剩餘${unit.skuCount}項可接續` : "尚未開始";
       checkbox.addEventListener("change", () => {
         if (checkbox.checked) state.selectedWorkUnitIds.add(unit.id); else state.selectedWorkUnitIds.delete(unit.id);
         state.activeWorkUnit = null; state.returnScope = null; state.draftId = ""; state.draftStage = "";
@@ -2753,6 +2772,11 @@
         updateSupplierChecks(); resetReviewWorkflow("已更新分批範圍；確認勾選後，可直接在此下載本批Excel。"); renderWorkUnitDashboard();
       });
       card.append(heading, detail, status);
+      if (unit.continuation) {
+        const note = document.createElement("small");
+        note.textContent = `已排除${unit.excludedSkus.length}項；原分類${unit.originalSkuCount}項。${unit.sources.map(source => `${source.sku}：${source.quantity}件，${source.erpReference || source.batchId}`).join("；")}。本卡數量與金額僅為剩餘原建議，不追加已處理品項的差額。`;
+        card.append(note);
+      }
       if (draft && !draft.sharedMetadataOnly && draft.analysis) {
         const button = document.createElement("button"); button.type = "button"; button.className = activeIds.has(unit.id) ? "primary-button" : "secondary-button";
         button.textContent = "開啟此批次";
@@ -2776,14 +2800,21 @@
     elements.download.textContent = selectedUnits.length ? `下載已選${selectedUnits.length}個單位的本批報表` : "勾選後下載本批報表";
   }
   async function startSelectedWorkUnits() {
-    const units = core.listProcurementWorkUnits(state.analysis).filter((unit) => state.selectedWorkUnitIds.has(unit.id));
+    if (!await loadLedger()) { setWorkflowStatus("無法核對最新已處理品項，已停止建立分批；請先重新整理公司台帳。", "error"); return; }
+    const units = planningWorkUnits().filter((unit) => state.selectedWorkUnitIds.has(unit.id));
     if (!units.length) return;
+    const committed = units.map(unit => workUnitDraft(unit)).find(draft => draft && !draft.analysis && !draft.sharedMetadataOnly);
+    if (committed) { setWorkflowStatus(`本審核單位已有正式批次${committed.batchId}，已停止重複建立；請查看已承諾批次。`, "warning"); return; }
     const existing = existingDraftForSelectedUnits(units);
     if (existing) {
       setWorkflowStatus(`同一母批次的${existing.workUnitLabel || existing.activeWorkUnit?.label || "審核單位"}已存在，已改為開啟原批次，未重複建立。`, "warning");
       if (existing.sharedMetadataOnly) await openSharedWorkflowDraft(existing.id);
       else restoreWorkflowDraft(existing);
       return;
+    }
+    const continuations = units.filter(unit => unit.continuation);
+    if (continuations.length && !globalThis.confirm(`接續以下分類的剩餘原建議：\n${continuations.map(unit => `${unit.label}：${unit.skuCount}項／${formatNumber(unit.quantity)}件／${formatCurrency(unit.amount)}；已排除${unit.excludedSkus.join("、")}`).join("\n")}\n\n已處理品項及其差額不會再採購，原ERP與核准量不變。請確認剩餘品項確實尚未處理；若先前曾人工填0取消，請接續原批次，不要重新建立。是否建立剩餘品項的審核報表？`)) {
+      setWorkflowStatus("已取消建立剩餘分批；原批次與核准數量未變動。", "warning"); return;
     }
     const sharedParents = sharedParentsForCurrentPeriod();
     const currentParentIsShared = sharedParents.some((draft) => draft.id === state.parentBatchId);
@@ -3605,6 +3636,7 @@
     if (!state.reviewFile || !state.analysis || !state.returnScope) return;
     elements.reviewButton.disabled = true; setWorkflowStatus("正在重新檢查人工數量、力榮10件規則、可售至、付款月份與額度…");
     try {
+      if (!await loadLedger()) throw new Error("無法核對最新已處理品項，已停止回匯；請先重新整理公司台帳。");
       const baselineRows = workUnitBaselineRows(state.activeWorkUnit);
       const exportedRows = state.analysis.suggestedRows.filter((row) => core.rowMatchesProcurementWorkUnit(row, state.activeWorkUnit));
       const reservedConsignmentBySku = await activeConsignmentReservations(baselineRows.map((row) => row.supplier));
@@ -3615,6 +3647,7 @@
         baselineBySku: new Map(analysisBaselineRows().map((row) => [row.sku, row])),
         allowedSkuSet: new Set(baselineRows.map((row) => row.sku)),
         workUnit: state.activeWorkUnit,
+        processedSkuSet: new Set((state.ledger?.batches || []).filter(batch => batch.parent_batch_id === state.parentBatchId && batch.id !== state.batchId && batch.status !== "revoked").flatMap(batch => (batch.processed_items || []).filter(item => Number(item.approved_quantity) > 0).map(item => item.sku))),
         exportedSkuSet: new Set(exportedRows.map((row) => row.sku)),
         workflowType: state.analysis?.meta?.workflowType || "general",
         manualAdditionCatalogAvailable: Boolean(state.analysis.manualAdditionCatalog?.rows?.length),

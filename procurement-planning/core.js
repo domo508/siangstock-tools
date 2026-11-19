@@ -5093,6 +5093,7 @@
 
   function rowMatchesProcurementWorkUnit(row, workUnit) {
     if (!workUnit) return true;
+    if (Array.isArray(workUnit.excludedSkus) && workUnit.excludedSkus.includes(normalizeSku(row?.sku))) return false;
     const rowUnit = procurementWorkUnitForRow(row);
     if (!rowUnit) return false;
     const memberIds = Array.isArray(workUnit.memberIds) ? workUnit.memberIds : [];
@@ -5107,6 +5108,41 @@
       || structuredPuyoumaPurchaseTab(row.materialCategory);
     if (!correctedTab || correctedTab === row.purchaseTab) return false;
     return rowMatchesProcurementWorkUnit({ ...row, purchaseTab: correctedTab }, workUnit);
+  }
+
+  // A legacy source category may be linked solely because an item was explicitly
+  // added to another category. A link is not evidence that its other items ran.
+  function procurementWorkUnitContinuation(analysis, unit, batches, parentBatchId, drafts = []) {
+    if (!analysis || unit?.purchaseTab !== "無尺寸品項" || !parentBatchId) return null;
+    // Progress is always measured against the original category, even when the
+    // dashboard passes an already narrowed continuation unit back to this helper.
+    unit = { ...unit, excludedSkus: [] };
+    const originalSelection = (draft) => draft?.activeWorkUnit
+      && rowMatchesProcurementWorkUnit({ supplier: unit.supplier, purchaseTab: unit.purchaseTab }, draft.activeWorkUnit)
+      && !draft.activeWorkUnit.excludedSkus?.length;
+    if (drafts.some(d => d.parentBatchId === parentBatchId && originalSelection(d))) return null;
+    const related = (batches || []).filter(b => b.parent_batch_id === parentBatchId && b.status !== "revoked" && b.work_unit_ids?.includes(unit.id));
+    if (!related.length || related.some(b => !Array.isArray(b.processed_items) || !b.processed_items.length)) return null;
+    const baseline = new Map([...(analysis.manualAdditionCatalog?.rows || []), ...(analysis.rows || [])].map(r => [normalizeSku(r.sku), r]));
+    const processed = new Set();
+    const sources = [];
+    for (const batch of related) {
+      if (batch.processed_items.some(item => !baseline.has(normalizeSku(item.sku)))) return null;
+      const ownItems = batch.processed_items.filter(i => Number(i.approved_quantity) > 0 && rowMatchesProcurementWorkUnit(baseline.get(normalizeSku(i.sku)), unit));
+      if (!ownItems.length) return null;
+      for (const item of ownItems) {
+        const row = baseline.get(normalizeSku(item.sku));
+        const moved = batch.work_unit_ids.some(id => id !== unit.id && canAddReclassifiedPuyoumaRow(row, { id }));
+        if (!moved) return null;
+        processed.add(row.sku);
+        sources.push({ sku: row.sku, quantity: Number(item.approved_quantity), batchId: batch.id, erpReference: batch.erp_reference || "", status: batch.status });
+      }
+    }
+    const rows = (analysis.suggestedRows || []).filter(r => rowMatchesProcurementWorkUnit(r, unit) && !processed.has(r.sku));
+    if (!rows.length) return null;
+    return { excludedSkus: [...processed], sources, skuCount: rows.length,
+      quantity: rows.reduce((sum, r) => sum + Number(r.suggestedPurchaseQty || 0), 0),
+      amount: rows.reduce((sum, r) => sum + Number(r.suggestedPurchaseAmount || 0), 0) };
   }
 
   function procurementWorkUnitIdsForReview(reviewRows, analysisRows = []) {
@@ -5532,6 +5568,7 @@
             ? Math.min(Math.max(0, Number(suggestedQty || 0)), reviewConsignmentAvailableQty({ baseline, source }))
             : Math.max(0, Number(suggestedQty || 0)));
         const confirmedQty = manualBlank ? defaultConfirmedQty : parseNumber(manualCell);
+        if (Number(confirmedQty) > 0 && options.processedSkuSet?.has?.(sku)) errors.push({ sheetName, sourceRow: source.__rowNum__ + 1, sku, message: "此品號已在同母批次的其他採購批次處理，不能重複採購；請保留原批次並移除此新增列。" });
         const unitCost = manuallyAdded ? Number(baseline.unitCost || 0) : sourceUnitCost;
         const productStatusPendingReview = Boolean(baseline?.productStatusPendingReview);
         if (options.baselineBySku && !baseline) errors.push({
@@ -5938,6 +5975,7 @@
     inferMaterialHierarchy,
     classifyPuyoumaPurchaseTab,
     canAddReclassifiedPuyoumaRow,
+    procurementWorkUnitContinuation,
     puyoumaConsignmentGroup,
     applyDemandModel,
     activityDemandScopeLabel,
