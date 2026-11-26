@@ -1,4 +1,5 @@
 import { cleanupStoreOrders, recoverStoreOrderRecognitions, storeOrdersRoute } from "./store-orders";
+import { marketingAiRoute } from './marketing-ai';
 import { homepageDepartmentsRoute } from "./homepage-departments";
 import { verifyAdmin } from "./access";
 import { RequestValidationError, validateRules, validateUpdateBody } from "./schema";
@@ -100,6 +101,8 @@ export default {
   async fetch(request: Request, env: Env, ctx?:ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     try {
+      const marketingAiResponse = await marketingAiRoute(request, env);
+      if (marketingAiResponse) return marketingAiResponse;
       const storeOrdersResponse = await storeOrdersRoute(request, env, ctx);
       if (storeOrdersResponse) return storeOrdersResponse;
       const homepageResponse = await homepageDepartmentsRoute(request, env);

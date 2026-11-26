@@ -1244,3 +1244,5 @@ body.history-readonly .stage-two, body.history-readonly .stage-three, body.histo
 .puyouma-order-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .puyouma-order-actions button { white-space: normal; }
 @media(max-width: 420px) { .puyouma-order-dialog { padding: 16px; } .puyouma-order-actions button { width: 100%; } }
+
+.source-provenance { overflow-wrap: anywhere; word-break: break-word; }

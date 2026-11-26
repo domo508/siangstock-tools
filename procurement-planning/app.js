@@ -3,6 +3,7 @@
 
   const core = globalThis.ProcurementPlanningCore;
   const googleSources = globalThis.ProcurementGoogleSources;
+  const masterGuard = globalThis.ProcurementMasterSourceGuard;
   const shortageBatch = globalThis.ProcurementShortageBatch;
   const outputXlsx = globalThis.ProcurementXlsxWriter || globalThis.XLSX;
   const MODEL_CACHE = Object.freeze({ database: "siangstock-procurement-local", store: "files", key: "seasonal-model", refreshMonths: 6 });
@@ -14,8 +15,9 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261119-procurement-unit-progress-r1";
+  const APP_VERSION = "20261126-procurement-master-guard-r1";
   const state = {
+    newCalculationBusy: false, masterGuardBusy: false,
     importProgress: null, shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
     consignmentFile: null, consignmentWorkbook: null, lirongConsignmentFile: null, lirongConsignmentWorkbook: null,
     salesFiles: [], modelFile: null, marketingFile: null, analysis: null, reviewFile: null, reviewWorkbook: null, manualReasonCandidates: [], firstReview: null,
@@ -36,6 +38,7 @@
     summaryAuth: get("#summary-auth"), summaryAuthMessage: get("#summary-auth-message"), summaryAuthConnect: get("#summary-auth-connect"),
     accountBadge: get("#account-badge"), googleAuthPriority: get("#google-auth-priority"), googleAuthStatus: get("#google-auth-status"), googleConnect: get("#google-connect-button"), autoSource: get("#auto-source-button"), autoSourceLabel: get("#auto-source-label"),
     autoSourceProgress: get("#auto-source-progress"), sourceStatus: get("#source-status"),
+    masterGuardStatus: get("#master-guard-status"), masterRefresh: get("#master-refresh-button"), masterRecheck: get("#master-recheck-button"), calculationMaster: get("#calculation-master-source"),
     month: get("#analysis-month"), checkpoint: get("#checkpoint"), orderDate: get("#order-date"), inventoryDate: get("#inventory-date"),
     salesSourceTitle: get("#sales-source-title"), salesSourcePeriod: get("#sales-source-period"),
     pendingDate: get("#pending-date"), transferDate: get("#transfer-date"), consignmentDate: get("#consignment-date"), salesDate: get("#sales-date"),
@@ -87,8 +90,70 @@
   function formatCurrency(value) { return new Intl.NumberFormat("zh-TW", { style: "currency", currency: "TWD", maximumFractionDigits: 0 }).format(Number(value || 0)); }
   function formatCurrencyPrecise(value) { return new Intl.NumberFormat("zh-TW", { style: "currency", currency: "TWD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value || 0)); }
   function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
-  function sourceProof(id, metadata) { return `ID…${String(id || "").slice(-6)}・更新${metadata?.modifiedTime || "依工作表內容"}・抓取${String(metadata?.fetchedAt || "").replace("T", " ").slice(0, 19)}・SHA-256 ${String(metadata?.sha256 || "").slice(0, 12)}…`; }
+  function sourceProof(id, metadata) { return `ID…${String(id || "").slice(-6)}・更新${metadata?.modifiedTime ? masterGuard.taipei(metadata.modifiedTime) : "依工作表內容"}・抓取${masterGuard.taipei(metadata?.fetchedAt)}・SHA-256 ${String(metadata?.sha256 || "").slice(0, 12)}…`; }
   function setStatus(message, type = "") { elements.status.textContent = message; elements.status.className = `main-status ${type}`.trim(); }
+  function renderCalculationMaster(analysis = state.analysis) {
+    elements.calculationMaster.textContent = masterGuard.describe(masterGuard.proofForAnalysis(analysis));
+  }
+  function masterGuardMessage(message, error = false) {
+    elements.masterGuardStatus.textContent = message;
+    elements.masterGuardStatus.className = `main-status ${error ? "error" : ""}`;
+    elements.masterRefresh.hidden = !error;
+    elements.masterRecheck.hidden = !error;
+  }
+  async function latestPlanningMaster() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    try { return await googleSources.latestMasterMetadata(state.config?.fixedSources?.productMasterFolderId, { signal: controller.signal }); }
+    catch (error) { throw new Error(`無法核對最新商品主檔：${controller.signal.aborted ? "查詢逾時" : error.message}。已停止新計算，原草稿與選檔保留；完成公司Google授權或稍後重新確認。`); }
+    finally { clearTimeout(timer); }
+  }
+  async function verifyPlanningMaster() {
+    masterGuardMessage("正在核對雲端最新商品主檔…");
+    const file = state.masterFile;
+    const source = state.sourceMetadata?.master;
+    const metadata = source?.file === file ? source.metadata : null;
+    try {
+      const proof = await masterGuard.verify({ file, metadata, latest: await latestPlanningMaster(), download: latest => googleSources.downloadDriveFile(latest.id, latest.name, { cache: "no-store" }) });
+      masterGuard.assertUnchanged(proof, await latestPlanningMaster(), file === state.masterFile);
+      masterGuardMessage(`新計算主檔已核對：${proof.name}；核對${masterGuard.taipei(proof.checkedAt)}。`);
+      return { file, proof };
+    } catch (error) { masterGuardMessage(error.message, true); throw error; }
+  }
+  async function assertPlanningMasterUnchanged(verified) {
+    try { masterGuard.assertUnchanged(verified.proof, await latestPlanningMaster(), verified.file === state.masterFile); }
+    catch (error) { masterGuardMessage(error.message, true); throw error; }
+  }
+  async function assertBaseMasterCurrent() {
+    const proof = state.baseAnalysis?.meta?.masterSource;
+    if (!proof?.id) throw new Error("此試算基礎未保存完整主檔版本；請以最新主檔重新產生一般建議，再建立新的新品／臨時追加。原回匯與核准批次保留。");
+    masterGuard.assertUnchanged(proof, await latestPlanningMaster(), true);
+  }
+  async function refreshPlanningMaster() {
+    if (state.masterGuardBusy || state.newCalculationBusy) return;
+    state.masterGuardBusy = true; elements.masterRefresh.disabled = true; elements.masterRecheck.disabled = true; updateReadyState();
+    masterGuardMessage("正在重新取得最新主檔；其他選檔與目前批次保留…");
+    try {
+      if (!(await checkRuntimeVersion())) return;
+      const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 60000);
+      let source;
+      try { source = await googleSources.loadLatestMaster(state.config?.fixedSources?.productMasterFolderId, { signal: controller.signal }); }
+      finally { clearTimeout(timer); }
+      validateAutoMaster(await readWorkbook(source.file));
+      if (!(await checkRuntimeVersion())) throw new Error("工具版本未確認，尚未採用新主檔；請依上方版本提示處理。");
+      state.masterFile = source.file; state.masterWorkbook = null;
+      state.sourceMetadata = { ...state.sourceMetadata, master: source };
+      elements.masterFileName.textContent = `下次新計算來源：${source.metadata.name}・${sourceProof(source.metadata.id, source.metadata)}`;
+      masterGuardMessage("最新主檔已取得，請再次按產生採購建議；目前批次仍保留原計算依據，沒有自動重算或改量。");
+    } catch (error) { masterGuardMessage(`取得主檔失敗：${error.message}；原主檔、草稿與其他選檔保留。`, true); }
+    finally { state.masterGuardBusy = false; elements.masterRefresh.disabled = false; elements.masterRecheck.disabled = false; updateReadyState(); }
+  }
+  async function recheckPlanningMaster() {
+    if (state.masterGuardBusy || state.newCalculationBusy) return;
+    state.masterGuardBusy = true; updateReadyState();
+    try { if (await checkRuntimeVersion()) await verifyPlanningMaster(); } catch (_) { /* shown beside the calculation button */ }
+    finally { state.masterGuardBusy = false; updateReadyState(); }
+  }
   function pendingNotificationCount() {
     return (state.ledger?.batches || []).filter((row) => ["pending", "failed"].includes(String(row.notification_status || ""))).length;
   }
@@ -313,7 +378,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261119-procurement-unit-progress-r1");
+        const worker = new Worker("inventory-reader-worker.js?v=20261126-procurement-master-guard-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1081,7 +1146,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261119-procurement-unit-progress-r1");
+      const worker = new Worker("seasonal-model-worker.js?v=20261126-procurement-master-guard-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -1176,8 +1241,8 @@
     if (!monthEndMode && !state.monthEndWorkbook) elements.monthEndPanel.hidden = true;
     renderActivityControls();
     renderModelStatus();
-    elements.analyze.disabled = !requirementsReady();
-    elements.runShortageOrder.disabled = !requirementsReady() || !state.storeShortageNeeds.some((row) => row.handling_mode === "new_order" && shortageBatch.remainingNeed(row) > 0);
+    elements.analyze.disabled = state.newCalculationBusy || state.masterGuardBusy || !requirementsReady();
+    elements.runShortageOrder.disabled = !requirementsReady() || (state.newCalculationBusy || state.masterGuardBusy) || !state.storeShortageNeeds.some((row) => row.handling_mode === "new_order" && shortageBatch.remainingNeed(row) > 0);
     updateSpecialWorkflowReady();
     if (!requirementsReady() && !state.analysis) setStatus(monthEndMode
       ? "月底驗證需準備商品主檔、最新庫存、全部狀態採購單、期間調撥單、普優瑪寄庫表與本月銷售；不需要季節模型或產生採購建議。"
@@ -1214,6 +1279,7 @@
     state.pendingSummaryAction = null;
     state.transferDraft=null;state.transferSourceAnalysis=null;state.transferRestoredDraft=null;state.transferCorrection=null;state.transferDraftDirty=false;state.transferParentContext=null;state.transferPeriodGeneration=(state.transferPeriodGeneration || 0)+1;state.transferPeriodSyncing=false;state.transferPeriodError=false;
     state.analysis = null; state.baseAnalysis = null; state.parsedSources = null; state.workflowType = "system_recommendation"; state.consignmentSource = null; state.selectedSuppliers = new Set(); state.returnScope = null; state.purchaseStatusSummary = null; state.costSummary = null; state.monthEndWorkbook = null; state.monthEndReportBytes = null; state.monthEndSummary = null; state.draftId = ""; state.draftStage = ""; state.sharedDraftId = ""; state.sharedDraftRevision = 0; state.parentBatchId = ""; state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set();
+    renderCalculationMaster();
     elements.download.disabled = true; elements.resultPanel.hidden = true; elements.supplierFilterList.replaceChildren();
     elements.monthEndPanel.hidden = true; elements.monthEndSummary.replaceChildren(); elements.monthEndDownload.disabled = true; elements.monthEndConfirm.disabled = true; elements.monthEndRetryEmail.disabled = true;
     resetReviewWorkflow("請先產生建議，再於分批審核區勾選一個或多個單位並下載本批Excel；下載後才會開放第一次人工回匯。");
@@ -1235,6 +1301,7 @@
     input.addEventListener("change", () => {
       const files = [...input.files]; state[key] = multiple ? files : (files[0] || null);
       if (workbookKey) state[workbookKey] = null;
+      if (key === "masterFile" && state.sourceMetadata) state.sourceMetadata = { ...state.sourceMetadata, master: null };
       label.textContent = fileLabel(files); invalidateAnalysis(); updateReadyState();
     });
   }
@@ -2053,7 +2120,7 @@
       const source = structuredClone(transferActivitySource());
       source.originParentId=state.parentBatchId;
       for (const month of source.months) if(!(month.retailTarget>0)) throw new Error(`${month.month}沒有可提供的實體門市需求，請先確認目標及歷史資料。`);
-      const send=async body=>fetch("/api/store-transfer/activity-plans", { method:"POST", cache:"no-store", headers:{Accept:"application/json","Content-Type":"application/json","X-Store-Transfer-Version":"20261116-transfer-store-names-r1"},body:JSON.stringify(body) });
+      const send=async body=>fetch("/api/store-transfer/activity-plans", { method:"POST", cache:"no-store", headers:{Accept:"application/json","Content-Type":"application/json","X-Store-Transfer-Version":"20261123-prepurchase-r4"},body:JSON.stringify(body) });
       let response=await send({source}), result=await response.json();
       if(response.status===409 && result.existingId && confirm(`${result.error}\n\n確認更新此活動來源？`)) {response=await send({source,expectedRevision:result.existingRevision});result=await response.json();}
       if (!response.ok) throw new Error(result.error || "提供活動草稿失敗；須具備週調撥總部權限。");
@@ -3003,6 +3070,7 @@
     renderSelectedAnalysis();
   }
   function renderSummary(analysis, consignmentSource) {
+    renderCalculationMaster(analysis);
     elements.dateCheck.textContent = `銷售截止日：${analysis.asOfDate}｜檔案最新：${analysis.sourceMaxSalesDate}`;
     const styleNote = consignmentSource.styleAudit.pinkDetected ? `已辨識${formatNumber(consignmentSource.styleAudit.pinkCells)}個粉紅排程格。` : "未辨識粉紅排程。";
     const activityRule = analysis.appliedRules?.activityDemand;
@@ -3129,13 +3197,20 @@
   }
   async function resolveWorkbook(file, loaded) { return loaded || readWorkbook(file); }
   async function analyze() {
-    if (!(await checkRuntimeVersion())) return;
-    if (!requirementsReady()) return;
-    if (elements.activityEnabled.checked && state.legacyActivity) { setStatus("請重新設定新版活動月份目標，再產生新的母批次；舊批次可直接續作與下載。", "warning"); return; }
-    if (elements.activityEnabled.checked && elements.checkpoint.value !== "month-end") { try { globalThis.ProcurementActivityPlanning.normalize(activitySettings(), elements.salesDate.value); } catch (error) { setStatus(error.message, "error"); return; } }
+    if (state.newCalculationBusy || state.masterGuardBusy) return;
+    state.newCalculationBusy = true; updateReadyState();
+    if (!(await checkRuntimeVersion()) || !requirementsReady()) { state.newCalculationBusy = false; updateReadyState(); return; }
+    let verifiedMaster;
+    try { verifiedMaster = await verifyPlanningMaster(); }
+    catch (error) { state.newCalculationBusy = false; updateReadyState(); setStatus(error.message, "error"); return; }
+    if (elements.activityEnabled.checked && state.legacyActivity) { setStatus("請重新設定新版活動月份目標，再產生新的母批次；舊批次可直接續作與下載。", "warning"); state.newCalculationBusy = false; updateReadyState(); return; }
+    if (elements.activityEnabled.checked && elements.checkpoint.value !== "month-end") { try { globalThis.ProcurementActivityPlanning.normalize(activitySettings(), elements.salesDate.value); } catch (error) { setStatus(error.message, "error"); state.newCalculationBusy = false; updateReadyState(); return; } }
     let activityToken=null;
-    try{if(elements.activityEnabled.checked && elements.checkpoint.value!=="month-end")activityToken=await sharedActivity.assertReady();}catch(error){setStatus(error.message,"error");return;}
+    try{if(elements.activityEnabled.checked && elements.checkpoint.value!=="month-end")activityToken=await sharedActivity.assertReady();}catch(error){setStatus(error.message,"error");state.newCalculationBusy=false;updateReadyState();return;}
+    state.newCalculationBusy = true;
     elements.analyze.disabled = true; elements.download.disabled = true; setStatus("正在以大型檔專用模式預檢庫存；門市店倉會完整保留…");
+    const previousPlanning = Object.fromEntries(["analysis", "baseAnalysis", "parsedSources", "purchaseStatusSummary", "costSummary", "consignmentSource"].map(key => [key, state[key]]));
+    let resultAdopted = false;
     const importProgress = state.importProgress = {current:0,total:2+state.pendingFiles.length+state.salesFiles.length};
     const markFileRead = () => { if (state.importProgress === importProgress && !importProgress.stopped) { importProgress.current++; globalThis.CompanyGuidance?.reportProgress({id:"required-file-read",message:`必要檔案已讀取 ${importProgress.current}／${importProgress.total} 份`,status:"processing",current:importProgress.current,total:importProgress.total}); } };
     const readRequired = async file => { const workbook = await readWorkbook(file); markFileRead(); return workbook; };
@@ -3158,7 +3233,8 @@
         monthEndMode && !state.modelFile ? Promise.resolve(null) : readWorkbook(state.modelFile),
         Promise.all(state.pendingFiles.map(readRequired)), Promise.all(state.salesFiles.map(readRequired))
       ]);
-      const master = core.parseProductMasterWorkbook(masterWorkbook, XLSX, { fileName: "本次商品主檔" });
+      if (verifiedMaster.file !== state.masterFile) throw new Error("計算期間主檔選檔已變更，請重新計算；原批次保留。");
+      const master = core.parseProductMasterWorkbook(masterWorkbook, XLSX, { fileName: verifiedMaster.proof.name });
       const transferReport = core.parseTransferWorkbook(transferWorkbook, XLSX, { fileName: state.transferFile.name || "期間調撥單" });
       let consignment;
       let lirongConsignment;
@@ -3186,6 +3262,7 @@
         inventory: elements.inventoryDate.value, pending: elements.pendingDate.value, transfer: elements.transferDate.value, consignment: elements.consignmentDate.value, sales: elements.salesDate.value
       } });
       if (elements.checkpoint.value === "month-end") {
+        await assertPlanningMasterUnchanged(verifiedMaster);
         state.analysis = null; state.baseAnalysis = null; state.parsedSources = { master, inventory, pendingReports, transferReports: [transferReport], consignment, lirongConsignment, salesReports, model };
         state.consignmentSource = consignment;
         await syncErpReconciliations(pendingReports);
@@ -3224,27 +3301,30 @@
         blacklist: blacklistEntries(),
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES,
         purchaseUnitRules: state.procurementRules?.purchaseUnits,
-        sourceHash: state.sourceMetadata?.master?.metadata?.sha256 || "",
-        sourceModifiedTime: state.sourceMetadata?.master?.metadata?.modifiedTime || "",
+        sourceHash: verifiedMaster.proof.sha256,
+        sourceModifiedTime: verifiedMaster.proof.modifiedTime,
         dataAsOfDate: elements.inventoryDate.value
       });
       analysis.meta = {
+        masterSource: verifiedMaster.proof,
         month: elements.month.value, checkpoint: elements.checkpoint.value, sourceMode: state.consignmentWorkbook ? "Google自動" : "手動備援",
         consignmentSources: { puyouma: { header: consignment.currentHeader || "未驗證", date: consignment.currentStockDate || "" }, lirong: { header: lirongConsignment.currentHeader || "未驗證", date: lirongConsignment.currentStockDate || "" } },
         seasonalModel: state.modelMetadata ? { ...state.modelMetadata, refreshMonth: modelRefreshMonth(), status: "本次沿用／已更新" } : null,
         sourceHashes: state.sourceMetadata ? {
-          master: state.sourceMetadata.master.metadata.sha256,
-          marketing: state.sourceMetadata.marketingMetadata.sha256,
+          master: verifiedMaster.proof.sha256,
+          marketing: state.sourceMetadata.marketingMetadata?.sha256 || "",
           puyouma: state.sourceMetadata.puyoumaMetadata?.sha256 || "unavailable",
           lirong: state.sourceMetadata.lirongMetadata?.sha256 || "unavailable"
-        } : {}
+        } : { master: verifiedMaster.proof.sha256 }
       };
       if (!(await checkRuntimeVersion())) throw new Error("本機計算已結束，但版本尚未確認或已有新版，結果未採用且尚未寫入台帳。請先確認上方版本訊息。");
+      await assertPlanningMasterUnchanged(verifiedMaster);
       await sharedActivity.verify(activityToken);
       await loadProcurementRules();
       if (state.procurementRulesVersion !== calculationRulesVersion) throw new Error("公司採購規則已在計算期間更新，請保留檔案並重新產生建議。");
       if (backorderStamp !== JSON.stringify([get("#foreign-backorders").value, get("#foreign-backorders-confirmed").checked])) throw new Error("有效欠單設定已在計算期間變更，請重新產生建議。");
       analysis.appliedRules.version = calculationRulesVersion;
+      resultAdopted = true;
       state.analysis = analysis; state.baseAnalysis = analysis; state.workflowType = state.shortageRunMode === "new_order" ? "store_shortage_replenishment" : "system_recommendation";
       state.transferParentContext=null;state.transferPeriodError=false;state.transferPeriodSyncing=false;
       state.parentBatchId = newParentBatchId(); state.activeWorkUnit = null; state.selectedWorkUnitIds = new Set(); state.draftId = state.parentBatchId;
@@ -3271,8 +3351,9 @@
       renderCostSnapshotStatus();
       renderBudget(); updateSpecialWorkflowReady(); elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
-      state.analysis = null; elements.resultPanel.hidden = true; setStatus(`無法完成：${error.message || "請確認檔案格式"}`, "error");
-    } finally { importProgress.stopped = true; elements.analyze.disabled = !requirementsReady(); }
+      if (!resultAdopted) Object.assign(state, previousPlanning);
+      elements.resultPanel.hidden = !state.analysis; renderCalculationMaster(); setStatus(`無法完成：${error.message || "請確認檔案格式"}`, "error");
+    } finally { importProgress.stopped = true; state.newCalculationBusy = false; updateReadyState(); }
   }
   function activateSpecialAnalysis(analysis, label) {
     state.analysis = analysis;
@@ -3292,6 +3373,7 @@
     elements.newProductButton.disabled = true;
     elements.specialWorkflowStatus.textContent = `正在檢查${state.newProductFile.name}與最新商品主檔…`;
     try {
+      await assertBaseMasterCurrent();
       const parsed = core.parseNewProductWorkbook(await readNewProductWorkbook(state.newProductFile), XLSX, { fileName: state.newProductFile.name });
       if (parsed.errors.length) {
         const visibleErrors = parsed.errors.slice(0, 8).map((row) => `第${row.sourceRow}列${row.sku ? `（${row.sku}）` : ""}：${row.message}`);
@@ -3307,6 +3389,7 @@
       const setup=await setupResponse.json();
       if(!setupResponse.ok||!setup.storeInventory||!Array.isArray(setup.displayExceptions))throw new Error(setup.error||'新品展示規則未取得。');
       for(const row of analysis.rows) row.newProductAllocation = globalThis.NewProductAllocation.draft(row,state.baseAnalysis.rows,setup.storeInventory,setup.displayExceptions);
+      await assertBaseMasterCurrent();
       if(!(await checkRuntimeVersion())) throw new Error('新品登錄前請先重新載入最新版。');
       await postJson('/api/procurement/new-products/register',{items:analysis.rows.filter(r=>Object.keys(r.newProductAllocation.stores).length).map(r=>({sku:r.sku,name:r.name,listedDate:r.listedDate}))},{'X-New-Product-Version':'20261116-new-product-allocation-r3'});
       activateSpecialAnalysis(analysis, "新品首批採購建議");
@@ -3320,6 +3403,7 @@
     elements.manualDraftButton.disabled = true;
     elements.specialWorkflowStatus.textContent = "正在把臨時追加名單與最新淨需求比對…";
     try {
+      await assertBaseMasterCurrent();
       const workbooks = await Promise.all(state.manualDraftFiles.map(readWorkbook));
       const reports = workbooks.map((workbook, index) => core.parsePendingPurchaseWorkbook(workbook, XLSX, { fileName: state.manualDraftFiles[index].name }));
       const rows = core.buildTemporaryAdditionalPurchaseRows(reports);
@@ -3330,6 +3414,7 @@
         master: state.parsedSources.master, inventory: state.parsedSources.inventory, pendingReports: state.parsedSources.pendingReports,
         supplierRules: state.procurementRules?.suppliers || core.SUPPLIER_RULES, purchaseUnitRules: state.procurementRules?.purchaseUnits
       });
+      await assertBaseMasterCurrent();
       activateSpecialAnalysis(analysis, "臨時追加採購");
     } catch (error) {
       elements.specialWorkflowStatus.textContent = `臨時追加採購停止：${error.message}`;
@@ -3878,6 +3963,8 @@
     elements.specialWorkflowStatus.textContent = `已選${state.postedOrderFiles.length}份ERP採購單：${state.postedOrderFiles.map((file) => file.name).join("、")}。可直接檢查並補登，不必先產生採購建議。`;
     elements.specialWorkflowStatus.className = "main-status success";
   });
+  elements.masterRefresh.addEventListener("click", refreshPlanningMaster);
+  elements.masterRecheck.addEventListener("click", recheckPlanningMaster);
   elements.newProductButton.addEventListener("click", buildNewProductFlow);
   elements.manualDraftButton.addEventListener("click", buildManualDraftFlow);
   elements.postedOrderButton.addEventListener("click", importPostedOrders);
@@ -4054,7 +4141,7 @@
     readWorkbook, getConfig: () => state.config, googleSources, ensureCurrent: checkRuntimeVersion,
     afterAuthorize: () => { state.googleAuthorized = Boolean(googleSources.token()); renderGoogleAuthorizationStatus(); }
   });
-  setInitialDates(); renderChannels(); renderBudget(); renderModelStatus(); updateModelControls(); updateReadyState(); checkRuntimeVersion(); hydrateCachedModel(); hydrateWorkflowDrafts(); loadConfig();
+  setInitialDates(); renderCalculationMaster(); renderChannels(); renderBudget(); renderModelStatus(); updateModelControls(); updateReadyState(); checkRuntimeVersion(); hydrateCachedModel(); hydrateWorkflowDrafts(); loadConfig();
 
   // Guide snapshots contain readiness only; no quantities, amounts or source contents.
   let guidanceContext = '';
@@ -4070,9 +4157,9 @@
   }
   globalThis.CompanyGuidance?.register({
     context(target){const area=target.closest?.('#activity-transfer-result,#activity-demand-card,#workflow-panel,#source-title,#source-panel,#manual-source-title,#analyze-button,#result-panel,#budget-panel');if(area){guidanceContext=area.id==='activity-transfer-result'?'activity-handoff':area.id==='activity-demand-card'?'activity-settings':area.id==='workflow-panel'?'workflow':area.id==='result-panel'?'results':area.id==='budget-panel'?'budget':'sources';}return guidanceContext;},
-    acceptStatus(status){if(state.summaryActionBusy)return !!status.closest('#workflow-panel');if(guidanceContext==='activity-settings')return !!status.closest('#activity-demand-card');if(guidanceContext==='activity-handoff')return !!status.closest('#activity-transfer-result');if(guidanceContext==='budget')return ['budget-plan-status','cost-snapshot-status'].includes(status.id);if(guidanceContext==='workflow')return !!status.closest('#workflow-panel');if(guidanceContext==='sources')return ['main-status','source-status','model-run-status','inventory-file-name','pending-files-name','transfer-file-name','sales-files-name'].includes(status.id);if(guidanceContext==='results')return ['main-status','month-end-status'].includes(status.id);return true;},
+    acceptStatus(status){if(state.summaryActionBusy)return !!status.closest('#workflow-panel');if(guidanceContext==='activity-settings')return !!status.closest('#activity-demand-card');if(guidanceContext==='activity-handoff')return !!status.closest('#activity-transfer-result');if(guidanceContext==='budget')return ['budget-plan-status','cost-snapshot-status'].includes(status.id);if(guidanceContext==='workflow')return !!status.closest('#workflow-panel');if(guidanceContext==='sources')return ['master-guard-status','main-status','source-status','model-run-status','inventory-file-name','pending-files-name','transfer-file-name','sales-files-name'].includes(status.id);if(guidanceContext==='results')return ['main-status','month-end-status'].includes(status.id);return true;},
     progress(){return globalThis.ProcurementGuidance.progress(guidanceSnapshot());},
-    statuses:'#main-status,#source-status,#workflow-status,#special-workflow-status,#model-run-status,#store-shortage-status,#budget-plan-status,#cost-snapshot-status,#month-end-status,#transfer-activity-status,#activity-registry-status,#inventory-file-name,#pending-files-name,#transfer-file-name,#sales-files-name',
+    statuses:'#master-guard-status,#main-status,#source-status,#workflow-status,#special-workflow-status,#model-run-status,#store-shortage-status,#budget-plan-status,#cost-snapshot-status,#month-end-status,#transfer-activity-status,#activity-registry-status,#inventory-file-name,#pending-files-name,#transfer-file-name,#sales-files-name',
     resolve(){return globalThis.ProcurementGuidance.resolve(guidanceSnapshot());}
   });
 })();

@@ -44,6 +44,17 @@ function fixture({ files, status = 200, abortDownload = false } = {}) {
   return { api, calls, login: async () => { api.initialize("synthetic-client"); await api.authorize(); } };
 }
 describe("正式共用 Google 來源回歸", () => {
+  it("最新主檔跨分頁查詢，不能只看第一頁；下載中更新也停止採用", async () => {
+    let client, lists=0, afterDownload=false, mutate=false; const calls=[];
+    const record=(id,time)=>({id,name:id+'.xlsx',mimeType:MIME,parents:['folder'],modifiedTime:time});
+    const old=record('old','2026-11-16T00:00:00Z'),latest=record('new','2026-11-26T00:00:00Z');
+    const c={console,URLSearchParams,File,Blob,TextEncoder,Uint8Array,ArrayBuffer,crypto:webcrypto,setTimeout,clearTimeout,
+      google:{accounts:{oauth2:{initTokenClient:()=>{client={requestAccessToken:()=>client.callback({access_token:'synthetic'})};return client;}}}},
+      fetch:async(url,options)=>{calls.push({url,options});if(url.includes('alt=media')){afterDownload=true;return{ok:true,blob:async()=>new Blob([workbookBytes()])};}lists++;const page=new URL(url).searchParams.get('pageToken');return{ok:true,json:async()=>page?{files:[mutate&&afterDownload?{...latest,modifiedTime:'2026-11-27T00:00:00Z'}:latest]}:{files:[old],nextPageToken:'second'}};}};
+    vm.createContext(c);vm.runInContext(source,c);const api=c.ProcurementGoogleSources;api.initialize('synthetic');await api.authorize();
+    expect((await api.latestMasterMetadata('folder')).id).toBe('new');expect(lists).toBe(2);
+    mutate=true;await expect(api.loadLatestMaster('folder')).rejects.toThrow('下載期間');expect(calls.every(x=>x.options.cache==='no-store')).toBe(true);
+  });
   it("原本單參數呼叫可選取最新直屬主檔，實際 XLSX 下載重讀品號／金額守恆", async () => {
     const f = fixture(); await f.login();
     const result = await f.api.loadLatestMaster("master-folder");
@@ -54,7 +65,9 @@ describe("正式共用 Google 來源回歸", () => {
     expect(XLSX.utils.sheet_to_json(workbook.Sheets["工作表1"])).toEqual([
       { "貨號": "TEST-001", "品名": "合成測試商品", "進貨價": 125, "貨品狀態": "尚可追加", "已下架": "否" }
     ]);
-    expect(f.calls).toHaveLength(2);
+    expect(f.calls).toHaveLength(3);
+    expect(f.calls[2].url).not.toContain("alt=media");
+    expect(f.calls.every(c => c.options.cache === "no-store")).toBe(true);
     expect(f.calls[1].url).toContain("/new?alt=media");
   });
   it("周調撥正式雙來源呼叫兩份均完成且不寫入來源", async () => {
@@ -63,7 +76,7 @@ describe("正式共用 Google 來源回歸", () => {
       f.api.loadLatestMaster("master-folder"), f.api.downloadDriveFile("marketing-file", "整體行銷策略.xlsx")
     ]);
     expect(master.file.size).toBeGreaterThan(0); expect(marketing.size).toBe(master.file.size);
-    expect(f.calls).toHaveLength(3);
+    expect(f.calls).toHaveLength(4);
     expect(f.calls.every(c => !c.options.method || c.options.method === "GET")).toBe(true);
   });
   it("取消訊號同時傳到清單及檔案下載，不遺漏 options", async () => {
@@ -72,7 +85,7 @@ describe("正式共用 Google 來源回歸", () => {
     expect(f.calls.every(c => c.options.signal === controller.signal)).toBe(true);
     controller.abort();
     await expect(f.api.loadLatestMaster("master-folder", { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
-    expect(f.calls).toHaveLength(3);
+    expect(f.calls).toHaveLength(4);
   });
   it("未登入及401均停止，不回傳半份資料或繞過授權", async () => {
     const f = fixture({ status: 401 });

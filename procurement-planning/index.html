@@ -8,7 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://openidconnect.googleapis.com https://www.googleapis.com https://sheets.googleapis.com https://gmail.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'">
   <title>庫存採購規劃｜翔仔居家</title>
   <link rel="stylesheet" href="../cost-analysis/style.css?v=20260828-procurement-r1">
-  <link rel="stylesheet" href="style.css?v=20261119-procurement-unit-progress-r1">
+  <link rel="stylesheet" href="style.css?v=20261126-procurement-master-guard-r1">
   <link rel="stylesheet" href="/live-guidance/style.css?v=20261103-guidance-compact-r6">
 </head>
 <body>
@@ -210,7 +210,7 @@
               <p class="upload-help">自動選取白名單資料夾內修改時間最新且唯一有效的.xlsx；無新品或異動可沿用最近有效版本。</p>
               <a class="source-file-link" href="https://drive.google.com/drive/folders/1wzVoxLUXb9CEJK-cWrH8AMPxO5NVpTeC?usp=drive_link" target="_blank" rel="noopener noreferrer">開啟商品主檔資料夾 <span aria-hidden="true">↗</span></a>
               <label class="file-button">手動備援<input id="master-file" type="file" accept=".xlsx"></label>
-              <p id="master-file-name" class="file-name">尚未取得</p>
+              <p id="master-file-name" class="file-name">下次新計算來源：尚未取得</p>
             </article>
 
             <article class="upload-card" data-source="marketing">
@@ -326,6 +326,10 @@
       </div>
 
       <div class="action-bar">
+        <div class="result-alert" aria-label="新計算主檔版本核對">
+          <p id="master-guard-status" class="main-status" role="status" aria-live="polite">每次新計算會先核對雲端最新主檔；目前批次原計算來源在回匯區另列。</p>
+          <div class="button-row"><button id="master-refresh-button" class="secondary-button" type="button" hidden>取得最新主檔</button><button id="master-recheck-button" class="secondary-button" type="button" hidden>重新確認主檔</button></div>
+        </div>
         <button id="analyze-button" class="primary-button" type="button" disabled>產生採購建議</button>
         <p id="main-status" class="main-status" role="status">請先完成日期與本次必要資料。</p>
       </div>
@@ -528,6 +532,7 @@
     </section>
 
     <section id="workflow-panel" class="panel workflow-panel stage-panel stage-three" aria-labelledby="workflow-title">
+      <p id="calculation-master-source" class="result-alert source-provenance" role="status">尚未載入採購批次。</p>
       <div class="section-heading"><div><p class="eyebrow"><span class="stage-number" aria-hidden="true">5</span> 回匯・核准・ERP</p><h2 id="workflow-title">人工回匯、需要時異動與正式核准</h2></div><p>新品同意建議量時留白即可；人工量不符箱數時會提醒確認「仍採用人工量」，不會自動改量或硬性阻擋。待核准階段不寄信。</p></div>
       <aside id="resume-draft-card" class="resume-draft-card" hidden>
         <div class="resume-draft-heading"><strong>採購批次續作與多人協作</strong><small>本機草稿可發布成公司共用協作草稿；授權同事能在自己的電腦查看並接續。版本衝突時會停止儲存，不會直接覆蓋別人的更新。</small></div>
@@ -656,22 +661,23 @@
   <script src="xlsx-style-runtime.js?v=20260930-month-end-r1"></script>
   <script src="../inventory/assets/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="core.js?v=20261119-procurement-unit-progress-r1"></script>
+  <script src="core.js?v=20261126-procurement-master-guard-r1"></script>
   <script src="seasonal-model.js?v=20260918-seasonal-spring-r1"></script>
-  <script src="google-sources.js?v=20261119-procurement-unit-progress-r1"></script>
+  <script src="master-source-guard.js?v=20261126-procurement-master-guard-r1"></script>
+  <script src="google-sources.js?v=20261126-procurement-master-guard-r1"></script>
   <script src="../store-transfer/core.js?v=20261027-activity-transfer-r6"></script>
-  <script src="../store-transfer/activity.js?v=20261116-transfer-store-names-r1"></script>
-  <script src="activity-planning.js?v=20261119-procurement-unit-progress-r1"></script>
-  <script src="shortage-batch.js?v=20261119-procurement-unit-progress-r1"></script>
-  <script src="activity-period.js?v=20261119-procurement-unit-progress-r1"></script>
-  <script src="activity-registry.js?v=20261119-procurement-unit-progress-r1"></script>
+  <script src="../store-transfer/activity.js?v=20261123-prepurchase-r4"></script>
+  <script src="activity-planning.js?v=20261126-procurement-master-guard-r1"></script>
+  <script src="shortage-batch.js?v=20261126-procurement-master-guard-r1"></script>
+  <script src="activity-period.js?v=20261126-procurement-master-guard-r1"></script>
+  <script src="activity-registry.js?v=20261126-procurement-master-guard-r1"></script>
   <script src="/live-guidance/progress.js?v=20261103-guidance-compact-r6"></script>
 <script src="/live-guidance/app.js?v=20261103-guidance-compact-r6"></script>
-  <script src="guidance.js?v=20261119-procurement-unit-progress-r1"></script>
-  <script src="puyouma-order.js?v=20261119-procurement-unit-progress-r1"></script>
-  <script src="puyouma-order-ui.js?v=20261119-procurement-unit-progress-r1"></script>
-  <script src="../store-transfer/core.js?v=20261116-transfer-store-names-r1"></script>
+  <script src="guidance.js?v=20261126-procurement-master-guard-r1"></script>
+  <script src="puyouma-order.js?v=20261126-procurement-master-guard-r1"></script>
+  <script src="puyouma-order-ui.js?v=20261126-procurement-master-guard-r1"></script>
+  <script src="../store-transfer/core.js?v=20261123-prepurchase-r4"></script>
   <script src="../store-transfer/new-products-core.js?v=20261116-new-product-allocation-r3"></script>
-  <script src="app.js?v=20261119-procurement-unit-progress-r1"></script>
+  <script src="app.js?v=20261126-procurement-master-guard-r1"></script>
 </body>
 </html>

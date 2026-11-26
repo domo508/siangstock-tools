@@ -5207,6 +5207,12 @@
       ["分批釋放規則", recommendations.checkpoint === "month-start" ? "熱銷70%／穩定50%／低銷0%" : "依本次最新缺口100%重算"],
       ["採購流程", recommendations.meta?.workflowLabel || "一般採購建議"],
       ["固定來源模式", recommendations.meta?.sourceMode || "未標示"],
+      ...(recommendations.meta?.masterSource ? [
+        ["計算主檔檔名", recommendations.meta.masterSource.name || "未記錄"],
+        ["計算主檔來源更新時間（UTC）", recommendations.meta.masterSource.modifiedTime || "未記錄"],
+        ["計算前主檔核對時間（UTC）", recommendations.meta.masterSource.checkedAt || "未記錄"],
+        ["主檔核對方式", recommendations.meta.masterSource.sourceMode || "未記錄"]
+      ] : []),
       ...Object.entries(recommendations.meta?.consignmentSources || {}).map(([source, detail]) => [source === "lirong" ? "力榮採用庫存欄" : "普優瑪採用庫存欄", detail.header, detail.date || "欄名未提供日期"]),
       ...Object.entries(recommendations.meta?.sourceHashes || {}).map(([source, hash]) => [`來源SHA-256：${source}`, String(hash)]),
       ["五來源日期檢核", sourceDateCheck?.status || "未提供", sourceDateCheck?.message || "下載前請確認庫存、未到貨、期間調撥、寄庫與銷售截止日。"],

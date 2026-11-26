@@ -1,3 +1,4 @@
+import { candidateRoute, isCustomCandidateSku } from './new-product-candidates';
 import { newProductNoticeStatements, sendNewProductNotices } from './new-product-notifications';
 import { RequestValidationError } from './schema';
 type Env = { DB:D1Database };
@@ -34,16 +35,17 @@ export function newProductSeedStatements(env:Env,batchId:string,value:unknown,ap
 
 export function activateNewProductStatements(env:Env,batchId:string,actor:string,now:string){return [env.DB.prepare("UPDATE new_product_plans SET status='store_confirmation',updated_at=?,updated_by=?,revision=revision+1 WHERE procurement_batch_id=? AND status='pending_purchase' AND EXISTS(SELECT 1 FROM procurement_batches WHERE id=? AND status='approved')").bind(now,actor,batchId,batchId),...newProductNoticeStatements(env,batchId,now)];}
 export async function newProductCalculationState(env:Env){
- const rows=await env.DB.prepare(`SELECT r.*,p.revision,p.status,p.updated_at approved_at,b.status purchase_status,g.listed_date,g.first_stock_date,
+ const rows=await env.DB.prepare(`SELECT r.*,p.revision,p.status,p.updated_at approved_at,b.status purchase_status,g.listed_date,COALESCE(g.first_stock_date,(SELECT c.first_stock_date FROM new_product_candidates c WHERE c.sku=g.sku)) first_stock_date,
  r.archived_dispatched_quantity + COALESCE((SELECT SUM(u.quantity) FROM new_product_claim_usage u WHERE u.plan_id=r.plan_id AND u.store_code=r.store_code AND u.sku=r.sku),0) committed_quantity,
  r.archived_dispatched_quantity + COALESCE((SELECT SUM(u.quantity) FROM new_product_claim_usage u WHERE u.plan_id=r.plan_id AND u.store_code=r.store_code AND u.sku=r.sku AND u.erp_created=1),0) dispatched_quantity
  FROM new_product_plan_rows r JOIN new_product_plans p ON p.id=r.plan_id JOIN procurement_batches b ON b.id=p.procurement_batch_id
  JOIN new_product_registry g ON g.sku=r.sku WHERE b.status IN ('pending_approval','approved','erp_created','received')`).all<Record<string,unknown>>();
- const registry=await env.DB.prepare(`SELECT g.sku,g.listed_date,g.first_stock_date FROM new_product_registry g WHERE NOT EXISTS(SELECT 1 FROM new_product_plan_rows r WHERE r.sku=g.sku) OR EXISTS(SELECT 1 FROM new_product_plan_rows r JOIN new_product_plans p ON p.id=r.plan_id JOIN procurement_batches b ON b.id=p.procurement_batch_id WHERE r.sku=g.sku AND b.status IN ('pending_approval','approved','erp_created','received'))`).all<Record<string,unknown>>();
- return {rows:rows.results,registry:registry.results};
+ const registry=await env.DB.prepare(`SELECT g.sku,g.listed_date,COALESCE(g.first_stock_date,(SELECT c.first_stock_date FROM new_product_candidates c WHERE c.sku=g.sku)) first_stock_date,0 prepurchase FROM new_product_registry g WHERE NOT EXISTS(SELECT 1 FROM new_product_plan_rows r WHERE r.sku=g.sku) OR EXISTS(SELECT 1 FROM new_product_plan_rows r JOIN new_product_plans p ON p.id=r.plan_id JOIN procurement_batches b ON b.id=p.procurement_batch_id WHERE r.sku=g.sku AND b.status IN ('pending_approval','approved','erp_created','received')) UNION ALL SELECT c.sku,c.created_date listed_date,c.first_stock_date,1 prepurchase FROM new_product_candidates c WHERE c.status='prelaunch' AND NOT EXISTS(SELECT 1 FROM new_product_registry g WHERE g.sku=c.sku) AND NOT EXISTS(SELECT 1 FROM procurement_batch_items i WHERE i.sku=c.sku AND i.received_quantity>0)`).all<Record<string,unknown>>();
+ return {rows:rows.results,registry:registry.results.filter(r=>!r.prepurchase||!isCustomCandidateSku(r.sku))};
 }
 export async function newProductRoute(request:Request,env:Env,who:Who):Promise<Response>{
  const url=new URL(request.url),path=url.pathname.replace('/api/store-transfer/new-products','');
+ if(path==='/candidates')return candidateRoute(request,env,who);
  if(request.method==='GET'&&path==='/calculation'){if(who.role==='store')fail('僅總部可讀取新品計算資料。',403);return reply(await newProductCalculationState(env));}
  if(request.method==='GET'&&(path===''||path==='/')){
  const rows=await env.DB.prepare(`SELECT p.id,p.revision,p.status,p.procurement_batch_id,p.updated_at,s.store_code,s.status store_status,
@@ -120,6 +122,7 @@ async function registerNewProducts(env:Env,body:Record<string,unknown>,email:str
   const items=body.items.map(raw=>{const r=object(raw),sku=str(r.sku,'新品品號',80).toUpperCase();if(seen.has(sku))fail('新品來源重複。');seen.add(sku);return !observe?{sku,name:str(r.name,'新品品名'),listedDate:date(r.listedDate)}:{sku};});
   if(!observe)statements.push(env.DB.prepare(`INSERT INTO new_product_registry(sku,name,listed_date,registered_at,registered_by) SELECT json_extract(value,'$.sku'),json_extract(value,'$.name'),json_extract(value,'$.listedDate'),?,? FROM json_each(?) WHERE 1 ON CONFLICT(sku) DO NOTHING`).bind(now,email,JSON.stringify(items)));
   else {const observedOn=date(body.observedOn);if(observedOn>new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Taipei'}))fail('庫存觀察日期不可在未來。');statements.push(env.DB.prepare(`UPDATE new_product_registry SET first_stock_seen_at=?,first_stock_date=? WHERE first_stock_seen_at IS NULL AND sku IN(SELECT json_extract(value,'$.sku') FROM json_each(?))`).bind(now,observedOn,JSON.stringify(items)));}
+  if(observe){const observedOn=date(body.observedOn);statements.push(env.DB.prepare(`UPDATE new_product_candidates SET first_stock_date=?,updated_at=?,updated_by=? WHERE first_stock_date IS NULL AND sku IN(SELECT json_extract(value,'$.sku') FROM json_each(?))`).bind(observedOn,now,email,JSON.stringify(items)));}
   if(statements.length)await env.DB.batch(statements);return reply({count:statements.length});
 }
 export async function newProductProcurementSetup(request:Request,env:Env,email:string){

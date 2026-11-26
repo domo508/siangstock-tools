@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const APP_VERSION = "20261116-transfer-store-names-r1";
+  const APP_VERSION = "20261123-prepurchase-r4";
   const state = { pendingPurchaseSnapshot: null, config: null, calculation: null, formalCalculation: null, activeBatch: null, activeCollaboration: null, collaborationDrafts: [], calculationStore: "all", batchStore: "all", calculationSku: "", batchSku: "", batchChangesOnly: false, batchSource:"all", files: { master: null, marketing: null }, googleReady: false, runtimeOutdated: false, latestRuntimeVersion: "" };
   const $ = (id) => document.getElementById(id);
   const inputXlsx = globalThis.XLSX;
@@ -49,7 +49,7 @@
 
   async function api(path, options = {}) {
     if ((options.method || "GET") !== "GET" && !(await checkRuntimeVersion())) throw new Error("已有新版工具，請先重新載入最新版。");
-    const init = { method: options.method || "GET", headers: { Accept: "application/json", "X-Store-Transfer-Version":APP_VERSION, ...(path.startsWith("/new-products")?{"X-New-Product-Version":"20261116-new-product-allocation-r3"}:{}), ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.googleAccessToken ? { "X-Google-Access-Token": options.googleAccessToken } : {}) }, cache: "no-store" };
+    const init = { method: options.method || "GET", headers: { Accept: "application/json", "X-Store-Transfer-Version":APP_VERSION, ...(path.startsWith("/new-products")?{"X-New-Product-Version":"20261116-new-product-allocation-r3"}:{}), ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}), ...(options.googleAccessToken ? { "X-Google-Access-Token": options.googleAccessToken } : {}) }, cache: "no-store" };
     if (options.body) init.body = JSON.stringify(options.body);
     const controller = options.timeoutMs ? new AbortController() : null;
     if (controller) init.signal = controller.signal;
@@ -556,6 +556,20 @@
     } finally { $("google-connect-button").disabled = false; }
   }
 
+  async function scanNewCandidates(expectedRevision) {
+    if(!state.googleReady||!googleSources.token())throw Error('請先完成公司 Google 授權，再更新候選。');
+    const C=globalThis.NewProductCandidates,folder=state.config.fixedSources.productMasterFolderId;
+    const versions=C.versions(await googleSources.listDriveExcelFiles(folder));
+    const currentFile=await googleSources.downloadDriveFile(versions[0].id,versions[0].name);
+    const latest=C.parse(await workbook(currentFile),inputXlsx),baseline=new Map();
+    for(const old of versions.slice(1)){const file=await googleSources.downloadDriveFile(old.id,old.name);for(const r of C.parse(await workbook(file),inputXlsx,true).rows)baseline.set(r.sku,r);await yieldToBrowser();}
+    const fingerprint=files=>JSON.stringify(files.map(f=>[f.id,f.modifiedTime,f.size]));
+    if(fingerprint(versions)!==fingerprint(C.versions(await googleSources.listDriveExcelFiles(folder))))throw Error('讀取期間主檔版本改變，請重新比對。');
+    const sourceHash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',await currentFile.arrayBuffer()))].map(v=>v.toString(16).padStart(2,'0')).join('');
+    if(!(await checkRuntimeVersion()))throw Error('請重新載入最新版。');
+    await api('/new-products/candidates',{method:'POST',headers:{'X-New-Candidate-Version':C.VERSION},body:{action:'scan',expectedRevision,sourceHash,sourceAt:versions[0].modifiedTime,current:latest.rows,baseline:[...baseline.values()]}});
+    if(latest.invalid.length)return `比對已保存；${latest.invalid.length}筆新增日期無效，未列候選。列號／品號：${latest.invalid.slice(0,10).map(r=>r.row+'／'+r.sku).join('、')}。請人工查核來源日期；這些品號不自動判為新品`;
+  }
   async function loadGoogleSources() {
     if (!state.googleReady) throw new Error("請先完成公司 Google 授權。");
     const button = $("auto-source-button");
@@ -574,6 +588,7 @@
       document.querySelector('[data-for="marketing-file"]').textContent = "已自動取得：整體行銷策略.xlsx";
       $("source-status").textContent = `兩項固定來源已更新；商品主檔版本：${master.metadata.modifiedTime || master.file.name}。`;
       updateReady();
+      if(state.candidateUI)await state.candidateUI.scan();
     } finally {
       button.classList.remove("is-loading"); button.disabled = !state.googleReady;
       $("auto-source-label").textContent = "重新取得兩項資料";
@@ -1874,6 +1889,7 @@
       }
       state.performanceUI=globalThis.StoreTransferPerformanceUI.mount({api,checkRuntimeVersion});
       if(state.config.role!=='store')state.performanceImport=globalThis.StoreTransferPerformanceImport.mount({api,refresh:()=>state.performanceUI?.refresh(),readReports:async files=>{const reports=[];for(const file of files){await xlsxPreflight.assertSalesWorkbookSize(file);reports.push(parser.parseSalesWorkbook(await workbook(file),inputXlsx,{fileName:file.name}));await yieldToBrowser();}return reports;}});
+      state.candidateUI=globalThis.NewProductCandidatesUI.mount({api,config:state.config,checkRuntimeVersion,scan:scanNewCandidates});
       window.NewProductAllocationUI.mount({api,config:state.config,checkRuntimeVersion,sendNotice:async id=>{
         if(!googleSources.token())await authorizeGoogle();
         return api(`/new-products/${encodeURIComponent(id)}/notifications/send`,{method:'POST',body:{},googleAccessToken:googleSources.token(),headers:{'X-New-Product-Version':'20261116-new-product-allocation-r3'}});
@@ -2029,6 +2045,7 @@
     if (state.config.role==='store') return S('下一步：查看本店待確認批次', '開啟本店批次核對建議；如需更改數量，填寫原因後再自行送出。', '#store-batches');
     if (!$('display-exceptions-panel').hidden) return S('管理本店展示設定', '核對目前門市、貨號與原因；只操作有權限的例外資料。', '#display-exception-rows');
     if (state.calculation) return S('核對建議，再建立確認批次', '請先檢查一般補貨、活動與缺貨未配；A/B模式另依協作流程操作。', '#calculation-results');
+    if(document.activeElement?.closest('#new-candidate-panel'))return S('確認下採前新品候選','先更新候選，再勾選確認待上市或一般商品；不建立採購單與首配量。','#new-candidate-summary');
     if (!state.files.master || !state.files.marketing) return S('下一步：取得兩項固定來源', '完成公司 Google 授權再自動取得；也可依原流程手動備援。', '#fixed-source-title');
     for(const id of ['inventory-file','sales-files','transfer-file']) if (!$(id).files.length) return S('下一步：備妥本次必要資料', '請依卡片說明提供最新庫存、近12週銷售及期間調撥單。', '#'+id);
     return S('下一步：產生本週調撥建議', '確認門市、模式及日期後，再按原本的產生建議按鈕。', '#calculate-button');

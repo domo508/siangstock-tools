@@ -24,6 +24,8 @@
   const records=inventory.records||[],registered=new Map((payload.registry||[]).map(r=>[r.sku,r]));
   const balances=new Map();for(const r of records.filter(r=>r.warehouseCode==='T00'))balances.set(r.sku,(balances.get(r.sku)||0)+Number(r.quantity||0));
   const hasStock=new Set([...balances].filter(([,q])=>q>0).map(([sku])=>sku));
+  const physical=new Map();for(const r of records.filter(r=>['T00',...STORES].includes(r.warehouseCode))){const key=r.warehouseCode+'|'+r.sku;physical.set(key,(physical.get(key)||0)+Number(r.quantity||0));}
+  for(const [key,q] of physical)if(q>0){const sku=key.slice(key.indexOf('|')+1);if(registered.get(sku)?.prepurchase)hasStock.add(sku);}
   const controlled=new Set(registered.keys()),approved=new Map(),held=new Map(),pending=new Set(),zeroed=new Set(),eligible=new Map(),active=new Set(),facts=new Map(),rows=[];
   for(const r of payload.rows||[]){facts.set(`${r.store_code}|${r.sku}`,r);if(!eligible.has(r.sku))eligible.set(r.sku,new Set());eligible.get(r.sku).add(r.store_code);if(r.approved_quantity===0)zeroed.add(`${r.store_code}|${r.sku}`);if(r.status!=='waiting_stock')pending.add(`${r.store_code}|${r.sku}`);if(r.status!=='waiting_stock'||Number(r.approved_quantity||0)>Number(r.dispatched_quantity||0))active.add(r.sku);}
   for(const r of payload.rows||[]){if(!selectedStores.includes(r.store_code))continue;held.set(`${r.store_code}|${r.sku}`,Math.max(0,Number(r.committed_quantity||0)-Number(r.dispatched_quantity||0)));const remaining=Math.max(0,Number(r.approved_quantity||0)-Number(r.committed_quantity||0));if(r.status==='waiting_stock'&&remaining>0){const key=`${r.store_code}|${r.sku}`;if(approved.has(key))throw Error(`${key}有重複新品首配來源，請總部核對。`);approved.set(key,{...r,remaining});rows.push(r);}}

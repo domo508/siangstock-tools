@@ -245,18 +245,24 @@
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   }
 
-  async function loadLatestMaster(folderId, options = {}) {
-    const query = `'${folderId.replace(/'/g, "\\'")}' in parents and trashed = false`;
-    const params = new URLSearchParams({ q: query, fields: "files(id,name,mimeType,modifiedTime,parents,size)", orderBy: "modifiedTime desc", pageSize: "100" });
-    const response = await googleFetch(`https://www.googleapis.com/drive/v3/files?${params}`, options);
-    const files = (await response.json()).files || [];
-    const candidates = files.filter((file) => file.mimeType === XLSX_MIME && file.parents?.length === 1 && file.parents[0] === folderId);
+  async function latestMasterMetadata(folderId, options = {}) {
+    if (!folderId) throw new Error("公司尚未設定商品主檔資料夾。");
+    const files = await listDriveExcelFiles(folderId, { ...options, cache: "no-store" });
+    const candidates = files.sort((a, b) => String(b.modifiedTime).localeCompare(String(a.modifiedTime)));
     if (!candidates.length) throw new Error("商品主檔資料夾沒有直屬.xlsx候選檔。");
+    if (candidates.some(file => !file.modifiedTime || !Number.isFinite(Date.parse(file.modifiedTime)))) throw new Error("商品主檔修改時間無法確認，已停止自動選取。");
     const latestTime = candidates[0].modifiedTime;
     const latest = candidates.filter((file) => file.modifiedTime === latestTime);
     if (latest.length !== 1) throw new Error("商品主檔有多份相同修改時間的最新候選，已停止自動選取。");
-    const file = await downloadDriveFile(latest[0].id, latest[0].name, options);
-    return { file, metadata: { ...latest[0], sha256: await sha256(await file.arrayBuffer()), fetchedAt: new Date().toISOString() } };
+    return latest[0];
+  }
+  async function loadLatestMaster(folderId, options = {}) {
+    const latest = await latestMasterMetadata(folderId, options);
+    const file = await downloadDriveFile(latest.id, latest.name, { ...options, cache: "no-store" });
+    // Do not attach a pre-download version to bytes changed during download.
+    const after = await latestMasterMetadata(folderId, options);
+    if (latest.id !== after.id || latest.modifiedTime !== after.modifiedTime || latest.md5Checksum !== after.md5Checksum || latest.size !== after.size) throw new Error("下載期間商品主檔已更新，未採用本次下載；請重新取得。");
+    return { file, metadata: { ...latest, sha256: await sha256(await file.arrayBuffer()), fetchedAt: new Date().toISOString() } };
   }
 
   function cellValue(cell) {
@@ -395,7 +401,7 @@
 
   global.ProcurementGoogleSources = {
     initialize, authorize, verifyCompanyIdentity, loadAll, token, canSendSummary, clearAuthorization,
-    downloadDriveFile, listDriveExcelFiles, loadLatestMaster, loadLatestApprovedModel, uploadDriveExcel, sendSeasonalModelSummary, sendMonthEndReport,
+    downloadDriveFile, listDriveExcelFiles, latestMasterMetadata, loadLatestMaster, loadLatestApprovedModel, uploadDriveExcel, sendSeasonalModelSummary, sendMonthEndReport,
     selectSpreadsheetSheetTitle, loadPuyoumaConsignment
   };
 })(typeof globalThis !== "undefined" ? globalThis : window);
