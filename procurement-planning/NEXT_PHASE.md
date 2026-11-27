@@ -1509,3 +1509,16 @@ Oliver只可R00／R10／R03；xyz11619只可R01／R07／R06。區域／單店成
 本機主採購20261127-procurement-low-stock-inclusive-r1及首頁20261127-low-stock-inclusive-entry-r1已同步執行版本、版本資訊、資產query及跨工具入口，手冊與結果說明同步。正式站仍source-compat-r1，本輪未commit、push或部署，未修改公司資料。既有母／子批次、回匯、核准及ERP不重算或回寫；僅適用規則發布後新產生建議。共用母批次誤標舊版屬另案，未混入本輪修正。
 
 驗收：完整103份1536項、Wrangler型別生成及完整tsc通過。涵蓋0／2／3／4件、3件已有未交覆蓋、3件無總部需求，實際XLSX寫出讀回、黃底及未改量回匯。真實既有家禾報表新舊覆核結果及原快照所有頁籤逐儲存格完全一致，原始Excel SHA不變。未執行正式採購計算、寄信或業務寫入。git diff --check通過，私有證據在.local-context/verification/20261127-low-stock-inclusive/。
+
+
+### 2026-11-27 低庫存包含3件：正式發布完成
+
+使用者已明確授權部署，取代上段待部署狀態。功能07efaca已推feature/company-tools-static-site；API89aacfc1-834f-47b7-8bed-de8f494ded86及Static301af251-a783-4d5c-8386-626b2c552cf4均正式啟用。主採購20261127-procurement-low-stock-inclusive-r1、首頁20261127-low-stock-inclusive-entry-r1同步，週調撥本身保留prepurchase-r4，只更新引用與入口。部署前遠端正式分支仍0168adb、API8cabd7c3及Static937a87aa；15項既有服務綁定逐項完全相同，沿用keep-vars，無權限／DNS／資料表遷移／Apps Script變更。
+
+三道門檻完成：重新執行完整103份1536項與型別生成／tsc通過；靜態6749檔SHA256 bcbdcc48bfceeff07d937539eb8145591b09c5c0437f0b811433124fc2e1e181，新版首頁實際點入、app／core資產query、version.json及手冊3件（含）說明已核對。真正舊分頁依原5分鐘檢查顯示重新載入最新版並停止操作，僅導航至警示，未重整同仁頁面。正式手冊390／320px無水平溢出、視窗設定已還原。真實既有家禾報表未改量回匯與所有頁籤逐儲存格不變，原Excel SHA保持；新門檻與未交覆蓋／無總部需求、黃底、實際XLSX往返及人工異動等由全套合成流程回歸驗收。
+
+正式D1部署前後全結果完全一致：38批次、514逐品項的數量／金額／狀態、13共用草稿SHA與版本及37通知。沒有代做正式採購計算、回匯、核准、ERP或寄信。既有母批次保留原計算，重新載入只更新工具；下次新產生建議才套用包含3件規則。母批次誤標舊版另案仍未修正。
+
+限制：未執行真實正式採購交易，不把合成流程當同仁新單；登入後HTTP線路快取標頭本輪未另擷取，維持既有no-store配置與測試。瀏覽器阻擋直接開啟JS，pageAssets不支援匯出script；已核對正式載入query、版本資訊與上傳封裝，不宣稱下載正式JS逐位元比對。私有證據.local-context/verification/20261127-low-stock-inclusive/，截圖formal-rule-desktop.jpg與formal-old-warning.jpg。
+
+回復基準：API8cabd7c3-bf2e-4cbb-81d0-c8fa3388bb54與Static937a87aa-ad1c-4bad-9cb4-8bec03de5279需同步回復；保留D1及既有批次，不能以回復規則改寫歷史採購。
