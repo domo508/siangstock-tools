@@ -2321,28 +2321,44 @@ describe("採購建議第二階段", () => {
     expect(blocked.errors.some((error) => error.message.includes("修改採購量時必須填人工調整原因"))).toBe(true);
   });
 
-  it("蝦皮3件保護可讓低銷品產生建議並在Excel整列標淡黃", () => {
+  it.each([
+    { stock: 0 }, { stock: 2 }, { stock: 3 }, { stock: 4 },
+    { stock: 3, coveredByPending: true }, { stock: 3, storeOnly: true }
+  ])("蝦皮3件保護邊界、未交覆蓋及無總部需求：%j", ({ stock, coveredByPending = false, storeOnly = false }) => {
     const inventoryBook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(inventoryBook, XLSX.utils.aoa_to_sheet([
       ["店倉編號", "店倉名稱", "貨號", "品名", "實際庫存", "實際庫存成本額"],
-      ["T00", "寬承總倉", "A1", "60天絲測試床包", 0, 0]
+      ["T00", "寬承總倉", "A1", "60天絲測試床包", stock, stock * 500],
+      ["R00", "台北門市", "A1", "60天絲測試床包", 10, 5000]
     ]), "乾淨商品");
     const salesBook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(salesBook, XLSX.utils.aoa_to_sheet([
       ["銷別", "結帳時間", "貨號", "品名", "銷售量", "實收金額", "開單倉編號", "開單倉名稱"],
-      ["銷貨", "2026-08-27", "A1", "60天絲測試床包", 1, 1000, "T00", "寬承總倉"]
+      ["銷貨", "2026-08-27", "A1", "60天絲測試床包", 1, 1000, storeOnly ? "R00" : "T00", storeOnly ? "台北門市" : "寬承總倉"],
+      ["銷貨", "2026-08-20", "A1", "60天絲測試床包", 1, 1000, storeOnly ? "R00" : "T00", storeOnly ? "台北門市" : "寬承總倉"]
     ]), "工作表1");
     const analysis = core.buildProcurementRecommendations({
-      master: makeMaster(), inventory: core.parseInventoryWorkbook(inventoryBook, XLSX), pendingReports: [], consignment: makeConsignment(),
+      master: makeMaster(), inventory: core.parseInventoryWorkbook(inventoryBook, XLSX), pendingReports: coveredByPending ? [makePending()] : [], consignment: makeConsignment(),
       salesReports: [core.parseSalesWorkbook(salesBook, XLSX)], model: makeForecastModel(), blacklist: [], asOfDate: "2026-08-28", checkpoint: "month-start"
     });
     const row = analysis.rows.find((item) => item.sku === "A1");
+    if (stock > 0) expect(row.standardRawPurchaseQty).toBe(0);
+    if (stock > 3 || coveredByPending || storeOnly) {
+      expect(row).toMatchObject({ shopeeProtectionApplied: false, shopeeProtectionRawQty: 0, suggestedPurchaseQty: 0 });
+      expect(analysis.suggestedRows.some((item) => item.sku === "A1")).toBe(false);
+      return;
+    }
+    expect(row.shopeeProtectionRawQty).toBeCloseTo(3 + row.hqDailyQty * row.effectiveSupplierLeadDays - stock, 10);
     expect(row).toMatchObject({ shopeeProtectionApplied: true, recommendationSource: "蝦皮3件保護" });
     expect(row.suggestedPurchaseQty).toBeGreaterThan(0);
     const output = core.buildRecommendationWorkbook(analysis, XLSX, { selectedSuppliers: ["普優瑪"] });
-    const sheet = output.Sheets["03B1_普優瑪_天絲"];
+    const bytes = XLSX.write(output, { type: "array", bookType: "xlsx", cellStyles: true });
+    const reopened = XLSX.read(bytes, { type: "array", cellStyles: true, cellDates: true });
+    const sheet = reopened.Sheets["03B1_普優瑪_天絲"];
     const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })[0];
-    expect(sheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("ERP品號") })].s.fill.fgColor.rgb).toBe("FFFFF2CC");
+    expect(sheet[XLSX.utils.encode_cell({ r: 1, c: headers.indexOf("ERP品號") })].s.fgColor.rgb).toBe("FFF2CC");
+    const review = core.reviewReturnedWorkbook(reopened, XLSX, { baselineBySku: new Map([[row.sku, row]]), exportedSkuSet: new Set([row.sku]) });
+    expect(review.errors).toHaveLength(0);
   });
 
   it("連假只延後保障期限，不改變日需求", () => {

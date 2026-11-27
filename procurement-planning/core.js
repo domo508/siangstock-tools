@@ -3697,7 +3697,7 @@
       const releaseRate = purchaseReleaseRate(row.tier, checkpoint);
       const standardReleasedPurchaseQty = standardRawPurchaseQtyWithoutActivity * releaseRate + Math.max(standardRawPurchaseQty - standardRawPurchaseQtyWithoutActivity, 0);
       const holidayReleasedPurchaseQty = standardReleasedPurchaseQty + holidayProtectionRawQty;
-      const shopeeProtectionRawQty = inventoryQty < 3 && hqDailyQty > 0
+      const shopeeProtectionRawQty = inventoryQty <= 3 && hqDailyQty > 0
         ? Math.max(3 + hqDailyQty * effectiveSupplierLeadDays - inventoryQty - effectivePendingQty, 0)
         : 0;
       const releasedBeforeShopeeQty = holidayReleasedPurchaseQty + springFestivalExtraRawQty;
