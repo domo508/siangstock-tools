@@ -475,7 +475,7 @@
   }
 
   function normalizeHeader(value) {
-    return normalizeText(value).replace(/[\s\-_–—／/＆&()（）【】\[\]：:．.*\n\r]/g, "");
+    return normalizeText(value).replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/[\s\-_–—／/＆&()（）【】\[\]：:．.*\n\r]/g, "");
   }
 
   function normalizeSku(value) {
@@ -504,7 +504,7 @@
   function parseNumber(value) {
     if (typeof value === "number") return Number.isFinite(value) ? value : null;
     if (value == null || value === "") return null;
-    let text = String(value).trim();
+    let text = String(value).normalize("NFKC").trim();
     if (!text) return null;
     const negative = /^\(.*\)$/.test(text);
     text = text.replace(/[(),，$＄元%％\s]/g, "");
@@ -1482,8 +1482,8 @@
   function selectConsignmentStockColumn(columns, options = {}) {
     const asOf = parseDateValue(options.asOfDate) || new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
     const year = Number(asOf.slice(0, 4)), asOfMonth = Number(asOf.slice(5, 7));
-    const candidates = columns.filter(({ header }) => /庫存|現貨/.test(String(header)) && !/排程|製作|下單|新增|預計|完工|出貨|入庫|待交/.test(String(header))).map(column => {
-      const raw = String(column.header).normalize('NFKC').trim();
+    const candidates = columns.filter(({ header }) => /庫存|現貨/.test(normalizeHeader(header)) && !/排程|製作|下單|新增|預計|完工|出貨|入庫|待交/.test(normalizeHeader(header))).map(column => {
+      const raw = String(column.header).normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/[–—]/g, "-").replace(/\s/g, "").trim();
       const dateText = raw.replace(/最新|目前|期末|總庫存|寄庫現貨|庫存數量|剩餘庫存|可用庫存|庫存|現貨/g, '').replace(/[\s()（）【】\[\]]/g, '');
       let y = null, m = null, d = null, match;
       if ((match = dateText.match(/^(\d{4})[年/.-](\d{1,2})[月/.-](\d{1,2})日?$/)) || (match = dateText.match(/^(\d{4})(\d{2})(\d{2})$/))) [,y,m,d] = match.map(Number);
@@ -1505,44 +1505,46 @@
   }
 
   function parseConsignmentWorkbook(workbook, XLSX, options = {}) {
-    const sheetName = workbook.SheetNames.includes("庫存+下單") ? "庫存+下單" : workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    if (!sheet || !sheet["!ref"]) throw new Error("寄倉表沒有可讀取的資料。");
-    const range = XLSX.utils.decode_range(sheet["!ref"]);
-    const headers = [];
-    for (let column = range.s.c; column <= range.e.c; column += 1) {
-      headers[column] = String(sheet[XLSX.utils.encode_cell({ r: range.s.r, c: column })]?.v || "").trim();
-    }
-    const findColumn = (aliases) => {
-      let bestIndex = null;
-      let bestScore = 0;
-      headers.forEach((header, index) => {
-        const score = scoreHeader(header, aliases);
-        if (score > bestScore) { bestIndex = index; bestScore = score; }
-      });
-      return bestScore >= 60 ? bestIndex : null;
+    // Match known semantic aliases only; never let a partial match use 產品編號 as ERP編號.
+    const aliases = {
+      supplierSku: ["產品編號", "供應商貨號"], sku: ["編號", "ERP品號", "貨號"],
+      labelName: ["貼標名稱"], name: ["商品名稱", "品名"],
+      spec: ["規格"], unitCost: ["成品價", "採購價"]
     };
-    const columns = {
-      supplierSku: findColumn(["產品編號", "供應商貨號"]),
-      sku: findColumn(["編號", "ERP品號", "貨號"]),
-      labelName: findColumn(["貼標名稱"]),
-      name: findColumn(["商品名稱", "品名"]),
-      spec: findColumn(["規格"]),
-      unitCost: findColumn(["成品價", "採購價"])
-    };
-    const stockColumn = selectConsignmentStockColumn(headers.map((header,index) => ({header,index})).filter(({header}) => /最新/.test(header) && /庫存/.test(header)), options);
-    const currentColumn = stockColumn?.index ?? null;
-    if (columns.sku == null || columns.supplierSku == null || columns.name == null || currentColumn == null) {
-      throw new Error("寄倉表缺少「產品編號、編號、商品名稱、最新庫存」欄位。");
+    const required = ["supplierSku", "sku", "name"];
+    const preferred = (workbook.SheetNames || []).filter(name => normalizeHeader(name) === normalizeHeader("庫存+下單"));
+    if (preferred.length > 1) throw new Error("普優瑪寄庫表有多個同名資料頁籤，請確認「庫存+下單」。");
+    const candidates = [];
+    for (const sheetName of preferred.length ? preferred : workbook.SheetNames || []) {
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet?.["!ref"]) continue;
+      const range = XLSX.utils.decode_range(sheet["!ref"]);
+      for (let headerRowIndex = range.s.r; headerRowIndex <= Math.min(range.e.r, range.s.r + 34); headerRowIndex++) {
+        const headers = [];
+        for (let col = range.s.c; col <= range.e.c; col++) headers[col] = String(sheet[XLSX.utils.encode_cell({r:headerRowIndex,c:col})]?.v ?? "").trim();
+        const matches = Object.fromEntries(Object.entries(aliases).map(([key, names]) => [key, headers.flatMap((header, index) => names.some(name => normalizeHeader(name) === normalizeHeader(header)) ? [index] : [])]));
+        if (!required.every(key => matches[key].length)) continue;
+        for (const [key, indices] of Object.entries(matches)) if (indices.length > 1) throw new Error(`普優瑪寄庫表「${sheetName}」第${headerRowIndex + 1}列的「${aliases[key][0]}」欄位重複，請確認。`);
+        const stockColumn = selectConsignmentStockColumn(headers.map((header,index) => ({header,index})), options);
+        if (!stockColumn) throw new Error(`普優瑪寄庫表「${sheetName}」第${headerRowIndex + 1}列缺少可辨識的庫存／現貨欄；例如「11/27庫存」或「最新庫存11/27」。`);
+        candidates.push({sheetName,sheet,range,headers,headerRowIndex,stockColumn,columns:Object.fromEntries(Object.entries(matches).map(([key,indices]) => [key,indices[0] ?? null]))});
+      }
     }
+    if (candidates.length !== 1) throw new Error(candidates.length ? "普優瑪寄庫表有多個完整資料區塊，請確認使用哪一份，未猜測來源。" : "普優瑪寄庫表找不到同一列的產品編號、編號與商品名稱欄；支援換行、空白及全形字元，請確認欄名與工作表。");
+    const {sheetName,sheet,range,headers,headerRowIndex,stockColumn,columns} = candidates[0];
+    const currentColumn = stockColumn.index;
 
-    const cellValue = (row, column) => sheet[XLSX.utils.encode_cell({ r: row, c: column })]?.v;
+    const cellValue = (row, column) => {
+      const address = XLSX.utils.encode_cell({ r: row, c: column }), cell = sheet[address];
+      if (cell?.t === "e") throw new Error(`普優瑪寄庫表「${sheetName}」${address}有公式錯誤，請修正來源後重試。`);
+      return cell?.v;
+    };
     const records = [];
     const exceptions = [];
     const confirmedExclusions = [];
     let numericStyledCells = 0;
     let pinkCells = 0;
-    for (let row = range.s.r + 1; row <= range.e.r; row += 1) {
+    for (let row = headerRowIndex + 1; row <= range.e.r; row += 1) {
       const supplierSku = normalizeSku(cellValue(row, columns.supplierSku));
       const sku = normalizeSku(cellValue(row, columns.sku));
       const labelName = columns.labelName == null ? "" : String(cellValue(row, columns.labelName) || "").trim();
@@ -1581,9 +1583,10 @@
       for (let column = currentColumn + 1; column <= range.e.c; column += 1) {
         const address = XLSX.utils.encode_cell({ r: row, c: column });
         const cell = sheet[address];
-        const value = parseNumber(cell?.v);
-        if (value == null || value === 0) continue;
         const rgb = cellFillRgb(cell);
+        if (cell?.t === "e" && isPinkFill(rgb)) throw new Error(`普優瑪寄庫表「${sheetName}」${address}的粉紅排程有公式錯誤，請確認。`);
+        const value = cell?.t === "e" ? null : parseNumber(cell?.v);
+        if (value == null || value === 0) continue;
         if (rgb) numericStyledCells += 1;
         if (isPinkFill(rgb)) {
           pinkCells += 1;
@@ -1607,6 +1610,7 @@
     return {
       fileName: options.fileName || "",
       sheetName,
+      headerRowIndex, currentColumn,
       currentHeader: headers[currentColumn],
       currentStockDate: stockColumn?.date || "",
       records,
@@ -1671,11 +1675,15 @@
       if (!sku) throw new Error(`力榮寄庫表第${index + 1}列缺少ERP品號。`);
       if (seen.has(sku)) throw new Error(`力榮寄庫表ERP品號重複：${sku}。`);
       seen.add(sku);
+      const currentAddress = XLSX.utils.encode_cell({r:index,c:currentColumn});
+      if (workbook.Sheets[sheetName][currentAddress]?.t === "e") throw new Error(`力榮寄庫表「${sheetName}」${currentAddress}有公式錯誤。`);
       const currentQty = parseNumber(row[currentColumn]);
       if (currentQty == null || currentQty < 0) throw new Error(`力榮寄庫表${sku}的現貨數量不是有效非負數。`);
       let scheduledQty = 0;
       const scheduleNotes = [];
       for (const column of scheduleColumns) {
+        const address = XLSX.utils.encode_cell({r:index,c:column.index});
+        if (workbook.Sheets[sheetName][address]?.t === "e") throw new Error(`力榮寄庫表「${sheetName}」${address}的排程有公式錯誤。`);
         const value = row[column.index];
         if (value === "" || value == null) continue;
         const quantity = parseNumber(value);

@@ -283,15 +283,24 @@
   function workbookFromSheetsApi(payload, XLSX) {
     const workbook = XLSX.utils.book_new();
     for (const source of payload.sheets || []) {
-      const grid = source.data?.[0] || {};
-      const rows = (grid.rowData || []).map((row) => (row.values || []).map(cellValue));
-      const sheet = XLSX.utils.aoa_to_sheet(rows);
-      (grid.rowData || []).forEach((row, rowOffset) => (row.values || []).forEach((cell, columnOffset) => {
-        const rgb = colorToRgb(cell.effectiveFormat?.backgroundColor);
-        if (!rgb || rgb === "FFFFFF") return;
-        const address = XLSX.utils.encode_cell({ r: Number(grid.startRow || 0) + rowOffset, c: Number(grid.startColumn || 0) + columnOffset });
-        if (sheet[address]) sheet[address].s = { fill: { fgColor: { rgb: `FF${rgb}` } } };
-      }));
+      const sheet = XLSX.utils.aoa_to_sheet([]);
+      for (const grid of source.data || []) {
+        const origin = { r: Number(grid.startRow || 0), c: Number(grid.startColumn || 0) };
+        const rows = (grid.rowData || []).map(row => (row.values || []).map(cellValue));
+        XLSX.utils.sheet_add_aoa(sheet, rows, { origin });
+        (grid.rowData || []).forEach((row, rowOffset) => (row.values || []).forEach((cell, columnOffset) => {
+          const address = XLSX.utils.encode_cell({ r: origin.r + rowOffset, c: origin.c + columnOffset });
+          if (cell.effectiveValue?.errorValue && sheet[address]) {
+            // Preserve typed errors. Only consuming a required business cell should block;
+            // an unrelated supplier helper formula must not disable the entire source.
+            sheet[address].t = "e"; sheet[address].v = 15;
+            sheet[address].w = cell.formattedValue || "#VALUE!";
+          }
+          const rgb = colorToRgb(cell.effectiveFormat?.backgroundColor);
+          if (!rgb || rgb === "FFFFFF") return;
+          if (sheet[address]) sheet[address].s = { fill: { fgColor: { rgb: `FF${rgb}` } } };
+        }));
+      }
       XLSX.utils.book_append_sheet(workbook, sheet, source.properties?.title || `Sheet${workbook.SheetNames.length + 1}`);
     }
     return workbook;
@@ -301,7 +310,7 @@
     const params = new URLSearchParams({ includeGridData: "true" });
     ranges.forEach((range) => params.append("ranges", range));
     params.set("fields", "sheets(properties(title),data(startRow,startColumn,rowData(values(effectiveValue,formattedValue,effectiveFormat(backgroundColor)))))");
-    const response = await googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?${params}`);
+    const response = await googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?${params}`, { cache: "no-store" });
     const payload = await response.json();
     return {
       workbook: workbookFromSheetsApi(payload, XLSX),
@@ -314,12 +323,32 @@
     };
   }
 
+  const sourceTitleKey = value => String(value || "").normalize("NFKC").replace(/[\s\u200B-\u200D\uFEFF]/g, "");
+  function matchingSourceTitle(titles, preferred) {
+    const matches = titles.filter(title => sourceTitleKey(title) === sourceTitleKey(preferred));
+    if (matches.length > 1) throw new Error(`Google試算表有多個「${preferred}」相似頁籤，請確認來源，未猜測。`);
+    return matches[0] || "";
+  }
+
+  async function loadPuyoumaSpreadsheet(spreadsheetId, XLSX, includeFabric = false) {
+    const params = new URLSearchParams({ fields: "sheets(properties(title,index))" });
+    const response = await googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?${params}`, {cache:"no-store"});
+    const payload = await response.json();
+    const titles = (payload.sheets || []).map(sheet => sheet.properties?.title || "");
+    const stock = matchingSourceTitle(titles, "庫存+下單");
+    if (!stock) throw new Error("普優瑪寄庫來源找不到「庫存+下單」頁籤，請確認來源名稱；未改讀其他頁籤。");
+    const fabric = includeFabric ? matchingSourceTitle(titles, "庫存布") : "";
+    const result = await loadSpreadsheet(spreadsheetId, [stock, ...(fabric ? [fabric] : [])].map(quoteSheetTitle), XLSX);
+    result.metadata.selectedSheet = stock;
+    return result;
+  }
+
   function selectSpreadsheetSheetTitle(sheetTitles, preferredTitles = []) {
-    const titles = (sheetTitles || []).map((title) => String(title || "").trim()).filter(Boolean);
+    const titles = (sheetTitles || []).map((title) => String(title || "")).filter(title => title.trim());
     if (!titles.length) throw new Error("Google 試算表沒有可讀取的頁籤。");
     for (const preferred of preferredTitles || []) {
       const normalizedPreferred = String(preferred || "").trim();
-      const matched = titles.find((title) => title === normalizedPreferred);
+      const matched = matchingSourceTitle(titles, normalizedPreferred);
       if (matched) return matched;
     }
     return titles[0];
@@ -331,7 +360,7 @@
 
   async function loadPreferredSpreadsheet(spreadsheetId, preferredTitles, XLSX) {
     const params = new URLSearchParams({ fields: "sheets(properties(title,index))" });
-    const response = await googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?${params}`);
+    const response = await googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?${params}`, { cache: "no-store" });
     const payload = await response.json();
     const sheets = (payload.sheets || [])
       .map((sheet) => ({ title: sheet.properties?.title || "", index: Number(sheet.properties?.index || 0) }))
@@ -365,7 +394,7 @@
         const file = await downloadDriveFile(source.marketingDriveFileId, "整體行銷策略.xlsx");
         return { file, metadata: { fileId: source.marketingDriveFileId, sha256: await sha256(await file.arrayBuffer()), fetchedAt: new Date().toISOString() } };
       }),
-      tracked("puyouma", "普優瑪寄庫表", () => loadSpreadsheet(source.puyoumaSpreadsheetId, ["'庫存+下單'", "'庫存布'"], XLSX)),
+      tracked("puyouma", "普優瑪寄庫表", () => loadPuyoumaSpreadsheet(source.puyoumaSpreadsheetId, XLSX, true)),
       tracked("lirong", "力榮寄庫表", () => loadPreferredSpreadsheet(source.lirongSpreadsheetId, ["下單", ...(source.lirongSheets || []), "工作表1"], XLSX))
     ]);
     const criticalFailures = results.slice(0, 2).filter((result) => result.status === "rejected").map((result) => result.reason);
@@ -396,7 +425,7 @@
   function loadPuyoumaConsignment(config, XLSX) {
     const id = config?.fixedSources?.puyoumaSpreadsheetId;
     if (!id) throw new Error("公司尚未設定普優瑪寄庫來源。");
-    return loadSpreadsheet(id, ["'庫存+下單'"], XLSX);
+    return loadPuyoumaSpreadsheet(id, XLSX);
   }
 
   global.ProcurementGoogleSources = {

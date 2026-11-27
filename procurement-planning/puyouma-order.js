@@ -13,11 +13,7 @@
   function parseSource(workbook, XLSX, core) {
     const parsed = core.parseConsignmentWorkbook(workbook, XLSX);
     const sheet = workbook.Sheets[parsed.sheetName];
-    const range = XLSX.utils.decode_range(sheet["!ref"]);
-    let stockColumn = -1;
-    for (let col = range.s.c; col <= range.e.c; col++) {
-      if (text(sheet[XLSX.utils.encode_cell({ r: range.s.r, c: col })]?.v) === text(parsed.currentHeader)) stockColumn = col;
-    }
+    const stockColumn = parsed.currentColumn;
     // The general planning parser has a legacy zero fallback. A supplier order
     // must retain the distinction between an actual zero and a missing/bad cell.
     const records = parsed.records.map(row => ({ ...row, currentQty: core.parseNumber(sheet[XLSX.utils.encode_cell({ r: row.sourceRow - 1, c: stockColumn })]?.v) }));

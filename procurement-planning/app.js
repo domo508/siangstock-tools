@@ -15,7 +15,7 @@
     "寬沐": Object.freeze(["新竹東區門市", "文心秀泰門市", "誠品480門市", "新莊門市", "其它實體門市"])
   });
   const MAX_SEASONAL_SOURCE_BYTES = 45 * 1024 * 1024;
-  const APP_VERSION = "20261126-procurement-master-guard-r1";
+  const APP_VERSION = "20261127-procurement-source-compat-r1";
   const state = {
     newCalculationBusy: false, masterGuardBusy: false,
     importProgress: null, shortageBulkBusy: false, shortageBulkRetry: null, config: null, masterFile: null, masterWorkbook: null, inventoryFile: null, pendingFiles: [], transferFile: null,
@@ -378,7 +378,7 @@
   async function parseInventoryFile(file) {
     if (typeof Worker === "function") {
       return new Promise((resolve, reject) => {
-        const worker = new Worker("inventory-reader-worker.js?v=20261126-procurement-master-guard-r1");
+        const worker = new Worker("inventory-reader-worker.js?v=20261127-procurement-source-compat-r1");
         const finish = (callback, value) => { worker.terminate(); callback(value); };
         worker.addEventListener("message", (event) => {
           if (event.data?.ok) finish(resolve, event.data.inventory);
@@ -1146,7 +1146,7 @@
       }
       const totalBytes = sourceFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
       setModelProgress(`已找到${sourceFiles.length}份Excel（${formatNumber(totalBytes / 1024 / 1024)} MB），正在啟動背景回測…`);
-      const worker = new Worker("seasonal-model-worker.js?v=20261126-procurement-master-guard-r1");
+      const worker = new Worker("seasonal-model-worker.js?v=20261127-procurement-source-compat-r1");
       state.modelWorker = worker; updateModelControls();
       const masterBuffer = await state.masterFile.arrayBuffer();
       await workerRequest(worker, { type: "initialize", masterBuffer, masterName: state.masterFile.name, blacklist: blacklistEntries() }, [masterBuffer]);
@@ -2665,7 +2665,7 @@
       if (!lirong.unavailable) updateSourceProgress("lirong", "success", `已取得並讀取${lirong.records.length}列；採用「${lirong.currentHeader}」${lirong.corrections.length ? `；${lirong.corrections.join("、")}` : ""}`);
       elements.masterFileName.textContent = `自動：${sources.master.metadata.name}・${sourceProof(sources.master.metadata.id, sources.master.metadata)}`;
       elements.marketingFileName.textContent = `自動：整體行銷策略・${sourceProof(sources.marketingMetadata.fileId, sources.marketingMetadata)}`;
-      elements.consignmentFileName.textContent = puyouma.unavailable ? `未驗證：${puyouma.unavailableReason}` : `自動：庫存+下單／庫存布，共${puyouma.records.length}列・${sourceProof(sources.puyoumaMetadata.spreadsheetId, sources.puyoumaMetadata)}`;
+      elements.consignmentFileName.textContent = puyouma.unavailable ? `未驗證：${puyouma.unavailableReason}` : `自動：${sources.puyoumaMetadata.sheets.join("／")}，共${puyouma.records.length}列・${sourceProof(sources.puyoumaMetadata.spreadsheetId, sources.puyoumaMetadata)}`;
       elements.lirongConsignmentFileName.textContent = lirong.unavailable ? `未驗證：${lirong.unavailableReason}` : `自動：${sources.lirongMetadata.selectedSheet || lirong.sheetName || "力榮寄庫"}，共${lirong.records.length}列・採用「${lirong.currentHeader}」・${sourceProof(sources.lirongMetadata.spreadsheetId, sources.lirongMetadata)}`;
       const validationMessage = masterValidation.invalidCount
         ? `固定 Google 資料源已完成格式檢核；${masterValidation.hardInvalidCount}列缺供應商、正數進貨價或MOQ並停止自動採購，${masterValidation.statusReviewCount}列貨品狀態空白仍顯示試算建議；僅提示主檔待補，未改量不需原因。`
